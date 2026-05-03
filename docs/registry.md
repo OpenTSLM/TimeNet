@@ -9,13 +9,13 @@ In-memory dataset catalog. Maps dataset IDs to connector instances. Built once a
 ```python
 from pathlib import Path
 
-from timenet.connectors.base import DatasetConnector
+from timenet.connectors.base import BaseConnector
 from timenet.models import QueryCriteria
 from timenet.timef.metadata import DatasetMetadata
 
 
 class DatasetRegistry:
-    def __init__(self, connectors: dict[str, DatasetConnector]) -> None: ...
+    def __init__(self, connectors: dict[str, BaseConnector]) -> None: ...
 
     @classmethod
     def from_config(
@@ -25,7 +25,7 @@ class DatasetRegistry:
     ) -> "DatasetRegistry": ...
 
     def all(self)    -> list[DatasetMetadata]: ...
-    def get(self, dataset_id: str) -> DatasetConnector | None: ...
+    def get(self, dataset_id: str) -> BaseConnector | None: ...
     def ids(self)    -> list[str]: ...
     def filter(self, criteria: QueryCriteria) -> list[DatasetMetadata]: ...
 ```
@@ -122,7 +122,7 @@ Returns descriptors for every registered dataset.
 ### `get()` { data-toc-label='get()' }
 
 ```python
-def get(self, dataset_id: str) -> DatasetConnector | None: ...
+def get(self, dataset_id: str) -> BaseConnector | None: ...
 ```
 
 Looks up a single connector by its dataset ID.
@@ -182,7 +182,7 @@ from timenet.tasks import Task
 @dataclass(frozen=True)
 class QueryCriteria:
     domains: tuple[Domain, ...] | None = None
-    tasks: tuple[Task, ...] | None = None
+    tasks: tuple[type[Task], ...] | None = None
     license: License | None = None
     signals: tuple[str, ...] | None = None
     min_length_s: float | None = None
@@ -193,13 +193,25 @@ class QueryCriteria:
 
 **Fields**
 
-| Name           | Type                 | Description                                                                          |
-| -------------- | -------------------- | ------------------------------------------------------------------------------------ |
-| `domains`      | `tuple[Domain, ...]` | Match if the dataset's `metadata().domains` shares any value with this tuple.        |
-| `tasks`        | `tuple[Task, ...]`   | Match if the dataset's annotation specs include any of these task types.             |
+| Name           | Type                       | Description                                                                                       |
+| -------------- | -------------------------- | ------------------------------------------------------------------------------------------------- |
+| `domains`      | `tuple[Domain, ...]`       | Match if the dataset's `metadata().domains` shares any value with this tuple.                     |
+| `tasks`        | `tuple[type[Task], ...]`   | Match if the dataset's annotation specs include any of these task classes (e.g. `ClassificationTask`). |
 | `license`      | `License`            | Exact match against `metadata().license`.                                            |
 | `signals`      | `tuple[str, ...]`    | Match if the dataset declares all of these `SignalSpec.name` values.                 |
 | `min_length_s` | `float`              | Match if the dataset's minimum recording length is at least this many seconds.       |
 | `source`       | `str`                | Substring match against `metadata().source_url`.                                     |
 | `dataset_ids`  | `tuple[str, ...]`    | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID. |
 | `tags`         | `tuple[str, ...]`    | Match if the dataset declares all of these tags in `metadata().tags`.                |
+
+**Example**
+
+```python
+from timenet.tasks import ClassificationTask
+
+criteria = QueryCriteria(
+    domains=(Domain.CARDIOLOGY,),
+    tasks=(ClassificationTask,),
+    license=License.CC_BY_4,
+)
+```

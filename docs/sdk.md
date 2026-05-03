@@ -14,7 +14,7 @@ from typing import Literal
 from timenet.models import DatasetCollection, DownloadProgressEvent, DownloadReport, QueryCriteria
 from timenet.timef.metadata import DatasetMetadata
 from timenet.sdk.dataset import Dataset
-from timenet.timef.schema import Sample
+from timenet.timef.builder import Sample
 from timenet.domains import Domain
 from timenet.tasks import Task
 from timenet.licenses import License
@@ -29,7 +29,7 @@ class TimeNet:
     def query(
         self,
         domains: list[Domain] | None = None,
-        tasks: list[Task] | None = None,
+        tasks: list[type[Task]] | None = None,
         license: License | None = None,
         signals: list[str] | None = None,
         min_length_s: float | None = None,
@@ -48,14 +48,14 @@ class TimeNet:
         progress_cb: Callable[[DownloadProgressEvent], None] | None = None,
     ) -> DownloadReport: ...
 
-    def downloaded_datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
+    def datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
 
     def query_samples(
         self,
         dataset_id: str,
         version: str,
         data_root: Path | None = None,
-        task: Task | None = None,
+        task: type[Task] | None = None,
         domains: list[Domain] | None = None,
     ) -> list[Sample]: ...
 
@@ -69,12 +69,13 @@ class TimeNet:
 ```
 
 ```python
-from timenet import TimeNet, Domain, Task
+from timenet import TimeNet, Domain
+from timenet.tasks import ClassificationTask
 
 client = TimeNet()                        # default catalog only
 client = TimeNet(config="datasets.yaml")  # default + custom catalog
 
-collection = client.query(domains=[Domain.CARDIOLOGY], tasks=[Task.CLASSIFICATION])
+collection = client.query(domains=[Domain.CARDIOLOGY], tasks=[ClassificationTask])
 report     = client.download(collection, target_dir="~/.timenet/processed")
 ```
 
@@ -92,18 +93,20 @@ Builds the registry from the library's built-in YAML catalog, optionally extende
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `config` | `str \| Path \| None` | `None` | Path to a custom YAML catalog. Merged after the default, cannot redefine existing IDs. |
+| Name     | Type                  | Default | Description                                                                            |
+| -------- | --------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `config` | `str \| Path \| None` | `None`  | Path to a custom YAML catalog. Merged after the default, cannot redefine existing IDs. |
 
 **Raises**
 
-| Exception | Condition |
-| --- | --- |
-| `FileNotFoundError` | `config` is provided and the file does not exist. |
-| `ImportError` | A connector class listed in either YAML cannot be imported. |
-| `TypeError` | A connector class requires constructor arguments. |
-| `ValueError` | A connector's `metadata().dataset_id` does not match its YAML key. |
+| Exception           | Condition                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `FileNotFoundError` | `config` is provided and the file does not exist.                                                                |
+| `yaml.YAMLError`    | A YAML file is malformed.                                                                                        |
+| `ImportError`       | The module portion of a connector's `class:` value cannot be imported.                                           |
+| `AttributeError`    | The class portion of a `class:` value is not present on the imported module.                                     |
+| `TypeError`         | A connector class requires constructor arguments.                                                                |
+| `ValueError`        | A connector's `metadata().dataset_id` does not match its YAML key, or a duplicate ID is found across both files. |
 
 ---
 
@@ -117,9 +120,9 @@ Returns every registered dataset. If `criteria` is provided, filters before retu
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `criteria` | `QueryCriteria \| None` | `None` | Filter specification. `None` returns all datasets. |
+| Name       | Type                    | Default | Description                                        |
+| ---------- | ----------------------- | ------- | -------------------------------------------------- |
+| `criteria` | `QueryCriteria \| None` | `None`  | Filter specification. `None` returns all datasets. |
 
 **Returns:** `list[DatasetMetadata]`, one entry per registered dataset matching `criteria`.
 
@@ -131,7 +134,7 @@ Returns every registered dataset. If `criteria` is provided, filters before retu
 def query(
     self,
     domains: list[Domain] | None = None,
-    tasks: list[Task] | None = None,
+    tasks: list[type[Task]] | None = None,
     license: License | None = None,
     signals: list[str] | None = None,
     min_length_s: float | None = None,
@@ -145,25 +148,27 @@ Builds a `QueryCriteria` from the given filters and runs it against the registry
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `domains` | `list[Domain] \| None` | `None` | Keep datasets that include any of these domains. |
-| `tasks` | `list[Task] \| None` | `None` | Keep datasets that support any of these tasks. |
-| `license` | `License \| None` | `None` | Keep datasets with this exact license. |
-| `signals` | `list[str] \| None` | `None` | Keep datasets that declare all of these signal names. |
-| `min_length_s` | `float \| None` | `None` | Keep datasets whose minimum recording length meets this threshold (seconds). |
-| `source` | `str \| None` | `None` | Keep datasets from this source label. |
-| `dataset_ids` | `list[str] \| None` | `None` | Keep only these specific dataset IDs. |
-| `tags` | `list[str] \| None` | `None` | Keep datasets that carry all of these tags. |
+| Name           | Type                       | Default | Description                                                                  |
+| -------------- | -------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `domains`      | `list[Domain] \| None`     | `None`  | Keep datasets that include any of these domains.                             |
+| `tasks`        | `list[type[Task]] \| None` | `None`  | Keep datasets that support any of these task types (pass the class, e.g. `ClassificationTask`). |
+| `license`      | `License \| None`      | `None`  | Keep datasets with this exact license.                                       |
+| `signals`      | `list[str] \| None`    | `None`  | Keep datasets that declare all of these signal names.                        |
+| `min_length_s` | `float \| None`        | `None`  | Keep datasets whose minimum recording length meets this threshold (seconds). |
+| `source`       | `str \| None`          | `None`  | Keep datasets from this source label.                                        |
+| `dataset_ids`  | `list[str] \| None`    | `None`  | Keep only these specific dataset IDs.                                        |
+| `tags`         | `list[str] \| None`    | `None`  | Keep datasets that carry all of these tags.                                  |
 
 **Returns:** `DatasetCollection` containing the matching descriptors. Pass directly to `download()`.
 
 **Example**
 
 ```python
+from timenet.tasks import ClassificationTask
+
 collection = client.query(
     domains=[Domain.CARDIOLOGY],
-    tasks=[Task.CLASSIFICATION],
+    tasks=[ClassificationTask],
     license=License.CC_BY_4,
 )
 ```
@@ -188,15 +193,14 @@ Runs the engine over every dataset in `collection`, downloading and converting e
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `collection` | `DatasetCollection` | required | Output of `query()` or `list()`. |
-| `target_dir` | `Path \| None` | `None` | Root output directory. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
-| `io_workers` | `int` | `16` | Workers for downloading datasets. |
-| `cpu_workers` | `int` | `4` | Workers for converting datasets. |
-| `force` | `bool` | `False` | Re-download and re-convert even when an up-to-date manifest already exists. |
-| `progress_cb` | `Callable[[DownloadProgressEvent], None] \| None` | `None` | Optional progress callback. Invoked from worker threads, must be thread-safe. |
-
+| Name          | Type                                              | Default  | Description                                                                        |
+| ------------- | ------------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `collection`  | `DatasetCollection`                               | required | Output of `query()` or `list()`.                                                   |
+| `target_dir`  | `Path \| None`                                    | `None`   | Root output directory. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
+| `io_workers`  | `int`                                             | `16`     | Workers for downloading datasets.                                                  |
+| `cpu_workers` | `int`                                             | `4`      | Workers for converting datasets.                                                   |
+| `force`       | `bool`                                            | `False`  | Re-download and re-convert even when an up-to-date manifest already exists.        |
+| `progress_cb` | `Callable[[DownloadProgressEvent], None] \| None` | `None`   | Optional progress callback. Invoked from worker threads, must be thread-safe.      |
 
 **Returns:** `DownloadReport`. One entry per dataset with `dataset_id`, `version`, `status` (`"ok" | "skipped" | "failed"`), `output_path`, and optional `error`.
 
@@ -204,14 +208,14 @@ Runs the engine over every dataset in `collection`, downloading and converting e
 
 **Raises**
 
-| Exception | Condition |
-| --- | --- |
+| Exception             | Condition                                       |
+| --------------------- | ----------------------------------------------- |
 | `RegistryLookupError` | A descriptor in `collection` is not registered. |
 
 **Example**
 
 ```python
-report = client.download(collection, workers=8)
+report = client.download(collection, io_workers=16, cpu_workers=4)
 
 for entry in report:
     if entry.status == "failed":
@@ -223,23 +227,23 @@ for entry in report:
 ### `datasets()`
 
 ```python
-def downloaded_datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
+def datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
 ```
 
 Scans `data_root` for `manifest.json` files and returns a `Dataset` wrapper for each one found.
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `data_root` | `Path \| None` | `None` | Directory to scan. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
+| Name        | Type           | Default | Description                                                                    |
+| ----------- | -------------- | ------- | ------------------------------------------------------------------------------ |
+| `data_root` | `Path \| None` | `None`  | Directory to scan. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
 
 **Returns:** `list[Dataset]`. Manifests are loaded into memory; signal data is not read until accessed.
 
 **Raises**
 
-| Exception | Condition |
-| --- | --- |
+| Exception           | Condition                   |
+| ------------------- | --------------------------- |
 | `FileNotFoundError` | `data_root` does not exist. |
 
 ---
@@ -252,7 +256,7 @@ def query_samples(
     dataset_id: str,
     version: str,
     data_root: Path | None = None,
-    task: Task | None = None,
+    task: type[Task] | None = None,
     domains: list[Domain] | None = None,
 ) -> list[Sample]: ...
 ```
@@ -261,20 +265,20 @@ Filters the samples of one local dataset by task or domain.
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `dataset_id` | `str` | required | ID of the dataset to query. |
-| `version` | `str` | required | Version string of the dataset. |
-| `data_root` | `Path \| None` | `None` | Root directory to look in. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
-| `task` | `Task \| None` | `None` | Keep samples that have at least one annotation with this task. |
-| `domains` | `list[Domain] \| None` | `None` | Keep samples that belong to any of these domains. |
+| Name         | Type                   | Default  | Description                                                                                                                                                       |
+| ------------ | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset_id` | `str`                  | required | ID of the dataset to query.                                                                                                                                       |
+| `version`    | `str`                  | required | Version string of the dataset.                                                                                                                                    |
+| `data_root`  | `Path \| None`         | `None`   | Root directory to look in. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`.                                                                            |
+| `task`       | `type[Task] \| None`   | `None`   | Keep samples that have at least one annotation whose `task` is an instance of this class (pass the class, e.g. `ClassificationTask`).                             |
+| `domains`    | `list[Domain] \| None` | `None`   | Keep samples whose dataset declares any of these domains in its `metadata().domains`. The filter is dataset-level, applied to every sample of a matching dataset. |
 
 **Returns:** `list[Sample]` matching all provided filters.
 
 **Raises**
 
-| Exception | Condition |
-| --- | --- |
+| Exception              | Condition                                                          |
+| ---------------------- | ------------------------------------------------------------------ |
 | `DatasetNotFoundError` | `<data_root>/<dataset_id>/<version>/manifest.json` does not exist. |
 
 ---
@@ -294,18 +298,18 @@ Starts the Explorer web server bound to `data_root`.
 
 **Parameters**
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `host` | `str` | `"127.0.0.1"` | Interface to bind to. |
-| `port` | `int` | `8000` | Port to listen on. |
-| `data_root` | `Path \| None` | `None` | Dataset root to serve. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
+| Name        | Type           | Default       | Description                                                                        |
+| ----------- | -------------- | ------------- | ---------------------------------------------------------------------------------- |
+| `host`      | `str`          | `"127.0.0.1"` | Interface to bind to.                                                              |
+| `port`      | `int`          | `8000`        | Port to listen on.                                                                 |
+| `data_root` | `Path \| None` | `None`        | Dataset root to serve. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
 
 **Raises**
 
-| Exception | Condition |
-| --- | --- |
-| `FileNotFoundError` | `data_root` does not exist. |
-| `OSError` | The `host:port` combination is already in use. |
+| Exception           | Condition                                      |
+| ------------------- | ---------------------------------------------- |
+| `FileNotFoundError` | `data_root` does not exist.                    |
+| `OSError`           | The `host:port` combination is already in use. |
 
 ---
 
@@ -354,12 +358,12 @@ class DownloadProgressEvent:
     message: str | None = None
 ```
 
-| Field | Description |
-| --- | --- |
-| `dataset_id` | Which dataset the event is about. |
-| `stage` | Pipeline stage. `download` = fetching bytes, `convert` = parsing into a `TimeFDataset`, `write` = serializing to disk. |
-| `completed` / `total` | Stage-specific units of work. For `download` they are bytes; for `convert` and `write` they are samples. |
-| `message` | Optional human-readable detail (e.g. current file name, error retry message). |
+| Field                 | Description                                                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `dataset_id`          | Which dataset the event is about.                                                                                      |
+| `stage`               | Pipeline stage. `download` = fetching bytes, `convert` = parsing into a `TimeFDataset`, `write` = serializing to disk. |
+| `completed` / `total` | Stage-specific units of work. For `download` they are bytes; for `convert` and `write` they are samples.               |
+| `message`             | Optional human-readable detail (e.g. current file name, error retry message).                                          |
 
 ---
 
@@ -395,11 +399,11 @@ class DownloadReport:
 
 **Status values**
 
-| Status | Meaning | `output_path` | `error` |
-| --- | --- | --- | --- |
-| `"ok"` | The dataset was downloaded and converted in this run. | set | `None` |
-| `"skipped"` | An up-to-date manifest already existed and `force=False`. | points to existing dir | `None` |
-| `"failed"` | Something went wrong during download or conversion. | `None` | set |
+| Status      | Meaning                                                   | `output_path`          | `error` |
+| ----------- | --------------------------------------------------------- | ---------------------- | ------- |
+| `"ok"`      | The dataset was downloaded and converted in this run.     | set                    | `None`  |
+| `"skipped"` | An up-to-date manifest already existed and `force=False`. | points to existing dir | `None`  |
+| `"failed"`  | Something went wrong during download or conversion.       | `None`                 | set     |
 
 Per-dataset errors are surfaced here, not raised. The whole `download()` call only raises for setup-level errors like an unregistered descriptor.
 
@@ -407,7 +411,7 @@ Per-dataset errors are surfaced here, not raised. The whole `download()` call on
 
 ## `Dataset`
 
-A class wrapping a single dataset that has already been **downloaded to disk**. Returned by `downloaded_datasets()`. Holds the manifest in memory; signal data is read lazily on access.
+A class wrapping a single dataset that has already been **downloaded to disk**. Returned by `datasets()`. Holds the manifest in memory; signal data is read lazily on access.
 
 ```python
 from collections.abc import Iterator
@@ -429,5 +433,3 @@ class Dataset:
 ```
 
 `Dataset.samples()` yields `Sample` objects already linked to their annotations. `Dataset.signal(signal_id)` reads the requested rows from the underlying Parquet shard on demand.
-
-    

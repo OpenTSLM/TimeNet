@@ -7,15 +7,11 @@ The unit of dataset integration. One connector class = one dataset (for the mome
 ## At a glance
 
 ```python
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from timenet.domains import Domain
-from timenet.licenses import License
-from timenet.tasks import Task
-
-from timenet.connectors.base import BaseConnector
-from timenet.timef.builder import TimeFDataset, SignalRef
+from timenet.timef.dataset import TimeFDataset
 from timenet.timef.metadata import DatasetMetadata
 
 TRaw = TypeVar("TRaw")
@@ -44,9 +40,13 @@ from pathlib import Path
 from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
 from timenet.licenses import License
-from timenet.tasks import Task
-from timenet.timef.builder import TimeFDataset, SignalRef
-from timenet.timef.metadata import DatasetMetadata
+from timenet.tasks import ClassificationTask
+from timenet.timef.dataset import TimeFDataset, SignalRef
+from timenet.timef.metadata import (
+    AnnotationSpec, DatasetMetadata, SignalSpec, ViewSpec,
+)
+from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
+from timenet.version import Version
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,27 @@ class ECGConnector(BaseConnector[Recording]):
 
     METADATA = DatasetMetadata(
         dataset_id="ecg_dataset",
-        version="1.0.0",
+        version=Version(1, 0, 0),
         description="100 patients, one 12-lead ECG recording each.",
         license=License.CC_BY_4,
         domains=(Domain.CARDIOLOGY,),
+        signal_specs=(
+            SignalSpec(
+                spec_id="ecg_12lead",
+                name="ECG",
+                channels=("I", "II", "III", "aVR", "aVL", "aVF",
+                          "V1", "V2", "V3", "V4", "V5", "V6"),
+                unit_sampling_rate=SamplingRateUnit.HZ,
+                unit_timestamp=TimestampUnit.SECONDS,
+                unit_value=ValueUnit.MILLIVOLT,
+            ),
+        ),
+        annotation_specs=(
+            AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask),
+        ),
+        view_specs=(
+            ViewSpec(name="full", description="Whole recording with all available leads."),
+        ),
     )
 
     def metadata(self) -> DatasetMetadata:
@@ -88,9 +105,8 @@ class ECGConnector(BaseConnector[Recording]):
                 view="full",
             )
             sample.annotate(
-                task=Task.CLASSIFICATION,
+                ClassificationTask(label="normal_sinus_rhythm"),
                 spec_id="rhythm_cls",
-                label="normal_sinus_rhythm",
             )
         return dataset
 ```
@@ -175,7 +191,7 @@ CPU-bound stage. Parses raw references and populates a `TimeFDataset`. No networ
 | ---------- | ------------ | -------- | ---------------------------------- |
 | `raw_refs` | `list[TRaw]` | required | The list returned by `download()`. |
 
-**Returns:** A fully-populated `TimeFDataset`. See [TimeFDataset](timef-builder.md).
+**Returns:** A fully-populated `TimeFDataset`. See [TimeFDataset](timef-dataset.md).
 
 **Constraints**
 
@@ -194,12 +210,13 @@ from timenet.licenses import License
 from timenet.timef.metadata import (
     AnnotationSpec, SignalSpec, ViewSpec,
 )
+from timenet.version import Version
 
 
 @dataclass(frozen=True)
 class DatasetMetadata:
     dataset_id: str
-    version: str
+    version: Version
     description: str
     license: License
     signal_specs: tuple[SignalSpec, ...] = ()
@@ -212,18 +229,18 @@ class DatasetMetadata:
 
 **Fields**
 
-| Name               | Type                         | Required | Description                                                                                           |
-| ------------------ | ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
-| `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                      |
-| `version`          | `str`                        | yes      | Semantic version string (e.g. `"1.0.0"`).                                                             |
-| `description`      | `str`                        | yes      | One-sentence human-readable description.                                                              |
-| `license`          | `License`                    | yes      | Data license.                                                                                         |
-| `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [Schema](schema.md#signalspec). |
-| `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [Schema](schema.md#annotationspec).     |
-| `view_specs`       | `tuple[ViewSpec, ...]`       | no       | Sample views the connector emits. Every `Sample.view` must reference one of these by name.            |
-| `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                           |
-| `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                  |
-| `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                       |
+| Name               | Type                         | Required | Description                                                                                                                   |
+| ------------------ | ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                              |
+| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](enums-and-spec.md#version).                                             |
+| `description`      | `str`                        | yes      | One-sentence human-readable description.                                                                                      |
+| `license`          | `License`                    | yes      | Data license.                                                                                                                 |
+| `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [SignalSpec](enums-and-spec.md#signalspec).                      |
+| `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](enums-and-spec.md#annotationspec).                      |
+| `view_specs`       | `tuple[ViewSpec, ...]`       | no       | Sample views the connector emits. Every `Sample.view` must reference one of these by name. See [ViewSpec](enums-and-spec.md#viewspec). |
+| `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                   |
+| `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                                          |
+| `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                                               |
 
 ---
 

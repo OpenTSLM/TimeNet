@@ -12,8 +12,8 @@ TimeNet is not for: training, inference, model definitions, evaluation metrics.
 
 ![TimeNet 2.0 architecture diagram](assets/architecture.svg)
 
-- **`DatasetConnector`**: the only contract a new data source must satisfy.
-- **`TimeFDataset`**: the in-memory model a connector populates during `convert_to_timef`.
+- **`BaseConnector`**: the only contract a new data source must satisfy.
+- **`TimeFDataset`**: the in-memory model a connector populates during `convert()`.
 - **`TimeFWriter`**: serializes a populated `TimeFDataset` to disk. (Deferred — to be designed.)
 
 ---
