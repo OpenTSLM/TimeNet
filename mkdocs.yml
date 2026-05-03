@@ -1,0 +1,77 @@
+site_name: TimeNet2.0
+site_description: Architecture and design proposal for the TimeNet time-series dataset framework.
+site_url: ""
+use_directory_urls: false
+
+repo_url: https://github.com/AI-X-Labs/TimeNet
+repo_name: AI-X-Labs/TimeNet
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - pymdownx.caret
+  - pymdownx.keys
+
+nav:
+  - Overview: index.md
+  - Client: sdk.md
+  - Registry: registry.md
+  - Connectors: connectors.md
+  - Specs & Enums: enums-and-spec.md
+  - TimeFDataset: timef-builder.md
+  - Schema: schema.md
+  - TimeFWriter: timef-writer.md
+  - Engine: engine.md

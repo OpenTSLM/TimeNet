@@ -1,6 +1,6 @@
 # Registry
 
-The **registry** is TimeNet's in-memory dataset catalog: a map from dataset id to connector instance. The registry is built once, at client construction time, from one or two YAML files. After that it is read-only.
+In-memory dataset catalog. Maps dataset IDs to connector instances. Built once at construction time from one or two YAML files; read-only after that.
 
 ---
 
@@ -10,7 +10,8 @@ The **registry** is TimeNet's in-memory dataset catalog: a map from dataset id t
 from pathlib import Path
 
 from timenet.connectors.base import DatasetConnector
-from timenet.models import DatasetDescriptor, QueryCriteria
+from timenet.models import QueryCriteria
+from timenet.timef.metadata import DatasetMetadata
 
 
 class DatasetRegistry:
@@ -23,38 +24,15 @@ class DatasetRegistry:
         custom_path: Path | None = None,
     ) -> "DatasetRegistry": ...
 
-    def all(self)    -> list[DatasetDescriptor]: ...
+    def all(self)    -> list[DatasetMetadata]: ...
     def get(self, dataset_id: str) -> DatasetConnector | None: ...
     def ids(self)    -> list[str]: ...
-    def filter(self, criteria: QueryCriteria) -> list[DatasetDescriptor]: ...
+    def filter(self, criteria: QueryCriteria) -> list[DatasetMetadata]: ...
 ```
-
-How the client builds and queries it:
-
-```python
-
-registry = DatasetRegistry.from_config(
-    default_path=Path("timenet/registry/default_datasets.yaml"),
-    custom_path=Path("datasets.yaml"),     # optional
-)
-
-```
-
-The rest of this page explains each method and the loading rules that produce the registry.
 
 ---
 
-## Creating the registry
-
-### `DatasetRegistry.from_config(default_path, custom_path=None) -> DatasetRegistry` { data-toc-label='from_config()' }
-
-Builds a registry by reading a default YAML, optionally extending it with a custom YAML, importing every listed connector class dynamically and registering each instance.
-
-- `default_path` : The path to the library's built-in catalog, shipped with TimeNet (`timenet/registry/default_datasets.yaml`). Lists every connector that comes out of the box.
-
-- `custom_path` : Optional. Points at a user-supplied YAML that adds more datasets to the catalog. Same shape as the default.
-
-### YAML shape
+## Catalog format
 
 ```yaml
 datasets:
@@ -64,87 +42,164 @@ datasets:
     class: timenet.connectors.SyntheticECGConnector
 ```
 
-### Loading sequence
+| Field        | Type   | Description                                                                 |
+| ------------ | ------ | --------------------------------------------------------------------------- |
+| `datasets`   | map    | Top-level key. Each child key is the dataset ID used throughout the system. |
+| `<id>.class` | string | Fully-qualified Python path to the connector class.                         |
 
-For each entry in the merged `default_path` + `custom_path`:
-
-1. **Import** the dotted class path. Failure → registry load aborts
-2. **Instantiate** the class: `instance = Cls()`. A connector that requires constructor args is rejected → load aborts.
-3. **Validate identity**: `instance.metadata().dataset_id == yaml_key`. Mismatch → registry load aborts. The connector is the source of truth for its id while the YAML key is the human-readable index
-4. **Register** the instance under the key.
-
-### How the YAML becomes a connector instance
-
-Each `class:` value is a dotted Python path (e.g. `timenet.connectors.MITBIHConnector`). The registry resolves it through `importlib`.
-
-```python
-import importlib
-import yaml
-
-
-@classmethod
-def from_config(
-    cls,
-    default_path: Path,
-    custom_path: Path | None = None,
-) -> "DatasetRegistry":
-    connectors: dict[str, DatasetConnector] = {}
-
-    for path in (default_path, custom_path):
-        if path is None:
-            continue
-        with open(path) as f:
-            config = yaml.safe_load(f)
-
-        for dataset_id, entry in config["datasets"].items():
-            # 1. Split dotted path into module + class name.
-            module_path, _, class_name = entry["class"].rpartition(".")
-
-            # 2. Dynamically import the module.
-            module = importlib.import_module(module_path)
-
-            # 3. Look up the class object.
-            connector_cls: type[DatasetConnector] = getattr(module, class_name)
-
-            # 4. Instantiate with no arguments.
-            instance: DatasetConnector = connector_cls()
-
-            # 5. Validate that the connector's id matches the YAML key.
-            if instance.metadata().dataset_id != dataset_id:
-                raise ValueError(
-                    f"id mismatch for '{dataset_id}': "
-                    f"connector reports '{instance.metadata().dataset_id}'"
-                )
-
-            # 6. Reject collisions (default vs custom).
-            if dataset_id in connectors:
-                raise ValueError(f"duplicate dataset id: {dataset_id}")
-
-            connectors[dataset_id] = instance
-
-    return cls(connectors)
-```
+The default catalog ships at `timenet/registry/default_datasets.yaml`. A custom catalog is **additive only**: it cannot override or remove entries from the default.
 
 ---
 
 ## Methods
 
-### `all() -> list[DatasetDescriptor]` { data-toc-label='all()' }
+### `from_config()` { data-toc-label='from_config()' }
 
-Returns every registered dataset's descriptor.
+```python
+@classmethod
+def from_config(
+    cls,
+    default_path: Path,
+    custom_path: Path | None = None,
+) -> "DatasetRegistry": ...
+```
 
-### `get(dataset_id: str) -> DatasetConnector | None` { data-toc-label='get()' }
+Builds the registry by loading `default_path`, optionally merging `custom_path`, then importing and instantiating each connector class.
 
-Returns the connector instance for one dataset id, or `None` if not registered.
+**Parameters**
 
-### `ids() -> list[str]` { data-toc-label='ids()' }
+| Name           | Type           | Default  | Description                                                                              |
+| -------------- | -------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `default_path` | `Path`         | required | Path to the built-in catalog shipped with TimeNet.                                       |
+| `custom_path`  | `Path \| None` | `None`   | User-supplied catalog. Entries are merged after the default; duplicate IDs are rejected. |
 
-Just the keys, sorted.
+**Returns:** A fully-loaded `DatasetRegistry`.
 
-### `filter(criteria: QueryCriteria) -> list[DatasetDescriptor]` { data-toc-label='filter()' }
+**Raises**
 
-Returns the descriptors of datasets matching `criteria`.
+| Exception           | Condition                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `FileNotFoundError` | Either path does not exist.                                                                        |
+| `yaml.YAMLError`    | A YAML file is malformed.                                                                          |
+| `ImportError`       | The module portion of a `class:` value cannot be imported.                                         |
+| `AttributeError`    | The class portion of a `class:` value is not present on the imported module.                       |
+| `TypeError`         | The connector class requires constructor arguments.                                                |
+| `ValueError`        | `metadata().dataset_id` does not match its YAML key, or a duplicate ID is found across both files. |
 
-The filter is implemented by walking `all()` and applying the criteria field-by-field.
+**Loading sequence**
+
+For each entry, in order (`default_path` first, `custom_path` second):
+
+1. Import the dotted class path.
+2. Instantiate with no arguments: `Cls()`.
+3. Assert `instance.metadata().dataset_id == yaml_key`, the connector is the source of truth for its own ID.
+4. Assert the ID is not already registered.
+5. Store under the key.
+
+**Example**
+
+```python
+registry = DatasetRegistry.from_config(
+    default_path=Path("timenet/registry/default_datasets.yaml"),
+    custom_path=Path("my_datasets.yaml"),  # optional
+)
+```
 
 ---
+
+### `all()` { data-toc-label='all()' }
+
+```python
+def all(self) -> list[DatasetMetadata]: ...
+```
+
+Returns descriptors for every registered dataset.
+
+**Returns:** Descriptors for every registered dataset, in registration order (default entries first, then custom).
+
+---
+
+### `get()` { data-toc-label='get()' }
+
+```python
+def get(self, dataset_id: str) -> DatasetConnector | None: ...
+```
+
+Looks up a single connector by its dataset ID.
+
+**Parameters**
+
+| Name         | Type  | Default  | Description                                        |
+| ------------ | ----- | -------- | -------------------------------------------------- |
+| `dataset_id` | `str` | required | The YAML key / `metadata().dataset_id` to look up. |
+
+**Returns:** The connector instance, or `None` if the ID is not registered.
+
+---
+
+### `ids()` { data-toc-label='ids()' }
+
+```python
+def ids(self) -> list[str]: ...
+```
+
+Returns the IDs of every registered dataset.
+
+**Returns:** All registered dataset IDs, sorted alphabetically.
+
+---
+
+### `filter()` { data-toc-label='filter()' }
+
+```python
+def filter(self, criteria: QueryCriteria) -> list[DatasetMetadata]: ...
+```
+
+Returns the descriptors of datasets that match a `QueryCriteria`.
+
+**Parameters**
+
+| Name       | Type            | Default  | Description                                                        |
+| ---------- | --------------- | -------- | ------------------------------------------------------------------ |
+| `criteria` | `QueryCriteria` | required | Filter specification. Fields are ANDed; `None` fields are ignored. |
+
+**Returns:** Descriptors of datasets that match every non-`None` field in `criteria`.
+
+---
+
+## `QueryCriteria`
+
+Filter specification for `filter()` and the SDK's `query()` / `list()`. Each field is independent: fields set to `None` are ignored, and non-`None` fields are ANDed together to form the final filter.
+
+```python
+from dataclasses import dataclass
+
+from timenet.domains import Domain
+from timenet.licenses import License
+from timenet.tasks import Task
+
+
+@dataclass(frozen=True)
+class QueryCriteria:
+    domains: tuple[Domain, ...] | None = None
+    tasks: tuple[Task, ...] | None = None
+    license: License | None = None
+    signals: tuple[str, ...] | None = None
+    min_length_s: float | None = None
+    source: str | None = None
+    dataset_ids: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+```
+
+**Fields**
+
+| Name           | Type                 | Description                                                                          |
+| -------------- | -------------------- | ------------------------------------------------------------------------------------ |
+| `domains`      | `tuple[Domain, ...]` | Match if the dataset's `metadata().domains` shares any value with this tuple.        |
+| `tasks`        | `tuple[Task, ...]`   | Match if the dataset's annotation specs include any of these task types.             |
+| `license`      | `License`            | Exact match against `metadata().license`.                                            |
+| `signals`      | `tuple[str, ...]`    | Match if the dataset declares all of these `SignalSpec.name` values.                 |
+| `min_length_s` | `float`              | Match if the dataset's minimum recording length is at least this many seconds.       |
+| `source`       | `str`                | Substring match against `metadata().source_url`.                                     |
+| `dataset_ids`  | `tuple[str, ...]`    | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID. |
+| `tags`         | `tuple[str, ...]`    | Match if the dataset declares all of these tags in `metadata().tags`.                |
