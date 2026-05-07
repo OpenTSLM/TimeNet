@@ -1,0 +1,34 @@
+[project]
+name = "timenet"
+version = "0.1.0"
+description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["SIM", "C4", "PIE", "RET", "PTH", "ARG", "ASYNC", "UP", "RUF", "E", "N", "W", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["timenet"]
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.12",
+    "ty>=0.0.34",
+]
