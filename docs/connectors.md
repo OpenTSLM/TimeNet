@@ -9,10 +9,12 @@ The unit of dataset integration. One connector class = one dataset (for the mome
 ```python
 from abc import ABC, abstractmethod
 from pathlib import Path
+from collections.abc import Callable, Iterator
 from typing import Generic, TypeVar
 
 from timenet.timef.dataset import TimeFDataset
 from timenet.timef.metadata import DatasetMetadata
+from timenet.timef.writer import SignalChunk, TimeFWriter, WriteProgressEvent
 
 TRaw = TypeVar("TRaw")
 
@@ -29,6 +31,18 @@ class BaseConnector(ABC, Generic[TRaw]):
 
     @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset: ...
+
+    @abstractmethod
+    def iter_signals(self, raw_refs: list[TRaw], dataset: TimeFDataset) -> Iterator[SignalChunk]: ...
+
+    def store(
+        self,
+        raw_refs: list[TRaw],
+        dataset: TimeFDataset,
+        root: Path,
+        *,
+        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+    ) -> None: ...
 ```
 
 Minimal example, 12-lead ECG dataset:
@@ -195,8 +209,84 @@ CPU-bound stage. Parses raw references and populates a `TimeFDataset`. No networ
 
 **Constraints**
 
-- One source recording = one stored sample. Do not slice; slicing is the data-loader's responsibility.
 - `dataset_id` and `version` on the returned `TimeFDataset` must match `metadata().dataset_id` and `metadata().version`.
+
+---
+
+### `iter_signals()`
+
+```python
+@abstractmethod
+def iter_signals(self, raw_refs: list[TRaw], dataset: TimeFDataset) -> Iterator[SignalChunk]: ...
+```
+
+Yields every `SignalChunk` required by the dataset. Called by `store()` to stream signal data into `TimeFWriter`.
+
+**Parameters**
+
+| Name       | Type           | Default  | Description                                                                           |
+| ---------- | -------------- | -------- | ------------------------------------------------------------------------------------- |
+| `raw_refs` | `list[TRaw]`   | required | The list returned by `download()`.                                                    |
+| `dataset`  | `TimeFDataset` | required | The dataset built by `convert()`. Use it to look up `sample_id` values derived there. |
+
+**Returns:** An iterator of `SignalChunk`. See [SignalChunk](timef-writer.md#signalchunk).
+
+**Constraints**
+
+- Chunks may be yielded in any order.
+- For samples that share signal data, yield one `SignalChunk` with all sharing sample IDs in `sample_ids`. The writer does not dedup.
+- The `sample_ids` in every yielded chunk must match IDs present in `dataset.samples`. The writer validates this at `add_chunk()` time.
+- In testing mode (`self.testing`), yield only fixture-derived chunks.
+
+**Pattern for building the source → sample_id index**
+
+```python
+def iter_signals(self, raw_refs, dataset):
+    by_source: dict[str, list[str]] = {}
+    for s in dataset.samples:
+        for source_id in s.source_ids:
+            by_source.setdefault(source_id, []).append(s.sample_id)
+
+    for rec in raw_refs:
+        sids = tuple(by_source[rec.recording_id])
+        for channel, values in read_signals(rec.path):
+            yield SignalChunk(sample_ids=sids, ...)
+```
+
+---
+
+### `store()`
+
+```python
+def store(
+    self,
+    raw_refs: list[TRaw],
+    dataset: TimeFDataset,
+    root: Path,
+    *,
+    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+) -> None: ...
+```
+
+Streams `iter_signals()` into a `TimeFWriter` and commits the dataset to disk.
+
+**Parameters**
+
+| Name          | Type                                           | Default  | Description                                                 |
+| ------------- | ---------------------------------------------- | -------- | ----------------------------------------------------------- |
+| `raw_refs`    | `list[TRaw]`                                   | required | The list returned by `download()`.                          |
+| `dataset`     | `TimeFDataset`                                 | required | The populated dataset returned by `convert()`.              |
+| `root`        | `Path`                                         | required | Parent directory passed through to `TimeFWriter`.           |
+| `progress_cb` | `Callable[[WriteProgressEvent], None] \| None` | `None`   | Forwarded to `TimeFWriter`. Called once per progress event. |
+
+**Small example body**
+
+```python
+def store(self, raw_refs, dataset, root, *, progress_cb=None):
+    with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
+        for chunk in self.iter_signals(raw_refs, dataset):
+            writer.add_chunk(chunk)
+```
 
 ---
 
@@ -229,18 +319,18 @@ class DatasetMetadata:
 
 **Fields**
 
-| Name               | Type                         | Required | Description                                                                                                                   |
-| ------------------ | ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                              |
-| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](enums-and-spec.md#version).                                             |
-| `description`      | `str`                        | yes      | One-sentence human-readable description.                                                                                      |
-| `license`          | `License`                    | yes      | Data license.                                                                                                                 |
+| Name               | Type                         | Required | Description                                                                                                                            |
+| ------------------ | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                                       |
+| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](enums-and-spec.md#version).                                                      |
+| `description`      | `str`                        | yes      | One-sentence human-readable description.                                                                                               |
+| `license`          | `License`                    | yes      | Data license.                                                                                                                          |
 | `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [SignalSpec](enums-and-spec.md#signalspec).                      |
 | `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](enums-and-spec.md#annotationspec).                      |
 | `view_specs`       | `tuple[ViewSpec, ...]`       | no       | Sample views the connector emits. Every `Sample.view` must reference one of these by name. See [ViewSpec](enums-and-spec.md#viewspec). |
-| `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                   |
-| `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                                          |
-| `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                                               |
+| `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                            |
+| `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                                                   |
+| `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                                                        |
 
 ---
 
