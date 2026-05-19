@@ -1,6 +1,6 @@
 # TimeFWriter
 
-Serializes a `TimeFDataset` and its associated signal arrays to disk in the TimeF format.
+Serializes a `TimeFDataset` and its associated time-series arrays to disk in the TimeF format.
 
 Two public types live in `timenet/timef/writer.py`:
 
@@ -10,7 +10,7 @@ timenet/timef/writer.py
     TimeFWriter            (context manager)
 ```
 
-The writer pulls bytes from `Signal.reader` callables attached to the dataset's samples.
+The writer pulls bytes from `TimeSeries.reader` callables attached to the dataset's samples.
 
 ---
 
@@ -27,7 +27,7 @@ from timenet.timef.dataset import TimeFDataset
 
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["signal", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -58,11 +58,11 @@ class TimeFWriter:
 
 ## How sharing and splitting work
 
-**Identity-based sharing.** Before serializing, the writer walks `dataset.samples` and groups `Signal` instances by Python identity (`id(signal)`). One unique `Signal` produces one or more chunks on disk, every chunk's `sample_ids` column lists every sample that referenced that Signal.
+**Identity-based sharing.** Before serializing, the writer walks `dataset.samples` and groups `TimeSeries` instances by Python identity (`id(ts)`). One unique `TimeSeries` produces one or more chunks on disk, every chunk's `sample_ids` column lists every sample that referenced that `TimeSeries`.
 
-Two `Signal`s with equal fields but different Python identity produce **two** chunks. Reusing the same `Signal` object across samples is how connectors declare shared bytes.
+Two `TimeSeries` with equal fields but different Python identity produce **two** chunks. Reusing the same `TimeSeries` object across samples is how connectors declare shared bytes.
 
-**Chunk splitting.** A single `Signal.reader()` call may return a large array. If its payload exceeds `chunk_max_bytes` (default 8 MB), the writer splits it into sequential sub-chunks with increasing `t_start_s`. Each sub-chunk gets its own `chunk_idx` row in `signal_index.parquet`. The Signal's `(spec_id, channel, source_id, t_start_s, t_end_s)` metadata in `samples.parquet` is unaffected — splitting is purely a storage-layer concern.
+**Chunk splitting.** A single `TimeSeries.reader()` call may return a large array. If its payload exceeds `chunk_max_bytes` (default 8 MB), the writer splits it into sequential sub-chunks with increasing `t_start_s`. Each sub-chunk gets its own `chunk_idx` row in `time_series_index.parquet`. The series' `(spec_id, channel, source_id, t_start_s, t_end_s)` metadata in `samples.parquet` is unaffected, splitting is purely a storage-layer concern.
 
 ---
 
@@ -73,7 +73,7 @@ Emitted by the writer at each stage of the write pipeline. Passed to `progress_c
 ```python
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["signal", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -92,7 +92,7 @@ class WriteProgressEvent:
 
 ## `TimeFWriter`
 
-Context manager that serializes the dataset's signals into the TimeF format on disk.
+Context manager that serializes the dataset's time series into the TimeF format on disk.
 
 ### `__init__()`
 
@@ -111,14 +111,14 @@ def __init__(
 
 **Parameters**
 
-| Name                 | Type                                           | Default       | Description                                                                                         |
-| -------------------- | ---------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------- |
-| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.               |
-| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples` and `dataset.metadata` during finalize.       |
-| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.      |
-| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | A `Signal.reader()` payload exceeding this size is split into sequential sub-chunks before storing. |
-| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                              |
-| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                            |
+| Name                 | Type                                           | Default       | Description                                                                                             |
+| -------------------- | ---------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.                   |
+| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples` and `dataset.metadata` during finalize.           |
+| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.          |
+| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | A `TimeSeries.reader()` payload exceeding this size is split into sequential sub-chunks before storing. |
+| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                                  |
+| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                                |
 
 **Raises**
 
@@ -153,7 +153,7 @@ def __exit__(self, exc_type, exc_val, tb) -> None: ...
 def write(self) -> None: ...
 ```
 
-Walks `dataset.samples`, dedupes signals by Python identity, calls each unique `Signal.reader()` once, splits the payload into chunks if needed, and finalizes every output file. After `write()` returns successfully, `close()` (or the context manager's `__exit__`) only has to flush the manifest.
+Walks `dataset.samples`, dedupes time series by Python identity, calls each unique `TimeSeries.reader()` once, splits the payload into chunks if needed, and finalizes every output file. After `write()` returns successfully, `close()` (or the context manager's `__exit__`) only has to flush the manifest.
 
 Callers just open the writer as a context manager and call `write()`
 
@@ -199,11 +199,11 @@ Deletes `<root>/<dataset_id>/<version>/`. Called automatically by `__exit__` on 
     task=question_and_answer/part-0.parquet
     task=forecasting/part-0.parquet
     task=reasoning/part-0.parquet
-  signals/
+  time_series/
     shard-00000.parquet
     shard-00001.parquet
     ...
-  signal_index.parquet
+  time_series_index.parquet
 ```
 
 `manifest.json` is the commit marker. A version directory without it is in-progress and must be ignored by readers.
@@ -218,25 +218,26 @@ Annotations are partitioned by `task_id` because task subclasses have disjoint p
 
 One row per sample, sorted by `sample_id`.
 
-| Column          | Arrow type                      | Description                                                                                                     |
-| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `sample_id`     | `string`                        |                                                                                                                 |
-| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                       |
-| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                           |
-| `source_ids`    | `list<string>`                  | Distinct `Signal.source_id` values across `signals`, in first-seen order. Derived from `signals` at write time. |
-| `signals`       | `list<struct<...>>` — see below | One entry per `Signal` on the sample.                                                                           |
-| `n_annotations` | `int32`                         |                                                                                                                 |
+| Column          | Arrow type                      | Description                                                                                                                 |
+| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`     | `string`                        |                                                                                                                             |
+| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                                   |
+| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                                       |
+| `source_ids`    | `list<string>`                  | Distinct `TimeSeries.source_id` values across `time_series`, in first-seen order. Derived from `time_series` at write time. |
+| `time_series`   | `list<struct<...>>` — see below | One entry per `TimeSeries` on the sample.                                                                                   |
+| `n_annotations` | `int32`                         |                                                                                                                             |
 
-`signals` struct fields:
+`time_series` struct fields:
 
-| Field              | Arrow type           | Notes                                         |
-| ------------------ | -------------------- | --------------------------------------------- |
-| `spec_id`          | `string`             | Dictionary-encoded.                           |
-| `channel`          | `string`             | Dictionary-encoded.                           |
-| `source_id`        | `string`             | Dictionary-encoded.                           |
-| `sampling_rate_hz` | `float64`            |                                               |
-| `t_start_s`        | `float64`            | Window start in the source's timeline.        |
-| `t_end_s`          | `float64` (nullable) | `null` when the signal runs to end of source. |
+| Field           | Arrow type           | Notes                                             |
+| --------------- | -------------------- | ------------------------------------------------- |
+| `spec_id`       | `string`             | Dictionary-encoded.                               |
+| `channel`       | `string`             | Dictionary-encoded.                               |
+| `source_id`     | `string`             | Dictionary-encoded.                               |
+| `sampling_rate` | `float64`            | Canonical Hz, from `TimeSeries.sampling_rate.hz`. |
+| `t_start_s`     | `float64`            | Window start in the source's timeline.            |
+| `t_end_s`       | `float64` (nullable) | `null` when the series runs to end of source.     |
+| `has_timestamps` | `bool`              | `true` when `TimeSeries.timestamps` is set (non-uniform sampling); the explicit per-sample timestamps live in the shard's `timestamps` column. |
 
 ---
 
@@ -266,27 +267,27 @@ Task-specific columns:
 
 ---
 
-### `signals/shard-N.parquet`
+### `time_series/shard-N.parquet`
 
 One row per chunk. Sorted by `(spec_id, channel, chunk_idx)`. Row groups flushed every 10,000 rows [TODO: this has to be discussed].
 
-| Column             | Arrow type                                  |
-| ------------------ | ------------------------------------------- |
-| `sample_ids`       | `list<string>` (dictionary-encoded entries) |
-| `spec_id`          | `string` (dictionary-encoded)               |
-| `channel`          | `string` (dictionary-encoded)               |
-| `chunk_idx`        | `int32`                                     |
-| `t_start_s`        | `float64`                                   |
-| `n_samples`        | `int32`                                     |
-| `sampling_rate_hz` | `float64`                                   |
-| `values`           | `list<float32>`                             |
-| `timestamps`       | `list<float64>` (nullable)                  |
+| Column          | Arrow type                                  |
+| --------------- | ------------------------------------------- |
+| `sample_ids`    | `list<string>` (dictionary-encoded entries) |
+| `spec_id`       | `string` (dictionary-encoded)               |
+| `channel`       | `string` (dictionary-encoded)               |
+| `chunk_idx`     | `int32`                                     |
+| `t_start_s`     | `float64`                                   |
+| `n_samples`     | `int32`                                     |
+| `sampling_rate` | `float64`                                   |
+| `values`        | `list<float32>`                             |
+| `timestamps`    | `list<float64>` (nullable)                  |
 
-A new shard is opened when the current one exceeds `shard_target_bytes`. Per-sample lookup goes through `signal_index.parquet`.
+A new shard is opened when the current one exceeds `shard_target_bytes`. Per-sample lookup goes through `time_series_index.parquet`.
 
 ---
 
-### `signal_index.parquet`
+### `time_series_index.parquet`
 
 The reader's primary lookup table. One row per `(sample_id, chunk)` pair. A chunk shared by N samples contributes N rows, all pointing at the same shard row.
 
@@ -309,7 +310,7 @@ Sorted by `(sample_id, spec_id, channel, chunk_idx)`.
 
 ### `manifest.json`
 
-Written last by `close()`. Its presence is the commit signal.
+Written last by `close()`. Its presence is the commit marker.
 
 ```json
 {
@@ -326,28 +327,23 @@ Written last by `close()`. Its presence is the commit signal.
     "domains": ["cardiology"],
     "source_url": null,
     "tags": [],
-    "signal_specs": [
+    "time_series_specs": [
       {
-        "spec_id": "ecg_12lead",
-        "name": "ECG",
-        "channels": [
-          "I",
-          "II",
-          "III",
-          "aVR",
-          "aVL",
-          "aVF",
-          "V1",
-          "V2",
-          "V3",
-          "V4",
-          "V5",
-          "V6"
-        ],
+        "spec_id": "ecg_lead",
+        "name": "ECG Lead",
         "unit_sampling_rate": "Hz",
         "unit_timestamp": "s",
         "unit_value": "mV",
-        "sensor_id": null
+        "device": "holter_x"
+      }
+    ],
+    "device_specs": [
+      {
+        "device_id": "holter_x",
+        "name": "Holter Monitor X",
+        "manufacturer": "Acme",
+        "model": null,
+        "time_series_specs": ["ecg_lead"]
       }
     ],
     "annotation_specs": [
@@ -357,24 +353,24 @@ Written last by `close()`. Its presence is the commit signal.
   "counts": {
     "samples": 1000,
     "annotations_by_task": { "classification": 1000, "labeling": 4000 },
-    "signal_chunks": 12000,
-    "signal_index_rows": 14500,
-    "signal_specs": { "ecg_12lead": { "samples": 1000, "channels": 12 } }
+    "time_series_chunks": 12000,
+    "time_series_index_rows": 14500,
+    "time_series_specs": { "ecg_lead": { "samples": 1000, "channels": 12 } }
   },
   "files": {
     "samples": "samples.parquet",
     "annotations": ["annotations/task=classification/part-0.parquet"],
-    "signals": ["signals/shard-00000.parquet"],
-    "signal_index": "signal_index.parquet"
+    "time_series": ["time_series/shard-00000.parquet"],
+    "time_series_index": "time_series_index.parquet"
   },
   "checksums": {
     "samples.parquet": "sha256:...",
-    "signal_index.parquet": "sha256:..."
+    "time_series_index.parquet": "sha256:..."
   }
 }
 ```
 
-`signal_chunks` counts unique rows across all shards. `signal_index_rows` counts exploded index rows, equal to `signal_chunks` when no chunks are shared, greater when sharing occurs.
+`time_series_chunks` counts unique rows across all shards. `time_series_index_rows` counts exploded index rows, equal to `time_series_chunks` when no chunks are shared, greater when sharing occurs.
 
 ---
 
@@ -382,16 +378,16 @@ Written last by `close()`. Its presence is the commit signal.
 
 Full sequence from construction to commit:
 
-| Step | Method      | Action                                                                                                                                                                                                                             |
-| ---- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `__init__`  | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                                                                           |
-| 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                        |
-| 3a   | `write`     | Validates every `Sample.view` and every `Signal` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                                                     |
-| 3b   | `write`     | Dedupes signals by Python identity. Builds the unique-signal set and a `signal_id → list[sample_id]` index.                                                                                                                        |
-| 3c   | `write`     | For each unique signal, calls `signal.reader()` (and `signal.timestamps()` when set), validates the returned array, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed. |
-| 3d   | `write`     | Validates that every annotation's `sample_ids` resolves. Writes `samples.parquet`, `annotations/`, `signal_index.parquet`.                                                                                                         |
-| 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                        |
-| —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                    |
+| Step | Method      | Action                                                                                                                                                                                                                           |
+| ---- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `__init__`  | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                                                                         |
+| 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                      |
+| 3a   | `write`     | Validates every `Sample.view` and every `TimeSeries` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                                               |
+| 3b   | `write`     | Dedupes time series by Python identity. Builds the unique-`TimeSeries` set and a `time_series_id → list[sample_id]` index.                                                                                                       |
+| 3c   | `write`     | For each unique `TimeSeries`, calls `ts.reader()` (and `ts.timestamps()` when set), validates the returned array, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed. |
+| 3d   | `write`     | Validates that every annotation's `sample_ids` resolves. Writes `samples.parquet`, `annotations/`, `time_series_index.parquet`.                                                                                                  |
+| 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                      |
+| —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                  |
 
 **Commit contract:** `manifest.json` is written last. A version directory that exists but has no `manifest.json` is in-progress or failed and must be ignored by readers.
 
@@ -405,23 +401,23 @@ Full sequence from construction to commit:
 
 ### Dataset-level (enforced at the start of `write()`)
 
-| Check                                                                                       | Raises       |
-| ------------------------------------------------------------------------------------------- | ------------ |
-| Every `Sample.view` is a member of the `View` enum                                          | `ValueError` |
-| `Sample.signals` is non-empty for every sample                                              | `ValueError` |
-| Every `Signal.spec_id` is the `spec_id` of a `SignalSpec` in `DatasetMetadata.signal_specs` | `ValueError` |
-| Every `Signal.channel` is one of the referenced `SignalSpec.channels`                       | `ValueError` |
-| `Signal.sampling_rate_hz > 0`                                                               | `ValueError` |
-| `Signal.t_start_s >= 0`, and `t_end_s is None or t_end_s > t_start_s`                       | `ValueError` |
-| Every annotation's `sample_ids` only contains IDs present in `dataset.samples`              | `ValueError` |
+| Check                                                                                                                                                                               | Raises       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Every `Sample.view` is a member of the `View` enum                                                                                                                                  | `ValueError` |
+| `Sample.time_series` is non-empty for every sample                                                                                                                                  | `ValueError` |
+| Every `TimeSeries.spec` is an instance of a `TimeSeriesSpec` subclass whose type is declared in `DatasetMetadata.time_series_specs` (`type(ts.spec) in metadata.time_series_specs`) | `ValueError` |
+| `TimeSeries.spec.channel` is non-empty                                                                                                                                              | `ValueError` |
+| `TimeSeries.sampling_rate.hz > 0` (guaranteed by [`Frequency`](types.md#frequency)'s constructor)                                                                                   | `ValueError` |
+| `TimeSeries.t_start_s >= 0`, and `t_end_s is None or t_end_s > t_start_s`                                                                                                           | `ValueError` |
+| Every annotation's `sample_ids` only contains IDs present in `dataset.samples`                                                                                                      | `ValueError` |
 
-### Per-signal (enforced as each `reader()` is called)
+### Per-series (enforced as each `reader()` is called)
 
-| Check                                                                                                                                | Raises       |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
-| `signal.reader()` returns a 1-D `float32`, non-empty, finite array                                                                   | `ValueError` |
-| When `t_end_s is not None`: `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)` (off-by-one tolerated within ±1 sample) | `ValueError` |
-| When `signal.timestamps` is set: same length as `reader()` output and monotonic non-decreasing                                       | `ValueError` |
+| Check                                                                                        | Raises       |
+| -------------------------------------------------------------------------------------------- | ------------ |
+| `ts.reader()` returns a 1-D `float32`, non-empty, finite array                               | `ValueError` |
+| When `t_end_s is not None`: `len(values) == round((t_end_s - t_start_s) * sampling_rate.hz)` | `ValueError` |
+| When `ts.timestamps` is set: same length as `reader()` output and monotonic non-decreasing   | `ValueError` |
 
 Failure leaves the writer unusable. `__exit__` will call `abort()`.
 
@@ -431,12 +427,12 @@ Failure leaves the writer unusable. `__exit__` will call `abort()`.
 
 `progress_cb` is called once per event. Events are emitted in the order listed below.
 
-| `stage`           | `completed`              | `total`                                 | When                                                          |
-| ----------------- | ------------------------ | --------------------------------------- | ------------------------------------------------------------- |
-| `signal`          | signals serialized       | total unique signals across the dataset | after each unique `Signal` is read, validated, and serialized |
-| `shard_finalized` | shards finalized so far  | `None`                                  | each time a shard is flushed and closed                       |
-| `samples`         | `len(dataset.samples)`   | `len(dataset.samples)`                  | once, after `samples.parquet` is written                      |
-| `annotations`     | annotations written      | total annotation count                  | once per task partition written                               |
-| `index`           | total index rows written | total index rows                        | once, after `signal_index.parquet` is written                 |
-| `manifest`        | `1`                      | `1`                                     | once, after `manifest.json` is written                        |
-| `commit`          | `1`                      | `1`                                     | once, immediately after `manifest`                            |
+| `stage`           | `completed`              | `total`                                     | When                                                              |
+| ----------------- | ------------------------ | ------------------------------------------- | ----------------------------------------------------------------- |
+| `time_series`     | time series serialized   | total unique time series across the dataset | after each unique `TimeSeries` is read, validated, and serialized |
+| `shard_finalized` | shards finalized so far  | `None`                                      | each time a shard is flushed and closed                           |
+| `samples`         | `len(dataset.samples)`   | `len(dataset.samples)`                      | once, after `samples.parquet` is written                          |
+| `annotations`     | annotations written      | total annotation count                      | once per task partition written                                   |
+| `index`           | total index rows written | total index rows                            | once, after `time_series_index.parquet` is written                |
+| `manifest`        | `1`                      | `1`                                         | once, after `manifest.json` is written                            |
+| `commit`          | `1`                      | `1`                                         | once, immediately after `manifest`                                |

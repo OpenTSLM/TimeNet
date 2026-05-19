@@ -53,11 +53,11 @@ from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
 from timenet.licenses import License
 from timenet.tasks import ClassificationTask
-from timenet.timef.dataset import Signal, TimeFDataset
+from timenet.timef.dataset import TimeSeries, TimeFDataset
 from timenet.timef.metadata import (
-    AnnotationSpec, DatasetMetadata, SignalSpec,
+    AnnotationSpec, DatasetMetadata, DeviceSpec, TimeSeriesSpec,
 )
-from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
+from timenet.units import Frequency, SamplingRateUnit, TimestampUnit, ValueUnit
 from timenet.version import Version
 from timenet.views import View
 
@@ -68,12 +68,29 @@ class Recording:
     patient_id: str
     path: Path
     leads: tuple[str, ...]
-    sampling_rate_hz: float
+    sampling_rate: float
 
 
 def read_lead(path: Path, lead: str) -> np.ndarray:
     # parse the EDF and return the channel as a float32 1-D array
     ...
+
+
+# Modality + device contracts. Define the TimeSeriesSpec subclass first, the
+# DeviceSpec subclass second (listing its spec classes), then back-patch the
+# spec's typed `device` ref once both classes exist.
+class ECGLeadSpec(TimeSeriesSpec):
+    spec_id = "ecg_lead"
+    name = "ECG Lead"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.MILLIVOLT
+
+
+class HolterX(DeviceSpec):
+    device_id = "holter_x"
+    name = "Holter Monitor X"
+    manufacturer = "Acme"
 
 
 class ECGConnector(BaseConnector[Recording]):
@@ -84,17 +101,8 @@ class ECGConnector(BaseConnector[Recording]):
         description="100 patients, one 12-lead ECG recording each.",
         license=License.CC_BY_4,
         domains=(Domain.CARDIOLOGY,),
-        signal_specs=(
-            SignalSpec(
-                spec_id="ecg_12lead",
-                name="ECG",
-                channels=("I", "II", "III", "aVR", "aVL", "aVF",
-                          "V1", "V2", "V3", "V4", "V5", "V6"),
-                unit_sampling_rate=SamplingRateUnit.HZ,
-                unit_timestamp=TimestampUnit.SECONDS,
-                unit_value=ValueUnit.MILLIVOLT,
-            ),
-        ),
+        time_series_specs=(ECGLeadSpec,),
+        device_specs=(HolterX,),
         annotation_specs=(
             AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask),
         ),
@@ -116,12 +124,11 @@ class ECGConnector(BaseConnector[Recording]):
             sample = dataset.add_sample(
                 sample_id=rec.recording_file_name,
                 subject_ids=(rec.patient_id,),
-                signals=tuple(
-                    Signal(
-                        spec_id="ecg_12lead",
-                        channel=lead,
+                time_series=tuple(
+                    TimeSeries(
+                        spec=ECGLeadSpec(channel=lead),
                         source_id=rec.recording_file_name,
-                        sampling_rate_hz=rec.sampling_rate_hz,
+                        sampling_rate=Frequency.Hz(rec.sampling_rate),
                         reader=lambda p=rec.path, c=lead: read_lead(p, c),
                     )
                     for lead in rec.leads
@@ -221,8 +228,8 @@ CPU-bound stage. Parses raw references and populates a `TimeFDataset`. No networ
 **Constraints**
 
 - `dataset_id` and `version` on the returned `TimeFDataset` must match `metadata().dataset_id` and `metadata().version`.
-- To share signal data across samples, attach the **same** `Signal` instance to each sample. The writer dedupes by Python object identity (`id()`).
-- Each `Signal.reader` should be a closure that captures whatever it needs (file path, file handle, S3 key, …), `store()` calls it with no arguments.
+- To share time-series data across samples, attach the **same** `TimeSeries` instance to each sample. The writer dedupes by Python object identity (`id()`).
+- Each `TimeSeries.reader` should be a closure that captures whatever it needs (file path, file handle, S3 key, …), `store()` calls it with no arguments.
 - In testing mode (`self.testing`), build readers that pull from fixtures instead of remote sources.
 
 ---
@@ -239,7 +246,7 @@ def store(
 ) -> None: ...
 ```
 
-Walks `dataset.samples`, dedupes `Signal` instances by identity, and streams them through a `TimeFWriter`. Commits the dataset to disk on success.
+Walks `dataset.samples`, dedupes `TimeSeries` instances by identity, and streams them through a `TimeFWriter`. Commits the dataset to disk on success.
 
 `store()` has a default implementation on `BaseConnector`. Most connectors do not need to override it.
 
@@ -269,13 +276,13 @@ def store(
 
 ## `DatasetMetadata`
 
-The connector's self-description. Declares identity, classification, and the specs that govern the dataset's contents (signals, annotations).
+The connector's self-description. Declares identity, classification, and the specs that govern the dataset's contents (time series, annotations).
 
 ```python
 from timenet.domains import Domain
 from timenet.licenses import License
 from timenet.timef.metadata import (
-    AnnotationSpec, SensorSpec, SignalSpec,
+    AnnotationSpec, DeviceSpec, TimeSeriesSpec,
 )
 from timenet.version import Version
 
@@ -286,9 +293,9 @@ class DatasetMetadata:
     version: Version
     description: str
     license: License
-    signal_specs: tuple[SignalSpec, ...] = ()
+    time_series_specs: tuple[type[TimeSeriesSpec], ...] = ()
     annotation_specs: tuple[AnnotationSpec, ...] = ()
-    sensor_specs: tuple[SensorSpec, ...] = ()
+    device_specs: tuple[type[DeviceSpec], ...] = ()
     domains: tuple[Domain, ...] = ()
     source_url: str | None = None
     tags: tuple[str, ...] = ()
@@ -296,17 +303,18 @@ class DatasetMetadata:
 
 **Fields**
 
-| Name               | Type                         | Required | Description                                                                                                                            |
-| ------------------ | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                                       |
-| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](types.md#version).                                                      |
-| `description`      | `str`                        | yes      | One-sentence human-readable description.                                                                                               |
-| `license`          | `License`                    | yes      | Data license.                                                                                                                          |
-| `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [SignalSpec](types.md#signalspec).                      |
-| `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](types.md#annotationspec).                      |
-| `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                            |
-| `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                                                   |
-| `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                                                        |
+| Name                | Type                               | Required | Description                                                                                                                                                                |
+| ------------------- | ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset_id`        | `str`                              | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                                                                           |
+| `version`           | `Version`                          | yes      | Semantic version (`major.minor.patch`). See [Version](types.md#version).                                                                                                   |
+| `description`       | `str`                              | yes      | One-sentence human-readable description.                                                                                                                                   |
+| `license`           | `License`                          | yes      | Data license.                                                                                                                                                              |
+| `time_series_specs` | `tuple[type[TimeSeriesSpec], ...]` | no       | Modality **types** the dataset records (channel, units, sampling rate, device). `TimeSeriesSpec` subclasses, not instances. See [TimeSeriesSpec](types.md#timeseriesspec). |
+| `annotation_specs`  | `tuple[AnnotationSpec, ...]`       | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](types.md#annotationspec).                                                                   |
+| `device_specs`      | `tuple[type[DeviceSpec], ...]`     | no       | Device **types** that produced the modalities. `DeviceSpec` subclasses, not instances. See [DeviceSpec](types.md#devicespec).                                              |
+| `domains`           | `tuple[Domain, ...]`               | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                                                                |
+| `source_url`        | `str \| None`                      | no       | Canonical URL of the source dataset.                                                                                                                                       |
+| `tags`              | `tuple[str, ...]`                  | no       | Free-form labels for filtering.                                                                                                                                            |
 
 ---
 
@@ -323,7 +331,7 @@ def download(self, cache_dir: Path) -> list[Recording]:
                 patient_id="p_001",
                 path=cache_dir / "fixture_001.edf",
                 leads=LEADS,
-                sampling_rate_hz=500.0,
+                sampling_rate=500.0,
             )
         ]
     # real download ...
@@ -338,7 +346,7 @@ Fixture files live under `E2E_CACHE_DIR/<dataset_id>/` by convention.
 - **One connector class, one dataset.**
 - **No constructor arguments.** Configuration comes from environment variables with hardcoded defaults.
 - **The connector decides what a sample is.** For a given dataset there is one connector and it is authoritative: which recordings become samples, which variables to expose, which views to create.
-- **Signals are references, not data.** `convert()` builds `Signal` instances with lazy `reader` callables. Bytes are pulled by the writer during `store()`, never held in memory by the dataset.
-- **Share data by reusing instances.** Two samples that read identical bytes must reference the **same** `Signal` object, the writer dedupes by Python identity.
+- **Time series are references, not data.** `convert()` builds `TimeSeries` instances with lazy `reader` callables. Bytes are pulled by the writer during `store()`, never held in memory by the dataset.
+- **Share data by reusing instances.** Two samples that read identical bytes must reference the **same** `TimeSeries` object, the writer dedupes by Python identity.
 
 PD: this design rule will be changed when we support multiple connectors per dataset

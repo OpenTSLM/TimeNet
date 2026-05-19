@@ -31,7 +31,7 @@ class TimeFDataset:
     def add_sample(
         self,
         *,
-        signals: tuple[Signal, ...],
+        time_series: tuple[TimeSeries, ...],
         view: View,
         subject_ids: tuple[str, ...] = (),
     ) -> Sample: ...
@@ -73,7 +73,7 @@ def __init__(self, *, dataset_id: str, version: str) -> None: ...
 def add_sample(
     self,
     *,
-    signals: tuple[Signal, ...],
+    time_series: tuple[TimeSeries, ...],
     view: View,
     subject_ids: tuple[str, ...] = (),
 ) -> Sample: ...
@@ -83,26 +83,38 @@ Creates a `Sample` with an auto-generated `sample_id`, registers it, and returns
 
 **Parameters**
 
-| Name          | Type                 | Required | Description                                                                                                                                                                                                                                                          |
-| ------------- | -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signals`     | `tuple[Signal, ...]` | yes      | One `Signal` per `(spec_id, channel)` the sample uses. Multi-element for multi-channel or multi-modal samples. Reuse the **same** `Signal` instance across samples to declare shared data. Each `Signal.spec_id` must be declared in `DatasetMetadata.signal_specs`. |
-| `view`        | `View`               | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                                                                          |
-| `subject_ids` | `tuple[str, ...]`    | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects.                                                |
+| Name          | Type                     | Required | Description                                                                                                                                                                                                           |
+| ------------- | ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time_series` | `tuple[TimeSeries, ...]` | yes      | One `TimeSeries` per channel the sample uses.                                                                                                                                                                         |
+| `view`        | `View`                   | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                           |
+| `subject_ids` | `tuple[str, ...]`        | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects. |
 
 **Returns:** The newly created `Sample`.
 
 **Raises**
 
-| Exception    | Condition           |
-| ------------ | ------------------- |
-| `ValueError` | `signals` is empty. |
+| Exception    | Condition               |
+| ------------ | ----------------------- |
+| `ValueError` | `time_series` is empty. |
 
 **Examples**
 
 Single-subject ECG recording:
 
 ```python
+from timenet.timef.dataset import TimeSeries
+from timenet.timef.metadata import TimeSeriesSpec
+from timenet.units import Frequency, SamplingRateUnit, TimestampUnit, ValueUnit
+
 dataset = TimeFDataset(dataset_id="ecg_dataset", version="1.0.0")
+
+# One modality, subclassed once. Reused by every ECG example below.
+class ECGLeadSpec(TimeSeriesSpec):
+    spec_id = "ecg_lead"
+    name = "ECG Lead"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.MILLIVOLT
 
 def ecg_reader(path: Path, channel: str) -> np.ndarray:
     # parse the EDF and return that channel as a float32 1-D array
@@ -110,12 +122,11 @@ def ecg_reader(path: Path, channel: str) -> np.ndarray:
 
 full = dataset.add_sample(
     subject_ids=("patient_42",),
-    signals=tuple(
-        Signal(
-            spec_id="ecg_12lead",
-            channel=ch,
+    time_series=tuple(
+        TimeSeries(
+            spec=ECGLeadSpec(channel=ch),
             source_id="rec_001",
-            sampling_rate_hz=500.0,
+            sampling_rate=Frequency.Hz(500.0),
             reader=lambda p=path, c=ch: ecg_reader(p, c),
         )
         for ch in ("I", "II", "V1", "V2")
@@ -128,19 +139,40 @@ full = dataset.add_sample(
 Multi-sensor wearables session:
 
 ```python
+class PPGSpec(TimeSeriesSpec):
+    spec_id = "ppg"
+    name = "PPG"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.DIMENSIONLESS
+
+class AccelSpec(TimeSeriesSpec):
+    spec_id = "accel"
+    name = "Acceleration"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.G
+
+class SkinTempSpec(TimeSeriesSpec):
+    spec_id = "skin_temp"
+    name = "Skin Temperature"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.CELSIUS
+
 session = dataset.add_sample(
     subject_ids=("participant_07",),
-    signals=(
-        Signal(spec_id="ppg", channel="ppg", source_id="session_3",
-               sampling_rate_hz=64.0, reader=lambda: load_ppg(session_path)),
-        Signal(spec_id="accel", channel="x", source_id="session_3",
-               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "x")),
-        Signal(spec_id="accel", channel="y", source_id="session_3",
-               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "y")),
-        Signal(spec_id="accel", channel="z", source_id="session_3",
-               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "z")),
-        Signal(spec_id="skin_temp", channel="skin_temp", source_id="session_3",
-               sampling_rate_hz=1.0, reader=lambda: load_temp(session_path)),
+    time_series=(
+        TimeSeries(spec=PPGSpec(channel="ppg"), source_id="session_3",
+                   sampling_rate=Frequency.Hz(64.0), reader=lambda: load_ppg(session_path)),
+        TimeSeries(spec=AccelSpec(channel="x"), source_id="session_3",
+                   sampling_rate=Frequency.Hz(100.0), reader=lambda: load_accel(session_path, "x")),
+        TimeSeries(spec=AccelSpec(channel="y"), source_id="session_3",
+                   sampling_rate=Frequency.Hz(100.0), reader=lambda: load_accel(session_path, "y")),
+        TimeSeries(spec=AccelSpec(channel="z"), source_id="session_3",
+                   sampling_rate=Frequency.Hz(100.0), reader=lambda: load_accel(session_path, "z")),
+        TimeSeries(spec=SkinTempSpec(channel="skin_temp"), source_id="session_3",
+                   sampling_rate=Frequency.Hz(1.0), reader=lambda: load_temp(session_path)),
     ),
     view=View.FULL,
 )
@@ -149,21 +181,42 @@ session = dataset.add_sample(
 Multi-source sample (one logical overnight recording split across two files on disk, the connector concatenates inside each `reader` and exposes a single `source_id`):
 
 ```python
+class EEGSpec(TimeSeriesSpec):
+    spec_id = "eeg"
+    name = "EEG"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.MICROVOLT
+
+class EOGSpec(TimeSeriesSpec):
+    spec_id = "eog"
+    name = "EOG"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.MICROVOLT
+
+class EMGSpec(TimeSeriesSpec):
+    spec_id = "emg"
+    name = "EMG"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.MICROVOLT
+
 night = dataset.add_sample(
     subject_ids=("participant_07",),
-    signals=(
-        Signal(spec_id="eeg", channel="f3", source_id="night_001",
-               sampling_rate_hz=256.0,
-               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "f3")),
-        Signal(spec_id="eeg", channel="c4", source_id="night_001",
-               sampling_rate_hz=256.0,
-               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "c4")),
-        Signal(spec_id="eog", channel="l", source_id="night_001",
-               sampling_rate_hz=256.0,
-               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "l")),
-        Signal(spec_id="emg", channel="emg", source_id="night_001",
-               sampling_rate_hz=256.0,
-               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "emg")),
+    time_series=(
+        TimeSeries(spec=EEGSpec(channel="f3"), source_id="night_001",
+                   sampling_rate=Frequency.Hz(256.0),
+                   reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "f3")),
+        TimeSeries(spec=EEGSpec(channel="c4"), source_id="night_001",
+                   sampling_rate=Frequency.Hz(256.0),
+                   reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "c4")),
+        TimeSeries(spec=EOGSpec(channel="l"), source_id="night_001",
+                   sampling_rate=Frequency.Hz(256.0),
+                   reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "l")),
+        TimeSeries(spec=EMGSpec(channel="emg"), source_id="night_001",
+                   sampling_rate=Frequency.Hz(256.0),
+                   reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "emg")),
     ),
     view=View.FULL,
 )
@@ -172,19 +225,26 @@ night = dataset.add_sample(
 Subject-less domain. Omit `subject_ids`:
 
 ```python
+class EquityTickSpec(TimeSeriesSpec):
+    spec_id = "equity_tick"
+    name = "Equity Tick"
+    unit_sampling_rate = SamplingRateUnit.HZ
+    unit_timestamp = TimestampUnit.SECONDS
+    unit_value = ValueUnit.DIMENSIONLESS
+
 tick = dataset.add_sample(
-    signals=(
-        Signal(spec_id="equity_tick", channel="price", source_id="AAPL::2026-05-13",
-               sampling_rate_hz=1.0, reader=lambda: load_ticks("AAPL", "2026-05-13", "price")),
-        Signal(spec_id="equity_tick", channel="volume", source_id="AAPL::2026-05-13",
-               sampling_rate_hz=1.0, reader=lambda: load_ticks("AAPL", "2026-05-13", "volume")),
+    time_series=(
+        TimeSeries(spec=EquityTickSpec(channel="price"), source_id="AAPL::2026-05-13",
+                   sampling_rate=Frequency.Hz(1.0), reader=lambda: load_ticks("AAPL", "2026-05-13", "price")),
+        TimeSeries(spec=EquityTickSpec(channel="volume"), source_id="AAPL::2026-05-13",
+                   sampling_rate=Frequency.Hz(1.0), reader=lambda: load_ticks("AAPL", "2026-05-13", "volume")),
     ),
     view=View.FULL,
 )
 # tick.subject_ids == ()
 ```
 
-Windowed samples, two samples that slice disjoint time ranges out of the same recording. Each `Signal` declares its own window, and `reader()` returns just the windowed values:
+Windowed samples, two samples that slice disjoint time ranges out of the same recording. Each `TimeSeries` declares its own window, and `reader()` returns just the windowed values:
 
 ```python
 def windowed(path: Path, channel: str, t_start: float, t_end: float, sr: float) -> np.ndarray:
@@ -193,20 +253,20 @@ def windowed(path: Path, channel: str, t_start: float, t_end: float, sr: float) 
 
 first = dataset.add_sample(
     subject_ids=("patient_42",),
-    signals=(
-        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
-               sampling_rate_hz=500.0, t_start_s=0.0, t_end_s=10.0,
-               reader=lambda: windowed(path, "I", 0.0, 10.0, 500.0)),
+    time_series=(
+        TimeSeries(spec=ECGLeadSpec(channel="I"), source_id="rec_001",
+                   sampling_rate=Frequency.Hz(500.0), t_start_s=0.0, t_end_s=10.0,
+                   reader=lambda: windowed(path, "I", 0.0, 10.0, 500.0)),
     ),
     view=View.WINDOW,
 )
 
 last = dataset.add_sample(
     subject_ids=("patient_42",),
-    signals=(
-        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
-               sampling_rate_hz=500.0, t_start_s=50.0, t_end_s=60.0,
-               reader=lambda: windowed(path, "I", 50.0, 60.0, 500.0)),
+    time_series=(
+        TimeSeries(spec=ECGLeadSpec(channel="I"), source_id="rec_001",
+                   sampling_rate=Frequency.Hz(500.0), t_start_s=50.0, t_end_s=60.0,
+                   reader=lambda: windowed(path, "I", 50.0, 60.0, 500.0)),
     ),
     view=View.WINDOW,
 )
@@ -215,27 +275,27 @@ last = dataset.add_sample(
 More examples:
 
 ```python
-lead_ii = Signal(
-    spec_id="ecg_12lead", channel="II", source_id="rec_001",
-    sampling_rate_hz=500.0,
+lead_ii = TimeSeries(
+    spec=ECGLeadSpec(channel="II"), source_id="rec_001",
+    sampling_rate=Frequency.Hz(500.0),
     reader=lambda: ecg_reader(path, "II"),
 )
 
 full = dataset.add_sample(
     subject_ids=("patient_42",),
-    signals=(
-        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
-               sampling_rate_hz=500.0, reader=lambda: ecg_reader(path, "I")),
+    time_series=(
+        TimeSeries(spec=ECGLeadSpec(channel="I"), source_id="rec_001",
+                   sampling_rate=Frequency.Hz(500.0), reader=lambda: ecg_reader(path, "I")),
         lead_ii,                                  # shared object
-        Signal(spec_id="ecg_12lead", channel="V1", source_id="rec_001",
-               sampling_rate_hz=500.0, reader=lambda: ecg_reader(path, "V1")),
+        TimeSeries(spec=ECGLeadSpec(channel="V1"), source_id="rec_001",
+                   sampling_rate=Frequency.Hz(500.0), reader=lambda: ecg_reader(path, "V1")),
     ),
     view=View.FULL,
 )
 
 lead_only = dataset.add_sample(
     subject_ids=("patient_42",),
-    signals=(lead_ii,),                           # same object → shared chunk on disk
+    time_series=(lead_ii,),                       # same object → shared chunk on disk
     view=View.SINGLE_CHANNEL,
 )
 ```
@@ -325,8 +385,9 @@ higher-level ones from them. Each `add_annotation()` returns the `Annotation`,
 which is fed into the next call via `from_annotations`:
 
 ```python
-#TODO: This example will be modify once I update the schema of Signal to TimeSeries
-# 1. Per-lead labelings on the raw recording.
+# 1. Per-lead labelings on the raw recording. `LabelingTask.channels` is
+#    unchanged: each name resolves against `TimeSeries.spec.channel` on one of
+#    the sample's `time_series` (here, the `ECGLeadSpec(channel=...)` instances).
 lead_labels = tuple(
     dataset.add_annotation(
         ecg_sample,
@@ -389,56 +450,65 @@ One logical unit of time-series data: a recording, a session, a sensor bundle, a
 @dataclass(kw_only=True)
 class Sample:
     sample_id: field(default_factory=lambda: str(uuid.uuid4()))
-    signals: tuple[Signal, ...]
+    time_series: tuple[TimeSeries, ...]
     view: View
     subject_ids: tuple[str, ...] = ()
     annotation_ids: tuple[str, ...] = ()
 
     @property
-    def source_ids(self) -> tuple[str, ...]: ...   # derived: distinct sources across signals
+    def source_ids(self) -> tuple[str, ...]: ...   # derived: distinct sources across time_series
 ```
 
 **Fields**
 
-| Name             | Type                 | Description                                                                                                                               |
-| ---------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample_id`      | `str`                | Auto-generated unique identifier (uuid4-based).                                                                                           |
-| `signals`        | `tuple[Signal, ...]` | One `Signal` per `(spec_id, channel)` present in the sample. Reuse a `Signal` instance across samples to share its bytes on disk.         |
-| `view`           | `View`               | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                         |
-| `subject_ids`    | `tuple[str, ...]`    | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                                   |
-| `annotation_ids` | `tuple[str, ...]`    | IDs of the annotations attached to this sample. Populated by `TimeFDataset.add_annotation()`; resolve against `TimeFDataset.annotations`. |
+| Name             | Type                     | Description                                                                                                                               |
+| ---------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`      | `str`                    | Auto-generated unique identifier (uuid4-based).                                                                                           |
+| `time_series`    | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel present in the sample. Reuse a `TimeSeries` instance across samples to share its bytes on disk.              |
+| `view`           | `View`                   | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                         |
+| `subject_ids`    | `tuple[str, ...]`        | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                                   |
+| `annotation_ids` | `tuple[str, ...]`        | IDs of the annotations attached to this sample. Populated by `TimeFDataset.add_annotation()`; resolve against `TimeFDataset.annotations`. |
 
 ---
 
-### `Signal`
+### `TimeSeries`
 
-Reference to one channel of time-series data, with optional windowing and a lazy reader callable.. Construct `Signal`s in `convert()` and attach them to samples via `add_sample(signals=...)`.
+Reference to one channel of time-series data, with optional windowing and a lazy reader callable.
 
 ```python
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import numpy as np
+
+from timenet.timef.metadata import TimeSeriesSpec
+from timenet.units import Frequency
+
+
 @dataclass(frozen=True, eq=False)
-class Signal:
-    spec_id: str
-    channel: str
+class TimeSeries:
+    spec: TimeSeriesSpec
     source_id: str
-    sampling_rate_hz: float
+    sampling_rate: Frequency
     reader: Callable[[], np.ndarray]
     t_start_s: float = 0.0
     t_end_s: float | None = None
     timestamps: Callable[[], np.ndarray] | None = None
 ```
 
-| Field              | Type                               | Required | Description                                                                                                                                                                 |
-| ------------------ | ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec_id`          | `str`                              | yes      | Must match a `SignalSpec.spec_id` declared in `DatasetMetadata.signal_specs`.                                                                                               |
-| `channel`          | `str`                              | yes      | Must match a channel name declared on the referenced `SignalSpec.channels`.                                                                                                 |
-| `source_id`        | `str`                              | yes      | Identifier of the raw recording this signal was extracted from. Multiple `Signal`s can share a `source_id` (different channels or different windows of the same recording). |
-| `sampling_rate_hz` | `float`                            | yes      | Sampling rate of the values returned by `reader()`.                                                                                                                         |
-| `reader`           | `Callable[[], np.ndarray]`         | yes      | Lazy loader. Returns a 1-D `float32` array of exactly the values for this Signal's window. Invoked by `TimeFWriter` during `store()`.                                       |
-| `t_start_s`        | `float`                            | no       | Time offset of the first returned value within the original recording timeline. Default `0.0`.                                                                              |
-| `t_end_s`          | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate_hz)`.                      |
-| `timestamps`       | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                                              |
+| Field              | Type                               | Required | Description                                                                                                                                            |
+| ------------------ | ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `spec`             | `TimeSeriesSpec`                   | yes      | An instance of a `TimeSeriesSpec` subclass                                                                                                             |
+| `source_id`        | `str`                              | yes      | Identifier of the raw recording this series was extracted from.                                                                                        |
+| `sampling_rate`    | [`Frequency`](types.md#frequency)  | yes      | Sampling rate of the values returned by `reader()`. Build with `Frequency.Hz(...)`, `Frequency.kHz(...)`, or `Frequency.MHz(...)`.                      |
+| `reader`           | `Callable[[], np.ndarray]`         | yes      | Lazy loader. Returns a 1-D `float32` array of exactly the values for this series' window. Invoked by `TimeFWriter` during `store()`.                   |
+| `t_start_s`        | `float`                            | no       | Time offset of the first returned value within the original recording timeline. Default `0.0`.                                                         |
+| `t_end_s`          | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate.hz)`. |
+| `timestamps`       | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                         |
 
-**Windowing.** A windowed `Signal` is just a `Signal` with `t_start_s` / `t_end_s` set and a `reader` that returns the windowed slice. The window metadata travels to `samples.parquet` so readers can recover the bounds without scanning the index.
+**Identity sharing.** `TimeSeries` is `eq=False`, so the writer dedupes by Python object identity: attach the _same_ `TimeSeries` instance to two samples to share one chunk of bytes on disk.
+
+**Windowing.** A windowed `TimeSeries` is just a `TimeSeries` with `t_start_s` / `t_end_s` set and a `reader` that returns the windowed slice.
 
 ---
 
