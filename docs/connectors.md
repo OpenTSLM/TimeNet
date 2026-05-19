@@ -9,12 +9,12 @@ The unit of dataset integration. One connector class = one dataset (for the mome
 ```python
 from abc import ABC, abstractmethod
 from pathlib import Path
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from timenet.timef.dataset import TimeFDataset
 from timenet.timef.metadata import DatasetMetadata
-from timenet.timef.writer import SignalChunk, TimeFWriter, WriteProgressEvent
+from timenet.timef.writer import TimeFWriter, WriteProgressEvent
 
 TRaw = TypeVar("TRaw")
 
@@ -32,12 +32,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset: ...
 
-    @abstractmethod
-    def iter_signals(self, raw_refs: list[TRaw], dataset: TimeFDataset) -> Iterator[SignalChunk]: ...
-
     def store(
         self,
-        raw_refs: list[TRaw],
         dataset: TimeFDataset,
         root: Path,
         *,
@@ -51,24 +47,33 @@ Minimal example, 12-lead ECG dataset:
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
 from timenet.licenses import License
 from timenet.tasks import ClassificationTask
-from timenet.timef.dataset import TimeFDataset, SignalRef
+from timenet.timef.dataset import Signal, TimeFDataset
 from timenet.timef.metadata import (
-    AnnotationSpec, DatasetMetadata, SignalSpec, ViewSpec,
+    AnnotationSpec, DatasetMetadata, SignalSpec,
 )
 from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
 from timenet.version import Version
+from timenet.views import View
 
 
 @dataclass(frozen=True)
 class Recording:
-    recording_id: str
+    recording_file_name: str
     patient_id: str
     path: Path
     leads: tuple[str, ...]
+    sampling_rate_hz: float
+
+
+def read_lead(path: Path, lead: str) -> np.ndarray:
+    # parse the EDF and return the channel as a float32 1-D array
+    ...
 
 
 class ECGConnector(BaseConnector[Recording]):
@@ -93,9 +98,6 @@ class ECGConnector(BaseConnector[Recording]):
         annotation_specs=(
             AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask),
         ),
-        view_specs=(
-            ViewSpec(name="full", description="Whole recording with all available leads."),
-        ),
     )
 
     def metadata(self) -> DatasetMetadata:
@@ -112,13 +114,22 @@ class ECGConnector(BaseConnector[Recording]):
         )
         for rec in raw_refs:
             sample = dataset.add_sample(
-                sample_id=rec.recording_id,
+                sample_id=rec.recording_file_name,
                 subject_ids=(rec.patient_id,),
-                source_ids=(rec.recording_id,),
-                signals=(SignalRef(spec_id="ecg_12lead", channels=rec.leads),),
-                view="full",
+                signals=tuple(
+                    Signal(
+                        spec_id="ecg_12lead",
+                        channel=lead,
+                        source_id=rec.recording_file_name,
+                        sampling_rate_hz=rec.sampling_rate_hz,
+                        reader=lambda p=rec.path, c=lead: read_lead(p, c),
+                    )
+                    for lead in rec.leads
+                ),
+                view=View.FULL,
             )
-            sample.annotate(
+            dataset.add_annotation(
+                sample,
                 ClassificationTask(label="normal_sinus_rhythm"),
                 spec_id="rhythm_cls",
             )
@@ -205,53 +216,14 @@ CPU-bound stage. Parses raw references and populates a `TimeFDataset`. No networ
 | ---------- | ------------ | -------- | ---------------------------------- |
 | `raw_refs` | `list[TRaw]` | required | The list returned by `download()`. |
 
-**Returns:** A fully-populated `TimeFDataset`. See [TimeFDataset](timef-dataset.md).
+**Returns:** A `TimeFDataset`.
 
 **Constraints**
 
 - `dataset_id` and `version` on the returned `TimeFDataset` must match `metadata().dataset_id` and `metadata().version`.
-
----
-
-### `iter_signals()`
-
-```python
-@abstractmethod
-def iter_signals(self, raw_refs: list[TRaw], dataset: TimeFDataset) -> Iterator[SignalChunk]: ...
-```
-
-Yields every `SignalChunk` required by the dataset. Called by `store()` to stream signal data into `TimeFWriter`.
-
-**Parameters**
-
-| Name       | Type           | Default  | Description                                                                           |
-| ---------- | -------------- | -------- | ------------------------------------------------------------------------------------- |
-| `raw_refs` | `list[TRaw]`   | required | The list returned by `download()`.                                                    |
-| `dataset`  | `TimeFDataset` | required | The dataset built by `convert()`. Use it to look up `sample_id` values derived there. |
-
-**Returns:** An iterator of `SignalChunk`. See [SignalChunk](timef-writer.md#signalchunk).
-
-**Constraints**
-
-- Chunks may be yielded in any order.
-- For samples that share signal data, yield one `SignalChunk` with all sharing sample IDs in `sample_ids`. The writer does not dedup.
-- The `sample_ids` in every yielded chunk must match IDs present in `dataset.samples`. The writer validates this at `add_chunk()` time.
-- In testing mode (`self.testing`), yield only fixture-derived chunks.
-
-**Pattern for building the source → sample_id index**
-
-```python
-def iter_signals(self, raw_refs, dataset):
-    by_source: dict[str, list[str]] = {}
-    for s in dataset.samples:
-        for source_id in s.source_ids:
-            by_source.setdefault(source_id, []).append(s.sample_id)
-
-    for rec in raw_refs:
-        sids = tuple(by_source[rec.recording_id])
-        for channel, values in read_signals(rec.path):
-            yield SignalChunk(sample_ids=sids, ...)
-```
+- To share signal data across samples, attach the **same** `Signal` instance to each sample. The writer dedupes by Python object identity (`id()`).
+- Each `Signal.reader` should be a closure that captures whatever it needs (file path, file handle, S3 key, …), `store()` calls it with no arguments.
+- In testing mode (`self.testing`), build readers that pull from fixtures instead of remote sources.
 
 ---
 
@@ -260,7 +232,6 @@ def iter_signals(self, raw_refs, dataset):
 ```python
 def store(
     self,
-    raw_refs: list[TRaw],
     dataset: TimeFDataset,
     root: Path,
     *,
@@ -268,37 +239,43 @@ def store(
 ) -> None: ...
 ```
 
-Streams `iter_signals()` into a `TimeFWriter` and commits the dataset to disk.
+Walks `dataset.samples`, dedupes `Signal` instances by identity, and streams them through a `TimeFWriter`. Commits the dataset to disk on success.
+
+`store()` has a default implementation on `BaseConnector`. Most connectors do not need to override it.
 
 **Parameters**
 
 | Name          | Type                                           | Default  | Description                                                 |
 | ------------- | ---------------------------------------------- | -------- | ----------------------------------------------------------- |
-| `raw_refs`    | `list[TRaw]`                                   | required | The list returned by `download()`.                          |
 | `dataset`     | `TimeFDataset`                                 | required | The populated dataset returned by `convert()`.              |
 | `root`        | `Path`                                         | required | Parent directory passed through to `TimeFWriter`.           |
 | `progress_cb` | `Callable[[WriteProgressEvent], None] \| None` | `None`   | Forwarded to `TimeFWriter`. Called once per progress event. |
 
-**Small example body**
+**Default body**
 
 ```python
-def store(self, raw_refs, dataset, root, *, progress_cb=None):
+def store(
+    self,
+    dataset: TimeFDataset,
+    root: Path,
+    *,
+    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+) -> None:
     with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
-        for chunk in self.iter_signals(raw_refs, dataset):
-            writer.add_chunk(chunk)
+        writer.write()
 ```
 
 ---
 
 ## `DatasetMetadata`
 
-The connector's self-description. Declares identity, classification, and the specs that govern the dataset's contents (signals, annotations, views).
+The connector's self-description. Declares identity, classification, and the specs that govern the dataset's contents (signals, annotations).
 
 ```python
 from timenet.domains import Domain
 from timenet.licenses import License
 from timenet.timef.metadata import (
-    AnnotationSpec, SignalSpec, ViewSpec,
+    AnnotationSpec, SensorSpec, SignalSpec,
 )
 from timenet.version import Version
 
@@ -311,7 +288,7 @@ class DatasetMetadata:
     license: License
     signal_specs: tuple[SignalSpec, ...] = ()
     annotation_specs: tuple[AnnotationSpec, ...] = ()
-    view_specs: tuple[ViewSpec, ...] = ()
+    sensor_specs: tuple[SensorSpec, ...] = ()
     domains: tuple[Domain, ...] = ()
     source_url: str | None = None
     tags: tuple[str, ...] = ()
@@ -322,12 +299,11 @@ class DatasetMetadata:
 | Name               | Type                         | Required | Description                                                                                                                            |
 | ------------------ | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `dataset_id`       | `str`                        | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                                       |
-| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](enums-and-spec.md#version).                                                      |
+| `version`          | `Version`                    | yes      | Semantic version (`major.minor.patch`). See [Version](types.md#version).                                                      |
 | `description`      | `str`                        | yes      | One-sentence human-readable description.                                                                                               |
 | `license`          | `License`                    | yes      | Data license.                                                                                                                          |
-| `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [SignalSpec](enums-and-spec.md#signalspec).                      |
-| `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](enums-and-spec.md#annotationspec).                      |
-| `view_specs`       | `tuple[ViewSpec, ...]`       | no       | Sample views the connector emits. Every `Sample.view` must reference one of these by name. See [ViewSpec](enums-and-spec.md#viewspec). |
+| `signal_specs`     | `tuple[SignalSpec, ...]`     | no       | Modalities the dataset records (channels, units, sampling rates). See [SignalSpec](types.md#signalspec).                      |
+| `annotation_specs` | `tuple[AnnotationSpec, ...]` | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](types.md#annotationspec).                      |
 | `domains`          | `tuple[Domain, ...]`         | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                            |
 | `source_url`       | `str \| None`                | no       | Canonical URL of the source dataset.                                                                                                   |
 | `tags`             | `tuple[str, ...]`            | no       | Free-form labels for filtering.                                                                                                        |
@@ -342,7 +318,13 @@ When `TIMENET_TESTING=1`, `download()` must not hit the network. The standard pa
 def download(self, cache_dir: Path) -> list[Recording]:
     if self.testing:
         return [
-            Recording("fixture_001", "p_001", cache_dir / "fixture_001.edf", LEADS)
+            Recording(
+                recording_file_name="fixture_001",
+                patient_id="p_001",
+                path=cache_dir / "fixture_001.edf",
+                leads=LEADS,
+                sampling_rate_hz=500.0,
+            )
         ]
     # real download ...
 ```
@@ -356,5 +338,7 @@ Fixture files live under `E2E_CACHE_DIR/<dataset_id>/` by convention.
 - **One connector class, one dataset.**
 - **No constructor arguments.** Configuration comes from environment variables with hardcoded defaults.
 - **The connector decides what a sample is.** For a given dataset there is one connector and it is authoritative: which recordings become samples, which variables to expose, which views to create.
+- **Signals are references, not data.** `convert()` builds `Signal` instances with lazy `reader` callables. Bytes are pulled by the writer during `store()`, never held in memory by the dataset.
+- **Share data by reusing instances.** Two samples that read identical bytes must reference the **same** `Signal` object, the writer dedupes by Python identity.
 
 PD: this design rule will be changed when we support multiple connectors per dataset
