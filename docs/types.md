@@ -224,6 +224,34 @@ class ReasoningTask(Task):
 | `question` | `str` | Question text. |
 | `answer`   | `str` | Answer text.   |
 
+### Task registry
+
+Mapping from on-disk `task_id` to `Task` subclass. `TimeFReader` uses this table to rebuild `Task` instances when reading the annotation partitions. An unknown `task_id` raises `ValueError`.
+
+```python
+from timenet.tasks import (
+    CaptioningTask,
+    ClassificationTask,
+    ForecastingTask,
+    LabelingTask,
+    QATask,
+    ReasoningTask,
+    Task,
+)
+
+
+TASKS: dict[str, type[Task]] = {
+    "classification":      ClassificationTask,
+    "labeling":            LabelingTask,
+    "captioning":          CaptioningTask,
+    "question_and_answer": QATask,
+    "forecasting":         ForecastingTask,
+    "reasoning":           ReasoningTask,
+}
+```
+
+Each key matches the `task_id` `ClassVar` declared on the corresponding subclass. The directory name `annotations/task=<task_id>/` written by `TimeFWriter` uses the same string.
+
 ### Examples
 
 ```python
