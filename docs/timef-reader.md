@@ -151,9 +151,9 @@ Synthesized subclasses are not `is`-equal to the original subclasses the connect
 
 | Step | Method                | Action                                                                                                                                                                                                                                                                                                                                                                      |
 | ---- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `__init__`            | Reads `manifest.json`. Synthesizes `TimeSeriesSpec`, `DeviceSpec`, and resolves `Task` subclasses. Reads every `annotations/task=*/part-*.parquet`, constructs `Annotation` objects, resolves `from_annotations`. Loads `time_series_index.parquet` into the lookup dict keyed by `(sample_id, spec_id, channel)`. Populates `metadata` and `annotations`. Single I/O step. |
-| 2a   | `read()`              | Reads `samples.parquet`. Constructs each `Sample` with lazy `TimeSeries.reader` / `timestamps` closures. Returns a `TimeFDataset` bundling those samples with the annotations loaded in step 1.                                                                                                                                                                             |
-| 2b   | `iter_samples()`      | Same as `read()` but yields each `Sample` lazily without building a `TimeFDataset`.                                                                                                                                                                                                                                                                                         |
+| 1    | `__init__`            | Reads `manifest.json`. Synthesizes `TimeSeriesSpec`, `DeviceSpec`, and resolves `Task` subclasses. Reads every `annotations/task=*/part-*.parquet`, constructs `Annotation` objects, resolves `from_annotations`. Reads `events.parquet` and constructs the `event_id → Event` lookup. Loads `time_series_index.parquet` into the lookup dict keyed by `(sample_id, series_id)`. Populates `metadata` and `annotations`. Single I/O step. |
+| 2a   | `read()`              | Reads `samples.parquet`. Constructs each `Sample` with lazy `TimeSeries.reader` / `timestamps` closures, and attaches `Event` instances via the row's `event_ids`. Returns a `TimeFDataset` bundling those samples with the annotations loaded in step 1.                                                                                                                                                                                |
+| 2b   | `iter_samples()`      | Same as `read()` but yields each `Sample` lazily without building a `TimeFDataset`.                                                                                                                                                                                                                                                                                                                                                      |
 | —    | `TimeSeries.reader()` | Opens the shard parquet file via `pyarrow.parquet.read_table` with a row-group filter, reads each chunk's `values`, concatenates in `chunk_idx` order, returns a 1-D `float32` array. The file handle is opened and closed within the call. `TimeSeries.timestamps()` does the same against the chunk's `timestamps` column when present.                                   |
 
 ---
@@ -164,13 +164,14 @@ For a `TimeFDataset` `D` that passes `TimeFWriter` validation:
 
 **Preserved**
 
-- Per `Sample`: `sample_id`, `view`, `subject_ids`, `annotation_ids`, the channel set and order of `time_series`.
-- Per `TimeSeries`: `spec.spec_id`, `spec.channel`, `source_id`, `sampling_rate`, `t_start_s`, `t_end_s`, the byte content of `reader()`, and the byte content of `timestamps()` when set.
+- Per `Sample`: `sample_id`, `view`, `subject_ids`, `annotation_ids`, `events`, the channel set and order of `time_series`.
+- Per `TimeSeries`: `spec.spec_id`, `spec.channel`, `source_id`, `sampling_rate`, `series_id`, `t_start_s`, `t_end_s`, the byte content of `reader()`, and the byte content of `timestamps()` when set.
+- Per `Event`: `event_id`, `name`, `kind`, `start_time_s`, `end_time_s`, `time_series_ids`.
 - Per `Annotation`: `annotation_id`, `task` (subclass and fields), `sample_ids`, `spec_id`, `from_annotations` (resolved to the rebuilt `Annotation` objects).
 
 **Not preserved**
 
-- Python object identity of `TimeSeries` instances. A `TimeSeries` shared across samples in `D` becomes one distinct `TimeSeries` per sample on read. The byte content of `reader()` is identical, but `id(sample_a.time_series[0]) != id(sample_b.time_series[0])`.
+- Python object identity of `TimeSeries` instances. `series_id` is the durable handle: two samples that referenced the same series before write reference the same `series_id` after read, but the Python objects are distinct (`id(sample_a.time_series[0]) != id(sample_b.time_series[0])`).
 - Python object identity of `TimeSeriesSpec` and `DeviceSpec` subclasses. The synthesized subclasses match the originals field-for-field but are not the originals.
 
 ---
@@ -179,13 +180,14 @@ For a `TimeFDataset` `D` that passes `TimeFWriter` validation:
 
 Checked during `__init__`, in this order:
 
-| Check                                                               | Raises              |
-| ------------------------------------------------------------------- | ------------------- |
-| `root` exists                                                       | `FileNotFoundError` |
-| `root/manifest.json` exists                                         | `FileNotFoundError` |
-| `manifest.json["format_version"]` matches a supported version (`1`) | `ValueError`        |
-| Every file listed in `manifest.json["files"]` exists                | `FileNotFoundError` |
-| Every `annotations/task=<task_id>/` partition has a known `task_id` | `ValueError`        |
+| Check                                                                       | Raises              |
+| --------------------------------------------------------------------------- | ------------------- |
+| `root` exists                                                               | `FileNotFoundError` |
+| `root/manifest.json` exists                                                 | `FileNotFoundError` |
+| `manifest.json["format_version"]` matches a supported version (`1`)         | `ValueError`        |
+| Every file listed in `manifest.json["files"]` exists (incl. `events.parquet`) | `FileNotFoundError` |
+| Every `annotations/task=<task_id>/` partition has a known `task_id`         | `ValueError`        |
+| Every `events.parquet` row has a `kind` value in [`EventKind`](types.md#eventkind) | `ValueError`        |
 
 A chunk row referenced by `time_series_index.parquet` that points at a missing shard or row group is detected when the corresponding `TimeSeries.reader()` is called, not eagerly. The call raises `ValueError`.
 

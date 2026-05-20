@@ -34,6 +34,7 @@ class TimeFDataset:
         time_series: tuple[TimeSeries, ...],
         view: View,
         subject_ids: tuple[str, ...] = (),
+        events: tuple[Event, ...] = (),
     ) -> Sample: ...
 
     def add_annotation(
@@ -76,6 +77,7 @@ def add_sample(
     time_series: tuple[TimeSeries, ...],
     view: View,
     subject_ids: tuple[str, ...] = (),
+    events: tuple[Event, ...] = (),
 ) -> Sample: ...
 ```
 
@@ -83,19 +85,26 @@ Creates a `Sample` with an auto-generated `sample_id`, registers it, and returns
 
 **Parameters**
 
-| Name          | Type                     | Required | Description                                                                                                                                                                                                           |
-| ------------- | ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time_series` | `tuple[TimeSeries, ...]` | yes      | One `TimeSeries` per channel the sample uses.                                                                                                                                                                         |
-| `view`        | `View`                   | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                           |
-| `subject_ids` | `tuple[str, ...]`        | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects. |
+| Name          | Type                     | Required | Description                                                                                                                                                                                                                        |
+| ------------- | ------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time_series` | `tuple[TimeSeries, ...]` | yes      | One `TimeSeries` per channel the sample uses.                                                                                                                                                                                      |
+| `view`        | `View`                   | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                                        |
+| `subject_ids` | `tuple[str, ...]`        | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects.              |
+| `events`      | `tuple[Event, ...]`      | no       | [`Event`](types.md#event) instances attached to this sample. Pass the same `Event` instance (or different instances with the same `event_id`) to multiple `add_sample()` calls to declare reuse; the writer dedupes by `event_id`. |
 
 **Returns:** The newly created `Sample`.
 
 **Raises**
 
-| Exception    | Condition               |
-| ------------ | ----------------------- |
-| `ValueError` | `time_series` is empty. |
+| Exception    | Condition                                                                                                                           |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `ValueError` | `time_series` is empty.                                                                                                             |
+| `ValueError` | An `Event` has empty `name`.                                                                                                        |
+| `ValueError` | `event.kind == POINT` and `event.end_time_s is not None`.                                                                           |
+| `ValueError` | `event.kind == INTERVAL` and `event.end_time_s is None or event.end_time_s <= event.start_time_s`.                                  |
+| `ValueError` | `event.time_series_ids` is non-`None` and any id does not match a `TimeSeries.series_id` in `time_series`.                          |
+| `ValueError` | `event.time_series_ids is None` (trial-level) but the sample's `TimeSeries` instances do not share a common `(t_start_s, t_end_s)`. |
+| `ValueError` | Event time bounds fall outside the referenced `TimeSeries` window (channel-level) or outside the common trial span (trial-level).   |
 
 **Examples**
 
@@ -300,6 +309,39 @@ lead_only = dataset.add_sample(
 )
 ```
 
+Sample with one trial-level point event and one channel-level interval event:
+
+```python
+from timenet.events import Event, EventKind
+
+lead_v1 = TimeSeries(
+    spec=ECGLeadSpec(channel="V1"), source_id="rec_001",
+    sampling_rate=Frequency.Hz(500.0), t_start_s=0.0, t_end_s=30.0,
+    reader=lambda: ecg_reader(path, "V1"),
+)
+lead_v2 = TimeSeries(
+    spec=ECGLeadSpec(channel="V2"), source_id="rec_001",
+    sampling_rate=Frequency.Hz(500.0), t_start_s=0.0, t_end_s=30.0,
+    reader=lambda: ecg_reader(path, "V2"),
+)
+
+trial = dataset.add_sample(
+    subject_ids=("patient_42",),
+    time_series=(lead_v1, lead_v2),
+    view=View.SUBSET,
+    events=(
+        Event(name="stimulus_onset", kind=EventKind.POINT, start_time_s=4.0),
+        Event(
+            name="artifact",
+            kind=EventKind.INTERVAL,
+            start_time_s=10.0,
+            end_time_s=12.0,
+            time_series_ids=(lead_v1.series_id,),
+        ),
+    ),
+)
+```
+
 ---
 
 ### `add_annotation()`
@@ -385,16 +427,18 @@ higher-level ones from them. Each `add_annotation()` returns the `Annotation`,
 which is fed into the next call via `from_annotations`:
 
 ```python
-# 1. Per-lead labelings on the raw recording. `LabelingTask.channels` is
-#    unchanged: each name resolves against `TimeSeries.spec.channel` on one of
-#    the sample's `time_series` (here, the `ECGLeadSpec(channel=...)` instances).
+# 1. Per-lead labelings on the raw recording.
 lead_labels = tuple(
     dataset.add_annotation(
         ecg_sample,
-        LabelingTask(label="st_elevation", channels=(lead,), windows_s=((4.0, 9.0),)),
+        LabelingTask(
+            label="st_elevation",
+            time_series_ids=(lead_ts.series_id,),
+            windows_s=((4.0, 9.0),),
+        ),
         spec_id="st_segment",
     )
-    for lead in ("V1", "V2", "V3")
+    for lead_ts in (lead_v1_ts, lead_v2_ts, lead_v3_ts)
 )
 
 # 2. A QA conclusion reasoned from those labelings.
@@ -449,11 +493,12 @@ One logical unit of time-series data: a recording, a session, a sensor bundle, a
 ```python
 @dataclass(kw_only=True)
 class Sample:
-    sample_id: field(default_factory=lambda: str(uuid.uuid4()))
+    sample_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     time_series: tuple[TimeSeries, ...]
     view: View
     subject_ids: tuple[str, ...] = ()
     annotation_ids: tuple[str, ...] = ()
+    events: tuple[Event, ...] = ()
 
     @property
     def source_ids(self) -> tuple[str, ...]: ...   # derived: distinct sources across time_series
@@ -464,10 +509,11 @@ class Sample:
 | Name             | Type                     | Description                                                                                                                               |
 | ---------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `sample_id`      | `str`                    | Auto-generated unique identifier (uuid4-based).                                                                                           |
-| `time_series`    | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel present in the sample. Reuse a `TimeSeries` instance across samples to share its bytes on disk.              |
+| `time_series`    | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel present in the sample. Two `TimeSeries` with the same `series_id` share one chunk on disk.                  |
 | `view`           | `View`                   | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                         |
 | `subject_ids`    | `tuple[str, ...]`        | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                                   |
 | `annotation_ids` | `tuple[str, ...]`        | IDs of the annotations attached to this sample. Populated by `TimeFDataset.add_annotation()`; resolve against `TimeFDataset.annotations`. |
+| `events`         | `tuple[Event, ...]`      | [`Event`](types.md#event) instances attached to this sample. Empty by default.                                                            |
 
 ---
 
@@ -487,6 +533,7 @@ from timenet.units import Frequency
 
 @dataclass(frozen=True, eq=False)
 class TimeSeries:
+    series_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     spec: TimeSeriesSpec
     source_id: str
     sampling_rate: Frequency
@@ -496,17 +543,18 @@ class TimeSeries:
     timestamps: Callable[[], np.ndarray] | None = None
 ```
 
-| Field              | Type                               | Required | Description                                                                                                                                            |
-| ------------------ | ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec`             | `TimeSeriesSpec`                   | yes      | An instance of a `TimeSeriesSpec` subclass                                                                                                             |
-| `source_id`        | `str`                              | yes      | Identifier of the raw recording this series was extracted from.                                                                                        |
-| `sampling_rate`    | [`Frequency`](types.md#frequency)  | yes      | Sampling rate of the values returned by `reader()`. Build with `Frequency.Hz(...)`, `Frequency.kHz(...)`, or `Frequency.MHz(...)`.                      |
-| `reader`           | `Callable[[], np.ndarray]`         | yes      | Lazy loader. Returns a 1-D `float32` array of exactly the values for this series' window. Invoked by `TimeFWriter` during `store()`.                   |
-| `t_start_s`        | `float`                            | no       | Time offset of the first returned value within the original recording timeline. Default `0.0`.                                                         |
-| `t_end_s`          | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate.hz)`. |
-| `timestamps`       | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                         |
+| Field           | Type                               | Required | Description                                                                                                                                            |
+| --------------- | ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `series_id`     | `str`                              | no       | Persistent handle. Auto-generated uuid4 by default                                                                                                     |
+| `spec`          | `TimeSeriesSpec`                   | yes      | An instance of a `TimeSeriesSpec` subclass                                                                                                             |
+| `source_id`     | `str`                              | yes      | Identifier of the raw recording this series was extracted from.                                                                                        |
+| `sampling_rate` | [`Frequency`](types.md#frequency)  | yes      | Sampling rate of the values returned by `reader()`. Build with `Frequency.Hz(...)`, `Frequency.kHz(...)`, or `Frequency.MHz(...)`.                     |
+| `reader`        | `Callable[[], np.ndarray]`         | yes      | Lazy loader. Returns a 1-D `float32` array of exactly the values for this series' window. Invoked by `TimeFWriter` during `store()`.                   |
+| `t_start_s`     | `float`                            | no       | Time offset of the first returned value within the original recording timeline. Default `0.0`.                                                         |
+| `t_end_s`       | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate.hz)`. |
+| `timestamps`    | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                         |
 
-**Identity sharing.** `TimeSeries` is `eq=False`, so the writer dedupes by Python object identity: attach the _same_ `TimeSeries` instance to two samples to share one chunk of bytes on disk.
+**Sharing.** `TimeSeries` keeps identity-based equality (`eq=False`); the writer dedupes by `series_id`. Two `TimeSeries` with the same `series_id` (whether the same Python instance reused across samples, or separately constructed instances passed the same explicit `series_id`) collapse to one chunk of bytes on disk. `series_id` is also the persistent handle that `LabelingTask.time_series_ids` and `Event.time_series_ids` reference.
 
 **Windowing.** A windowed `TimeSeries` is just a `TimeSeries` with `t_start_s` / `t_end_s` set and a `reader` that returns the windowed slice.
 
