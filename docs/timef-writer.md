@@ -27,7 +27,7 @@ from timenet.timef.dataset import TimeFDataset
 
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["time_series", "shard_finalized", "samples", "events", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "events", "tasks", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -73,7 +73,7 @@ Emitted by the writer at each stage of the write pipeline. Passed to `progress_c
 ```python
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["time_series", "shard_finalized", "samples", "events", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "events", "tasks", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -111,20 +111,20 @@ def __init__(
 
 **Parameters**
 
-| Name                 | Type                                           | Default       | Description                                                                                             |
-| -------------------- | ---------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.                   |
-| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples` and `dataset.metadata` during finalize.           |
-| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.          |
-| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | A `TimeSeries.reader()` payload exceeding this size is split into sequential sub-chunks before storing. |
-| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                                  |
-| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                                |
+| Name                 | Type                                           | Default       | Description                                                                                                     |
+| -------------------- | ---------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------- |
+| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.                           |
+| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples`, `dataset.tasks`, and `dataset.metadata` during finalize. |
+| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.                  |
+| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | A `TimeSeries.reader()` payload exceeding this size is split into sequential sub-chunks before storing.         |
+| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                                          |
+| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                                        |
 
 **Raises**
 
-| Exception    | Condition                                           |
-| ------------ | --------------------------------------------------- |
-| `ValueError` | `dataset.dataset_id` or `dataset.version` is empty. |
+| Exception    | Condition                               |
+| ------------ | --------------------------------------- |
+| `ValueError` | `dataset.metadata.dataset_id` is empty. |
 
 ---
 
@@ -137,7 +137,12 @@ def __exit__(self, exc_type, exc_val, tb) -> None: ...
 
 `__enter__` creates `<root>/<dataset_id>/<version>/` if it does not exist. Raises `FileExistsError` if the directory already exists and contains a `manifest.json` (i.e. a committed version is already there).
 
-`__exit__` calls `close()` on success or `abort()` on exception.
+`__exit__` decides between `close()` and `abort()` as follows:
+
+- If the `with` block raised: call `abort()`.
+- Otherwise call `close()` inside a `try`/`except`. If `close()` raises, `abort()` is called and the original `close()` exception is re-raised so the caller sees the failure.
+
+In short: `abort()` runs on any failure path, exceptions from inside the `with` block, or failures during `close()` itself.
 
 **Raises** (from `__enter__`)
 
@@ -193,7 +198,8 @@ Deletes `<root>/<dataset_id>/<version>/`. Called automatically by `__exit__` on 
   manifest.json
   samples.parquet
   events.parquet
-  annotations/
+  annotations.parquet
+  tasks/
     task=classification/part-0.parquet
     task=labeling/part-0.parquet
     task=captioning/part-0.parquet
@@ -209,7 +215,7 @@ Deletes `<root>/<dataset_id>/<version>/`. Called automatically by `__exit__` on 
 
 `manifest.json` is the commit marker. A version directory without it is in-progress and must be ignored by readers.
 
-Annotations are partitioned by `task_id` because task subclasses have disjoint payload fields; one wide table would have many nulls.
+Tasks are partitioned by `task_id` because task subclasses have disjoint payload fields; one wide table would have many nulls. Annotations are uniform (one row shape regardless of subclass) and live in a single flat file. Per-key annotation metadata (`unit`, `description`, `value_type`) lives in the manifest, not on the rows.
 
 ---
 
@@ -219,54 +225,69 @@ Annotations are partitioned by `task_id` because task subclasses have disjoint p
 
 One row per sample, sorted by `sample_id`.
 
-| Column          | Arrow type                      | Description                                                                                                                                         |
-| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample_id`     | `string`                        |                                                                                                                                                     |
-| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                                                           |
-| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                                                               |
-| `source_ids`    | `list<string>`                  | Distinct `TimeSeries.source_id` values across `time_series`, in first-seen order. Derived from `time_series` at write time.                         |
-| `time_series`   | `list<struct<...>>` — see below | One entry per `TimeSeries` on the sample.                                                                                                           |
-| `event_ids`     | `list<string>`                  | `event_id`s of the events attached to this sample, in insertion order. Resolves against `events.parquet`. Empty list when the sample has no events. |
-| `n_annotations` | `int32`                         |                                                                                                                                                     |
+| Column           | Arrow type                      | Description                                                                                                                                                                 |
+| ---------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`      | `string`                        |                                                                                                                                                                             |
+| `view`           | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                                                                                   |
+| `subject_ids`    | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                                                                                       |
+| `source_ids`     | `list<string>`                  | Distinct `TimeSeries.source_id` values across `time_series`, in first-seen order. Derived from `time_series` at write time.                                                 |
+| `time_series`    | `list<struct<...>>` — see below | One entry per `TimeSeries` on the sample.                                                                                                                                   |
+| `event_ids`      | `list<string>`                  | `event_id`s of the events attached to this sample, in insertion order. Resolves against `events.parquet`. Empty list when the sample has no events.                         |
+| `task_ids`       | `list<string>`                  | `Task.id`s of the dataset-level tasks attached to this sample, in insertion order. Resolves against `tasks/task=*/part-*.parquet`. Empty list when the sample has no tasks. |
+| `annotation_ids` | `list<string>`                  | `Annotation.id`s of the annotations attached to this sample, in insertion order. Resolves against `annotations.parquet`. Empty list when the sample has no annotations.     |
 
 `time_series` struct fields:
 
-| Field            | Arrow type           | Notes                                                                                                                                                                    |
-| ---------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec_id`        | `string`             | Dictionary-encoded.                                                                                                                                                      |
-| `channel`        | `string`             | Dictionary-encoded.                                                                                                                                                      |
-| `source_id`      | `string`             | Dictionary-encoded.                                                                                                                                                      |
-| `series_id`      | `string`             | Not dictionary-encoded (high cardinality). `TimeSeries.series_id`.                                                                                                       |
-| `sampling_rate`  | `float64`            | Canonical Hz, from `TimeSeries.sampling_rate.hz`.                                                                                                                        |
-| `t_start_s`      | `float64`            | Window start in the source's timeline.                                                                                                                                   |
-| `t_end_s`        | `float64` (nullable) | `null` when the series runs to end of source.                                                                                                                            |
-| `has_timestamps` | `bool`               | `true` when `TimeSeries.timestamps` is set (non-uniform sampling); the explicit per-sample timestamps live in the shard's `timestamps` column.                           |
+| Field            | Arrow type           | Notes                                                                                                                                          |
+| ---------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec_id`        | `string`             | Dictionary-encoded.                                                                                                                            |
+| `channel`        | `string`             | Dictionary-encoded.                                                                                                                            |
+| `source_id`      | `string`             | Dictionary-encoded.                                                                                                                            |
+| `series_id`      | `string`             | Not dictionary-encoded (high cardinality). `TimeSeries.series_id`.                                                                             |
+| `sampling_rate`  | `float64`            | Canonical Hz, from `TimeSeries.sampling_rate.hz`.                                                                                              |
+| `t_start_s`      | `float64`            | Window start in the source's timeline.                                                                                                         |
+| `t_end_s`        | `float64` (nullable) | `null` when the series runs to end of source.                                                                                                  |
+| `has_timestamps` | `bool`               | `true` when `TimeSeries.timestamps` is set (non-uniform sampling); the explicit per-sample timestamps live in the shard's `timestamps` column. |
 
 ---
 
-### `annotations/task=<task_id>/part-0.parquet`
+### `tasks/task=<task_id>/part-0.parquet`
 
-One file per task type. Only created if the dataset has at least one annotation of that type.
+One file per task type. Only created if the dataset has at least one task of that type.
 
 Common columns across all partitions:
 
-| Column                | Arrow type          |
-| --------------------- | ------------------- |
-| `annotation_id`       | `string`            |
-| `sample_ids`          | `list<string>`      |
-| `spec_id`             | `string` (nullable) |
-| `from_annotation_ids` | `list<string>`      |
+| Column          | Arrow type     |
+| --------------- | -------------- |
+| `id`            | `string`       |
+| `sample_ids`    | `list<string>` |
+| `from_task_ids` | `list<string>` |
 
 Task-specific columns:
 
-| Task                  | Extra columns                                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `classification`      | `label: string`                                                                                          |
-| `labeling`            | `label: string`, `time_series_ids: list<string>` (nullable), `windows_s: list<list<float64>>` (nullable) |
-| `captioning`          | `answer: string`                                                                                         |
-| `question_and_answer` | `question: string`, `answer: string`                                                                     |
-| `forecasting`         | `context_sample_ids: list<string>`, `target_sample_id: string`                                           |
-| `reasoning`           | `question: string`, `answer: string`                                                                     |
+| Task                  | Extra columns                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `classification`      | `label: string`, `schema: string` (nullable)                                                                                          |
+| `labeling`            | `label: string`, `schema: string` (nullable), `time_series_ids: list<string>` (nullable), `windows_s: list<list<float64>>` (nullable) |
+| `captioning`          | `answer: string`                                                                                                                      |
+| `question_and_answer` | `question: string`, `answer: string`                                                                                                  |
+| `forecasting`         | `context_sample_ids: list<string>`, `target_sample_id: string`                                                                        |
+| `reasoning`           | `question: string`, `answer: string`                                                                                                  |
+
+---
+
+### `annotations.parquet`
+
+One row per unique `Annotation.id`. Annotations shared across samples (same `id` passed to multiple `add_sample()` calls) appear once; the back-references live in `sample_ids`. Sorted by `(key, id)`.
+
+Per-key metadata (`unit`, `description`, `value_type`) is hoisted into the manifest's `metadata.annotations` block, so the row schema stays minimal regardless of how many subclasses exist.
+
+| Column       | Arrow type                    | Description                                                                                |
+| ------------ | ----------------------------- | ------------------------------------------------------------------------------------------ |
+| `id`         | `string`                      | `Annotation.id`.                                                                           |
+| `key`        | `string` (dictionary-encoded) | Discriminator. Resolves against `manifest.annotations[*].key`.                             |
+| `value`      | `string`                      | JSON-encoded scalar or list. Decoded against `manifest.annotations[*].value_type` on read. |
+| `sample_ids` | `list<string>`                | Derived at write time from samples whose `annotations` referenced this `id`.               |
 
 ---
 
@@ -274,15 +295,15 @@ Task-specific columns:
 
 One row per unique `event_id`. Events shared across samples (same `event_id`) appear once; the back-references live in `sample_ids`. Sorted by `event_id`.
 
-| Column            | Arrow type                                                    | Description                                                                                      |
-| ----------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `event_id`        | `string`                                                      | `Event.event_id`.                                                                                |
-| `name`            | `string` (dictionary-encoded)                                 | `Event.name`.                                                                                    |
-| `kind`            | `string` (dictionary-encoded; one of `"point"`, `"interval"`) | String value of the [`EventKind`](types.md#eventkind) enum member.                               |
-| `start_time_s`    | `float64`                                                     | Event start in the original recording timeline.                                                  |
-| `end_time_s`      | `float64` (nullable; null iff `kind == "point"`)              | Event end. `null` for point events.                                                              |
-| `time_series_ids` | `list<string>` (nullable; null = trial-level)                 | `series_id`s the event applies to. `null` = whole sample.                                        |
-| `sample_ids`      | `list<string>`                                                | Derived at write time from samples whose `events` referenced this `event_id`.                    |
+| Column            | Arrow type                                                    | Description                                                                                                                                      |
+| ----------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `event_id`        | `string`                                                      | `Event.event_id`.                                                                                                                                |
+| `name`            | `string` (dictionary-encoded)                                 | Discriminator (`Event.name`, declared as a `ClassVar` on the subclass). Must reference a `manifest.events[*].name` entry.                        |
+| `kind`            | `string` (dictionary-encoded; one of `"point"`, `"interval"`) | String value of the [`EventKind`](types.md#eventkind) enum member. Stored per row even when the subclass pins it, so rows remain self-contained. |
+| `start_time_s`    | `float64`                                                     | Event start in the original recording timeline.                                                                                                  |
+| `end_time_s`      | `float64` (nullable; null iff `kind == "point"`)              | Event end. `null` for point events.                                                                                                              |
+| `time_series_ids` | `list<string>` (nullable; null = trial-level)                 | `series_id`s the event applies to. `null` = whole sample.                                                                                        |
+| `sample_ids`      | `list<string>`                                                | Derived at write time from samples whose `events` referenced this `event_id`.                                                                    |
 
 ---
 
@@ -336,7 +357,7 @@ Written last by `close()`. Its presence is the commit marker.
 {
   "writer_version": "0.1.0",
   "format_version": 1,
-  "created_utc": "2026-05-11T09:00:00Z",
+  "created_utc": "2026-05-21T09:00:00Z",
   "dataset_id": "ecg_dataset",
   "version": "1.0.0",
   "metadata": {
@@ -357,23 +378,34 @@ Written last by `close()`. Its presence is the commit marker.
         "device": "holter_x"
       }
     ],
-    "device_specs": [
+    "devices": [
       {
         "device_id": "holter_x",
         "name": "Holter Monitor X",
         "manufacturer": "Acme",
-        "model": null,
-        "time_series_specs": ["ecg_lead"]
+        "model": null
       }
     ],
-    "annotation_specs": [
-      { "spec_id": "rhythm_cls", "task": "classification", "schema": null }
-    ]
+    "events": [
+      { "name": "stimulus_light", "kind": "point" },
+      { "name": "artifact", "kind": null }
+    ],
+    "annotations": [
+      {
+        "key": "age",
+        "value_type": "int",
+        "unit": "years",
+        "description": null
+      },
+      { "key": "sex", "value_type": "str", "unit": null, "description": null }
+    ],
+    "tasks": [{ "task_id": "classification" }, { "task_id": "labeling" }]
   },
   "counts": {
     "samples": 1000,
     "events": 320,
-    "annotations_by_task": { "classification": 1000, "labeling": 4000 },
+    "annotations": 3500,
+    "tasks_by_task": { "classification": 1000, "labeling": 4000 },
     "time_series_chunks": 12000,
     "time_series_index_rows": 14500,
     "time_series_specs": { "ecg_lead": { "samples": 1000, "channels": 12 } }
@@ -381,7 +413,8 @@ Written last by `close()`. Its presence is the commit marker.
   "files": {
     "samples": "samples.parquet",
     "events": "events.parquet",
-    "annotations": ["annotations/task=classification/part-0.parquet"],
+    "annotations": "annotations.parquet",
+    "tasks": ["tasks/task=classification/part-0.parquet"],
     "time_series": ["time_series/shard-00000.parquet"],
     "time_series_index": "time_series_index.parquet"
   },
@@ -392,7 +425,12 @@ Written last by `close()`. Its presence is the commit marker.
 }
 ```
 
-`time_series_chunks` counts unique rows across all shards. `time_series_index_rows` counts exploded index rows, equal to `time_series_chunks` when no chunks are shared, greater when sharing occurs.
+Notes:
+
+- `metadata.events[*].kind` is `null` when the subclass leaves `kind` per-instance, and the `EventKind` string (`"point"` / `"interval"`) when the subclass pins it as a class-level default.
+- `metadata.annotations[*].value_type` is one of `"int" | "float" | "str" | "bool" | "list"`. The reader uses it to decode the per-row JSON `value` back into the right Python type.
+- `metadata.tasks[*]` is sparse (just `task_id`) because Task payload shapes are fixed in code via the [`TASKS` registry](types.md#task-registry), not declared per dataset.
+- `time_series_chunks` counts unique rows across all shards. `time_series_index_rows` counts exploded index rows, equal to `time_series_chunks` when no chunks are shared, greater when sharing occurs.
 
 ---
 
@@ -400,44 +438,35 @@ Written last by `close()`. Its presence is the commit marker.
 
 Full sequence from construction to commit:
 
-| Step | Method      | Action                                                                                                                                                                                                                           |
-| ---- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `__init__`  | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                                                                         |
-| 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                      |
-| 3a   | `write`     | Validates every `Sample.view`, every `TimeSeries`, and every `Sample.events` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                       |
-| 3b   | `write`     | Dedupes time series by `series_id`. Builds the unique-`TimeSeries` set and a `series_id → list[sample_id]` index.                                                                                                                |
-| 3c   | `write`     | For each unique `TimeSeries`, calls `ts.reader()` (and `ts.timestamps()` when set), validates the returned array, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed. |
-| 3d   | `write`     | Validates that every annotation's `sample_ids` and every event's `time_series_ids` resolve. Writes `samples.parquet`, `events.parquet`, `annotations/`, `time_series_index.parquet`.                                             |
-| 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                      |
-| —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                  |
+| Step | Method      | Action                                                                                                                                                                                                                                                                                                           |
+| ---- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `__init__`  | Validates `dataset` (non-empty `dataset.metadata.dataset_id`). No disk I/O.                                                                                                                                                                                                                                      |
+| 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                                                                                                      |
+| 3a   | `write`     | Runs the cross-sample checks listed under [Validation](#validation) (shared-`event_id` field-equality, shared-annotation-`id` field-equality). Intrinsic per-sample checks have already been enforced by `TimeFDataset.add_sample()`/`add_task()`. Raises `ValueError` on the first failure before any disk I/O. |
+| 3b   | `write`     | Dedupes time series by `series_id`. Builds the unique-`TimeSeries` set and a `series_id → list[sample_id]` index.                                                                                                                                                                                                |
+| 3c   | `write`     | For each unique `TimeSeries`, calls `ts.reader()` (and `ts.timestamps()` when set), validates the returned array against the per-series contract, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed.                                                 |
+| 3d   | `write`     | Writes `samples.parquet`, `events.parquet`, `annotations.parquet`, `tasks/`, `time_series_index.parquet`.                                                                                                                                                                                                        |
+| 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                                                                                                      |
+| —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                                                                                                  |
 
 **Commit contract:** `manifest.json` is written last. A version directory that exists but has no `manifest.json` is in-progress or failed and must be ignored by readers.
 
 **Failure in `write`:** raises immediately and leaves the writer unusable. `__exit__` will call `abort()`, deleting the partial directory.
 
-**Failure in `close`:** `abort()` is called, deleting the partial directory.
+**Failure in `close`:** `__exit__` wraps `close()` in `try`/`except`, calls `abort()` on failure, and re-raises the original exception.
 
 ---
 
 ## Validation
 
-### Dataset-level (enforced at the start of `write()`)
+Intrinsic checks (sample-, event-, annotation-, and task-level well-formedness against `dataset.metadata`) are enforced at insertion time in [`TimeFDataset.add_sample()`](timef-dataset.md#add_sample) and [`TimeFDataset.add_task()`](timef-dataset.md#add_task). The writer's checks are limited to cross-sample consistency and to per-series array contracts that can only be verified once `reader()` runs.
 
-| Check                                                                                                                                                                               | Raises       |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| Every `Sample.view` is a member of the `View` enum                                                                                                                                  | `ValueError` |
-| `Sample.time_series` is non-empty for every sample                                                                                                                                  | `ValueError` |
-| Every `TimeSeries.spec` is an instance of a `TimeSeriesSpec` subclass whose type is declared in `DatasetMetadata.time_series_specs` (`type(ts.spec) in metadata.time_series_specs`) | `ValueError` |
-| `TimeSeries.spec.channel` is non-empty                                                                                                                                              | `ValueError` |
-| `TimeSeries.sampling_rate.hz > 0` (guaranteed by [`Frequency`](types.md#frequency)'s constructor)                                                                                   | `ValueError` |
-| `TimeSeries.t_start_s >= 0`, and `t_end_s is None or t_end_s > t_start_s`                                                                                                           | `ValueError` |
-| Every annotation's `sample_ids` only contains IDs present in `dataset.samples`                                                                                                      | `ValueError` |
-| `LabelingTask.time_series_ids` resolves to a `series_id` on every target sample's `time_series`                                                                                     | `ValueError` |
-| Per-Event well-formedness: `name` non-empty; `kind == POINT` iff `end_time_s is None`; `kind == INTERVAL` ⟹ `end_time_s > start_time_s`                                             | `ValueError` |
-| For each `Event` on a sample: `time_series_ids` (when not `None`) resolves to a `series_id` on that sample's `time_series`                                                          | `ValueError` |
-| Trial-level events (`time_series_ids is None`) require all `TimeSeries` on the sample to share a common `(t_start_s, t_end_s)`                                                      | `ValueError` |
-| Event time bounds lie within the referenced series' window (channel-level) or within the common trial span (trial-level)                                                            | `ValueError` |
-| Two `Event` instances sharing the same `event_id` across samples must be field-equal                                                                                                | `ValueError` |
+### Cross-sample (enforced at the start of `write()`)
+
+| Check                                                                                | Raises       |
+| ------------------------------------------------------------------------------------ | ------------ |
+| Two `Event` instances sharing the same `event_id` across samples must be field-equal | `ValueError` |
+| Two `Annotation` instances sharing the same `id` across samples must be field-equal  | `ValueError` |
 
 ### Per-series (enforced as each `reader()` is called)
 
@@ -455,13 +484,14 @@ Failure leaves the writer unusable. `__exit__` will call `abort()`.
 
 `progress_cb` is called once per event. Events are emitted in the order listed below.
 
-| `stage`           | `completed`              | `total`                                     | When                                                              |
-| ----------------- | ------------------------ | ------------------------------------------- | ----------------------------------------------------------------- |
-| `time_series`     | time series serialized   | total unique time series across the dataset | after each unique `TimeSeries` is read, validated, and serialized |
-| `shard_finalized` | shards finalized so far  | `None`                                      | each time a shard is flushed and closed                           |
-| `samples`         | `len(dataset.samples)`   | `len(dataset.samples)`                      | once, after `samples.parquet` is written                          |
-| `events`          | unique events written    | unique event count                          | once, after `events.parquet` is written                           |
-| `annotations`     | annotations written      | total annotation count                      | once per task partition written                                   |
-| `index`           | total index rows written | total index rows                            | once, after `time_series_index.parquet` is written                |
-| `manifest`        | `1`                      | `1`                                         | once, after `manifest.json` is written                            |
-| `commit`          | `1`                      | `1`                                         | once, immediately after `manifest`                                |
+| `stage`           | `completed`                | `total`                                     | When                                                              |
+| ----------------- | -------------------------- | ------------------------------------------- | ----------------------------------------------------------------- |
+| `time_series`     | time series serialized     | total unique time series across the dataset | after each unique `TimeSeries` is read, validated, and serialized |
+| `shard_finalized` | shards finalized so far    | `None`                                      | each time a shard is flushed and closed                           |
+| `samples`         | `len(dataset.samples)`     | `len(dataset.samples)`                      | once, after `samples.parquet` is written                          |
+| `events`          | unique events written      | unique event count                          | once, after `events.parquet` is written                           |
+| `tasks`           | tasks written in partition | tasks in partition                          | once per task partition written                                   |
+| `annotations`     | unique annotations written | unique annotation count                     | once, after `annotations.parquet` is written                      |
+| `index`           | total index rows written   | total index rows                            | once, after `time_series_index.parquet` is written                |
+| `manifest`        | `1`                        | `1`                                         | once, after `manifest.json` is written                            |
+| `commit`          | `1`                        | `1`                                         | once, immediately after `manifest`                                |

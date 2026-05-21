@@ -191,14 +191,14 @@ class QueryCriteria:
 
 **Fields**
 
-| Name          | Type                     | Description                                                                                            |
-| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `domains`     | `tuple[Domain, ...]`     | Match if the dataset's `metadata().domains` shares any value with this tuple.                          |
-| `tasks`       | `tuple[type[Task], ...]` | Match if the dataset's annotation specs include any of these task classes (e.g. `ClassificationTask`). |
-| `license`     | `License`                | Exact match against `metadata().license`.                                                              |
+| Name               | Type                     | Description                                                                                                     |
+| ------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `domains`          | `tuple[Domain, ...]`     | Match if the dataset's `metadata().domains` shares any value with this tuple.                                   |
+| `tasks`            | `tuple[type[Task], ...]` | Match if the dataset's annotation specs include any of these task classes (e.g. `ClassificationTask`).          |
+| `license`          | `License`                | Exact match against `metadata().license`.                                                                       |
 | `time_series_spec` | `tuple[str, ...]`        | Match if the dataset declares all of these `TimeSeriesSpec.spec_id` values among its `time_series_specs` types. |
-| `dataset_ids` | `tuple[str, ...]`        | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID.                   |
-| `tags`        | `tuple[str, ...]`        | Match if the dataset declares all of these tags in `metadata().tags`.                                  |
+| `dataset_ids`      | `tuple[str, ...]`        | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID.                            |
+| `tags`             | `tuple[str, ...]`        | Match if the dataset declares all of these tags in `metadata().tags`.                                           |
 
 **Example**
 

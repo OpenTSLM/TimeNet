@@ -46,18 +46,18 @@ Minimal example, 12-lead ECG dataset:
 ```python
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar, Literal
 
 import numpy as np
 
 from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
-from timenet.events import Event, EventKind
+from timenet.events import EventKind
 from timenet.licenses import License
 from timenet.tasks import ClassificationTask
 from timenet.timef.dataset import TimeSeries, TimeFDataset
-from timenet.timef.metadata import (
-    AnnotationSpec, DatasetMetadata, DeviceSpec, TimeSeriesSpec,
-)
+from timenet.timef.metadata import DatasetMetadata
+from timenet.timef.types import Annotation, Device, Event, TimeSeriesSpec
 from timenet.units import Frequency, SamplingRateUnit, TimestampUnit, ValueUnit
 from timenet.version import Version
 from timenet.views import View
@@ -67,6 +67,8 @@ from timenet.views import View
 class Recording:
     recording_file_name: str
     patient_id: str
+    age: int
+    sex: Literal["M", "F", "O"]
     path: Path
     leads: tuple[str, ...]
     sampling_rate: float
@@ -77,9 +79,9 @@ def read_lead(path: Path, lead: str) -> np.ndarray:
     ...
 
 
-# Modality + device contracts. Define the TimeSeriesSpec subclass first, the
-# DeviceSpec subclass second (listing its spec classes), then back-patch the
-# spec's typed `device` ref once both classes exist.
+# Modality + device contracts. Declare the TimeSeriesSpec subclass first, the
+# Device subclass second, then back-patch the spec's typed `device` ref once
+# both classes exist.
 class ECGLeadSpec(TimeSeriesSpec):
     spec_id = "ecg_lead"
     name = "ECG Lead"
@@ -88,10 +90,33 @@ class ECGLeadSpec(TimeSeriesSpec):
     unit_value = ValueUnit.MILLIVOLT
 
 
-class HolterX(DeviceSpec):
+class HolterX(Device):
     device_id = "holter_x"
     name = "Holter Monitor X"
     manufacturer = "Acme"
+
+
+# Event subclasses — one per distinct event name the connector emits.
+class StimulusLight(Event):
+    name = "stimulus_light"
+    kind =  EventKind.POINT                # pinned per subclass
+
+
+class Artifact(Event):
+    name = "artifact"
+    # kind stays per-instance — artifacts can be POINT or INTERVAL
+
+
+# Annotation subclasses — static per-sample context (demographics here).
+class Age(Annotation):
+    key: = "age"
+    unit: = "years"
+    value: int
+
+
+class Sex(Annotation):
+    key = "sex"
+    value: Literal["M", "F", "O"]
 
 
 class ECGConnector(BaseConnector[Recording]):
@@ -103,10 +128,10 @@ class ECGConnector(BaseConnector[Recording]):
         license=License.CC_BY_4,
         domains=(Domain.CARDIOLOGY,),
         time_series_specs=(ECGLeadSpec,),
-        device_specs=(HolterX,),
-        annotation_specs=(
-            AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask),
-        ),
+        devices=(HolterX,),
+        events=(StimulusLight, Artifact),
+        annotations=(Age, Sex),
+        tasks=(ClassificationTask,),
     )
 
     def metadata(self) -> DatasetMetadata:
@@ -117,13 +142,9 @@ class ECGConnector(BaseConnector[Recording]):
         ...
 
     def convert(self, raw_refs: list[Recording]) -> TimeFDataset:
-        dataset = TimeFDataset(
-            dataset_id=self.METADATA.dataset_id,
-            version=self.METADATA.version,
-        )
+        dataset = TimeFDataset(metadata=self.METADATA)
         for rec in raw_refs:
             sample = dataset.add_sample(
-                sample_id=rec.recording_file_name,
                 subject_ids=(rec.patient_id,),
                 time_series=tuple(
                     TimeSeries(
@@ -135,19 +156,10 @@ class ECGConnector(BaseConnector[Recording]):
                     for lead in rec.leads
                 ),
                 view=View.FULL,
-                events=(
-                    Event(
-                        name="recording_start",
-                        kind=EventKind.POINT,
-                        start_time_s=0.0,
-                    ),
-                ),
+                events=(StimulusLight(start_time_s=0.0),),
+                annotations=(Age(value=rec.age), Sex(value=rec.sex)),
             )
-            dataset.add_annotation(
-                sample,
-                ClassificationTask(label="normal_sinus_rhythm"),
-                spec_id="rhythm_cls",
-            )
+            dataset.add_task(sample, ClassificationTask(label="normal_sinus_rhythm"))
         return dataset
 ```
 
@@ -284,14 +296,14 @@ def store(
 
 ## `DatasetMetadata`
 
-The connector's self-description. Declares identity, classification, and the specs that govern the dataset's contents (time series, annotations).
+The connector's self-description. Declares identity, classification, and every typed entity the dataset emits. The five class-reference catalogs (`time_series_specs`, `devices`, `events`, `annotations`, `tasks`) follow one rule: each emitted instance's type must be in the corresponding catalog tuple. The writer enforces this at validation time, and the registry uses these catalogs to answer queries (e.g. "which datasets emit `ClassificationTask`?") without instantiating connectors.
 
 ```python
 from timenet.domains import Domain
 from timenet.licenses import License
-from timenet.timef.metadata import (
-    AnnotationSpec, DeviceSpec, TimeSeriesSpec,
-)
+from timenet.timef.metadata import DatasetMetadata, TimeSeriesSpec
+from timenet.timef.types import Annotation, Device, Event
+from timenet.tasks import Task
 from timenet.version import Version
 
 
@@ -302,11 +314,13 @@ class DatasetMetadata:
     description: str
     license: License
     time_series_specs: tuple[type[TimeSeriesSpec], ...] = ()
-    annotation_specs: tuple[AnnotationSpec, ...] = ()
-    device_specs: tuple[type[DeviceSpec], ...] = ()
-    domains: tuple[Domain, ...] = ()
-    source_url: str | None = None
-    tags: tuple[str, ...] = ()
+    devices:           tuple[type[Device], ...] = ()
+    events:            tuple[type[Event], ...] = ()
+    annotations:       tuple[type[Annotation], ...] = ()
+    tasks:             tuple[type[Task], ...] = ()
+    domains:           tuple[Domain, ...] = ()
+    source_url:        str | None = None
+    tags:              tuple[str, ...] = ()
 ```
 
 **Fields**
@@ -318,8 +332,10 @@ class DatasetMetadata:
 | `description`       | `str`                              | yes      | One-sentence human-readable description.                                                                                                                                   |
 | `license`           | `License`                          | yes      | Data license.                                                                                                                                                              |
 | `time_series_specs` | `tuple[type[TimeSeriesSpec], ...]` | no       | Modality **types** the dataset records (channel, units, sampling rate, device). `TimeSeriesSpec` subclasses, not instances. See [TimeSeriesSpec](types.md#timeseriesspec). |
-| `annotation_specs`  | `tuple[AnnotationSpec, ...]`       | no       | Task types the dataset annotates and their label schemas. See [AnnotationSpec](types.md#annotationspec).                                                                   |
-| `device_specs`      | `tuple[type[DeviceSpec], ...]`     | no       | Device **types** that produced the modalities. `DeviceSpec` subclasses, not instances. See [DeviceSpec](types.md#devicespec).                                              |
+| `devices`           | `tuple[type[Device], ...]`         | no       | Device **types** that produced the modalities. `Device` subclasses, not instances. See [Device](types.md#device).                                                          |
+| `events`            | `tuple[type[Event], ...]`          | no       | Event types the connector may emit. Validated at write time. See [Event](types.md#events).                                                                                 |
+| `annotations`       | `tuple[type[Annotation], ...]`     | no       | Annotation (static per-sample context) types the connector may emit. Validated at write time. See [Annotation](types.md#annotations).                                      |
+| `tasks`             | `tuple[type[Task], ...]`           | no       | Task types the connector may emit. Used by registry filters and validated at write time. See [Tasks](types.md#tasks).                                                      |
 | `domains`           | `tuple[Domain, ...]`               | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                                                                |
 | `source_url`        | `str \| None`                      | no       | Canonical URL of the source dataset.                                                                                                                                       |
 | `tags`              | `tuple[str, ...]`                  | no       | Free-form labels for filtering.                                                                                                                                            |
@@ -337,6 +353,8 @@ def download(self, cache_dir: Path) -> list[Recording]:
             Recording(
                 recording_file_name="fixture_001",
                 patient_id="p_001",
+                age=64,
+                sex="M",
                 path=cache_dir / "fixture_001.edf",
                 leads=LEADS,
                 sampling_rate=500.0,
