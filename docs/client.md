@@ -147,16 +147,16 @@ Builds a `QueryCriteria` from the given filters and runs it against the registry
 
 **Parameters**
 
-| Name           | Type                       | Default | Description                                                                                                    |
-| -------------- | -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| `domains`      | `list[Domain] \| None`     | `None`  | Keep datasets that include any of these domains.                                                               |
-| `tasks`        | `list[type[Task]] \| None` | `None`  | Keep datasets that support any of these task types (pass the class, e.g. `ClassificationTask`).                |
-| `license`      | `License \| None`          | `None`  | Keep datasets with this exact license.                                                                         |
-| `time_series`  | `list[str] \| None`        | `None`  | Keep datasets that declare all of these `TimeSeriesSpec.spec_id` values among their `time_series_specs` types. |
-| `min_length_s` | `float \| None`            | `None`  | Keep datasets whose minimum recording length meets this threshold (seconds).                                   |
-| `source`       | `str \| None`              | `None`  | Keep datasets from this source label.                                                                          |
-| `dataset_ids`  | `list[str] \| None`        | `None`  | Keep only these specific dataset IDs.                                                                          |
-| `tags`         | `list[str] \| None`        | `None`  | Keep datasets that carry all of these tags.                                                                    |
+| Name           | Type                       | Default | Description                                                                                     |
+| -------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `domains`      | `list[Domain] \| None`     | `None`  | Keep datasets that include any of these domains.                                                |
+| `tasks`        | `list[type[Task]] \| None` | `None`  | Keep datasets that support any of these task types (pass the class, e.g. `ClassificationTask`). |
+| `license`      | `License \| None`          | `None`  | Keep datasets with this exact license.                                                          |
+| `time_series`  | `list[str] \| None`        | `None`  | Keep datasets that declare all of these `TimeSeriesSpec.spec_id` values in their schema.        |
+| `min_length_s` | `float \| None`            | `None`  | Keep datasets whose minimum recording length meets this threshold (seconds).                    |
+| `source`       | `str \| None`              | `None`  | Keep datasets from this source label.                                                           |
+| `dataset_ids`  | `list[str] \| None`        | `None`  | Keep only these specific dataset IDs.                                                           |
+| `tags`         | `list[str] \| None`        | `None`  | Keep datasets that carry all of these tags.                                                     |
 
 **Returns:** `DatasetCollection` containing the matching descriptors. Pass directly to `download()`.
 
@@ -237,7 +237,7 @@ Scans `data_root` for `manifest.json` files and returns a `TimeFDataset` for eac
 | ----------- | -------------- | ------- | ------------------------------------------------------------------------------ |
 | `data_root` | `Path \| None` | `None`  | Directory to scan. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
 
-**Returns:** `list[TimeFDataset]`. Manifests, tasks, and the time-series index are loaded into memory; per-series values and per-sample events/annotations are pulled on demand via `TimeSeries.reader()` / `Sample.events` / `Sample.annotations`.
+**Returns:** `list[TimeFDataset]`. Manifests, tasks, and the time-series index are loaded into memory; per-series values and per-sample annotations are pulled on demand via `TimeSeries.reader()` / `Sample.annotations`.
 
 **Raises**
 

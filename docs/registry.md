@@ -1,21 +1,28 @@
 # Registry
 
-In-memory dataset catalog. Maps dataset IDs to connector instances. Built once at construction time from one or two YAML files; read-only after that.
+In-memory dataset catalog. Maps each dataset ID to a `RegistryEntry` — the connector instance plus its optional [precomputed schema](types.md#precomputed-schema). Built once at construction time from one or two YAML files; read-only after that.
 
 ---
 
 ## At a glance
 
 ```python
+from dataclasses import dataclass
 from pathlib import Path
 
 from timenet.connectors.base import BaseConnector
 from timenet.models import QueryCriteria
-from timenet.timef.metadata import DatasetMetadata
+from timenet.timef.metadata import DatasetMetadata, DatasetSchema
+
+
+@dataclass(frozen=True)
+class RegistryEntry:
+    connector: BaseConnector
+    precomputed_schema: DatasetSchema | None = None
 
 
 class DatasetRegistry:
-    def __init__(self, connectors: dict[str, BaseConnector]) -> None: ...
+    def __init__(self, entries: dict[str, RegistryEntry]) -> None: ...
 
     @classmethod
     def from_config(
@@ -38,14 +45,16 @@ class DatasetRegistry:
 datasets:
   mit_bih_arrhythmia:
     class: timenet.connectors.MITBIHConnector
+    precomputed_schema: timenet/registry/precomputed/mit_bih_arrhythmia.json
   synthetic_ecg:
     class: timenet.connectors.SyntheticECGConnector
 ```
 
-| Field        | Type   | Description                                                                 |
-| ------------ | ------ | --------------------------------------------------------------------------- |
-| `datasets`   | map    | Top-level key. Each child key is the dataset ID used throughout the system. |
-| `<id>.class` | string | Fully-qualified Python path to the connector class.                         |
+| Field                     | Type   | Description                                                                                                                                                                                                                                                                        |
+| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `datasets`                | map    | Top-level key. Each child key is the dataset ID used throughout the system.                                                                                                                                                                                                        |
+| `<id>.class`              | string | Fully-qualified Python path to the connector class.                                                                                                                                                                                                                                |
+| `<id>.precomputed_schema` | string | **Optional.** Path to a hand-written [precomputed schema](types.md#precomputed-schema) JSON (shape = `manifest.json["schema"]`). Lets the registry answer type-filters for this dataset before any build. Only connectors created by Timenet's mantainers are expected to have one |
 
 The default catalog ships at `timenet/registry/default_datasets.yaml`. A custom catalog is **additive only**: it cannot override or remove entries from the default.
 
@@ -85,6 +94,8 @@ Builds the registry by loading `default_path`, optionally merging `custom_path`,
 | `AttributeError`    | The class portion of a `class:` value is not present on the imported module.                       |
 | `TypeError`         | The connector class requires constructor arguments.                                                |
 | `ValueError`        | `metadata().dataset_id` does not match its YAML key, or a duplicate ID is found across both files. |
+| `FileNotFoundError` | A `precomputed_schema` path is set but the file does not exist.                                    |
+| `ValueError`        | A `precomputed_schema` file is present but cannot be parsed into a `DatasetSchema`.                |
 
 **Loading sequence**
 
@@ -94,7 +105,8 @@ For each entry, in order (`default_path` first, `custom_path` second):
 2. Instantiate with no arguments: `Cls()`.
 3. Assert `instance.metadata().dataset_id == yaml_key`, the connector is the source of truth for its own ID.
 4. Assert the ID is not already registered.
-5. Store under the key.
+5. If `precomputed_schema` is set, read and parse the JSON file into a `DatasetSchema` (otherwise `None`).
+6. Store a `RegistryEntry(connector, precomputed_schema)` under the dataset ID. `filter()` reaches the schema through `entry.precomputed_schema` for type queries.
 
 **Example**
 
@@ -125,7 +137,7 @@ Returns descriptors for every registered dataset.
 def get(self, dataset_id: str) -> BaseConnector | None: ...
 ```
 
-Looks up a single connector by its dataset ID.
+Looks up a single connector by its dataset ID, unwrapping it from the dataset's `RegistryEntry`.
 
 **Parameters**
 
@@ -191,14 +203,22 @@ class QueryCriteria:
 
 **Fields**
 
-| Name               | Type                     | Description                                                                                                     |
-| ------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `domains`          | `tuple[Domain, ...]`     | Match if the dataset's `metadata().domains` shares any value with this tuple.                                   |
-| `tasks`            | `tuple[type[Task], ...]` | Match if the dataset's annotation specs include any of these task classes (e.g. `ClassificationTask`).          |
-| `license`          | `License`                | Exact match against `metadata().license`.                                                                       |
-| `time_series_spec` | `tuple[str, ...]`        | Match if the dataset declares all of these `TimeSeriesSpec.spec_id` values among its `time_series_specs` types. |
-| `dataset_ids`      | `tuple[str, ...]`        | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID.                            |
-| `tags`             | `tuple[str, ...]`        | Match if the dataset declares all of these tags in `metadata().tags`.                                           |
+| Name               | Type                     | Description                                                                                                       |
+| ------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `domains`          | `tuple[Domain, ...]`     | Match if the dataset's `metadata().domains` shares any value with this tuple.                                     |
+| `tasks`            | `tuple[type[Task], ...]` | Match if the dataset's resolved `schema.tasks` includes any of these task classes (e.g. `ClassificationTask`).    |
+| `license`          | `License`                | Exact match against `metadata().license`.                                                                         |
+| `time_series_spec` | `tuple[str, ...]`        | Match if the dataset's resolved `schema.time_series_specs` declares all of these `TimeSeriesSpec.spec_id` values. |
+| `dataset_ids`      | `tuple[str, ...]`        | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID.                              |
+| `tags`             | `tuple[str, ...]`        | Match if the dataset declares all of these tags in `metadata().tags`.                                             |
+
+#### Schema resolution
+
+`tasks` and `time_series_spec` are **type-filters**: they need the dataset's `DatasetSchema`. The registry resolves it in this precedence order:
+
+1. **Written manifest**: if the dataset has been built, use the `schema` block from its committed `manifest.json`. This is ground truth: it reflects exactly what was written.
+2. **Precomputed schema**: else, if the entry's `precomputed_schema` is set, use it.
+3. **Unavailable**: else the dataset has no known schema and is **excluded** from any result filtered by `tasks` or `time_series_spec`.
 
 **Example**
 
