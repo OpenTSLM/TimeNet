@@ -12,9 +12,8 @@ from collections.abc import Callable
 from typing import Literal
 
 from timenet.models import DatasetCollection, DownloadProgressEvent, DownloadReport, QueryCriteria
+from timenet.timef.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.timef.metadata import DatasetMetadata
-from timenet.sdk.dataset import Dataset
-from timenet.timef.dataset import Sample, TimeSeries
 from timenet.domains import Domain
 from timenet.tasks import Task
 from timenet.licenses import License
@@ -48,7 +47,7 @@ class TimeNet:
         progress_cb: Callable[[DownloadProgressEvent], None] | None = None,
     ) -> DownloadReport: ...
 
-    def datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
+    def datasets(self, data_root: Path | None = None) -> list[TimeFDataset]: ...
 
     def query_samples(
         self,
@@ -227,10 +226,10 @@ for entry in report:
 ### `datasets()`
 
 ```python
-def datasets(self, data_root: Path | None = None) -> list[Dataset]: ...
+def datasets(self, data_root: Path | None = None) -> list[TimeFDataset]: ...
 ```
 
-Scans `data_root` for `manifest.json` files and returns a `Dataset` wrapper for each one found.
+Scans `data_root` for `manifest.json` files and returns a `TimeFDataset` for each one found. Each dataset is opened with [`TimeFReader`](timef-reader.md).
 
 **Parameters**
 
@@ -238,7 +237,7 @@ Scans `data_root` for `manifest.json` files and returns a `Dataset` wrapper for 
 | ----------- | -------------- | ------- | ------------------------------------------------------------------------------ |
 | `data_root` | `Path \| None` | `None`  | Directory to scan. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
 
-**Returns:** `list[Dataset]`. Manifests are loaded into memory; time-series data is not read until accessed.
+**Returns:** `list[TimeFDataset]`. Manifests, annotations, and the time-series index are loaded into memory; per-series values are pulled on demand via `TimeSeries.reader()`.
 
 **Raises**
 
@@ -261,7 +260,7 @@ def query_samples(
 ) -> list[Sample]: ...
 ```
 
-Filters the samples of one local dataset by task or domain.
+Filters the samples of one local dataset by task or domain. Backed by [`TimeFReader`](timef-reader.md): the dataset at `<data_root>/<dataset_id>/<version>/` is opened, its samples and annotations loaded, and the filtered subset returned.
 
 **Parameters**
 
@@ -408,42 +407,3 @@ class DownloadReport:
 Per-dataset errors are surfaced here, not raised. The whole `download()` call only raises for setup-level errors like an unregistered descriptor.
 
 ---
-
-## `Dataset`
-
-A class wrapping a single dataset that has already been **downloaded to disk**. Returned by `datasets()`.
-
-```python
-from collections.abc import Iterator
-from pathlib import Path
-
-import pandas as pd
-
-from timenet.timef.dataset import Sample, Annotation
-from timenet.timef.metadata import DatasetMetadata
-
-
-class Dataset:
-    metadata: DatasetMetadata
-    root: Path
-
-    def samples(self) -> Iterator[Sample]: ...
-    def annotations(self) -> Iterator[Annotation]: ...
-
-    def time_series(
-        self,
-        sample_id: str,
-        spec_id: str,
-        channel: str,
-    ) -> pd.DataFrame: ...
-```
-
-`Dataset.samples()` yields `Sample` objects; each carries the `annotation_ids` linking it to entries from `Dataset.annotations()`.
-
-`Dataset.time_series(sample_id, spec_id, channel)` reconstructs the values for a single `(sample_id, spec_id, channel)` triple. Many series share a `spec_id` (the modality tag) and differ only by `channel`, so all three keys are required to pin one series. It filters `time_series_index.parquet` by that key, reads each referenced chunk from the appropriate shard, and concatenates them in `chunk_idx` order. Returns a DataFrame with columns `t_s: float64` and `value: float32`; timestamps are derived from `t_start_s + i / sampling_rate` unless the chunk carries an explicit `timestamps` column.
-
-**Raises**
-
-| Exception  | Condition                                                                                                 |
-| ---------- | --------------------------------------------------------------------------------------------------------- |
-| `KeyError` | `sample_id` is not in `samples.parquet`, or `(spec_id, channel)` is not one of its `time_series` entries. |

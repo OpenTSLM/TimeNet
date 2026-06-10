@@ -73,4 +73,5 @@ nav:
   - Types: types.md
   - TimeFDataset: timef-dataset.md
   - TimeFWriter: timef-writer.md
+  - TimeFReader: timef-reader.md
   - Engine: engine.md
