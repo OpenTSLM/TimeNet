@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from timenet.events import Event
 from timenet.tasks import (
     Task,
     ClassificationTask,
@@ -23,8 +22,13 @@ from timenet.tasks import (
     ForecastingTask,
     ReasoningTask,
 )
-from timenet.timef.metadata import DatasetMetadata
-from timenet.timef.types import Annotation
+from timenet.timef.metadata import DatasetMetadata, DatasetSchema
+from timenet.timef.types import (
+    Annotation,
+    StaticAnnotation,
+    PointAnnotation,
+    IntervalAnnotation,
+)
 from timenet.views import View
 
 
@@ -38,8 +42,6 @@ class TimeFDataset:
         time_series: tuple[TimeSeries, ...],
         view: View,
         subject_ids: tuple[str, ...] = (),
-        events: tuple[Event, ...] = (),
-        annotations: tuple[Annotation, ...] = (),
     ) -> Sample: ...
 
     def add_task(
@@ -50,8 +52,13 @@ class TimeFDataset:
         from_tasks: tuple[Task, ...] = (),
     ) -> Task: ...
 
+    def derive_schema(self) -> DatasetSchema: ...
+
     @property
     def metadata(self) -> DatasetMetadata: ...
+
+    @property
+    def schema(self) -> DatasetSchema | None: ...   # None until derive_schema() (write) or the reader (read) populates it
 
     @property
     def samples(self) -> tuple[Sample, ...]: ...
@@ -68,9 +75,11 @@ def __init__(self, *, metadata: DatasetMetadata) -> None: ...
 
 **Parameters**
 
-| Name       | Type              | Description                                                                                                                                     |
-| ---------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metadata` | `DatasetMetadata` | The dataset's self-description. Carries `dataset_id`, `version`, and the type catalogs used to validate `add_sample()` and `add_task()` inputs. |
+| Name       | Type              | Description                                                                                                               |
+| ---------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `metadata` | `DatasetMetadata` | The dataset's descriptive identity. Carries `dataset_id`, `version`, `name`, `description`, `license`, `domains`, `tags`. |
+
+The dataset takes no `schema` argument. The type declaration is **derived**, not declared, it is populated after construction by the engine (write path) or the reader (read path). See [`schema`](#schema) below and [`DatasetSchema`](types.md#datasetschema).
 
 ---
 
@@ -83,12 +92,10 @@ def add_sample(
     time_series: tuple[TimeSeries, ...],
     view: View,
     subject_ids: tuple[str, ...] = (),
-    events: tuple[Event, ...] = (),
-    annotations: tuple[Annotation, ...] = (),
 ) -> Sample: ...
 ```
 
-Creates a `Sample` with an auto-generated `sample_id`, registers it, and returns it.
+Creates a `Sample` with an auto-generated `sample_id`, registers it on the dataset, and returns it. Annotations are attached afterward with [`Sample.add_annotation()`](#add_annotation); tasks with [`TimeFDataset.add_task()`](#add_task).
 
 **Parameters**
 
@@ -97,30 +104,18 @@ Creates a `Sample` with an auto-generated `sample_id`, registers it, and returns
 | `time_series` | `tuple[TimeSeries, ...]` | yes      | One `TimeSeries` per channel the sample uses.                                                                                                                                                                         |
 | `view`        | `View`                   | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                           |
 | `subject_ids` | `tuple[str, ...]`        | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects. |
-| `events`      | `tuple[Event, ...]`      | no       | [`Event`](types.md#events) instances attached to this sample.                                                                                                                                                         |
-| `annotations` | `tuple[Annotation, ...]` | no       | [`Annotation`](types.md#annotations) instances attached to this sample.                                                                                                                                               |
 
 **Returns:** The newly created `Sample`.
 
 **Raises**
 
-`add_sample()` enforces every check that is intrinsic to the sample being added (the sample's own series, events, annotations, and their resolution against the dataset's metadata). Cross-sample checks (same `event_id` / annotation `id` across samples must be field-equal) and per-series array-contract checks are deferred to [`TimeFWriter.write()`](timef-writer.md#validation).
+`add_sample()` enforces the checks intrinsic to the sample's own time series. Annotation-level checks run in [`Sample.add_annotation()`](#add_annotation); task-level checks in [`add_task()`](#add_task). Cross-sample checks (annotations sharing an `id` across samples must be field-equal) and per-series array-contract checks are deferred to [`TimeFWriter.write()`](timef-writer.md#validation).
 
-| Exception    | Condition                                                                                                                           |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `ValueError` | `time_series` is empty.                                                                                                             |
-| `ValueError` | `type(ts.spec)` is not in `metadata.time_series_specs` for some `ts` in `time_series`.                                              |
-| `ValueError` | `type(ts.spec).device is not None` and `type(ts.spec).device` is not in `metadata.devices`.                                         |
-| `ValueError` | `ts.spec.channel` is empty.                                                                                                         |
-| `ValueError` | `ts.t_start_s < 0`, or `ts.t_end_s is not None and ts.t_end_s <= ts.t_start_s`.                                                     |
-| `ValueError` | An emitted `Event`'s type is not declared in `metadata.events`.                                                                     |
-| `ValueError` | `event.kind == POINT` and `event.end_time_s is not None`.                                                                           |
-| `ValueError` | `event.kind == INTERVAL` and `event.end_time_s is None or event.end_time_s <= event.start_time_s`.                                  |
-| `ValueError` | The `Event` subclass pins `kind` as a class-level default and the emitted instance's `kind` differs from it.                        |
-| `ValueError` | `event.time_series_ids` is non-`None` and any id does not match a `TimeSeries.series_id` in `time_series`.                          |
-| `ValueError` | `event.time_series_ids is None` (trial-level) but the sample's `TimeSeries` instances do not share a common `(t_start_s, t_end_s)`. |
-| `ValueError` | Event time bounds fall outside the referenced `TimeSeries` window (channel-level) or outside the common trial span (trial-level).   |
-| `ValueError` | An emitted `Annotation`'s type is not declared in `metadata.annotations`.                                                           |
+| Exception    | Condition                                                                       |
+| ------------ | ------------------------------------------------------------------------------- |
+| `ValueError` | `time_series` is empty.                                                         |
+| `ValueError` | `ts.spec.channel` is empty.                                                     |
+| `ValueError` | `ts.t_start_s < 0`, or `ts.t_end_s is not None and ts.t_end_s <= ts.t_start_s`. |
 
 **Examples**
 
@@ -143,14 +138,16 @@ class ECGLeadSpec(TimeSeriesSpec):
     unit_timestamp = TimestampUnit.SECONDS
     unit_value = ValueUnit.MILLIVOLT
 
-dataset = TimeFDataset(metadata=DatasetMetadata(
-    dataset_id="ecg_dataset",
-    version=Version(1, 0, 0),
-    description="100 patients, one 12-lead ECG recording each.",
-    license=License.CC_BY_4,
-    domains=(Domain.CARDIOLOGY,),
-    time_series_specs=(ECGLeadSpec,),
-))
+dataset = TimeFDataset(
+    metadata=DatasetMetadata(
+        dataset_id="ecg_dataset",
+        version=Version(1, 0, 0),
+        name="ECG Dataset",
+        description="100 patients, one 12-lead ECG recording each.",
+        license=License.CC_BY_4,
+        domains=(Domain.CARDIOLOGY,),
+    ),
+)
 
 def ecg_reader(path: Path, channel: str) -> np.ndarray:
     # parse the EDF and return that channel as a float32 1-D array
@@ -336,11 +333,9 @@ lead_only = dataset.add_sample(
 )
 ```
 
-Sample with one trial-level point event and one channel-level interval event. `StimulusLight` and `Artifact` are subclasses of [`Event`](types.md#events) declared by the connector and listed in `DatasetMetadata.events`:
+Sample with a point annotation and a channel-level interval annotation. `StimulusLight` (a [`PointAnnotation`](types.md#pointannotation)) and `Artifact` (an [`IntervalAnnotation`](types.md#intervalannotation)) are subclasses declared by the connector:
 
 ```python
-from timenet.events import EventKind
-
 lead_v1 = TimeSeries(
     spec=ECGLeadSpec(channel="V1"), source_id="rec_001",
     sampling_rate=Frequency.Hz(500.0), t_start_s=0.0, t_end_s=30.0,
@@ -356,29 +351,24 @@ trial = dataset.add_sample(
     subject_ids=("patient_42",),
     time_series=(lead_v1, lead_v2),
     view=View.SUBSET,
-    events=(
-        StimulusLight(start_time_s=4.0),
-        Artifact(
-            kind=EventKind.INTERVAL,
-            start_time_s=10.0,
-            end_time_s=12.0,
-            time_series_ids=(lead_v1.series_id,),
-        ),
-    ),
 )
+trial.add_annotation(StimulusLight(start_time_s=4.0))
+trial.add_annotation(Artifact(
+    start_time_s=10.0,
+    end_time_s=12.0,
+    time_series_ids=(lead_v1.series_id,),
+))
 ```
 
-Demographics shared across every sample of one subject. `Age` and `Sex` are [`Annotation`](types.md#annotations) subclasses declared by the connector and listed in `DatasetMetadata.annotations`:
+Demographics shared across every sample of one subject. `Age` and `Sex` are [`StaticAnnotation`](types.md#staticannotation) subclasses declared by the connector:
 
 ```python
 age_64 = Age(value=64)
 sex_m  = Sex(value="M")
 for rec in subject_42_recordings:
-    dataset.add_sample(
-        time_series=(...),
-        view=View.FULL,
-        annotations=(age_64, sex_m),     # shared across all samples of subject 42
-    )
+    sample = dataset.add_sample(time_series=(...), view=View.FULL)
+    sample.add_annotation(age_64)        # shared across all samples of subject 42
+    sample.add_annotation(sex_m)
 ```
 
 ---
@@ -397,7 +387,7 @@ def add_task(
 
 Registers `task` on the dataset and links it to every target sample by appending `task.id` to each sample's `task_ids`. Pass a single `Sample` for a sample-scoped task, or a tuple of samples when the task spans several (e.g. a `ForecastingTask` over a context window plus a target window).
 
-The `task` instance is registered as-is: its `sample_ids` field is populated by `add_task()` from the targets, and `from_tasks` is set from the keyword argument. Each task's `type(task)` must be in `DatasetMetadata.tasks`.
+The `task` instance is registered as-is: its `sample_ids` field is populated by `add_task()` from the targets, and `from_tasks` is set from the keyword argument.
 
 **Parameters**
 
@@ -414,7 +404,6 @@ The `task` instance is registered as-is: its `sample_ids` field is populated by 
 | Exception    | Condition                                                                                                                              |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `ValueError` | `samples` is an empty tuple.                                                                                                           |
-| `ValueError` | `type(task)` is not declared in `metadata.tasks`.                                                                                      |
 | `ValueError` | `task` is a `LabelingTask` with `time_series_ids` set, and any id does not resolve to a `TimeSeries.series_id` on every target sample. |
 
 **Examples**
@@ -473,6 +462,36 @@ dataset.add_task(
 
 ---
 
+### `derive_schema()`
+
+```python
+def derive_schema(self) -> DatasetSchema: ...
+```
+
+Walks the dataset's own instances and builds its [`DatasetSchema`](types.md#datasetschema): the distinct `TimeSeriesSpec` types (and their `device`) across every sample's `time_series`, the distinct `Annotation` types across every sample's `annotations`, and the distinct `Task` types across `tasks`. Stores the result on the dataset (so [`schema`](#schema) returns it) and also returns it.
+
+Call it once the dataset is fully populated. On the write path the engine calls it after [`convert()`](connectors.md#convert) returns, before handing the dataset to [`store()`](connectors.md#store). [`TimeFWriter`](timef-writer.md) then reads `schema` to write `manifest.json["schema"]`.
+
+**Returns:** The derived `DatasetSchema` (also stored on the dataset).
+
+---
+
+### `schema`
+
+```python
+@property
+def schema(self) -> DatasetSchema : ...
+```
+
+The dataset's [type declaration](types.md#datasetschema), **populated once**
+
+- **Write path.** Set by [`derive_schema()`](#derive_schema), which the engine calls after [`convert()`](connectors.md#convert).
+- **Read path.** Set by [`TimeFReader`](timef-reader.md) from `manifest.json["schema"]` while reconstructing the dataset.
+
+**Returns:** The dataset's `DatasetSchema`
+
+---
+
 ### `samples`
 
 ```python
@@ -509,8 +528,9 @@ class Sample:
     view: View
     subject_ids: tuple[str, ...] = ()
     task_ids: tuple[str, ...] = ()
-    events: tuple[Event, ...] = ()
     annotations: tuple[Annotation, ...] = ()
+
+    def add_annotation(self, annotation: Annotation) -> Annotation: ...
 
     @property
     def source_ids(self) -> tuple[str, ...]: ...   # derived: distinct sources across time_series
@@ -518,15 +538,55 @@ class Sample:
 
 **Fields**
 
-| Name          | Type                     | Description                                                                                                                           |
-| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample_id`   | `str`                    | Auto-generated unique identifier (uuid4-based).                                                                                       |
-| `time_series` | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel present in the sample. Two `TimeSeries` with the same `series_id` share one chunk on disk.               |
-| `view`        | `View`                   | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                     |
-| `subject_ids` | `tuple[str, ...]`        | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                               |
-| `task_ids`    | `tuple[str, ...]`        | IDs of the dataset-level tasks attached to this sample. Populated by `TimeFDataset.add_task()`; resolve against `TimeFDataset.tasks`. |
-| `events`      | `tuple[Event, ...]`      | [`Event`](types.md#events) instances attached to this sample. Empty by default.                                                       |
-| `annotations` | `tuple[Annotation, ...]` | [`Annotation`](types.md#annotations) instances attached to this sample (static context such as demographics). Empty by default.       |
+| Name          | Type                     | Description                                                                                                                                                      |
+| ------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`   | `str`                    | Auto-generated unique identifier (uuid4-based).                                                                                                                  |
+| `time_series` | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel present in the sample. Two `TimeSeries` with the same `series_id` share one chunk on disk.                                          |
+| `view`        | `View`                   | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                                                |
+| `subject_ids` | `tuple[str, ...]`        | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                                                          |
+| `task_ids`    | `tuple[str, ...]`        | IDs of the dataset-level tasks attached to this sample. Populated by `TimeFDataset.add_task()`; resolve against `TimeFDataset.tasks`.                            |
+| `annotations` | `tuple[Annotation, ...]` | [`Annotation`](types.md#annotations) instances attached via [`add_annotation()`](#add_annotation) — static context and temporal markers alike. Empty by default. |
+
+---
+
+### `add_annotation()`
+
+```python
+def add_annotation(self, annotation: Annotation) -> Annotation: ...
+```
+
+Attaches `annotation` to the sample and returns it. Call it on the sample returned by [`add_sample()`](#add_sample). The same `Annotation` instance may be attached to several samples to declare reuse; the writer dedupes by `id`.
+
+**Parameters**
+
+| Name         | Type         | Required | Description                                                                |
+| ------------ | ------------ | -------- | -------------------------------------------------------------------------- |
+| `annotation` | `Annotation` | required | A `StaticAnnotation`, `PointAnnotation`, or `IntervalAnnotation` instance. |
+
+**Returns:** The attached `Annotation` (the same instance).
+
+**Raises**
+
+| Exception    | Condition                                                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ValueError` | `IntervalAnnotation` with `end_time_s <= start_time_s`.                                                                                      |
+| `ValueError` | A temporal annotation's `time_series_ids` is non-`None` and any id does not match a `TimeSeries.series_id` on the sample.                    |
+| `ValueError` | A temporal annotation is trial-level (`time_series_ids is None`) but the sample's `TimeSeries` do not share a common `(t_start_s, t_end_s)`. |
+| `ValueError` | A temporal annotation's time bounds fall outside the referenced `TimeSeries` window (channel-level) or the common trial span (trial-level).  |
+
+**Examples**
+
+```python
+sample = dataset.add_sample(time_series=(...), view=View.FULL)
+
+# Static context.
+sample.add_annotation(Age(value=64))
+sample.add_annotation(Sex(value="M"))
+
+# Temporal markers.
+sample.add_annotation(StimulusLight(start_time_s=4.0))
+sample.add_annotation(Artifact(start_time_s=10.0, end_time_s=12.0))
+```
 
 ---
 
@@ -568,13 +628,13 @@ class TimeSeries:
 | `t_end_s`       | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate.hz)`. |
 | `timestamps`    | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                         |
 
-**Sharing.** `TimeSeries` keeps identity-based equality (`eq=False`); the writer dedupes by `series_id`. Two `TimeSeries` with the same `series_id` (whether the same Python instance reused across samples, or separately constructed instances passed the same explicit `series_id`) collapse to one chunk of bytes on disk. `series_id` is also the persistent handle that `LabelingTask.time_series_ids` and `Event.time_series_ids` reference.
+**Sharing.** `TimeSeries` keeps identity-based equality (`eq=False`); the writer dedupes by `series_id`. Two `TimeSeries` with the same `series_id` (whether the same Python instance reused across samples, or separately constructed instances passed the same explicit `series_id`) collapse to one chunk of bytes on disk. `series_id` is also the persistent handle that `LabelingTask.time_series_ids` and a temporal annotation's `time_series_ids` reference.
 
 **Windowing.** A windowed `TimeSeries` is just a `TimeSeries` with `t_start_s` / `t_end_s` set and a `reader` that returns the windowed slice.
 
 ---
 
-The `Task` (dataset-level) and `Annotation` (per-sample static context) dataclasses themselves are defined in [`types.md`](types.md#tasks). `TimeFDataset` only exposes them through `add_task()`, `tasks`, and `Sample.annotations` — there is no separate `Annotation` dataclass on this page.
+The `Task` (dataset-level) and `Annotation` (per-sample context, static and temporal) dataclasses themselves are defined in [`types.md`](types.md#tasks). `TimeFDataset` only exposes them through `add_task()`, `tasks`, `Sample.add_annotation()`, and `Sample.annotations` — there is no separate `Annotation` dataclass on this page.
 
 **Reading task payloads**
 

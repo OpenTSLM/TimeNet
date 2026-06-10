@@ -1,5 +1,76 @@
 # Types
 
+## `DatasetMetadata`
+
+The dataset's descriptive identity: who the dataset is, not what it emits. Purely descriptive data: identifier, version, name, description, license, domains, source, tags. The typed entities the dataset emits live on [`DatasetSchema`](#datasetschema). Authored by the connector and returned from [`metadata()`](connectors.md#metadata).
+
+```python
+from timenet.domains import Domain
+from timenet.licenses import License
+from timenet.timef.metadata import DatasetMetadata
+from timenet.version import Version
+
+
+@dataclass(frozen=True)
+class DatasetMetadata:
+    dataset_id: str
+    version: Version
+    name: str
+    description: str
+    license: License
+    domains:    tuple[Domain, ...] = ()
+    source_url: str | None = None
+    tags:       tuple[str, ...] = ()
+```
+
+**Fields**
+
+| Name          | Type                 | Required | Description                                                      |
+| ------------- | -------------------- | -------- | ---------------------------------------------------------------- |
+| `dataset_id`  | `str`                | yes      | Snake-cased unique identifier. Must match the YAML registry key. |
+| `version`     | `Version`            | yes      | Semantic version (`major.minor.patch`). See [Version](#version). |
+| `name`        | `str`                | yes      | Human-readable display name.                                     |
+| `description` | `str`                | yes      | One-sentence human-readable description.                         |
+| `license`     | `License`            | yes      | Data license.                                                    |
+| `domains`     | `tuple[Domain, ...]` | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).      |
+| `source_url`  | `str \| None`        | no       | Canonical URL of the source dataset.                             |
+| `tags`        | `tuple[str, ...]`    | no       | Free-form labels for filtering.                                  |
+
+---
+
+## `DatasetSchema`
+
+The dataset's type declaration: every typed entity a dataset emits, across four class-reference catalogs (`time_series_specs`, `devices`, `annotations`, `tasks`). It is **derived, not declared**, a connector never constructs one. On the write path [`TimeFDataset.derive_schema()`](timef-dataset.md#derive_schema) builds it from the dataset's instances, and on the read path [`TimeFReader`](timef-reader.md) reconstructs it from the manifest.
+
+```python
+from timenet.timef.metadata import DatasetSchema
+from timenet.timef.types import Annotation, Device, TimeSeriesSpec
+from timenet.tasks import Task
+
+
+@dataclass(frozen=True)
+class DatasetSchema:
+    time_series_specs: tuple[type[TimeSeriesSpec], ...] = ()
+    devices:           tuple[type[Device], ...] = ()
+    annotations:       tuple[type[Annotation], ...] = ()
+    tasks:             tuple[type[Task], ...] = ()
+```
+
+**Fields**
+
+| Name                | Type                               | Required | Description                                                                                                                                      |
+| ------------------- | ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `time_series_specs` | `tuple[type[TimeSeriesSpec], ...]` | no       | Modality types the dataset records (channel, units, sampling rate, device). See [TimeSeriesSpec](#timeseriesspec).                               |
+| `devices`           | `tuple[type[Device], ...]`         | no       | Device types that produced the modalities. See [Device](#device).                                                                                |
+| `annotations`       | `tuple[type[Annotation], ...]`     | no       | Annotation types the dataset emits — `StaticAnnotation`, `PointAnnotation`, and `IntervalAnnotation` subclasses. See [Annotation](#annotations). |
+| `tasks`             | `tuple[type[Task], ...]`           | no       | Task types the dataset emits. See [Tasks](#tasks).                                                                                               |
+
+### Precomputed schema
+
+Because the schema is only known after a dataset is converted, the [registry](registry.md) cannot answer type queries (e.g. "which datasets emit `ClassificationTask`?") for a dataset that has never been built. To preserve the "query without executing the connector" behavior it is possible to ship a **precomputed schema**: a hand-written JSON file whose shape is identical to `manifest.json["schema"]`.
+
+---
+
 ## Specs
 
 ### `TimeSeriesSpec`
@@ -270,71 +341,9 @@ dataset.add_task(target, ForecastingTask(
 
 ---
 
-## Events
-
-A temporal marker attached to a `Sample`. Encodes either a point in time (`kind=POINT`, no end) or a bounded interval (`kind=INTERVAL`, `end_time_s > start_time_s`). The base `Event` should not be directly instantiable — connectors declare one subclass per event name and list those subclasses in `DatasetMetadata.events`.
-
-### `Event`
-
-```python
-from __future__ import annotations
-
-import uuid
-from dataclasses import dataclass, field
-from typing import ClassVar
-
-
-@dataclass(frozen=True, kw_only=True)
-class Event:
-    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    kind: EventKind
-    start_time_s: float
-    end_time_s: float | None = None
-    time_series_ids: tuple[str, ...] | None = None
-    name: ClassVar[str]                              # subclass sets
-```
-
-| Field             | Type                      | Scope    | Required | Description                                                                                                                                                                      |
-| ----------------- | ------------------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | `ClassVar[str]`           | class    | yes      | Non-empty event name (e.g. `"stimulus_light"`, `"artifact"`). Discriminator in `manifest.events`.                                                                                |
-| `event_id`        | `str`                     | instance | no       | Auto-generated unique identifier (uuid4-based).                                                                                                                                  |
-| `kind`            | [`EventKind`](#eventkind) | both     | yes      | `POINT` or `INTERVAL`. May be pinned as a class-level default on a subclass (in which case the writer enforces that every emitted instance matches); otherwise set per instance. |
-| `start_time_s`    | `float`                   | instance | yes      | Event start in the **original recording timeline**.                                                                                                                              |
-| `end_time_s`      | `float \| None`           | instance | no       | End of the interval. `None` iff `kind == POINT`; required and strictly greater than `start_time_s` when `kind == INTERVAL`.                                                      |
-| `time_series_ids` | `tuple[str, ...] \| None` | instance | no       | Series of the parent sample the event applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (the whole sample).           |
-
-**Attachment.** Events are passed via the `events=` kwarg on `TimeFDataset.add_sample()`. The same `Event` instance (or two instances sharing the same `event_id`) may be attached to multiple samples to declare reuse; the writer dedupes by `event_id`.
-
-A connector declares the subclasses it emits.
-
-```python
-@dataclass(frozen=True, kw_only=True)
-class StimulusLight(Event):
-    name: ClassVar[str] = "stimulus_light"
-    kind: EventKind = EventKind.POINT                # narrowed default
-
-
-@dataclass(frozen=True, kw_only=True)
-class Artifact(Event):
-    name: ClassVar[str] = "artifact"
-    # kind stays per-instance — artifacts can be POINT or INTERVAL
-
-
-stimulus_onset = StimulusLight(start_time_s=4.0)
-
-artifact = Artifact(
-    kind=EventKind.INTERVAL,
-    start_time_s=10.0,
-    end_time_s=12.0,
-    time_series_ids=(lead_v1.series_id,),
-)
-```
-
----
-
 ## Annotations
 
-Static contextual metadata attached to a `Sample` (demographics, device serial, recording conditions, ticker symbol, …). Annotations are strictly sample-scoped and time-independent: there are no time fields on `Annotation`. The base `Annotation` should not be directly instantiable — connectors declare one subclass per `key` and list those subclasses in `DatasetMetadata.annotations`.
+Contextual metadata attached to a `Sample`. An annotation is either **static** (sample-scoped and time-independent like demographics, device serial, ticker symbol) or **temporal** (anchored to a point or a bounded interval in the original recording timeline). All three share one base. The base `Annotation` is never instantiated directly, and connectors do not subclass it directly either, they subclass one of the three shapes below, one subclass per `key`. Annotations are attached with [`Sample.add_annotation()`](timef-dataset.md#add_annotation).
 
 ### `Annotation`
 
@@ -349,21 +358,67 @@ from typing import Any, ClassVar
 @dataclass(frozen=True, kw_only=True)
 class Annotation:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    value: Any
+    value: Any = None
     key: ClassVar[str]                               # subclass sets
     unit: ClassVar[str | None] = None
     description: ClassVar[str | None] = None
 ```
 
-| Field         | Type                         | Scope    | Required | Description                                                                                         |
-| ------------- | ---------------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `key`         | `ClassVar[str]`              | class    | yes      | Stable string identifier for this annotation class.                                                 |
-| `unit`        | `ClassVar[str \| None]`      | class    | no       | Physical unit for the value (e.g. `"years"`).                                                       |
-| `description` | `ClassVar[str \| None]`      | class    | no       | Human-readable description of what this annotation represents.                                      |
-| `id`          | `str`                        | instance | no       | Auto-generated unique identifier (uuid4-based). The writer dedupes annotation instances by `id`.    |
-| `value`       | concrete (subclass-narrowed) | instance | yes      | The annotation's value. Narrowed per subclass to a concrete type (`int`, `str`, `Literal[...]`, …). |
+| Field         | Type                        | Scope    | Required | Description                                                                                                                            |
+| ------------- | --------------------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`         | `ClassVar[str]`             | class    | yes      | Stable string identifier for this annotation class. Discriminator in `manifest.schema.annotations`.                                    |
+| `unit`        | `ClassVar[str \| None]`     | class    | no       | Physical unit for the value (e.g. `"years"`).                                                                                          |
+| `description` | `ClassVar[str \| None]`     | class    | no       | Human-readable description of what this annotation represents.                                                                         |
+| `id`          | `str`                       | instance | no       | Auto-generated unique identifier (uuid4-based). The writer dedupes annotation instances by `id`.                                       |
+| `value`       | subclass-narrowed `\| None` | instance | varies   | The annotation's value. Required on [`StaticAnnotation`](#staticannotation); optional on the temporal subtypes (`None` = pure marker). |
 
-**Attachment.** Annotations are passed via the `annotations=` kwarg on `TimeFDataset.add_sample()`. Passing the same `Annotation` instance to multiple `add_sample()` calls (or two instances sharing the same `id`) declares reuse.
+### `StaticAnnotation`
+
+Sample-scoped, time-independent context. Carries a required `value` and no time fields.
+
+```python
+@dataclass(frozen=True, kw_only=True)
+class StaticAnnotation(Annotation):
+    value: Any                                       # required; subclass narrows
+```
+
+### `PointAnnotation`
+
+Anchored to a single instant in the original recording timeline.
+
+```python
+@dataclass(frozen=True, kw_only=True)
+class PointAnnotation(Annotation):
+    start_time_s: float
+    time_series_ids: tuple[str, ...] | None = None
+```
+
+| Field             | Type                        | Required | Description                                                                                                                                                             |
+| ----------------- | --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start_time_s`    | `float`                     | yes      | Instant in the **original recording timeline**.                                                                                                                         |
+| `time_series_ids` | `tuple[str, ...] \| None`   | no       | Series of the parent sample the annotation applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (whole sample). |
+| `value`           | subclass-narrowed `\| None` | no       | Optional label for the point. `None` for a pure marker.                                                                                                                 |
+
+### `IntervalAnnotation`
+
+Anchored to a bounded interval in the original recording timeline.
+
+```python
+@dataclass(frozen=True, kw_only=True)
+class IntervalAnnotation(Annotation):
+    start_time_s: float
+    end_time_s: float
+    time_series_ids: tuple[str, ...] | None = None
+```
+
+| Field             | Type                        | Required | Description                                                                            |
+| ----------------- | --------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `start_time_s`    | `float`                     | yes      | Interval start in the **original recording timeline**.                                 |
+| `end_time_s`      | `float`                     | yes      | Interval end. Strictly greater than `start_time_s`.                                    |
+| `time_series_ids` | `tuple[str, ...] \| None`   | no       | Series the annotation applies to. `None` = trial-level (whole sample).                 |
+| `value`           | subclass-narrowed `\| None` | no       | Optional label for the interval (e.g. a sleep stage `"N2"`). `None` for a pure marker. |
+
+**Attachment.** Annotations are attached with `Sample.add_annotation()` on the sample returned by `TimeFDataset.add_sample()`. Attaching the same `Annotation` instance to multiple samples (or two instances sharing the same `id`) declares reuse; the writer dedupes by `id`.
 
 A connector declares the subclasses it emits.
 
@@ -371,49 +426,59 @@ A connector declares the subclasses it emits.
 from typing import ClassVar, Literal
 
 
+# Static context.
 @dataclass(frozen=True, kw_only=True)
-class Age(Annotation):
+class Age(StaticAnnotation):
     key: ClassVar[str] = "age"
     unit: ClassVar[str | None] = "years"
     value: int                                       # narrowed type
 
 
 @dataclass(frozen=True, kw_only=True)
-class Sex(Annotation):
+class Sex(StaticAnnotation):
     key: ClassVar[str] = "sex"
     value: Literal["M", "F", "O"]
 
 
 @dataclass(frozen=True, kw_only=True)
-class DeviceSerial(Annotation):
+class DeviceSerial(StaticAnnotation):
     key: ClassVar[str] = "device_serial"
     value: str
 
 
 @dataclass(frozen=True, kw_only=True)
-class Ticker(Annotation):
+class Ticker(StaticAnnotation):
     key: ClassVar[str] = "ticker"
     value: str
 
 
 @dataclass(frozen=True, kw_only=True)
-class RecordingSite(Annotation):
+class RecordingSite(StaticAnnotation):
     key: ClassVar[str] = "recording_site"
     description: ClassVar[str | None] = "Seismometer station code (FDSN convention)."
     value: str
 
 
+# Temporal markers (formerly events).
+@dataclass(frozen=True, kw_only=True)
+class StimulusLight(PointAnnotation):
+    key: ClassVar[str] = "stimulus_light"
+
+
+@dataclass(frozen=True, kw_only=True)
+class Artifact(IntervalAnnotation):
+    key: ClassVar[str] = "artifact"
+
+
 age_64 = Age(value=64)
 sex_m  = Sex(value="M")
-serial = DeviceSerial(value="HX-2024-0117")
+stimulus_onset = StimulusLight(start_time_s=4.0)
+artifact = Artifact(start_time_s=10.0, end_time_s=12.0, time_series_ids=(lead_v1.series_id,))
 
 # Same instance attached to every sample of subject 42 — declares reuse.
-for rec in subject_42_recordings:
-    dataset.add_sample(
-        time_series=(...),
-        view=View.FULL,
-        annotations=(age_64, sex_m, serial),
-    )
+for sample in subject_42_samples:
+    sample.add_annotation(age_64)
+    sample.add_annotation(sex_m)
 ```
 
 ---
@@ -558,31 +623,6 @@ class View(StrEnum):
 from timenet.views import View
 
 sample = dataset.add_sample(time_series=(...), view=View.FULL)
-```
-
----
-
-### `EventKind`
-
-Identifies whether an [`Event`](#event) is a point in time or a bounded interval. Set on `Event.kind`.
-
-```python
-from enum import StrEnum
-
-
-class EventKind(StrEnum):
-    POINT = "point"
-    INTERVAL = "interval"
-```
-
-| Value      | Identifier   | Meaning                                                                      |
-| ---------- | ------------ | ---------------------------------------------------------------------------- |
-| `POINT`    | `"point"`    | Instantaneous event. `Event.end_time_s` must be `None`.                      |
-| `INTERVAL` | `"interval"` | Bounded interval. `Event.end_time_s` is required and `> Event.start_time_s`. |
-
-```python
-StimulusLight(start_time_s=4.0)                                  # kind pinned on the subclass
-Artifact(kind=EventKind.INTERVAL, start_time_s=10.0, end_time_s=12.0)
 ```
 
 ---

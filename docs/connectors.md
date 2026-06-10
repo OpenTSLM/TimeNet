@@ -52,12 +52,17 @@ import numpy as np
 
 from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
-from timenet.events import EventKind
 from timenet.licenses import License
 from timenet.tasks import ClassificationTask
 from timenet.timef.dataset import TimeSeries, TimeFDataset
 from timenet.timef.metadata import DatasetMetadata
-from timenet.timef.types import Annotation, Device, Event, TimeSeriesSpec
+from timenet.timef.types import (
+    Device,
+    StaticAnnotation,
+    PointAnnotation,
+    IntervalAnnotation,
+    TimeSeriesSpec,
+)
 from timenet.units import Frequency, SamplingRateUnit, TimestampUnit, ValueUnit
 from timenet.version import Version
 from timenet.views import View
@@ -96,25 +101,22 @@ class HolterX(Device):
     manufacturer = "Acme"
 
 
-# Event subclasses — one per distinct event name the connector emits.
-class StimulusLight(Event):
-    name = "stimulus_light"
-    kind =  EventKind.POINT                # pinned per subclass
+# Annotation subclasses
+class StimulusLight(PointAnnotation):
+    key = "stimulus_light"
 
 
-class Artifact(Event):
-    name = "artifact"
-    # kind stays per-instance — artifacts can be POINT or INTERVAL
+class Artifact(IntervalAnnotation):
+    key = "artifact"
 
 
-# Annotation subclasses — static per-sample context (demographics here).
-class Age(Annotation):
-    key: = "age"
-    unit: = "years"
+class Age(StaticAnnotation):
+    key = "age"
+    unit = "years"
     value: int
 
 
-class Sex(Annotation):
+class Sex(StaticAnnotation):
     key = "sex"
     value: Literal["M", "F", "O"]
 
@@ -124,14 +126,10 @@ class ECGConnector(BaseConnector[Recording]):
     METADATA = DatasetMetadata(
         dataset_id="ecg_dataset",
         version=Version(1, 0, 0),
+        name="ECG Dataset",
         description="100 patients, one 12-lead ECG recording each.",
         license=License.CC_BY_4,
         domains=(Domain.CARDIOLOGY,),
-        time_series_specs=(ECGLeadSpec,),
-        devices=(HolterX,),
-        events=(StimulusLight, Artifact),
-        annotations=(Age, Sex),
-        tasks=(ClassificationTask,),
     )
 
     def metadata(self) -> DatasetMetadata:
@@ -156,9 +154,10 @@ class ECGConnector(BaseConnector[Recording]):
                     for lead in rec.leads
                 ),
                 view=View.FULL,
-                events=(StimulusLight(start_time_s=0.0),),
-                annotations=(Age(value=rec.age), Sex(value=rec.sex)),
             )
+            sample.add_annotation(StimulusLight(start_time_s=0.0))
+            sample.add_annotation(Age(value=rec.age))
+            sample.add_annotation(Sex(value=rec.sex))
             dataset.add_task(sample, ClassificationTask(label="normal_sinus_rhythm"))
         return dataset
 ```
@@ -193,9 +192,9 @@ def __init__(self) -> None:
 def metadata(self) -> DatasetMetadata: ...
 ```
 
-Returns the dataset's identity and classification. Called by the registry at startup, before any download has run.
+Returns the dataset's descriptive identity. Called by the registry at startup, before any download has run.
 
-**Returns:** `DatasetMetadata`. See [DatasetMetadata](#datasetmetadata) below.
+**Returns:** `DatasetMetadata`. See [DatasetMetadata](types.md#datasetmetadata).
 
 **Constraints**
 
@@ -291,54 +290,6 @@ def store(
     with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
         writer.write()
 ```
-
----
-
-## `DatasetMetadata`
-
-The connector's self-description. Declares identity, classification, and every typed entity the dataset emits. The five class-reference catalogs (`time_series_specs`, `devices`, `events`, `annotations`, `tasks`) follow one rule: each emitted instance's type must be in the corresponding catalog tuple. The writer enforces this at validation time, and the registry uses these catalogs to answer queries (e.g. "which datasets emit `ClassificationTask`?") without instantiating connectors.
-
-```python
-from timenet.domains import Domain
-from timenet.licenses import License
-from timenet.timef.metadata import DatasetMetadata, TimeSeriesSpec
-from timenet.timef.types import Annotation, Device, Event
-from timenet.tasks import Task
-from timenet.version import Version
-
-
-@dataclass(frozen=True)
-class DatasetMetadata:
-    dataset_id: str
-    version: Version
-    description: str
-    license: License
-    time_series_specs: tuple[type[TimeSeriesSpec], ...] = ()
-    devices:           tuple[type[Device], ...] = ()
-    events:            tuple[type[Event], ...] = ()
-    annotations:       tuple[type[Annotation], ...] = ()
-    tasks:             tuple[type[Task], ...] = ()
-    domains:           tuple[Domain, ...] = ()
-    source_url:        str | None = None
-    tags:              tuple[str, ...] = ()
-```
-
-**Fields**
-
-| Name                | Type                               | Required | Description                                                                                                                                                                |
-| ------------------- | ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataset_id`        | `str`                              | yes      | Snake-cased unique identifier. Must match the YAML registry key.                                                                                                           |
-| `version`           | `Version`                          | yes      | Semantic version (`major.minor.patch`). See [Version](types.md#version).                                                                                                   |
-| `description`       | `str`                              | yes      | One-sentence human-readable description.                                                                                                                                   |
-| `license`           | `License`                          | yes      | Data license.                                                                                                                                                              |
-| `time_series_specs` | `tuple[type[TimeSeriesSpec], ...]` | no       | Modality **types** the dataset records (channel, units, sampling rate, device). `TimeSeriesSpec` subclasses, not instances. See [TimeSeriesSpec](types.md#timeseriesspec). |
-| `devices`           | `tuple[type[Device], ...]`         | no       | Device **types** that produced the modalities. `Device` subclasses, not instances. See [Device](types.md#device).                                                          |
-| `events`            | `tuple[type[Event], ...]`          | no       | Event types the connector may emit. Validated at write time. See [Event](types.md#events).                                                                                 |
-| `annotations`       | `tuple[type[Annotation], ...]`     | no       | Annotation (static per-sample context) types the connector may emit. Validated at write time. See [Annotation](types.md#annotations).                                      |
-| `tasks`             | `tuple[type[Task], ...]`           | no       | Task types the connector may emit. Used by registry filters and validated at write time. See [Tasks](types.md#tasks).                                                      |
-| `domains`           | `tuple[Domain, ...]`               | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).                                                                                                                |
-| `source_url`        | `str \| None`                      | no       | Canonical URL of the source dataset.                                                                                                                                       |
-| `tags`              | `tuple[str, ...]`                  | no       | Free-form labels for filtering.                                                                                                                                            |
 
 ---
 
