@@ -70,8 +70,7 @@ nav:
   - Client: sdk.md
   - Registry: registry.md
   - Connectors: connectors.md
-  - Specs/Tasks/Enums: enums-and-spec.md
+  - Types: types.md
   - TimeFDataset: timef-dataset.md
-  - Schema: schema.md
   - TimeFWriter: timef-writer.md
   - Engine: engine.md

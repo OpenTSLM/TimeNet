@@ -4,10 +4,13 @@ The in-memory model a connector populates during `convert()`. Holds samples and 
 
 ---
 
-## At a glance
+## `TimeFDataset`
 
 ```python
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Callable
+
+import numpy as np
 
 from timenet.tasks import (
     Task,
@@ -18,6 +21,7 @@ from timenet.tasks import (
     ForecastingTask,
     ReasoningTask,
 )
+from timenet.views import View
 
 
 class TimeFDataset:
@@ -27,68 +31,26 @@ class TimeFDataset:
     def add_sample(
         self,
         *,
-        sample_id: str,
-        subject_ids: tuple[str, ...],
-        source_ids: tuple[str, ...],
-        signals: tuple[SignalRef, ...],
-        view: str,
+        signals: tuple[Signal, ...],
+        view: View,
+        subject_ids: tuple[str, ...] = (),
     ) -> Sample: ...
+
+    def add_annotation(
+        self,
+        samples: Sample | tuple[Sample, ...],
+        task: Task,
+        *,
+        spec_id: str | None = None,
+        from_annotations: tuple[Annotation, ...] = (),
+    ) -> Annotation: ...
 
     @property
     def samples(self) -> tuple[Sample, ...]: ...
 
-
-@dataclass(frozen=True)
-class SignalRef:
-    spec_id: str
-    channels: tuple[str, ...] = ()  # empty = all channels of the spec
-
-
-@dataclass
-class Sample:
-    sample_id: str
-    subject_ids: tuple[str, ...]
-    source_ids: tuple[str, ...]
-    signals: tuple[SignalRef, ...]
-    view: str
-    annotations: list[Annotation]
-
-    def annotate(
-        self,
-        task: Task,
-        *,
-        spec_id: str | None = None,
-        annotation_id: str | None = None,
-        from_annotations: tuple[Annotation, ...] = (),
-    ) -> Annotation: ...
-
-
-@dataclass(frozen=True)
-class Annotation:
-    annotation_id: str
-    task: Task
-    sample_ids: tuple[str, ...]
-    spec_id: str | None = None
-    from_annotations: tuple[Annotation, ...] = ()
-
     @property
-    def from_annotation_ids(self) -> tuple[str, ...]: ...
-
-
-# Composition helper
-def annotate_samples(
-    samples: list[Sample],
-    task: Task,
-    *,
-    spec_id: str | None = None,
-    annotation_id: str | None = None,
-    from_annotations: tuple[Annotation, ...] = (),
-) -> Annotation: ...
+    def annotations(self) -> tuple[Annotation, ...]: ...
 ```
-
----
-
-## `TimeFDataset`
 
 ### `__init__()`
 
@@ -111,33 +73,29 @@ def __init__(self, *, dataset_id: str, version: str) -> None: ...
 def add_sample(
     self,
     *,
-    sample_id: str,
-    subject_ids: tuple[str, ...],
-    source_ids: tuple[str, ...],
-    signals: tuple[SignalRef, ...],
-    view: str,
+    signals: tuple[Signal, ...],
+    view: View,
+    subject_ids: tuple[str, ...] = (),
 ) -> Sample: ...
 ```
 
-Creates a `Sample`, registers it, and returns it.
+Creates a `Sample` with an auto-generated `sample_id`, registers it, and returns it.
 
 **Parameters**
 
-| Name          | Type                    | Description                                                                                                                                                                                                 |
-| ------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample_id`   | `str`                   | Dataset-unique identifier for this sample.                                                                                                                                                                  |
-| `subject_ids` | `tuple[str, ...]`       | Subjects this sample belongs to (participants, devices, instruments, locations). Single-element tuple for the single-subject case; multi-element when the sample spans multiple subjects.                   |
-| `source_ids`  | `tuple[str, ...]`       | Source recordings this sample was derived from. Single-element tuple for the common case; multi-element when one sample is derived from multiple source recordings.                                         |
-| `signals`     | `tuple[SignalRef, ...]` | One `SignalRef` per `SignalSpec` the sample uses, naming the subset of channels actually present. Multi-element for multi-modal samples. Each `spec_id` must be declared in `DatasetMetadata.signal_specs`. |
-| `view`        | `str`                   | Name of a `ViewSpec` declared in `DatasetMetadata.view_specs`. Identifies which slice of the source this sample represents (e.g. `"full"`, `"single_channel"`, `"subset"`, `"window"`).                     |
+| Name          | Type                 | Required | Description                                                                                                                                                                                                                                                          |
+| ------------- | -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signals`     | `tuple[Signal, ...]` | yes      | One `Signal` per `(spec_id, channel)` the sample uses. Multi-element for multi-channel or multi-modal samples. Reuse the **same** `Signal` instance across samples to declare shared data. Each `Signal.spec_id` must be declared in `DatasetMetadata.signal_specs`. |
+| `view`        | `View`               | yes      | A [`View`](types.md#view) enum member identifying which slice of the source this sample represents (e.g. `View.FULL`, `View.SINGLE_CHANNEL`, `View.SUBSET`, `View.WINDOW`).                                                                                          |
+| `subject_ids` | `tuple[str, ...]`    | no       | Subjects this sample belongs to (participants, devices, instruments). Empty by default, leave unset for subject-less domains (finance, seismology, synthetic). Multi-element when the sample spans multiple subjects.                                                |
 
 **Returns:** The newly created `Sample`.
 
 **Raises**
 
-| Exception    | Condition                                                                                       |
-| ------------ | ----------------------------------------------------------------------------------------------- |
-| `ValueError` | `sample_id` is already registered, or any of `subject_ids` / `source_ids` / `signals` is empty. |
+| Exception    | Condition           |
+| ------------ | ------------------- |
+| `ValueError` | `signals` is empty. |
 
 **Examples**
 
@@ -146,46 +104,256 @@ Single-subject ECG recording:
 ```python
 dataset = TimeFDataset(dataset_id="ecg_dataset", version="1.0.0")
 
+def ecg_reader(path: Path, channel: str) -> np.ndarray:
+    # parse the EDF and return that channel as a float32 1-D array
+    ...
+
 full = dataset.add_sample(
-    sample_id="rec_001::full",
     subject_ids=("patient_42",),
-    source_ids=("rec_001",),
-    signals=(
-        SignalRef(spec_id="ecg_12lead", channels=("I", "II", "V1", "V2")),
+    signals=tuple(
+        Signal(
+            spec_id="ecg_12lead",
+            channel=ch,
+            source_id="rec_001",
+            sampling_rate_hz=500.0,
+            reader=lambda p=path, c=ch: ecg_reader(p, c),
+        )
+        for ch in ("I", "II", "V1", "V2")
     ),
-    view="full",
+    view=View.FULL,
 )
+# full.source_ids == ("rec_001",)
 ```
 
 Multi-sensor wearables session:
 
 ```python
 session = dataset.add_sample(
-    sample_id="participant_07::session_3",
     subject_ids=("participant_07",),
-    source_ids=("session_3",),
     signals=(
-        SignalRef(spec_id="ppg"),         # empty channels = all channels of the spec
-        SignalRef(spec_id="accel"),       # all 3 axes
-        SignalRef(spec_id="skin_temp"),   # the spec's single channel
+        Signal(spec_id="ppg", channel="ppg", source_id="session_3",
+               sampling_rate_hz=64.0, reader=lambda: load_ppg(session_path)),
+        Signal(spec_id="accel", channel="x", source_id="session_3",
+               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "x")),
+        Signal(spec_id="accel", channel="y", source_id="session_3",
+               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "y")),
+        Signal(spec_id="accel", channel="z", source_id="session_3",
+               sampling_rate_hz=100.0, reader=lambda: load_accel(session_path, "z")),
+        Signal(spec_id="skin_temp", channel="skin_temp", source_id="session_3",
+               sampling_rate_hz=1.0, reader=lambda: load_temp(session_path)),
     ),
-    view="full",
+    view=View.FULL,
 )
 ```
 
-Multi-source sample (one continuous overnight recording stored in two files):
+Multi-source sample (one logical overnight recording split across two files on disk, the connector concatenates inside each `reader` and exposes a single `source_id`):
 
 ```python
 night = dataset.add_sample(
-    sample_id="night_001::full",
     subject_ids=("participant_07",),
-    source_ids=("night_001a.edf", "night_001b.edf"),
     signals=(
-        SignalRef(spec_id="eeg", channels=("f3", "c4")),
-        SignalRef(spec_id="eog", channels=("l",)),
-        SignalRef(spec_id="emg", channels=("emg",)),
+        Signal(spec_id="eeg", channel="f3", source_id="night_001",
+               sampling_rate_hz=256.0,
+               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "f3")),
+        Signal(spec_id="eeg", channel="c4", source_id="night_001",
+               sampling_rate_hz=256.0,
+               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "c4")),
+        Signal(spec_id="eog", channel="l", source_id="night_001",
+               sampling_rate_hz=256.0,
+               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "l")),
+        Signal(spec_id="emg", channel="emg", source_id="night_001",
+               sampling_rate_hz=256.0,
+               reader=lambda: concat_channel(("night_001a.edf", "night_001b.edf"), "emg")),
     ),
-    view="full",
+    view=View.FULL,
+)
+```
+
+Subject-less domain. Omit `subject_ids`:
+
+```python
+tick = dataset.add_sample(
+    signals=(
+        Signal(spec_id="equity_tick", channel="price", source_id="AAPL::2026-05-13",
+               sampling_rate_hz=1.0, reader=lambda: load_ticks("AAPL", "2026-05-13", "price")),
+        Signal(spec_id="equity_tick", channel="volume", source_id="AAPL::2026-05-13",
+               sampling_rate_hz=1.0, reader=lambda: load_ticks("AAPL", "2026-05-13", "volume")),
+    ),
+    view=View.FULL,
+)
+# tick.subject_ids == ()
+```
+
+Windowed samples, two samples that slice disjoint time ranges out of the same recording. Each `Signal` declares its own window, and `reader()` returns just the windowed values:
+
+```python
+def windowed(path: Path, channel: str, t_start: float, t_end: float, sr: float) -> np.ndarray:
+    full = ecg_reader(path, channel)
+    return full[int(t_start * sr) : int(t_end * sr)]
+
+first = dataset.add_sample(
+    subject_ids=("patient_42",),
+    signals=(
+        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
+               sampling_rate_hz=500.0, t_start_s=0.0, t_end_s=10.0,
+               reader=lambda: windowed(path, "I", 0.0, 10.0, 500.0)),
+    ),
+    view=View.WINDOW,
+)
+
+last = dataset.add_sample(
+    subject_ids=("patient_42",),
+    signals=(
+        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
+               sampling_rate_hz=500.0, t_start_s=50.0, t_end_s=60.0,
+               reader=lambda: windowed(path, "I", 50.0, 60.0, 500.0)),
+    ),
+    view=View.WINDOW,
+)
+```
+
+More examples:
+
+```python
+lead_ii = Signal(
+    spec_id="ecg_12lead", channel="II", source_id="rec_001",
+    sampling_rate_hz=500.0,
+    reader=lambda: ecg_reader(path, "II"),
+)
+
+full = dataset.add_sample(
+    subject_ids=("patient_42",),
+    signals=(
+        Signal(spec_id="ecg_12lead", channel="I", source_id="rec_001",
+               sampling_rate_hz=500.0, reader=lambda: ecg_reader(path, "I")),
+        lead_ii,                                  # shared object
+        Signal(spec_id="ecg_12lead", channel="V1", source_id="rec_001",
+               sampling_rate_hz=500.0, reader=lambda: ecg_reader(path, "V1")),
+    ),
+    view=View.FULL,
+)
+
+lead_only = dataset.add_sample(
+    subject_ids=("patient_42",),
+    signals=(lead_ii,),                           # same object → shared chunk on disk
+    view=View.SINGLE_CHANNEL,
+)
+```
+
+---
+
+### `add_annotation()`
+
+```python
+def add_annotation(
+    self,
+    samples: Sample | tuple[Sample, ...],
+    task: Task,
+    *,
+    spec_id: str | None = None,
+    from_annotations: tuple[Annotation, ...] = (),
+) -> Annotation: ...
+```
+
+Creates one `Annotation`, registers it on the dataset, and links it to every
+target sample by appending its `annotation_id` to each sample's
+`annotation_ids`. Pass a single `Sample` to annotate one sample, or a tuple of
+samples to attach the same annotation across all of them.
+
+**Parameters**
+
+| Name               | Type                           | Default  | Description                                                                                                                                                 |
+| ------------------ | ------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `samples`          | `Sample \| tuple[Sample, ...]` | required | The sample, or tuple of samples, this annotation is attached to.                                                                                            |
+| `task`             | `Task`                         | required | Instance of a `Task` subclass. Carries all task-specific data (label, question/answer, windows, etc.).                                                      |
+| `spec_id`          | `str \| None`                  | `None`   | Optional reference to an `AnnotationSpec.spec_id` declared in the dataset metadata. `None` for free-form annotations that don't follow a declared spec.     |
+| `from_annotations` | `tuple[Annotation, ...]`       | `()`     | Source annotations this annotation was derived from. Used to build composition chains (e.g. a `ReasoningTask` built from prior `LabelingTask` annotations). |
+
+**Returns:** The newly created `Annotation`, already registered on the dataset and linked to every target sample.
+
+**Raises**
+
+| Exception    | Condition                    |
+| ------------ | ---------------------------- |
+| `ValueError` | `samples` is an empty tuple. |
+
+**Implementation**
+
+```python
+def add_annotation(
+    self,
+    samples: Sample | tuple[Sample, ...],
+    task: Task,
+    *,
+    spec_id: str | None = None,
+    from_annotations: tuple[Annotation, ...] = (),
+) -> Annotation:
+    targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
+    if not targets:
+        raise ValueError("add_annotation() requires at least one sample")
+
+    annotation = Annotation(
+        task=task,
+        sample_ids=tuple(s.sample_id for s in targets),
+        spec_id=spec_id,
+        from_annotations=from_annotations,
+    )
+    self._annotations.append(annotation)
+    for sample in targets:
+        sample.annotation_ids += (annotation.annotation_id,)
+    return annotation
+```
+
+**Examples**
+
+Whole-sample classification (ECG rhythm):
+
+```python
+dataset.add_annotation(ecg_sample, ClassificationTask(label="afib"))
+```
+
+Captioning over a whole sample (finance market window):
+
+```python
+dataset.add_annotation(market_window, CaptioningTask(
+    answer="AAPL traded sideways with low volume; SPY drifted down 0.4%.",
+))
+```
+
+Composition chain, build low-level annotations first, then derive
+higher-level ones from them. Each `add_annotation()` returns the `Annotation`,
+which is fed into the next call via `from_annotations`:
+
+```python
+#TODO: This example will be modify once I update the schema of Signal to TimeSeries
+# 1. Per-lead labelings on the raw recording.
+lead_labels = tuple(
+    dataset.add_annotation(
+        ecg_sample,
+        LabelingTask(label="st_elevation", channels=(lead,), windows_s=((4.0, 9.0),)),
+        spec_id="st_segment",
+    )
+    for lead in ("V1", "V2", "V3")
+)
+
+# 2. A QA conclusion reasoned from those labelings.
+qa = dataset.add_annotation(
+    ecg_sample,
+    QATask(
+        question="Which territory shows ST elevation?",
+        answer="Anteroseptal (V1–V3).",
+    ),
+    from_annotations=lead_labels,
+)
+
+# 3. A top-level reasoning annotation built on the QA conclusion.
+dataset.add_annotation(
+    ecg_sample,
+    ReasoningTask(
+        question="Is this consistent with an acute anterior STEMI?",
+        answer="Yes — contiguous anteroseptal ST elevation across V1–V3.",
+    ),
+    from_annotations=(qa,),
 )
 ```
 
@@ -202,116 +370,75 @@ def samples(self) -> tuple[Sample, ...]: ...
 
 ---
 
+### `annotations`
+
+```python
+@property
+def annotations(self) -> tuple[Annotation, ...]: ...
+```
+
+**Returns:** All annotations in insertion order. Read-only, use `add_annotation()` to extend.
+
+---
+
 ## `Sample`
 
 One logical unit of time-series data: a recording, a session, a sensor bundle, a market window. Samples are created exclusively by `TimeFDataset.add_sample()`.
 
+```python
+@dataclass(kw_only=True)
+class Sample:
+    sample_id: field(default_factory=lambda: str(uuid.uuid4()))
+    signals: tuple[Signal, ...]
+    view: View
+    subject_ids: tuple[str, ...] = ()
+    annotation_ids: tuple[str, ...] = ()
+
+    @property
+    def source_ids(self) -> tuple[str, ...]: ...   # derived: distinct sources across signals
+```
+
 **Fields**
 
-| Name          | Type                    | Description                                                              |
-| ------------- | ----------------------- | ------------------------------------------------------------------------ |
-| `sample_id`   | `str`                   | Dataset-unique identifier.                                               |
-| `subject_ids` | `tuple[str, ...]`       | Subjects this sample belongs to.                                         |
-| `source_ids`  | `tuple[str, ...]`       | Source recordings this sample was derived from.                          |
-| `signals`     | `tuple[SignalRef, ...]` | One entry per `SignalSpec` used, paired with the channel subset present. |
-| `view`        | `str`                   | Name of a `ViewSpec` declared in the dataset's metadata.                 |
-| `annotations` | `list[Annotation]`      | Annotations attached to this sample. Append via `annotate()`.            |
+| Name             | Type                 | Description                                                                                                                               |
+| ---------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`      | `str`                | Auto-generated unique identifier (uuid4-based).                                                                                           |
+| `signals`        | `tuple[Signal, ...]` | One `Signal` per `(spec_id, channel)` present in the sample. Reuse a `Signal` instance across samples to share its bytes on disk.         |
+| `view`           | `View`               | A [`View`](types.md#view) enum member identifying the slice of the source this sample represents.                                         |
+| `subject_ids`    | `tuple[str, ...]`    | Subjects this sample belongs to. Empty tuple for subject-less domains (finance, seismology, synthetic).                                   |
+| `annotation_ids` | `tuple[str, ...]`    | IDs of the annotations attached to this sample. Populated by `TimeFDataset.add_annotation()`; resolve against `TimeFDataset.annotations`. |
 
 ---
 
-### `SignalRef`
+### `Signal`
 
-Pairs a `SignalSpec.spec_id` with the subset of its channels present in a sample.
+Reference to one channel of time-series data, with optional windowing and a lazy reader callable.. Construct `Signal`s in `convert()` and attach them to samples via `add_sample(signals=...)`.
 
 ```python
-@dataclass(frozen=True)
-class SignalRef:
+@dataclass(frozen=True, eq=False)
+class Signal:
     spec_id: str
-    channels: tuple[str, ...] = ()  # empty = all channels of the spec
+    channel: str
+    source_id: str
+    sampling_rate_hz: float
+    reader: Callable[[], np.ndarray]
+    t_start_s: float = 0.0
+    t_end_s: float | None = None
+    timestamps: Callable[[], np.ndarray] | None = None
 ```
 
-| Field      | Type              | Description                                                                                                                          |
-| ---------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec_id`  | `str`             | Must match a `SignalSpec.spec_id` declared in `DatasetMetadata.signal_specs`.                                                        |
-| `channels` | `tuple[str, ...]` | Subset of the referenced `SignalSpec.channels` present in this sample. Empty tuple is the convention for "all channels of the spec". |
+| Field              | Type                               | Required | Description                                                                                                                                                                 |
+| ------------------ | ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec_id`          | `str`                              | yes      | Must match a `SignalSpec.spec_id` declared in `DatasetMetadata.signal_specs`.                                                                                               |
+| `channel`          | `str`                              | yes      | Must match a channel name declared on the referenced `SignalSpec.channels`.                                                                                                 |
+| `source_id`        | `str`                              | yes      | Identifier of the raw recording this signal was extracted from. Multiple `Signal`s can share a `source_id` (different channels or different windows of the same recording). |
+| `sampling_rate_hz` | `float`                            | yes      | Sampling rate of the values returned by `reader()`.                                                                                                                         |
+| `reader`           | `Callable[[], np.ndarray]`         | yes      | Lazy loader. Returns a 1-D `float32` array of exactly the values for this Signal's window. Invoked by `TimeFWriter` during `store()`.                                       |
+| `t_start_s`        | `float`                            | no       | Time offset of the first returned value within the original recording timeline. Default `0.0`.                                                                              |
+| `t_end_s`          | `float \| None`                    | no       | End of the window within the recording. `None` means "to end of source". When set, `len(reader()) == round((t_end_s - t_start_s) * sampling_rate_hz)`.                      |
+| `timestamps`       | `Callable[[], np.ndarray] \| None` | no       | Lazy loader for explicit per-sample timestamps (non-uniform sampling). Same length as `reader()`. `None` for uniform sampling.                                              |
 
----
-
-### `annotate()`
-
-```python
-def annotate(
-    self,
-    task: Task,
-    *,
-    spec_id: str | None = None,
-    annotation_id: str | None = None,
-    from_annotations: tuple[Annotation, ...] = (),
-) -> Annotation: ...
-```
-
-Attaches one annotation to this sample and returns it. The `task` argument is an instance of one of the [`Task`](enums-and-spec.md#tasks) subclasses (`ClassificationTask`, `LabelingTask`, `CaptioningTask`, `QATask`, `ForecastingTask`, `ReasoningTask`). Its type determines what data the annotation carries.
-
-**Parameters**
-
-| Name               | Type                     | Default  | Description                                                                                                                                                                                                                       |
-| ------------------ | ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task`             | `Task`                   | required | Instance of a `Task` subclass. Carries all task-specific data (label, question/answer, windows, etc.).                                                                                                                            |
-| `spec_id`          | `str \| None`            | `None`   | Optional reference to an `AnnotationSpec.spec_id` declared in the dataset metadata. `None` for free-form annotations that don't follow a declared spec.                                                                           |
-| `annotation_id`    | `str \| None`            | `None`   | Explicit ID. Auto-generated as `f"ann::{sample_id}::{task.task_id}"` if omitted. For multi-sample annotations created via `annotate_samples()`, the `sample_id` segment is replaced with a hash of the sorted `sample_ids` tuple. |
-| `from_annotations` | `tuple[Annotation, ...]` | `()`     | Source annotations this annotation was derived from. Used to build composition chains (e.g. a `ReasoningTask` built from prior `LabelingTask` annotations).                                                                       |
-
-**Returns:** The newly created `Annotation`, already appended to `self.annotations`.
-
-**Examples**
-
-Whole-sample classification (ECG rhythm):
-
-```python
-ecg_sample.annotate(ClassificationTask(label="afib"))
-```
-
-Windowed labeling on specific channels (wearables activity bout):
-
-```python
-session.annotate(LabelingTask(
-    label="walking",
-    channels=("accel_x", "accel_y", "accel_z"),
-    windows_s=((120.0, 480.0),),
-))
-```
-
-Captioning over a whole sample (finance market window):
-
-```python
-market_window.annotate(CaptioningTask(
-    answer="AAPL traded sideways with low volume; SPY drifted down 0.4%.",
-))
-```
-
-QA composed from prior annotations:
-
-```python
-sample.annotate(
-    QATask(
-        question="Is this rhythm consistent with atrial fibrillation?",
-        answer="No",
-    ),
-    from_annotations=tuple(prior_annotations),
-)
-```
-
-Reasoning composed from a chain of lower-level annotations:
-
-```python
-sample.annotate(
-    ReasoningTask(
-        question="Is there progression across recordings?",
-        answer="Yes — ST changes worsen across the three follow-ups.",
-    ),
-    from_annotations=tuple(lead_level_annotations),
-)
-```
+**Windowing.** A windowed `Signal` is just a `Signal` with `t_start_s` / `t_end_s` set and a `reader` that returns the windowed slice. The window metadata travels to `samples.parquet` so readers can recover the bounds without scanning the index.
 
 ---
 
@@ -319,15 +446,28 @@ sample.annotate(
 
 Frozen dataclass. Represents one labeled annotation over one or more samples. The annotation's payload lives on `task`; its subtype determines what fields are present.
 
+```python
+@dataclass(frozen=True)
+class Annotation:
+    annotation_id: field(default_factory=lambda: str(uuid.uuid4()))
+    task: Task
+    sample_ids: tuple[str, ...]
+    spec_id: str | None = None
+    from_annotations: tuple[Annotation, ...] = ()
+
+    @property
+    def from_annotation_ids(self) -> tuple[str, ...]: ...
+```
+
 **Fields**
 
-| Name               | Type                     | Description                                                                                                                    |
-| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `annotation_id`    | `str`                    | Dataset-unique identifier. Auto-generated if not supplied to `annotate()`.                                                     |
-| `task`             | `Task`                   | Instance of a `Task` subclass carrying all task-specific data.                                                                 |
-| `sample_ids`       | `tuple[str, ...]`        | IDs of the samples this annotation is attached to. Length 1 for `sample.annotate()`; >1 when created via `annotate_samples()`. |
-| `spec_id`          | `str \| None`            | Optional reference to an `AnnotationSpec.spec_id`. `None` for free-form annotations.                                           |
-| `from_annotations` | `tuple[Annotation, ...]` | Source annotations in a composition chain. Empty if this annotation was created independently.                                 |
+| Name               | Type                     | Description                                                                                                                                               |
+| ------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `annotation_id`    | `str`                    | Auto-generated unique identifier (uuid4-based)                                                                                                            |
+| `task`             | `Task`                   | Instance of a `Task` subclass carrying all task-specific data.                                                                                            |
+| `sample_ids`       | `tuple[str, ...]`        | IDs of the samples this annotation is attached to. Length 1 when a single `Sample` is passed to `add_annotation()`; >1 when a tuple of samples is passed. |
+| `spec_id`          | `str \| None`            | Optional reference to an `AnnotationSpec.spec_id`. `None` for free-form annotations.                                                                      |
+| `from_annotations` | `tuple[Annotation, ...]` | Source annotations in a composition chain. Empty if this annotation was created independently.                                                            |
 
 **Property**
 
@@ -350,43 +490,3 @@ match annotation.task:
 ```
 
 ---
-
-## Composition helper
-
-Use this when one annotation needs to span multiple samples. For single-sample annotations, use `sample.annotate()` directly. For QA or reasoning chains built from prior annotations, pass them through `from_annotations` on either entry point.
-
-### `annotate_samples()`
-
-```python
-def annotate_samples(
-    samples: list[Sample],
-    task: Task,
-    *,
-    spec_id: str | None = None,
-    annotation_id: str | None = None,
-    from_annotations: tuple[Annotation, ...] = (),
-) -> Annotation: ...
-```
-
-Attaches one shared `Annotation` to every sample in `samples`. The annotation's `sample_ids` contains all of their IDs.
-
-**Parameters:** same semantics as `Sample.annotate()` except `samples` replaces `self`.
-
-**Returns:** The single `Annotation` appended to every sample in the list.
-
-**Raises:** `ValueError` if `samples` is empty.
-
-**Example**
-
-A reasoning annotation built from per-lead labelings, attached to the corresponding full recordings:
-
-```python
-annotate_samples(
-    full_samples,
-    ReasoningTask(
-        question="Is there progression across recordings?",
-        answer="possible_progression",
-    ),
-    from_annotations=tuple(lead_level_annotations),
-)
-```

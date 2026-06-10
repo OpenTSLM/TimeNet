@@ -14,7 +14,7 @@ from typing import Literal
 from timenet.models import DatasetCollection, DownloadProgressEvent, DownloadReport, QueryCriteria
 from timenet.timef.metadata import DatasetMetadata
 from timenet.sdk.dataset import Dataset
-from timenet.timef.builder import Sample
+from timenet.timef.dataset import Sample
 from timenet.domains import Domain
 from timenet.tasks import Task
 from timenet.licenses import License
@@ -148,16 +148,16 @@ Builds a `QueryCriteria` from the given filters and runs it against the registry
 
 **Parameters**
 
-| Name           | Type                       | Default | Description                                                                  |
-| -------------- | -------------------------- | ------- | ---------------------------------------------------------------------------- |
-| `domains`      | `list[Domain] \| None`     | `None`  | Keep datasets that include any of these domains.                             |
+| Name           | Type                       | Default | Description                                                                                     |
+| -------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `domains`      | `list[Domain] \| None`     | `None`  | Keep datasets that include any of these domains.                                                |
 | `tasks`        | `list[type[Task]] \| None` | `None`  | Keep datasets that support any of these task types (pass the class, e.g. `ClassificationTask`). |
-| `license`      | `License \| None`      | `None`  | Keep datasets with this exact license.                                       |
-| `signals`      | `list[str] \| None`    | `None`  | Keep datasets that declare all of these signal names.                        |
-| `min_length_s` | `float \| None`        | `None`  | Keep datasets whose minimum recording length meets this threshold (seconds). |
-| `source`       | `str \| None`          | `None`  | Keep datasets from this source label.                                        |
-| `dataset_ids`  | `list[str] \| None`    | `None`  | Keep only these specific dataset IDs.                                        |
-| `tags`         | `list[str] \| None`    | `None`  | Keep datasets that carry all of these tags.                                  |
+| `license`      | `License \| None`          | `None`  | Keep datasets with this exact license.                                                          |
+| `signals`      | `list[str] \| None`        | `None`  | Keep datasets that declare all of these `SignalSpec.spec_id` values.                            |
+| `min_length_s` | `float \| None`            | `None`  | Keep datasets whose minimum recording length meets this threshold (seconds).                    |
+| `source`       | `str \| None`              | `None`  | Keep datasets from this source label.                                                           |
+| `dataset_ids`  | `list[str] \| None`        | `None`  | Keep only these specific dataset IDs.                                                           |
+| `tags`         | `list[str] \| None`        | `None`  | Keep datasets that carry all of these tags.                                                     |
 
 **Returns:** `DatasetCollection` containing the matching descriptors. Pass directly to `download()`.
 
@@ -411,7 +411,7 @@ Per-dataset errors are surfaced here, not raised. The whole `download()` call on
 
 ## `Dataset`
 
-A class wrapping a single dataset that has already been **downloaded to disk**. Returned by `datasets()`. Holds the manifest in memory; signal data is read lazily on access.
+A class wrapping a single dataset that has already been **downloaded to disk**. Returned by `datasets()`.
 
 ```python
 from collections.abc import Iterator
@@ -419,7 +419,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from timenet.timef.builder import Sample, Annotation
+from timenet.timef.dataset import Sample, Annotation
 from timenet.timef.metadata import DatasetMetadata
 
 
@@ -429,7 +429,21 @@ class Dataset:
 
     def samples(self) -> Iterator[Sample]: ...
     def annotations(self) -> Iterator[Annotation]: ...
-    def signal(self, signal_id: int) -> pd.DataFrame: ...
+
+    def signal(
+        self,
+        sample_id: str,
+        spec_id: str,
+        channel: str,
+    ) -> pd.DataFrame: ...
 ```
 
-`Dataset.samples()` yields `Sample` objects already linked to their annotations. `Dataset.signal(signal_id)` reads the requested rows from the underlying Parquet shard on demand.
+`Dataset.samples()` yields `Sample` objects; each carries the `annotation_ids` linking it to entries from `Dataset.annotations()`.
+
+`Dataset.signal(sample_id, spec_id, channel)` reconstructs the values for a single `(sample_id, spec_id, channel)` triple. It filters `signal_index.parquet` by that key, reads each referenced chunk from the appropriate shard, and concatenates them in `chunk_idx` order. Returns a DataFrame with columns `t_s: float64` and `value: float32`; timestamps are derived from `t_start_s + i / sampling_rate_hz` unless the chunk carries an explicit `timestamps` column.
+
+**Raises**
+
+| Exception  | Condition                                                                                             |
+| ---------- | ----------------------------------------------------------------------------------------------------- |
+| `KeyError` | `sample_id` is not in `samples.parquet`, or `(spec_id, channel)` is not one of its `signals` entries. |

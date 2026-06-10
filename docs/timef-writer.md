@@ -2,43 +2,32 @@
 
 Serializes a `TimeFDataset` and its associated signal arrays to disk in the TimeF format.
 
-Three public types live in `timenet/timef/writer.py`:
+Two public types live in `timenet/timef/writer.py`:
 
 ```
 timenet/timef/writer.py
-    SignalChunk            (frozen dataclass)
     WriteProgressEvent     (frozen dataclass)
     TimeFWriter            (context manager)
 ```
+
+The writer pulls bytes from `Signal.reader` callables attached to the dataset's samples.
 
 ---
 
 ## At a glance
 
 ```python
-import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable
 from typing import Literal
 
 from timenet.timef.dataset import TimeFDataset
 
 
 @dataclass(frozen=True)
-class SignalChunk:
-    sample_ids: tuple[str, ...]
-    spec_id: str
-    channel: str
-    values: np.ndarray
-    sampling_rate_hz: float
-    t_start_s: float = 0.0
-    timestamps: np.ndarray | None = None
-
-
-@dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["chunk", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["signal", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -60,46 +49,20 @@ class TimeFWriter:
     def __enter__(self) -> "TimeFWriter": ...
     def __exit__(self, exc_type, exc_val, tb) -> None: ...
 
-    def add_chunk(self, chunk: SignalChunk) -> None: ...
-    def add_chunks(self, chunks: Iterable[SignalChunk]) -> None: ...
-
+    def write(self) -> None: ...
     def close(self) -> None: ...
     def abort(self) -> None: ...
 ```
 
 ---
 
-## `SignalChunk`
+## How sharing and splitting work
 
-The unit the connector hands to the writer. One chunk = one channel of one or more samples.
+**Identity-based sharing.** Before serializing, the writer walks `dataset.samples` and groups `Signal` instances by Python identity (`id(signal)`). One unique `Signal` produces one or more chunks on disk, every chunk's `sample_ids` column lists every sample that referenced that Signal.
 
-```python
-@dataclass(frozen=True)
-class SignalChunk:
-    sample_ids: tuple[str, ...]
-    spec_id: str
-    channel: str
-    values: np.ndarray
-    sampling_rate_hz: float
-    t_start_s: float = 0.0
-    timestamps: np.ndarray | None = None
-```
+Two `Signal`s with equal fields but different Python identity produce **two** chunks. Reusing the same `Signal` object across samples is how connectors declare shared bytes.
 
-**Fields**
-
-| Field              | Type                 | Required | Description                                                                                                                                         |
-| ------------------ | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample_ids`       | `tuple[str, ...]`    | yes      | One or more sample IDs that own this data.                                                                                                          |
-| `spec_id`          | `str`                | yes      | Must match a `SignalSpec.spec_id` declared in the dataset's metadata.                                                                               |
-| `channel`          | `str`                | yes      | Channel name. Must be declared on the referenced `SignalSpec`.                                                                                      |
-| `values`           | `np.ndarray`         | yes      | 1-D array, `dtype=float32`.                                                                                                                         |
-| `sampling_rate_hz` | `float`              | yes      | Sampling rate in Hz.                                                                                                                                |
-| `t_start_s`        | `float`              | no       | Time offset in seconds of `values[0]` within the recording. Default `0.0`.                                                                          |
-| `timestamps`       | `np.ndarray \| None` | no       | Explicit per-sample timestamps (same length as `values`) `None` for uniform sampling, timestamps are derived as `t_start_s + i / sampling_rate_hz`. |
-
-**Automatic splitting**
-
-A connector may emit chunks of any length. If a chunk's `values` array exceeds the writer's `chunk_max_bytes` threshold (default 8 MB), the writer splits it into sub-chunks with increasing `t_start_s` before storing. The index records each sub-chunk as a separate row addressable by `chunk_idx`.
+**Chunk splitting.** A single `Signal.reader()` call may return a large array. If its payload exceeds `chunk_max_bytes` (default 8 MB), the writer splits it into sequential sub-chunks with increasing `t_start_s`. Each sub-chunk gets its own `chunk_idx` row in `signal_index.parquet`. The Signal's `(spec_id, channel, source_id, t_start_s, t_end_s)` metadata in `samples.parquet` is unaffected — splitting is purely a storage-layer concern.
 
 ---
 
@@ -110,7 +73,7 @@ Emitted by the writer at each stage of the write pipeline. Passed to `progress_c
 ```python
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["chunk", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["signal", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -129,7 +92,7 @@ class WriteProgressEvent:
 
 ## `TimeFWriter`
 
-Context manager that streams chunks into the TimeF format on disk.
+Context manager that serializes the dataset's signals into the TimeF format on disk.
 
 ### `__init__()`
 
@@ -148,14 +111,14 @@ def __init__(
 
 **Parameters**
 
-| Name                 | Type                                           | Default       | Description                                                                                        |
-| -------------------- | ---------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------- |
-| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.              |
-| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples` and `dataset.metadata` during finalize.      |
-| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.     |
-| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | Chunks whose `values` array exceeds this size are split into sequential sub-chunks before storing. |
-| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                             |
-| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                           |
+| Name                 | Type                                           | Default       | Description                                                                                         |
+| -------------------- | ---------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------- |
+| `root`               | `Path`                                         | required      | Parent directory. The writer creates `<root>/<dataset_id>/<version>/` on `__enter__`.               |
+| `dataset`            | `TimeFDataset`                                 | required      | Populated dataset. The writer reads `dataset.samples` and `dataset.metadata` during finalize.       |
+| `shard_target_bytes` | `int`                                          | `512 * 2**20` | Target for shard file size. A new shard is opened when the current one exceeds this threshold.      |
+| `chunk_max_bytes`    | `int`                                          | `8 * 2**20`   | A `Signal.reader()` payload exceeding this size is split into sequential sub-chunks before storing. |
+| `compression`        | `Literal["zstd", "snappy", "none"]`            | `"zstd"`      | Parquet compression codec applied to all output files.                                              |
+| `progress_cb`        | `Callable[[WriteProgressEvent], None] \| None` | `None`        | Called from the writer thread after each progress event.                                            |
 
 **Raises**
 
@@ -184,38 +147,22 @@ def __exit__(self, exc_type, exc_val, tb) -> None: ...
 
 ---
 
-### `add_chunk()`
+### `write()`
 
 ```python
-def add_chunk(self, chunk: SignalChunk) -> None: ...
+def write(self) -> None: ...
 ```
 
-Validates the chunk, optionally splits it, appends it to the open shard for its `spec_id`, and emits a `chunk` progress event.
+Walks `dataset.samples`, dedupes signals by Python identity, calls each unique `Signal.reader()` once, splits the payload into chunks if needed, and finalizes every output file. After `write()` returns successfully, `close()` (or the context manager's `__exit__`) only has to flush the manifest.
 
-Raises immediately on validation failure and leaves the writer in an unusable state; `__exit__` will call `abort()`.
-
-**Validation**
-
-| Check                                                                                                      | Raises       |
-| ---------------------------------------------------------------------------------------------------------- | ------------ |
-| `chunk.sample_ids` is non-empty                                                                            | `ValueError` |
-| Each `sid` in `chunk.sample_ids` exists in `dataset.samples`                                               | `ValueError` |
-| Each `sid` declares a `SignalRef` with `spec_id == chunk.spec_id`                                          | `ValueError` |
-| `chunk.channel` is in the ref's `channels`, or in `SignalSpec.channels` when the ref's `channels` is empty | `ValueError` |
-| `chunk.values` is 1-D, non-empty, and finite                                                               | `ValueError` |
-| `chunk.sampling_rate_hz > 0`                                                                               | `ValueError` |
-| If `chunk.timestamps is not None`: same length as `values`, monotonic non-decreasing                       | `ValueError` |
-| `(sid, spec_id, channel, chunk_idx)` not seen before for any `sid`                                         | `ValueError` |
-
----
-
-### `add_chunks()`
+Callers just open the writer as a context manager and call `write()`
 
 ```python
-def add_chunks(self, chunks: Iterable[SignalChunk]) -> None: ...
+with TimeFWriter(root, dataset) as writer:
+    writer.write()
 ```
 
-Calls `add_chunk()` for each element in `chunks`.
+Raises on the first validation failure and leaves the writer unusable; `__exit__` will call `abort()`. See [Validation](#validation) for the full check list.
 
 ---
 
@@ -225,7 +172,7 @@ Calls `add_chunk()` for each element in `chunks`.
 def close(self) -> None: ...
 ```
 
-Validates, finalizes all open shards, writes all output files, and commits `manifest.json`. Called automatically by `__exit__` on success. See [Lifecycle](#lifecycle) for the full sequence.
+Commits `manifest.json` if `write()` has run successfully. Called automatically by `__exit__` on success. If `write()` has not run, `close()` raises `RuntimeError`. See [Lifecycle](#lifecycle) for the full sequence.
 
 ---
 
@@ -271,14 +218,25 @@ Annotations are partitioned by `task_id` because task subclasses have disjoint p
 
 One row per sample, sorted by `sample_id`.
 
-| Column          | Arrow type                                              |
-| --------------- | ------------------------------------------------------- |
-| `sample_id`     | `string`                                                |
-| `subject_ids`   | `list<string>`                                          |
-| `source_ids`    | `list<string>`                                          |
-| `view`          | `string`                                                |
-| `signals`       | `list<struct<spec_id: string, channels: list<string>>>` |
-| `n_annotations` | `int32`                                                 |
+| Column          | Arrow type                      | Description                                                                                                     |
+| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `sample_id`     | `string`                        |                                                                                                                 |
+| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                       |
+| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                           |
+| `source_ids`    | `list<string>`                  | Distinct `Signal.source_id` values across `signals`, in first-seen order. Derived from `signals` at write time. |
+| `signals`       | `list<struct<...>>` — see below | One entry per `Signal` on the sample.                                                                           |
+| `n_annotations` | `int32`                         |                                                                                                                 |
+
+`signals` struct fields:
+
+| Field              | Arrow type           | Notes                                         |
+| ------------------ | -------------------- | --------------------------------------------- |
+| `spec_id`          | `string`             | Dictionary-encoded.                           |
+| `channel`          | `string`             | Dictionary-encoded.                           |
+| `source_id`        | `string`             | Dictionary-encoded.                           |
+| `sampling_rate_hz` | `float64`            |                                               |
+| `t_start_s`        | `float64`            | Window start in the source's timeline.        |
+| `t_end_s`          | `float64` (nullable) | `null` when the signal runs to end of source. |
 
 ---
 
@@ -324,7 +282,7 @@ One row per chunk. Sorted by `(spec_id, channel, chunk_idx)`. Row groups flushed
 | `values`           | `list<float32>`                             |
 | `timestamps`       | `list<float64>` (nullable)                  |
 
-A new shard is opened when the current one exceeds `shard_target_bytes`. Per-sample lookup goes through `signal_index.parquet`. Bulk modality scans filter on the dictionary-encoded `spec_id` column and benefit from row group statistics on `(spec_id, channel)` for skipping.
+A new shard is opened when the current one exceeds `shard_target_bytes`. Per-sample lookup goes through `signal_index.parquet`.
 
 ---
 
@@ -346,8 +304,6 @@ Sorted by `(sample_id, spec_id, channel, chunk_idx)`.
 | `t_start_s`  | `float64`  |
 | `t_end_s`    | `float64`  |
 | `n_samples`  | `int32`    |
-
-Scalar equality on `sample_id` is fast because the index is exploded.
 
 ---
 
@@ -396,12 +352,6 @@ Written last by `close()`. Its presence is the commit signal.
     ],
     "annotation_specs": [
       { "spec_id": "rhythm_cls", "task": "classification", "schema": null }
-    ],
-    "view_specs": [
-      {
-        "name": "full",
-        "description": "Whole recording with all available leads."
-      }
     ]
   },
   "counts": {
@@ -424,9 +374,7 @@ Written last by `close()`. Its presence is the commit signal.
 }
 ```
 
-`signal_chunks` counts unique rows across all shards. `signal_index_rows` counts exploded index rows — equal to `signal_chunks` when no chunks are shared, greater when sharing occurs.
-
-The `metadata` object is the canonical snapshot of every `SignalSpec`, `AnnotationSpec`, and `ViewSpec` for this version. All other files reference them by `spec_id` / `task_id` string only.
+`signal_chunks` counts unique rows across all shards. `signal_index_rows` counts exploded index rows, equal to `signal_chunks` when no chunks are shared, greater when sharing occurs.
 
 ---
 
@@ -434,50 +382,48 @@ The `metadata` object is the canonical snapshot of every `SignalSpec`, `Annotati
 
 Full sequence from construction to commit:
 
-| Step | Method          | Action                                                                                                                                                                       |
-| ---- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `__init__`      | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                     |
-| 2    | `__enter__`     | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                  |
-| 3    | `add_chunk` × N | Validates chunk, splits if `values` exceeds `chunk_max_bytes`, appends to the open shard. Rotates to a new shard when `shard_target_bytes` is exceeded.                      |
-| 4a   | `close`         | Validates completeness: every `(sample_id, SignalRef)` in the dataset must have at least one chunk for at least one of its channels. Raises `ValueError` on missing signals. |
-| 4b   | `close`         | Flushes all open shards.                                                                                                                                                     |
-| 4c   | `close`         | Writes `samples.parquet`, `annotations/`, `signal_index.parquet`.                                                                                                            |
-| 4d   | `close`         | Writes `manifest.json`, this is the commit                                                                                                                                   |
-| —    | `abort`         | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                              |
+| Step | Method      | Action                                                                                                                                                                                                                             |
+| ---- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `__init__`  | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                                                                           |
+| 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                        |
+| 3a   | `write`     | Validates every `Sample.view` and every `Signal` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                                                     |
+| 3b   | `write`     | Dedupes signals by Python identity. Builds the unique-signal set and a `signal_id → list[sample_id]` index.                                                                                                                        |
+| 3c   | `write`     | For each unique signal, calls `signal.reader()` (and `signal.timestamps()` when set), validates the returned array, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed. |
+| 3d   | `write`     | Validates that every annotation's `sample_ids` resolves. Writes `samples.parquet`, `annotations/`, `signal_index.parquet`.                                                                                                         |
+| 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                        |
+| —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                    |
 
 **Commit contract:** `manifest.json` is written last. A version directory that exists but has no `manifest.json` is in-progress or failed and must be ignored by readers.
 
-**Failure in `add_chunk`:** raises immediately and leaves the writer unusable. `__exit__` will call `abort()`, deleting the partial directory.
+**Failure in `write`:** raises immediately and leaves the writer unusable. `__exit__` will call `abort()`, deleting the partial directory.
 
-**Failure in `close` (step 4a–4c):** `abort()` is called, deleting the partial directory.
+**Failure in `close`:** `abort()` is called, deleting the partial directory.
 
 ---
 
 ## Validation
 
-### Per-chunk (enforced in `add_chunk`)
+### Dataset-level (enforced at the start of `write()`)
 
-| Check                                                                                                      | Raises       |
-| ---------------------------------------------------------------------------------------------------------- | ------------ |
-| `chunk.sample_ids` is non-empty                                                                            | `ValueError` |
-| Each `sid` in `chunk.sample_ids` exists in `dataset.samples`                                               | `ValueError` |
-| Each `sid` declares a `SignalRef` with `spec_id == chunk.spec_id`                                          | `ValueError` |
-| `chunk.channel` is in the ref's `channels`, or in `SignalSpec.channels` when the ref's `channels` is empty | `ValueError` |
-| `chunk.values` is 1-D, non-empty, and all values are finite                                                | `ValueError` |
-| `chunk.sampling_rate_hz > 0`                                                                               | `ValueError` |
-| If `chunk.timestamps is not None`: same length as `values` and monotonic non-decreasing                    | `ValueError` |
-| `(sid, chunk.spec_id, chunk.channel, chunk_idx)` not previously seen for any `sid`                         | `ValueError` |
+| Check                                                                                       | Raises       |
+| ------------------------------------------------------------------------------------------- | ------------ |
+| Every `Sample.view` is a member of the `View` enum                                          | `ValueError` |
+| `Sample.signals` is non-empty for every sample                                              | `ValueError` |
+| Every `Signal.spec_id` is the `spec_id` of a `SignalSpec` in `DatasetMetadata.signal_specs` | `ValueError` |
+| Every `Signal.channel` is one of the referenced `SignalSpec.channels`                       | `ValueError` |
+| `Signal.sampling_rate_hz > 0`                                                               | `ValueError` |
+| `Signal.t_start_s >= 0`, and `t_end_s is None or t_end_s > t_start_s`                       | `ValueError` |
+| Every annotation's `sample_ids` only contains IDs present in `dataset.samples`              | `ValueError` |
 
-The last check ensures the exploded `signal_index.parquet` will have unique keys. `chunk_idx` is assigned by the writer per `(sid, spec_id, channel)` tuple and increments with each chunk for that combination.
+### Per-signal (enforced as each `reader()` is called)
+
+| Check                                                                                                                                | Raises       |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| `signal.reader()` returns a 1-D `float32`, non-empty, finite array                                                                   | `ValueError` |
+| When `t_end_s is not None`: `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)` (off-by-one tolerated within ±1 sample) | `ValueError` |
+| When `signal.timestamps` is set: same length as `reader()` output and monotonic non-decreasing                                       | `ValueError` |
 
 Failure leaves the writer unusable. `__exit__` will call `abort()`.
-
-### At-close-time (enforced in `close`)
-
-| Check                                                                                                              | Raises       |
-| ------------------------------------------------------------------------------------------------------------------ | ------------ |
-| For every `(sample_id, SignalRef)` in the dataset, at least one chunk arrived for at least one channel of that ref | `ValueError` |
-| Every annotation's `sample_ids` contains only sample IDs present in `dataset.samples`                              | `ValueError` |
 
 ---
 
@@ -485,14 +431,12 @@ Failure leaves the writer unusable. `__exit__` will call `abort()`.
 
 `progress_cb` is called once per event. Events are emitted in the order listed below.
 
-| `stage`           | `completed`              | `total`                | When                                          |
-| ----------------- | ------------------------ | ---------------------- | --------------------------------------------- |
-| `chunk`           | chunks processed so far  | `None`                 | after each `add_chunk` call                   |
-| `shard_finalized` | shards finalized so far  | `None`                 | each time a shard is flushed and closed       |
-| `samples`         | `len(dataset.samples)`   | `len(dataset.samples)` | once, after `samples.parquet` is written      |
-| `annotations`     | annotations written      | total annotation count | once per task partition written               |
-| `index`           | total index rows written | total index rows       | once, after `signal_index.parquet` is written |
-| `manifest`        | `1`                      | `1`                    | once, after `manifest.json` is written        |
-| `commit`          | `1`                      | `1`                    | once, immediately after `manifest`            |
-
-`total` is `None` for `chunk` and `shard_finalized` because the writer does not know how many chunks or shards will arrive before `close()` is called.
+| `stage`           | `completed`              | `total`                                 | When                                                          |
+| ----------------- | ------------------------ | --------------------------------------- | ------------------------------------------------------------- |
+| `signal`          | signals serialized       | total unique signals across the dataset | after each unique `Signal` is read, validated, and serialized |
+| `shard_finalized` | shards finalized so far  | `None`                                  | each time a shard is flushed and closed                       |
+| `samples`         | `len(dataset.samples)`   | `len(dataset.samples)`                  | once, after `samples.parquet` is written                      |
+| `annotations`     | annotations written      | total annotation count                  | once per task partition written                               |
+| `index`           | total index rows written | total index rows                        | once, after `signal_index.parquet` is written                 |
+| `manifest`        | `1`                      | `1`                                     | once, after `manifest.json` is written                        |
+| `commit`          | `1`                      | `1`                                     | once, immediately after `manifest`                            |
