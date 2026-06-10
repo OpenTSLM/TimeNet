@@ -184,7 +184,7 @@ class QueryCriteria:
     domains: tuple[Domain, ...] | None = None
     tasks: tuple[type[Task], ...] | None = None
     license: License | None = None
-    signals: tuple[str, ...] | None = None
+    time_series_spec: tuple[str, ...] | None = None
     dataset_ids: tuple[str, ...] | None = None
     tags: tuple[str, ...] | None = None
 ```
@@ -196,7 +196,7 @@ class QueryCriteria:
 | `domains`     | `tuple[Domain, ...]`     | Match if the dataset's `metadata().domains` shares any value with this tuple.                          |
 | `tasks`       | `tuple[type[Task], ...]` | Match if the dataset's annotation specs include any of these task classes (e.g. `ClassificationTask`). |
 | `license`     | `License`                | Exact match against `metadata().license`.                                                              |
-| `signals`     | `tuple[str, ...]`        | Match if the dataset declares all of these `SignalSpec.spec_id` values.                                |
+| `time_series_spec` | `tuple[str, ...]`        | Match if the dataset declares all of these `TimeSeriesSpec.spec_id` values among its `time_series_specs` types. |
 | `dataset_ids` | `tuple[str, ...]`        | Match if `metadata().dataset_id` is in this tuple. Use to pin an exact subset by ID.                   |
 | `tags`        | `tuple[str, ...]`        | Match if the dataset declares all of these tags in `metadata().tags`.                                  |
 
@@ -209,5 +209,6 @@ criteria = QueryCriteria(
     domains=(Domain.CARDIOLOGY,),
     tasks=(ClassificationTask,),
     license=License.CC_BY_4,
+    time_series_spec=("ecg_lead",),
 )
 ```

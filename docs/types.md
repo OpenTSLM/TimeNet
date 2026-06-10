@@ -2,36 +2,41 @@
 
 ## Specs
 
-### `SignalSpec`
+### `TimeSeriesSpec`
 
-Declares a measurement modality. One spec is shared by every signal of that type (e.g. all 12-lead ECG recordings share one `SignalSpec`). Connectors declare their signal specs in `DatasetMetadata.signal_specs`. Samples reference them through `Sample.signals` (a tuple of `Signal` instances, see [TimeFDataset](timef-dataset.md#signal)).
+The contract for a measurement modality. Every `TimeSeries` carries exactly one `TimeSeriesSpec` instance, and that spec describes exactly one channel.
 
 ```python
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import ClassVar
 
 from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
 
 
 @dataclass(frozen=True)
-class SignalSpec:
-    spec_id: str
-    name: str
-    channels: tuple[str, ...]
-    unit_sampling_rate: SamplingRateUnit
-    unit_timestamp: TimestampUnit
-    unit_value: ValueUnit
-    sensor_id: str | None = None
+class TimeSeriesSpec:
+    channel: str                                       # per-series, e.g. "II", "f4", "V1", "APPL"
+    spec_id: ClassVar[str]                              # modality tag (machine), e.g. "ecg_lead"
+    name: ClassVar[str]                                 # modality tag (readable), e.g. "ECG Lead"
+    unit_sampling_rate: ClassVar[SamplingRateUnit]
+    unit_timestamp: ClassVar[TimestampUnit]
+    unit_value: ClassVar[ValueUnit]
+    device: ClassVar[type[DeviceSpec] | None] = None    # typed back-ref (set by subclass)
 ```
 
-| Field                | Type               | Required | Description                                                                       |
-| -------------------- | ------------------ | -------- | --------------------------------------------------------------------------------- |
-| `spec_id`            | `str`              | yes      | Dataset-unique identifier. Referenced by `SignalRef.spec_id` in `Sample.signals`. |
-| `name`               | `str`              | yes      | Human-readable modality name (e.g. `"ECG"`, `"Acceleration"`).                    |
-| `channels`           | `tuple[str, ...]`  | yes      | Ordered list of channel names.                                                    |
-| `unit_sampling_rate` | `SamplingRateUnit` | yes      | Unit for sampling-rate values. See [SamplingRateUnit](#samplingrateunit).         |
-| `unit_timestamp`     | `TimestampUnit`    | yes      | Unit for timestamp values. See [TimestampUnit](#timestampunit).                   |
-| `unit_value`         | `ValueUnit`        | yes      | Unit for channel values. See [ValueUnit](#valueunit).                             |
-| `sensor_id`          | `str \| None`      | no       | References a `SensorSpec.id`. `None` if hardware is unknown or not declared.      |
+| Field                | Type                                 | Scope    | Required | Description                                                                                                                           |
+| -------------------- | ------------------------------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel`            | `str`                                | instance | yes      | The single channel this series carries (e.g. `"II"`, `"f4"`, `"V1", "APPL"`).                                                         |
+| `spec_id`            | `ClassVar[str]`                      | modality | yes      | Dataset-unique modality tag (machine), e.g. `"ecg_lead"`.                                                                             |
+| `name`               | `ClassVar[str]`                      | modality | yes      | Human-readable modality label.                                                                                                        |
+| `unit_sampling_rate` | `ClassVar[SamplingRateUnit]`         | modality | yes      | Unit for sampling-rate values. See [SamplingRateUnit](#samplingrateunit).                                                             |
+| `unit_timestamp`     | `ClassVar[TimestampUnit]`            | modality | yes      | Unit for timestamp values. See [TimestampUnit](#timestampunit).                                                                       |
+| `unit_value`         | `ClassVar[ValueUnit]`                | modality | yes      | Unit for channel values. See [ValueUnit](#valueunit).                                                                                 |
+| `device`             | `ClassVar[type[DeviceSpec] \| None]` | modality | no       | Typed back-ref to the [`DeviceSpec`](#devicespec) subclass that produced this modality. `None` if hardware is unknown or not modeled. |
+
+The base `TimeSeriesSpec` is never instantiated directly. It is used through a subclass
 
 ---
 
@@ -66,28 +71,31 @@ AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask, schema="Willets201
 
 ---
 
-### `SensorSpec`
+### `DeviceSpec`
 
-Declares the hardware that produced a signal. Optional metadata, connectors that don't know or care about hardware can leave `SignalSpec.sensor_id` as `None`. Connectors declare sensor specs in `DatasetMetadata.sensor_specs`.
+The contract for the hardware used to collect timeseries. Connectors subclass it per device.
 
 ```python
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
-class SensorSpec:
-    id: str
-    name: str
-    manufacturer: str | None = None
-    model: str | None = None
+class DeviceSpec:
+    device_id: ClassVar[str]
+    name: ClassVar[str]
+    manufacturer: ClassVar[str | None] = None
+    model: ClassVar[str | None] = None
 ```
 
-| Field          | Type          | Required | Description                                                                       |
-| -------------- | ------------- | -------- | --------------------------------------------------------------------------------- |
-| `id`           | `str`         | yes      | Dataset-unique identifier. Referenced by `SignalSpec.sensor_id`.                  |
-| `name`         | `str`         | yes      | Human-readable device name (e.g. `"Apple Watch Series 9"`, `"Holter Monitor X"`). |
-| `manufacturer` | `str \| None` | no       | Vendor.                                                                           |
-| `model`        | `str \| None` | no       | Model identifier.                                                                 |
+| Field          | Type                    | Required | Description                                                                       |
+| -------------- | ----------------------- | -------- | --------------------------------------------------------------------------------- |
+| `device_id`    | `ClassVar[str]`         | yes      | Dataset-unique identifier. Referenced by `TimeSeriesSpec.device`.                 |
+| `name`         | `ClassVar[str]`         | yes      | Human-readable device name (e.g. `"Apple Watch Series 9"`, `"Holter Monitor X"`). |
+| `manufacturer` | `ClassVar[str \| None]` | no       | Vendor.                                                                           |
+| `model`        | `ClassVar[str \| None]` | no       | Model identifier.                                                                 |
 
 ---
 
@@ -144,11 +152,11 @@ class LabelingTask(Task):
     windows_s: tuple[tuple[float, float], ...] | None = None
 ```
 
-| Field       | Type                                      | Description                                                                                                                                      |
-| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `label`     | `str`                                     | Discrete class label.                                                                                                                            |
-| `channels`  | `tuple[str, ...] \| None`                 | Channels of the parent sample the annotation targets. Each name must match a `Signal.channel` on one of `Sample.signals`. `None` = whole sample. |
-| `windows_s` | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the annotation covers. `None` = full duration.                                                                             |
+| Field       | Type                                      | Description                                                                                                                                                   |
+| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `label`     | `str`                                     | Discrete class label.                                                                                                                                         |
+| `channels`  | `tuple[str, ...] \| None`                 | Channels of the parent sample the annotation targets. Each name must match a `TimeSeries.spec.channel` on one of `Sample.time_series`. `None` = whole sample. |
+| `windows_s` | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the annotation covers. `None` = full duration.                                                                                          |
 
 ### `CaptioningTask`
 
@@ -184,7 +192,7 @@ class QATask(Task):
 
 ### `ForecastingTask`
 
-Predict future values of a signal. Carries the context/target relation as a field.
+Predict future values of a time series. Carries the context/target relation as a field.
 
 ```python
 @dataclass(frozen=True)
@@ -201,7 +209,7 @@ class ForecastingTask(Task):
 
 ### `ReasoningTask`
 
-Higher-level analytical inference, often composed from multiple lower-level annotations (e.g. a longitudinal trend across recordings). Carries a question/answer pair like `QATask` but signals that the conclusion was reached by reasoning over a chain (use `Annotation.from_annotations` to record that chain).
+Higher-level analytical inference, often composed from multiple lower-level annotations (e.g. a longitudinal trend across recordings). Carries a question/answer pair like `QATask` but indicates that the conclusion was reached by reasoning over a chain (use `Annotation.from_annotations` to record that chain).
 
 ```python
 @dataclass(frozen=True)
@@ -306,6 +314,56 @@ str(Version(1, 2, 3))           # "1.2.3"
 
 ---
 
+## Frequency
+
+A sampling rate as a validated value object.
+
+```python
+import math
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Frequency:
+    hz: float                                    # canonical value, samples per second
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.hz) or self.hz <= 0:
+            raise ValueError(
+                f"frequency must be a positive, finite number of Hz, got {self.hz!r}"
+            )
+
+    @classmethod
+    def Hz(cls, value: float) -> "Frequency":
+        return cls(float(value))
+
+    @classmethod
+    def kHz(cls, value: float) -> "Frequency":
+        return cls(float(value) * 1_000.0)
+
+    @classmethod
+    def MHz(cls, value: float) -> "Frequency":
+        return cls(float(value) * 1_000_000.0)
+```
+
+| Member          | Signature                     | Description                                                  |
+| --------------- | ----------------------------- | ------------------------------------------------------------ |
+| `hz`            | `float`                       | Canonical rate in samples per second. The only stored field. |
+| `Frequency.Hz`  | `(value: float) -> Frequency` | Build from a value already in hertz.                         |
+| `Frequency.kHz` | `(value: float) -> Frequency` | Build from kilohertz; `Frequency.kHz(0.5).hz == 500.0`.      |
+| `Frequency.MHz` | `(value: float) -> Frequency` | Build from megahertz; `Frequency.MHz(1).hz == 1_000_000.0`.  |
+
+```python
+from timenet.units import Frequency
+
+Frequency.Hz(500.0)            # ECG at 500 Hz
+Frequency.kHz(0.5)             # same rate, written in kHz
+Frequency.MHz(2.0)             # high-rate sensor, 2 MHz
+Frequency.Hz(-1.0)             # ValueError
+```
+
+---
+
 ## Enums
 
 ### `View`
@@ -323,17 +381,17 @@ class View(StrEnum):
     WINDOW = "window"
 ```
 
-| Value            | Identifier         | Meaning                                                                     |
-| ---------------- | ------------------ | --------------------------------------------------------------------------- |
-| `FULL`           | `"full"`           | The whole recording with every available channel.                           |
-| `SINGLE_CHANNEL` | `"single_channel"` | One channel isolated out of a multi-channel recording.                      |
-| `SUBSET`         | `"subset"`         | A subset of channels (more than one, fewer than all).                       |
-| `WINDOW`         | `"window"`         | A bounded time range sliced out of the source (`Signal.t_start_s/t_end_s`). |
+| Value            | Identifier         | Meaning                                                                         |
+| ---------------- | ------------------ | ------------------------------------------------------------------------------- |
+| `FULL`           | `"full"`           | The whole recording with every available channel.                               |
+| `SINGLE_CHANNEL` | `"single_channel"` | One channel isolated out of a multi-channel recording.                          |
+| `SUBSET`         | `"subset"`         | A subset of channels (more than one, fewer than all).                           |
+| `WINDOW`         | `"window"`         | A bounded time range sliced out of the source (`TimeSeries.t_start_s/t_end_s`). |
 
 ```python
 from timenet.views import View
 
-sample = dataset.add_sample(signals=(...), view=View.FULL)
+sample = dataset.add_sample(time_series=(...), view=View.FULL)
 ```
 
 ---
@@ -412,7 +470,7 @@ metadata = DatasetMetadata(
 
 ### `SamplingRateUnit`
 
-Unit for a signal's sampling-rate values. Set on `SignalSpec.unit_sampling_rate`.
+Unit for a time series' sampling-rate values. Set on `TimeSeriesSpec.unit_sampling_rate`. This is the modality's declared display unit, not the actual rate of any one series — that is [`Frequency`](#frequency) on `TimeSeries.sampling_rate`.
 
 ```python
 from enum import StrEnum
@@ -431,14 +489,16 @@ class SamplingRateUnit(StrEnum):
 ```python
 from timenet.units import SamplingRateUnit
 
-SignalSpec(..., unit_sampling_rate=SamplingRateUnit.HZ)
+class ECGLeadSpec(TimeSeriesSpec):
+    unit_sampling_rate = SamplingRateUnit.HZ
+    # ... other modality ClassVars (spec_id, name, unit_timestamp, unit_value)
 ```
 
 ---
 
 ### `TimestampUnit`
 
-Unit for a signal's timestamp axis. Set on `SignalSpec.unit_timestamp`.
+Unit for a time series' timestamp axis. Set on `TimeSeriesSpec.unit_timestamp`.
 
 ```python
 from enum import StrEnum
@@ -461,14 +521,16 @@ class TimestampUnit(StrEnum):
 ```python
 from timenet.units import TimestampUnit
 
-SignalSpec(..., unit_timestamp=TimestampUnit.SECONDS)
+class ECGLeadSpec(TimeSeriesSpec):
+    unit_timestamp = TimestampUnit.SECONDS
+    # ... other modality ClassVars (spec_id, name, unit_sampling_rate, unit_value)
 ```
 
 ---
 
 ### `ValueUnit`
 
-Physical unit of a signal channel's values. Set on `SignalSpec.unit_value`.
+Physical unit of a time series channel's values. Set on `TimeSeriesSpec.unit_value`.
 
 ```python
 from enum import StrEnum
@@ -501,5 +563,7 @@ class ValueUnit(StrEnum):
 ```python
 from timenet.units import ValueUnit
 
-SignalSpec(..., unit_value=ValueUnit.MILLIVOLT)
+class ECGLeadSpec(TimeSeriesSpec):
+    unit_value = ValueUnit.MILLIVOLT
+    # ... other modality ClassVars (spec_id, name, unit_sampling_rate, unit_timestamp)
 ```
