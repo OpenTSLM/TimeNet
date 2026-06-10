@@ -51,6 +51,7 @@ import numpy as np
 
 from timenet.connectors.base import BaseConnector
 from timenet.domains import Domain
+from timenet.events import Event, EventKind
 from timenet.licenses import License
 from timenet.tasks import ClassificationTask
 from timenet.timef.dataset import TimeSeries, TimeFDataset
@@ -134,6 +135,13 @@ class ECGConnector(BaseConnector[Recording]):
                     for lead in rec.leads
                 ),
                 view=View.FULL,
+                events=(
+                    Event(
+                        name="recording_start",
+                        kind=EventKind.POINT,
+                        start_time_s=0.0,
+                    ),
+                ),
             )
             dataset.add_annotation(
                 sample,

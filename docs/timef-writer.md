@@ -27,7 +27,7 @@ from timenet.timef.dataset import TimeFDataset
 
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["time_series", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "events", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -58,11 +58,11 @@ class TimeFWriter:
 
 ## How sharing and splitting work
 
-**Identity-based sharing.** Before serializing, the writer walks `dataset.samples` and groups `TimeSeries` instances by Python identity (`id(ts)`). One unique `TimeSeries` produces one or more chunks on disk, every chunk's `sample_ids` column lists every sample that referenced that `TimeSeries`.
+**Sharing.** Before serializing, the writer walks `dataset.samples` and groups `TimeSeries` instances by `series_id`. Each unique `series_id` produces one or more chunks on disk; every chunk's `sample_ids` column lists every sample that referenced that `series_id`.
 
-Two `TimeSeries` with equal fields but different Python identity produce **two** chunks. Reusing the same `TimeSeries` object across samples is how connectors declare shared bytes.
+Two `TimeSeries` with different `series_id`s produce **two** chunks, even if their other data fields match. Sharing requires either reusing the same `TimeSeries` Python instance across samples (the default uuid4 `series_id` is then identical) or constructing separate instances with the same explicit `series_id`.
 
-**Chunk splitting.** A single `TimeSeries.reader()` call may return a large array. If its payload exceeds `chunk_max_bytes` (default 8 MB), the writer splits it into sequential sub-chunks with increasing `t_start_s`. Each sub-chunk gets its own `chunk_idx` row in `time_series_index.parquet`. The series' `(spec_id, channel, source_id, t_start_s, t_end_s)` metadata in `samples.parquet` is unaffected, splitting is purely a storage-layer concern.
+**Chunk splitting.** A single `TimeSeries.reader()` call may return a large array. If its payload exceeds `chunk_max_bytes` (default 8 MB), the writer splits it into sequential sub-chunks with increasing `t_start_s`. Each sub-chunk gets its own `chunk_idx` row in `time_series_index.parquet`. The series' `(spec_id, channel, source_id, series_id, t_start_s, t_end_s)` metadata in `samples.parquet` is unaffected, splitting is purely a storage-layer concern.
 
 ---
 
@@ -73,7 +73,7 @@ Emitted by the writer at each stage of the write pipeline. Passed to `progress_c
 ```python
 @dataclass(frozen=True)
 class WriteProgressEvent:
-    stage: Literal["time_series", "shard_finalized", "samples", "annotations", "index", "manifest", "commit"]
+    stage: Literal["time_series", "shard_finalized", "samples", "events", "annotations", "index", "manifest", "commit"]
     completed: int
     total: int | None
     message: str | None = None
@@ -192,6 +192,7 @@ Deletes `<root>/<dataset_id>/<version>/`. Called automatically by `__exit__` on 
 <root>/<dataset_id>/<version>/
   manifest.json
   samples.parquet
+  events.parquet
   annotations/
     task=classification/part-0.parquet
     task=labeling/part-0.parquet
@@ -218,26 +219,28 @@ Annotations are partitioned by `task_id` because task subclasses have disjoint p
 
 One row per sample, sorted by `sample_id`.
 
-| Column          | Arrow type                      | Description                                                                                                                 |
-| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `sample_id`     | `string`                        |                                                                                                                             |
-| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                                   |
-| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                                       |
-| `source_ids`    | `list<string>`                  | Distinct `TimeSeries.source_id` values across `time_series`, in first-seen order. Derived from `time_series` at write time. |
-| `time_series`   | `list<struct<...>>` — see below | One entry per `TimeSeries` on the sample.                                                                                   |
-| `n_annotations` | `int32`                         |                                                                                                                             |
+| Column          | Arrow type                      | Description                                                                                                                                         |
+| --------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample_id`     | `string`                        |                                                                                                                                                     |
+| `view`          | `string`                        | String value of the [`View`](types.md#view) enum member on `Sample.view`.                                                                           |
+| `subject_ids`   | `list<string>`                  | Empty list for subject-less domains (finance, seismology, synthetic).                                                                               |
+| `source_ids`    | `list<string>`                  | Distinct `TimeSeries.source_id` values across `time_series`, in first-seen order. Derived from `time_series` at write time.                         |
+| `time_series`   | `list<struct<...>>` — see below | One entry per `TimeSeries` on the sample.                                                                                                           |
+| `event_ids`     | `list<string>`                  | `event_id`s of the events attached to this sample, in insertion order. Resolves against `events.parquet`. Empty list when the sample has no events. |
+| `n_annotations` | `int32`                         |                                                                                                                                                     |
 
 `time_series` struct fields:
 
-| Field           | Arrow type           | Notes                                             |
-| --------------- | -------------------- | ------------------------------------------------- |
-| `spec_id`       | `string`             | Dictionary-encoded.                               |
-| `channel`       | `string`             | Dictionary-encoded.                               |
-| `source_id`     | `string`             | Dictionary-encoded.                               |
-| `sampling_rate` | `float64`            | Canonical Hz, from `TimeSeries.sampling_rate.hz`. |
-| `t_start_s`     | `float64`            | Window start in the source's timeline.            |
-| `t_end_s`       | `float64` (nullable) | `null` when the series runs to end of source.     |
-| `has_timestamps` | `bool`              | `true` when `TimeSeries.timestamps` is set (non-uniform sampling); the explicit per-sample timestamps live in the shard's `timestamps` column. |
+| Field            | Arrow type           | Notes                                                                                                                                                                    |
+| ---------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `spec_id`        | `string`             | Dictionary-encoded.                                                                                                                                                      |
+| `channel`        | `string`             | Dictionary-encoded.                                                                                                                                                      |
+| `source_id`      | `string`             | Dictionary-encoded.                                                                                                                                                      |
+| `series_id`      | `string`             | Not dictionary-encoded (high cardinality). `TimeSeries.series_id`.                                                                                                       |
+| `sampling_rate`  | `float64`            | Canonical Hz, from `TimeSeries.sampling_rate.hz`.                                                                                                                        |
+| `t_start_s`      | `float64`            | Window start in the source's timeline.                                                                                                                                   |
+| `t_end_s`        | `float64` (nullable) | `null` when the series runs to end of source.                                                                                                                            |
+| `has_timestamps` | `bool`               | `true` when `TimeSeries.timestamps` is set (non-uniform sampling); the explicit per-sample timestamps live in the shard's `timestamps` column.                           |
 
 ---
 
@@ -256,14 +259,30 @@ Common columns across all partitions:
 
 Task-specific columns:
 
-| Task                  | Extra columns                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------- |
-| `classification`      | `label: string`                                                                                   |
-| `labeling`            | `label: string`, `channels: list<string>` (nullable), `windows_s: list<list<float64>>` (nullable) |
-| `captioning`          | `answer: string`                                                                                  |
-| `question_and_answer` | `question: string`, `answer: string`                                                              |
-| `forecasting`         | `context_sample_ids: list<string>`, `target_sample_id: string`                                    |
-| `reasoning`           | `question: string`, `answer: string`                                                              |
+| Task                  | Extra columns                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| `classification`      | `label: string`                                                                                          |
+| `labeling`            | `label: string`, `time_series_ids: list<string>` (nullable), `windows_s: list<list<float64>>` (nullable) |
+| `captioning`          | `answer: string`                                                                                         |
+| `question_and_answer` | `question: string`, `answer: string`                                                                     |
+| `forecasting`         | `context_sample_ids: list<string>`, `target_sample_id: string`                                           |
+| `reasoning`           | `question: string`, `answer: string`                                                                     |
+
+---
+
+### `events.parquet`
+
+One row per unique `event_id`. Events shared across samples (same `event_id`) appear once; the back-references live in `sample_ids`. Sorted by `event_id`.
+
+| Column            | Arrow type                                                    | Description                                                                                      |
+| ----------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `event_id`        | `string`                                                      | `Event.event_id`.                                                                                |
+| `name`            | `string` (dictionary-encoded)                                 | `Event.name`.                                                                                    |
+| `kind`            | `string` (dictionary-encoded; one of `"point"`, `"interval"`) | String value of the [`EventKind`](types.md#eventkind) enum member.                               |
+| `start_time_s`    | `float64`                                                     | Event start in the original recording timeline.                                                  |
+| `end_time_s`      | `float64` (nullable; null iff `kind == "point"`)              | Event end. `null` for point events.                                                              |
+| `time_series_ids` | `list<string>` (nullable; null = trial-level)                 | `series_id`s the event applies to. `null` = whole sample.                                        |
+| `sample_ids`      | `list<string>`                                                | Derived at write time from samples whose `events` referenced this `event_id`.                    |
 
 ---
 
@@ -291,11 +310,12 @@ A new shard is opened when the current one exceeds `shard_target_bytes`. Per-sam
 
 The reader's primary lookup table. One row per `(sample_id, chunk)` pair. A chunk shared by N samples contributes N rows, all pointing at the same shard row.
 
-Sorted by `(sample_id, spec_id, channel, chunk_idx)`.
+Sorted by `(sample_id, series_id, chunk_idx)`.
 
 | Column       | Arrow type |
 | ------------ | ---------- |
 | `sample_id`  | `string`   |
+| `series_id`  | `string`   |
 | `spec_id`    | `string`   |
 | `channel`    | `string`   |
 | `chunk_idx`  | `int32`    |
@@ -352,6 +372,7 @@ Written last by `close()`. Its presence is the commit marker.
   },
   "counts": {
     "samples": 1000,
+    "events": 320,
     "annotations_by_task": { "classification": 1000, "labeling": 4000 },
     "time_series_chunks": 12000,
     "time_series_index_rows": 14500,
@@ -359,6 +380,7 @@ Written last by `close()`. Its presence is the commit marker.
   },
   "files": {
     "samples": "samples.parquet",
+    "events": "events.parquet",
     "annotations": ["annotations/task=classification/part-0.parquet"],
     "time_series": ["time_series/shard-00000.parquet"],
     "time_series_index": "time_series_index.parquet"
@@ -382,10 +404,10 @@ Full sequence from construction to commit:
 | ---- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | `__init__`  | Validates `dataset` (non-empty `dataset_id` and `version`). No disk I/O.                                                                                                                                                         |
 | 2    | `__enter__` | Creates `<root>/<dataset_id>/<version>/`. Raises `FileExistsError` if `manifest.json` already exists there.                                                                                                                      |
-| 3a   | `write`     | Validates every `Sample.view` and every `TimeSeries` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                                               |
-| 3b   | `write`     | Dedupes time series by Python identity. Builds the unique-`TimeSeries` set and a `time_series_id → list[sample_id]` index.                                                                                                       |
+| 3a   | `write`     | Validates every `Sample.view`, every `TimeSeries`, and every `Sample.events` against the dataset's metadata (see [Validation](#validation)). Raises `ValueError` on the first failure before any disk I/O.                       |
+| 3b   | `write`     | Dedupes time series by `series_id`. Builds the unique-`TimeSeries` set and a `series_id → list[sample_id]` index.                                                                                                                |
 | 3c   | `write`     | For each unique `TimeSeries`, calls `ts.reader()` (and `ts.timestamps()` when set), validates the returned array, splits it if it exceeds `chunk_max_bytes`, and appends chunk rows to the open shard. Rotates shards as needed. |
-| 3d   | `write`     | Validates that every annotation's `sample_ids` resolves. Writes `samples.parquet`, `annotations/`, `time_series_index.parquet`.                                                                                                  |
+| 3d   | `write`     | Validates that every annotation's `sample_ids` and every event's `time_series_ids` resolve. Writes `samples.parquet`, `events.parquet`, `annotations/`, `time_series_index.parquet`.                                             |
 | 4    | `close`     | Writes `manifest.json`, this is the commit.                                                                                                                                                                                      |
 | —    | `abort`     | Deletes `<root>/<dataset_id>/<version>/` without committing. Called by `__exit__` on exception.                                                                                                                                  |
 
@@ -410,6 +432,12 @@ Full sequence from construction to commit:
 | `TimeSeries.sampling_rate.hz > 0` (guaranteed by [`Frequency`](types.md#frequency)'s constructor)                                                                                   | `ValueError` |
 | `TimeSeries.t_start_s >= 0`, and `t_end_s is None or t_end_s > t_start_s`                                                                                                           | `ValueError` |
 | Every annotation's `sample_ids` only contains IDs present in `dataset.samples`                                                                                                      | `ValueError` |
+| `LabelingTask.time_series_ids` resolves to a `series_id` on every target sample's `time_series`                                                                                     | `ValueError` |
+| Per-Event well-formedness: `name` non-empty; `kind == POINT` iff `end_time_s is None`; `kind == INTERVAL` ⟹ `end_time_s > start_time_s`                                             | `ValueError` |
+| For each `Event` on a sample: `time_series_ids` (when not `None`) resolves to a `series_id` on that sample's `time_series`                                                          | `ValueError` |
+| Trial-level events (`time_series_ids is None`) require all `TimeSeries` on the sample to share a common `(t_start_s, t_end_s)`                                                      | `ValueError` |
+| Event time bounds lie within the referenced series' window (channel-level) or within the common trial span (trial-level)                                                            | `ValueError` |
+| Two `Event` instances sharing the same `event_id` across samples must be field-equal                                                                                                | `ValueError` |
 
 ### Per-series (enforced as each `reader()` is called)
 
@@ -432,6 +460,7 @@ Failure leaves the writer unusable. `__exit__` will call `abort()`.
 | `time_series`     | time series serialized   | total unique time series across the dataset | after each unique `TimeSeries` is read, validated, and serialized |
 | `shard_finalized` | shards finalized so far  | `None`                                      | each time a shard is flushed and closed                           |
 | `samples`         | `len(dataset.samples)`   | `len(dataset.samples)`                      | once, after `samples.parquet` is written                          |
+| `events`          | unique events written    | unique event count                          | once, after `events.parquet` is written                           |
 | `annotations`     | annotations written      | total annotation count                      | once per task partition written                                   |
 | `index`           | total index rows written | total index rows                            | once, after `time_series_index.parquet` is written                |
 | `manifest`        | `1`                      | `1`                                         | once, after `manifest.json` is written                            |

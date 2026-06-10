@@ -141,22 +141,22 @@ class ClassificationTask(Task):
 
 ### `LabelingTask`
 
-Time-localized labels within a sample (e.g. beat type at a specific window). The difference vs `ClassificationTask` is granularity: classification is whole-sample, labeling is windowed and may target specific channels.
+Time-localized labels within a sample (e.g. beat type at a specific window). The difference vs `ClassificationTask` is granularity: classification is whole-sample, labeling is windowed and may target specific series.
 
 ```python
 @dataclass(frozen=True)
 class LabelingTask(Task):
     task_id: ClassVar[str] = "labeling"
     label: str
-    channels: tuple[str, ...] | None = None
+    time_series_ids: tuple[str, ...] | None = None
     windows_s: tuple[tuple[float, float], ...] | None = None
 ```
 
-| Field       | Type                                      | Description                                                                                                                                                   |
-| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `label`     | `str`                                     | Discrete class label.                                                                                                                                         |
-| `channels`  | `tuple[str, ...] \| None`                 | Channels of the parent sample the annotation targets. Each name must match a `TimeSeries.spec.channel` on one of `Sample.time_series`. `None` = whole sample. |
-| `windows_s` | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the annotation covers. `None` = full duration.                                                                                          |
+| Field             | Type                                      | Description                                                                                                                                            |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `label`           | `str`                                     | Discrete class label.                                                                                                                                  |
+| `time_series_ids` | `tuple[str, ...] \| None`                 | Series of the parent sample the annotation targets. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = whole sample. |
+| `windows_s`       | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the annotation covers. `None` = full duration.                                                                                   |
 
 ### `CaptioningTask`
 
@@ -263,7 +263,7 @@ dataset.add_annotation(sample, ClassificationTask(label="afib"))
 
 dataset.add_annotation(sample, LabelingTask(
     label="walking",
-    channels=("accel_x", "accel_y", "accel_z"),
+    time_series_ids=(accel_x.series_id, accel_y.series_id, accel_z.series_id),
     windows_s=((120.0, 480.0),),
 ))
 
@@ -276,6 +276,56 @@ dataset.add_annotation(target, ForecastingTask(
     context_sample_ids=("rec_001::history",),
     target_sample_id="rec_001::future",
 ))
+```
+
+---
+
+## Events
+
+### `Event`
+
+A temporal marker attached to a `Sample`. Encodes either a point in time (`kind=POINT`, no end) or a bounded interval (`kind=INTERVAL`, `end_time_s > start_time_s`). Events are passed via the `events=` kwarg on `TimeFDataset.add_sample()`; the same `Event` instance may be attached to multiple samples for reusing, and the writer dedupes by `event_id`. If no time_series_ids are provided the event is consider trial-level (it affects all timeSeries)
+
+```python
+import uuid
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Event:
+    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    kind: EventKind
+    start_time_s: float
+    end_time_s: float | None = None
+    time_series_ids: tuple[str, ...] | None = None
+```
+
+| Field             | Type                      | Required | Description                                                                                                                                                            |
+| ----------------- | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event_id`        | `str`                     | no       | Auto-generated unique identifier (uuid4-based).                                                                                                                        |
+| `name`            | `str`                     | yes      | Non-empty event name (e.g. `"stimulus_onset"`, `"artifact"`).                                                                                                          |
+| `kind`            | [`EventKind`](#eventkind) | yes      | `POINT` or `INTERVAL`. Determines whether `end_time_s` must be set.                                                                                                    |
+| `start_time_s`    | `float`                   | yes      | Event start in the **original recording timeline**                                                                                                                     |
+| `end_time_s`      | `float \| None`           | no       | End of the interval. `None` iff `kind == POINT`; required and strictly greater than `start_time_s` when `kind == INTERVAL`.                                            |
+| `time_series_ids` | `tuple[str, ...] \| None` | no       | Series of the parent sample the event applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (the whole sample). |
+
+```python
+from timenet.events import Event, EventKind
+
+stimulus_onset = Event(
+    name="stimulus_onset",
+    kind=EventKind.POINT,
+    start_time_s=4.0,
+)
+
+artifact = Event(
+    name="artifact",
+    kind=EventKind.INTERVAL,
+    start_time_s=10.0,
+    end_time_s=12.0,
+    time_series_ids=(lead_v1.series_id,),
+)
 ```
 
 ---
@@ -420,6 +470,33 @@ class View(StrEnum):
 from timenet.views import View
 
 sample = dataset.add_sample(time_series=(...), view=View.FULL)
+```
+
+---
+
+### `EventKind`
+
+Identifies whether an [`Event`](#event) is a point in time or a bounded interval. Set on `Event.kind`.
+
+```python
+from enum import StrEnum
+
+
+class EventKind(StrEnum):
+    POINT = "point"
+    INTERVAL = "interval"
+```
+
+| Value      | Identifier   | Meaning                                                                      |
+| ---------- | ------------ | ---------------------------------------------------------------------------- |
+| `POINT`    | `"point"`    | Instantaneous event. `Event.end_time_s` must be `None`.                      |
+| `INTERVAL` | `"interval"` | Bounded interval. `Event.end_time_s` is required and `> Event.start_time_s`. |
+
+```python
+from timenet.events import Event, EventKind
+
+Event(name="stimulus_onset", kind=EventKind.POINT, start_time_s=4.0)
+Event(name="artifact", kind=EventKind.INTERVAL, start_time_s=10.0, end_time_s=12.0)
 ```
 
 ---
