@@ -237,7 +237,7 @@ Scans `data_root` for `manifest.json` files and returns a `TimeFDataset` for eac
 | ----------- | -------------- | ------- | ------------------------------------------------------------------------------ |
 | `data_root` | `Path \| None` | `None`  | Directory to scan. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`. |
 
-**Returns:** `list[TimeFDataset]`. Manifests, annotations, and the time-series index are loaded into memory; per-series values are pulled on demand via `TimeSeries.reader()`.
+**Returns:** `list[TimeFDataset]`. Manifests, tasks, and the time-series index are loaded into memory; per-series values and per-sample events/annotations are pulled on demand via `TimeSeries.reader()` / `Sample.events` / `Sample.annotations`.
 
 **Raises**
 
@@ -260,7 +260,7 @@ def query_samples(
 ) -> list[Sample]: ...
 ```
 
-Filters the samples of one local dataset by task or domain. Backed by [`TimeFReader`](timef-reader.md): the dataset at `<data_root>/<dataset_id>/<version>/` is opened, its samples and annotations loaded, and the filtered subset returned.
+Filters the samples of one local dataset by task or domain. Backed by [`TimeFReader`](timef-reader.md): the dataset at `<data_root>/<dataset_id>/<version>/` is opened, its samples and tasks loaded, and the filtered subset returned.
 
 **Parameters**
 
@@ -269,7 +269,7 @@ Filters the samples of one local dataset by task or domain. Backed by [`TimeFRea
 | `dataset_id` | `str`                  | required | ID of the dataset to query.                                                                                                                                       |
 | `version`    | `str`                  | required | Version string of the dataset.                                                                                                                                    |
 | `data_root`  | `Path \| None`         | `None`   | Root directory to look in. Defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/processed`.                                                                            |
-| `task`       | `type[Task] \| None`   | `None`   | Keep samples that have at least one annotation whose `task` is an instance of this class (pass the class, e.g. `ClassificationTask`).                             |
+| `task`       | `type[Task] \| None`   | `None`   | Keep samples whose `task_ids` resolve to at least one task that is an instance of this class (pass the class, e.g. `ClassificationTask`).                         |
 | `domains`    | `list[Domain] \| None` | `None`   | Keep samples whose dataset declares any of these domains in its `metadata().domains`. The filter is dataset-level, applied to every sample of a matching dataset. |
 
 **Returns:** `list[Sample]` matching all provided filters.

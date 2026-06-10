@@ -14,6 +14,8 @@ from typing import ClassVar
 
 from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
 
+from timenet.timef.metadata import Device
+
 
 @dataclass(frozen=True)
 class TimeSeriesSpec:
@@ -23,57 +25,26 @@ class TimeSeriesSpec:
     unit_sampling_rate: ClassVar[SamplingRateUnit]
     unit_timestamp: ClassVar[TimestampUnit]
     unit_value: ClassVar[ValueUnit]
-    device: ClassVar[type[DeviceSpec] | None] = None    # typed back-ref (set by subclass)
+    device: ClassVar[type[Device] | None] = None        # typed back-ref (set by subclass)
 ```
 
-| Field                | Type                                 | Scope    | Required | Description                                                                                                                           |
-| -------------------- | ------------------------------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `channel`            | `str`                                | instance | yes      | The single channel this series carries (e.g. `"II"`, `"f4"`, `"V1", "APPL"`).                                                         |
-| `spec_id`            | `ClassVar[str]`                      | modality | yes      | Dataset-unique modality tag (machine), e.g. `"ecg_lead"`.                                                                             |
-| `name`               | `ClassVar[str]`                      | modality | yes      | Human-readable modality label.                                                                                                        |
-| `unit_sampling_rate` | `ClassVar[SamplingRateUnit]`         | modality | yes      | Unit for sampling-rate values. See [SamplingRateUnit](#samplingrateunit).                                                             |
-| `unit_timestamp`     | `ClassVar[TimestampUnit]`            | modality | yes      | Unit for timestamp values. See [TimestampUnit](#timestampunit).                                                                       |
-| `unit_value`         | `ClassVar[ValueUnit]`                | modality | yes      | Unit for channel values. See [ValueUnit](#valueunit).                                                                                 |
-| `device`             | `ClassVar[type[DeviceSpec] \| None]` | modality | no       | Typed back-ref to the [`DeviceSpec`](#devicespec) subclass that produced this modality. `None` if hardware is unknown or not modeled. |
+| Field                | Type                             | Scope    | Required | Description                                                                                                                   |
+| -------------------- | -------------------------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `channel`            | `str`                            | instance | yes      | The single channel this series carries (e.g. `"II"`, `"f4"`, `"V1", "APPL"`).                                                 |
+| `spec_id`            | `ClassVar[str]`                  | modality | yes      | Dataset-unique modality tag (machine), e.g. `"ecg_lead"`.                                                                     |
+| `name`               | `ClassVar[str]`                  | modality | yes      | Human-readable modality label.                                                                                                |
+| `unit_sampling_rate` | `ClassVar[SamplingRateUnit]`     | modality | yes      | Unit for sampling-rate values. See [SamplingRateUnit](#samplingrateunit).                                                     |
+| `unit_timestamp`     | `ClassVar[TimestampUnit]`        | modality | yes      | Unit for timestamp values. See [TimestampUnit](#timestampunit).                                                               |
+| `unit_value`         | `ClassVar[ValueUnit]`            | modality | yes      | Unit for channel values. See [ValueUnit](#valueunit).                                                                         |
+| `device`             | `ClassVar[type[Device] \| None]` | modality | no       | Typed back-ref to the [`Device`](#device) subclass that produced this modality. `None` if hardware is unknown or not modeled. |
 
 The base `TimeSeriesSpec` is never instantiated directly. It is used through a subclass
 
 ---
 
-### `AnnotationSpec`
+### `Device`
 
-Declares a task type and optional label schema. Connectors declare them in `DatasetMetadata.annotation_specs`. Annotations _optionally_ reference one via `Annotation.spec_id`.
-
-```python
-from dataclasses import dataclass
-
-from timenet.tasks import Task
-
-
-@dataclass(frozen=True)
-class AnnotationSpec:
-    spec_id: str
-    task: type[Task]
-    schema: str | None = None
-```
-
-| Field     | Type          | Required | Description                                                                                                                                                                                                               |
-| --------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec_id` | `str`         | yes      | Dataset-unique identifier. Referenced by `Annotation.spec_id` (when set).                                                                                                                                                 |
-| `task`    | `type[Task]`  | yes      | The task **class** this spec describes (e.g. `ClassificationTask`). The class is the type tag — actual annotation data lives on instances.                                                                                |
-| `schema`  | `str \| None` | no       | Named label schema (e.g. `"Willets2018"`). Recommended for `LabelingTask` and `ClassificationTask` when there is a fixed label vocabulary. Omit for free-form discrete labels or for tasks where a schema does not apply. |
-
-```python
-from timenet.tasks import ClassificationTask
-
-AnnotationSpec(spec_id="rhythm_cls", task=ClassificationTask, schema="Willets2018")
-```
-
----
-
-### `DeviceSpec`
-
-The contract for the hardware used to collect timeseries. Connectors subclass it per device.
+The contract for the hardware used to collect timeseries. Connectors subclass it per device. The base class is never instantiated directly — subclasses declare every field as a `ClassVar`.
 
 ```python
 from __future__ import annotations
@@ -83,7 +54,7 @@ from typing import ClassVar
 
 
 @dataclass(frozen=True)
-class DeviceSpec:
+class Device:
     device_id: ClassVar[str]
     name: ClassVar[str]
     manufacturer: ClassVar[str | None] = None
@@ -101,69 +72,88 @@ class DeviceSpec:
 
 ## Tasks
 
-Two roles:
+One labeled training segment that references one or more samples. The class is the type tag, it can be used as a filter argument (`query(tasks=[ClassificationTask])`),and the instance carries the payload.
 
-- The **class** is a type tag. Used in `AnnotationSpec.task` and in filter parameters (`query(tasks=[ClassificationTask])`)
-- An **instance** carries the data for one annotation. `TimeFDataset.add_annotation(sample, ClassificationTask(label="afib"))` creates a concrete labeled annotation.
-
-Adding a new task type means adding one subclass.
+Tasks are attached to samples via `TimeFDataset.add_task(samples, task)`.
 
 ### `Task`
 
 ```python
-from dataclasses import dataclass
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class Task:
     task_id: ClassVar[str]
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    sample_ids: tuple[str, ...] = ()
+    from_tasks: tuple[Task, ...] = ()
+
+    @property
+    def from_task_ids(self) -> tuple[str, ...]: ...
 ```
 
-| Field     | Type            | Description                                   |
-| --------- | --------------- | --------------------------------------------- |
-| `task_id` | `ClassVar[str]` | Stable string identifier for this task class. |
+| Field        | Type               | Scope    | Description                                                                                                                        |
+| ------------ | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `task_id`    | `ClassVar[str]`    | class    | Stable string identifier for this task class. Drives both the disk partition name and the [Task registry](#task-registry) key.     |
+| `id`         | `str`              | instance | Auto-generated unique identifier (uuid4-based).                                                                                    |
+| `sample_ids` | `tuple[str, ...]`  | instance | IDs of the samples this task is attached to. Populated by `TimeFDataset.add_task()`; resolve against `TimeFDataset.samples`.       |
+| `from_tasks` | `tuple[Task, ...]` | instance | Source tasks this task was derived from. Used to build composition chains (e.g. a `ReasoningTask` built on prior `LabelingTask`s). |
+
+**Property**
+
+| Name            | Returns           | Description                                                    |
+| --------------- | ----------------- | -------------------------------------------------------------- |
+| `from_task_ids` | `tuple[str, ...]` | IDs of all tasks in `from_tasks`. Shorthand for serialization. |
 
 ### `ClassificationTask`
 
 One discrete label applied to the whole sample (e.g. rhythm type for an ECG recording).
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class ClassificationTask(Task):
     task_id: ClassVar[str] = "classification"
     label: str
+    schema: str | None = None
 ```
 
-| Field   | Type  | Description                  |
-| ------- | ----- | ---------------------------- |
-| `label` | `str` | class label (e.g. `"afib"`). |
+| Field    | Type          | Description                                                                                                                                 |
+| -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `label`  | `str`         | Class label (e.g. `"afib"`).                                                                                                                |
+| `schema` | `str \| None` | Optional named label schema (e.g. `"Willets2018"`). Set when there is a fixed label vocabulary; leave `None` for free-form discrete labels. |
 
 ### `LabelingTask`
 
 Time-localized labels within a sample (e.g. beat type at a specific window). The difference vs `ClassificationTask` is granularity: classification is whole-sample, labeling is windowed and may target specific series.
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class LabelingTask(Task):
     task_id: ClassVar[str] = "labeling"
     label: str
+    schema: str | None = None
     time_series_ids: tuple[str, ...] | None = None
     windows_s: tuple[tuple[float, float], ...] | None = None
 ```
 
-| Field             | Type                                      | Description                                                                                                                                            |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `label`           | `str`                                     | Discrete class label.                                                                                                                                  |
-| `time_series_ids` | `tuple[str, ...] \| None`                 | Series of the parent sample the annotation targets. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = whole sample. |
-| `windows_s`       | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the annotation covers. `None` = full duration.                                                                                   |
+| Field             | Type                                      | Description                                                                                                                                      |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `label`           | `str`                                     | Discrete class label.                                                                                                                            |
+| `schema`          | `str \| None`                             | Optional named label schema. Same convention as `ClassificationTask.schema`.                                                                     |
+| `time_series_ids` | `tuple[str, ...] \| None`                 | Series of the parent sample the task targets. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = whole sample. |
+| `windows_s`       | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the task covers. `None` = full duration.                                                                                   |
 
 ### `CaptioningTask`
 
 Free-form text describing the sample. No question, just an answer.
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class CaptioningTask(Task):
     task_id: ClassVar[str] = "captioning"
     answer: str
@@ -178,7 +168,7 @@ class CaptioningTask(Task):
 Question and answer pair.
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class QATask(Task):
     task_id: ClassVar[str] = "question_and_answer"
     question: str
@@ -195,7 +185,7 @@ class QATask(Task):
 Predict future values of a time series. Carries the context/target relation as a field.
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class ForecastingTask(Task):
     task_id: ClassVar[str] = "forecasting"
     context_sample_ids: tuple[str, ...]
@@ -209,10 +199,10 @@ class ForecastingTask(Task):
 
 ### `ReasoningTask`
 
-Higher-level analytical inference, often composed from multiple lower-level annotations (e.g. a longitudinal trend across recordings). Carries a question/answer pair like `QATask` but indicates that the conclusion was reached by reasoning over a chain (use `Annotation.from_annotations` to record that chain).
+Higher-level analytical inference, often composed from multiple lower-level tasks (e.g. a longitudinal trend across recordings). Carries a question/answer pair like `QATask` but indicates that the conclusion was reached by reasoning over a chain (use `Task.from_tasks` to record that chain).
 
 ```python
-@dataclass(frozen=True)
+@dataclass(kw_only=True)
 class ReasoningTask(Task):
     task_id: ClassVar[str] = "reasoning"
     question: str
@@ -226,7 +216,7 @@ class ReasoningTask(Task):
 
 ### Task registry
 
-Mapping from on-disk `task_id` to `Task` subclass. `TimeFReader` uses this table to rebuild `Task` instances when reading the annotation partitions. An unknown `task_id` raises `ValueError`.
+Mapping from on-disk `task_id` to `Task` subclass. `TimeFReader` uses this table to rebuild `Task` instances when reading the task partitions. An unknown `task_id` raises `ValueError`.
 
 ```python
 from timenet.tasks import (
@@ -250,7 +240,7 @@ TASKS: dict[str, type[Task]] = {
 }
 ```
 
-Each key matches the `task_id` `ClassVar` declared on the corresponding subclass. The directory name `annotations/task=<task_id>/` written by `TimeFWriter` uses the same string.
+Each key matches the `task_id` `ClassVar` declared on the corresponding subclass. The directory name `tasks/task=<task_id>/` written by `TimeFWriter` uses the same string.
 
 ### Examples
 
@@ -259,20 +249,20 @@ from timenet.tasks import (
     ClassificationTask, LabelingTask, QATask, ForecastingTask,
 )
 
-dataset.add_annotation(sample, ClassificationTask(label="afib"))
+dataset.add_task(sample, ClassificationTask(label="afib"))
 
-dataset.add_annotation(sample, LabelingTask(
+dataset.add_task(sample, LabelingTask(
     label="walking",
     time_series_ids=(accel_x.series_id, accel_y.series_id, accel_z.series_id),
     windows_s=((120.0, 480.0),),
 ))
 
-dataset.add_annotation(sample, QATask(
+dataset.add_task(sample, QATask(
     question="What is happening between 12s and 18s?",
     answer="ST elevation in V2.",
 ))
 
-dataset.add_annotation(target, ForecastingTask(
+dataset.add_task(target, ForecastingTask(
     context_sample_ids=("rec_001::history",),
     target_sample_id="rec_001::future",
 ))
@@ -282,50 +272,148 @@ dataset.add_annotation(target, ForecastingTask(
 
 ## Events
 
+A temporal marker attached to a `Sample`. Encodes either a point in time (`kind=POINT`, no end) or a bounded interval (`kind=INTERVAL`, `end_time_s > start_time_s`). The base `Event` should not be directly instantiable — connectors declare one subclass per event name and list those subclasses in `DatasetMetadata.events`.
+
 ### `Event`
 
-A temporal marker attached to a `Sample`. Encodes either a point in time (`kind=POINT`, no end) or a bounded interval (`kind=INTERVAL`, `end_time_s > start_time_s`). Events are passed via the `events=` kwarg on `TimeFDataset.add_sample()`; the same `Event` instance may be attached to multiple samples for reusing, and the writer dedupes by `event_id`. If no time_series_ids are provided the event is consider trial-level (it affects all timeSeries)
-
 ```python
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Event:
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
     kind: EventKind
     start_time_s: float
     end_time_s: float | None = None
     time_series_ids: tuple[str, ...] | None = None
+    name: ClassVar[str]                              # subclass sets
 ```
 
-| Field             | Type                      | Required | Description                                                                                                                                                            |
-| ----------------- | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `event_id`        | `str`                     | no       | Auto-generated unique identifier (uuid4-based).                                                                                                                        |
-| `name`            | `str`                     | yes      | Non-empty event name (e.g. `"stimulus_onset"`, `"artifact"`).                                                                                                          |
-| `kind`            | [`EventKind`](#eventkind) | yes      | `POINT` or `INTERVAL`. Determines whether `end_time_s` must be set.                                                                                                    |
-| `start_time_s`    | `float`                   | yes      | Event start in the **original recording timeline**                                                                                                                     |
-| `end_time_s`      | `float \| None`           | no       | End of the interval. `None` iff `kind == POINT`; required and strictly greater than `start_time_s` when `kind == INTERVAL`.                                            |
-| `time_series_ids` | `tuple[str, ...] \| None` | no       | Series of the parent sample the event applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (the whole sample). |
+| Field             | Type                      | Scope    | Required | Description                                                                                                                                                                      |
+| ----------------- | ------------------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | `ClassVar[str]`           | class    | yes      | Non-empty event name (e.g. `"stimulus_light"`, `"artifact"`). Discriminator in `manifest.events`.                                                                                |
+| `event_id`        | `str`                     | instance | no       | Auto-generated unique identifier (uuid4-based).                                                                                                                                  |
+| `kind`            | [`EventKind`](#eventkind) | both     | yes      | `POINT` or `INTERVAL`. May be pinned as a class-level default on a subclass (in which case the writer enforces that every emitted instance matches); otherwise set per instance. |
+| `start_time_s`    | `float`                   | instance | yes      | Event start in the **original recording timeline**.                                                                                                                              |
+| `end_time_s`      | `float \| None`           | instance | no       | End of the interval. `None` iff `kind == POINT`; required and strictly greater than `start_time_s` when `kind == INTERVAL`.                                                      |
+| `time_series_ids` | `tuple[str, ...] \| None` | instance | no       | Series of the parent sample the event applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (the whole sample).           |
+
+**Attachment.** Events are passed via the `events=` kwarg on `TimeFDataset.add_sample()`. The same `Event` instance (or two instances sharing the same `event_id`) may be attached to multiple samples to declare reuse; the writer dedupes by `event_id`.
+
+A connector declares the subclasses it emits.
 
 ```python
-from timenet.events import Event, EventKind
+@dataclass(frozen=True, kw_only=True)
+class StimulusLight(Event):
+    name: ClassVar[str] = "stimulus_light"
+    kind: EventKind = EventKind.POINT                # narrowed default
 
-stimulus_onset = Event(
-    name="stimulus_onset",
-    kind=EventKind.POINT,
-    start_time_s=4.0,
-)
 
-artifact = Event(
-    name="artifact",
+@dataclass(frozen=True, kw_only=True)
+class Artifact(Event):
+    name: ClassVar[str] = "artifact"
+    # kind stays per-instance — artifacts can be POINT or INTERVAL
+
+
+stimulus_onset = StimulusLight(start_time_s=4.0)
+
+artifact = Artifact(
     kind=EventKind.INTERVAL,
     start_time_s=10.0,
     end_time_s=12.0,
     time_series_ids=(lead_v1.series_id,),
 )
+```
+
+---
+
+## Annotations
+
+Static contextual metadata attached to a `Sample` (demographics, device serial, recording conditions, ticker symbol, …). Annotations are strictly sample-scoped and time-independent: there are no time fields on `Annotation`. The base `Annotation` should not be directly instantiable — connectors declare one subclass per `key` and list those subclasses in `DatasetMetadata.annotations`.
+
+### `Annotation`
+
+```python
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
+
+
+@dataclass(frozen=True, kw_only=True)
+class Annotation:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    value: Any
+    key: ClassVar[str]                               # subclass sets
+    unit: ClassVar[str | None] = None
+    description: ClassVar[str | None] = None
+```
+
+| Field         | Type                         | Scope    | Required | Description                                                                                         |
+| ------------- | ---------------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `key`         | `ClassVar[str]`              | class    | yes      | Stable string identifier for this annotation class.                                                 |
+| `unit`        | `ClassVar[str \| None]`      | class    | no       | Physical unit for the value (e.g. `"years"`).                                                       |
+| `description` | `ClassVar[str \| None]`      | class    | no       | Human-readable description of what this annotation represents.                                      |
+| `id`          | `str`                        | instance | no       | Auto-generated unique identifier (uuid4-based). The writer dedupes annotation instances by `id`.    |
+| `value`       | concrete (subclass-narrowed) | instance | yes      | The annotation's value. Narrowed per subclass to a concrete type (`int`, `str`, `Literal[...]`, …). |
+
+**Attachment.** Annotations are passed via the `annotations=` kwarg on `TimeFDataset.add_sample()`. Passing the same `Annotation` instance to multiple `add_sample()` calls (or two instances sharing the same `id`) declares reuse.
+
+A connector declares the subclasses it emits.
+
+```python
+from typing import ClassVar, Literal
+
+
+@dataclass(frozen=True, kw_only=True)
+class Age(Annotation):
+    key: ClassVar[str] = "age"
+    unit: ClassVar[str | None] = "years"
+    value: int                                       # narrowed type
+
+
+@dataclass(frozen=True, kw_only=True)
+class Sex(Annotation):
+    key: ClassVar[str] = "sex"
+    value: Literal["M", "F", "O"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class DeviceSerial(Annotation):
+    key: ClassVar[str] = "device_serial"
+    value: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class Ticker(Annotation):
+    key: ClassVar[str] = "ticker"
+    value: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class RecordingSite(Annotation):
+    key: ClassVar[str] = "recording_site"
+    description: ClassVar[str | None] = "Seismometer station code (FDSN convention)."
+    value: str
+
+
+age_64 = Age(value=64)
+sex_m  = Sex(value="M")
+serial = DeviceSerial(value="HX-2024-0117")
+
+# Same instance attached to every sample of subject 42 — declares reuse.
+for rec in subject_42_recordings:
+    dataset.add_sample(
+        time_series=(...),
+        view=View.FULL,
+        annotations=(age_64, sex_m, serial),
+    )
 ```
 
 ---
@@ -493,10 +581,8 @@ class EventKind(StrEnum):
 | `INTERVAL` | `"interval"` | Bounded interval. `Event.end_time_s` is required and `> Event.start_time_s`. |
 
 ```python
-from timenet.events import Event, EventKind
-
-Event(name="stimulus_onset", kind=EventKind.POINT, start_time_s=4.0)
-Event(name="artifact", kind=EventKind.INTERVAL, start_time_s=10.0, end_time_s=12.0)
+StimulusLight(start_time_s=4.0)                                  # kind pinned on the subclass
+Artifact(kind=EventKind.INTERVAL, start_time_s=10.0, end_time_s=12.0)
 ```
 
 ---
