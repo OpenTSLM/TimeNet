@@ -1,27 +1,22 @@
-name: Python package
+name: Pre-commit hooks
 
 on:
   pull_request:
     branches: [ "main" ]
 
 jobs:
-  build:
-
+  check:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
     - name: Set up uv
-      uses: astral-sh/setup-uv@v7
-      with:
-        python-version: "3.13"
+      uses: astral-sh/setup-uv@v8.2.0
     - name: Install dependencies
       run: |
-        uv sync --group dev
-    - name: Lint with ruff
+        uv sync --all-groups
+    - name: Run pre-commit hooks
       run: |
-        uv run ruff format --check .
-        uv run ruff check .
-        uv run ty check
+        uv run pre-commit run --all-files --show-diff-on-failure
     - name: Test with pytest
       run: |
         uv run pytest
