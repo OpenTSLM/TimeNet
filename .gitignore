@@ -1,3 +1,31 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.ty/
+.coverage
+.coverage.*
+
+# Virtual environments (uv + conventional)
+.venv/
 env/
-.venv
+
+# Secrets / local env
+.env
+.env.*
+
+# mkdocs build output
 site/

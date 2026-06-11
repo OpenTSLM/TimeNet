@@ -6,6 +6,13 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.scripts]
+timenet = "timenet.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"
+
 [tool.ruff]
 line-length = 120
 target-version = "py313"
@@ -32,3 +39,10 @@ dev = [
     "ruff>=0.15.12",
     "ty>=0.0.34",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
+
+[tool.uv]
+default-groups = ["dev"]

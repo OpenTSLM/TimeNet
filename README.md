@@ -9,28 +9,66 @@ TimeNet is infrastructure for registering, querying, downloading, converting, an
 Clone the repo and install locally:
 
 ```bash
-git clone https://github.com/yourorg/timenet.git
-cd timenet
-uv sync --extra all         # or: pip install -e ".[all]"
-make install-hooks
+git clone https://github.com/AI-X-Labs/Timenet2.0.git
+cd Timenet2.0
+uv sync --all-groups   # runtime + dev + docs dependencies
+make install-hooks     # set up pre-commit hooks
 ```
 
+Once installed, the CLI is available:
+
+```bash
+uv run timenet
+```
 
 ## Development
 
+This project uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, [ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and [mkdocs-material](https://squidfunk.github.io/mkdocs-material/) for docs.
+
+### Setup
+
+Install uv if you don't have it, then sync the environment:
+
 ```bash
-make sync           # install all deps (uv sync --extra all --extra dev)
-make test           # run pytest
-make check          # format + lint + typecheck
-make lint-fix       # fix trivial linting issues by ruff
+# install uv (skips if already present)
+command -v uv > /dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+
+make sync           # uv sync --all-groups (runtime + dev + docs)
 make install-hooks  # install pre-commit hooks (run once after cloning)
-make clean          # remove .venv and caches
+```
+
+Dependencies are split into groups in `pyproject.toml`:
+
+- runtime — `[project] dependencies` (none yet)
+- `dev` — ruff, ty, pytest, pre-commit (installed by default)
+- `docs` — mkdocs-material
+
+### Make targets
+
+```bash
+make sync           # install all deps (uv sync --all-groups)
+make test           # run pytest
+make check          # format + lint + typecheck (ruff format, ruff check, ty check)
+make lint-fix       # auto-fix lint issues with ruff
+make docs           # build the docs into site/
+make docs-serve     # serve the docs locally at http://127.0.0.1:8000
+make install-hooks  # install pre-commit hooks (run once after cloning)
+make clean          # remove .venv, caches, and built site/
 ```
 
 ### Pre-commit hooks
 
-This project uses [pre-commit](https://pre-commit.com/) to run ruff (lint + format) before every commit. After cloning, run:
+Every commit runs ruff (lint + format), ty type checking, `uv lock`, and basic file hygiene (trailing whitespace, end-of-file, TOML/JSON validation). After cloning:
 
 ```bash
 make install-hooks
+```
+
+Don't bypass the hooks with `--no-verify`. If a hook fails, fix the underlying issue (run `make check` / `make lint-fix`) and commit again.
+
+### Docs
+
+```bash
+make docs-serve   # live preview at http://127.0.0.1:8000
+make docs         # build static site into site/
 ```
