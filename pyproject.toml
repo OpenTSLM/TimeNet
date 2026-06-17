@@ -23,12 +23,42 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["SIM", "C4", "PIE", "RET", "PTH", "ARG", "ASYNC", "UP", "RUF", "E", "N", "W", "F", "I", "B", "S"]
-ignore = ["E501"]
+# Required for the DOC (pydoclint) rules, which are still in preview.
+preview = true
+select = [
+    "SIM",    # flake8-simplify — simplify needlessly verbose code
+    "C4",     # flake8-comprehensions — better list/set/dict comprehensions
+    "PIE",    # flake8-pie — misc lints (unnecessary pass, dup class fields)
+    "RET",    # flake8-return — consistent return statements
+    "PTH",    # flake8-use-pathlib — prefer pathlib over os.path
+    "ARG",    # flake8-unused-arguments — flag unused function arguments
+    "ASYNC",  # flake8-async — async/await pitfalls
+    "UP",     # pyupgrade — modern Python syntax
+    "RUF",    # Ruff-specific rules
+    "E",      # pycodestyle errors
+    "N",      # pep8-naming — naming conventions
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes — undefined names, unused imports
+    "I",      # isort — import sorting
+    "B",      # flake8-bugbear — likely bugs and design problems
+    "S",      # flake8-bandit — security issues
+    "D",      # pydocstyle — docstring presence and formatting
+    "DOC",    # pydoclint — args/returns match signatures
+]
+ignore = [
+    "E501",  # Line too long — handled by the formatter
+    "D417",  # Don't require documentation for every function parameter
+    "D105",  # Missing docstring in magic method
+    "D107",  # Missing docstring in __init__
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
-"tests/**/*.py" = ["S101", "S106"]
+# Don't require docstrings for test modules and functions.
+"tests/**/*.py" = ["S101", "S106", "D", "DOC"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["timenet"]

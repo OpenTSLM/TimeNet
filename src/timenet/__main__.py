@@ -1,3 +1,5 @@
+"""Entry point for `python -m timenet`."""
+
 from timenet.cli import main
 
 

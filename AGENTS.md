@@ -42,6 +42,15 @@ In final summaries, state which checks you ran and call out any you could not ru
 - Never use `git commit --no-verify`. If a hook fails, fix the underlying issue
   (run `make check` / `make lint-fix`) and commit again.
 
+## Docstrings
+- Write Google-style docstrings; ruff enforces them via `D` (pydocstyle) and `DOC`
+  (pydoclint), so every public module, class, and function needs one.
+- Document arguments and return values when they aren't obvious; `D417` is relaxed,
+  so you don't have to document every parameter, but `DOC` checks that any
+  documented args/returns match the signature.
+- `__init__` and magic methods are exempt (`D107`, `D105`). Tests skip docstring
+  rules entirely.
+
 ## Implementation Guidelines
 - Prefer small, reviewable changes.
 - Don't delete user-owned files unless explicitly asked.
