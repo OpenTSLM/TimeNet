@@ -23,11 +23,22 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["SIM", "C4", "PIE", "RET", "PTH", "ARG", "ASYNC", "UP", "RUF", "E", "N", "W", "F", "I", "B"]
+select = ["SIM", "C4", "PIE", "RET", "PTH", "ARG", "ASYNC", "UP", "RUF", "E", "N", "W", "F", "I", "B", "S"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest uses bare asserts by design; token-like literals in tests are fixtures.
+"tests/**/*.py" = ["S101", "S106"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["timenet"]
+combine-as-imports = true
+force-sort-within-sections = true
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
 
 [tool.ty.environment]
 python-version = "3.13"
