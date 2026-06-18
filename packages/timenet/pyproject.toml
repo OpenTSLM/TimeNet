@@ -1,0 +1,14 @@
+[project]
+name = "timenet"
+version = "0.1.0"
+description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+timenet = "timenet.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"

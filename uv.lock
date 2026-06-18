@@ -2,6 +2,24 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 
+[manifest]
+members = [
+    "timenet",
+    "timenet-connectors",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "ty", specifier = ">=0.0.34" },
+]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6" },
+    { name = "mkdocs-material", specifier = ">=9.5" },
+]
+
 [[package]]
 name = "babel"
 version = "2.18.0"
@@ -561,33 +579,18 @@ wheels = [
 [[package]]
 name = "timenet"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "packages/timenet" }
 
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
+[[package]]
+name = "timenet-connectors"
+version = "0.0.1"
+source = { editable = "packages/timenet-connectors" }
+dependencies = [
+    { name = "timenet" },
 ]
 
 [package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "ruff", specifier = ">=0.15.12" },
-    { name = "ty", specifier = ">=0.0.34" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6" },
-    { name = "mkdocs-material", specifier = ">=9.5" },
-]
+requires-dist = [{ name = "timenet", editable = "packages/timenet" }]
 
 [[package]]
 name = "ty"

@@ -1,10 +1,14 @@
-.PHONY: sync test check install-hooks lint-fix docs docs-serve clean
+.PHONY: sync test check install-hooks lint-fix build docs docs-serve clean
 
 sync:
 	uv sync --all-groups
 
 test:
 	uv run pytest
+
+build:
+	uv build --package timenet
+	uv build --package timenet-connectors
 
 check:
 	uv run ruff format .

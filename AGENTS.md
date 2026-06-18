@@ -10,9 +10,24 @@ Instructions for contributors and coding agents working in this repository.
 - `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and repo conventions.
 - Keep agent operating instructions here. Don't move them into the README.
 
+## Workspace Layout
+This is a `uv` workspace. Code lives in two packages under `packages/`:
+- `packages/timenet` — the `timenet` SDK and CLI: the TimeF format plus dataset,
+  reader, and writer definitions, and the `timenet` console script.
+- `packages/timenet-connectors` — the `timenet_connectors` package: dataset-specific
+  logic to fetch raw sources and convert them into TimeF. Depends on `timenet`, which
+  it resolves locally via `[tool.uv.sources]`.
+
+Each package keeps source under `src/` and tests under `tests/`
+(`packages/<name>/src`, `packages/<name>/tests`). The root `pyproject.toml` owns the
+workspace definition and the shared ruff/ty/pytest config; per-package
+`pyproject.toml` files own their name, version, and dependencies.
+
 ## Python And uv
 - Use `uv` for all Python workflows. The build backend is `uv_build`.
-- Set up the environment with `make sync` (`uv sync --all-groups`).
+- Set up the environment with `make sync` (`uv sync --all-groups`), which installs
+  every workspace member.
+- Build distributables with `make build` (`uv build --package <name>` per member).
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
 - Keep `uv.lock` committed; the `uv-lock` pre-commit hook enforces freshness.
 
@@ -28,8 +43,9 @@ run `uv run pre-commit run --all-files`.
 In final summaries, state which checks you ran and call out any you could not run.
 
 ## Conventions
-- Dash-separated names for user-facing/CLI names; underscores for Python import
-  packages and modules (`timenet`, `timenet.cli`). Keep the layers distinct.
+- Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);
+  underscores for Python import packages and modules (`timenet`, `timenet.cli`,
+  `timenet_connectors`). Keep the layers distinct.
 - Branch names follow [Conventional Branch](https://conventionalbranch.org/):
   `<type>/<description>` in lowercase with hyphens, e.g. `feature/dataset-register`,
   `bugfix/empty-timef-input`. Common types: `feature/`, `bugfix/`, `hotfix/`,
@@ -55,4 +71,4 @@ In final summaries, state which checks you ran and call out any you could not ru
 - Prefer small, reviewable changes.
 - Don't delete user-owned files unless explicitly asked.
 - Match the existing style instead of reformatting adjacent code.
-- Add type hints; the package ships `py.typed`, so `ty` must stay green.
+- Add type hints; both packages ship `py.typed`, so `ty` must stay green.

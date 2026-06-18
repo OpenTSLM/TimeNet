@@ -1,21 +1,27 @@
-[project]
-name = "timenet"
-version = "0.1.0"
-description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+[tool.uv.workspace]
+members = ["packages/*"]
 
-[project.scripts]
-timenet = "timenet.cli:main"
+[tool.uv]
+default-groups = ["dev"]
 
-[build-system]
-requires = ["uv_build>=0.10.10,<0.11.0"]
-build-backend = "uv_build"
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.12",
+    "ty>=0.0.34",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+# Members live under packages/*/src; the glob makes isort treat each package as
+# first-party. Config is discovered from the repo root, not shared by uv.
+src = ["packages/*/src"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -55,35 +61,19 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
 # Don't require docstrings for test modules and functions.
-"tests/**/*.py" = ["S101", "S106", "D", "DOC"]
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["timenet"]
 combine-as-imports = true
 force-sort-within-sections = true
 lines-after-imports = 2
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
-testpaths = ["tests"]
+testpaths = ["packages"]
 
 [tool.ty.environment]
 python-version = "3.13"
-
-[dependency-groups]
-dev = [
-    "pre-commit>=4.6.0",
-    "pytest>=9.0.3",
-    "ruff>=0.15.12",
-    "ty>=0.0.34",
-]
-docs = [
-    "mkdocs>=1.6",
-    "mkdocs-material>=9.5",
-]
-
-[tool.uv]
-default-groups = ["dev"]

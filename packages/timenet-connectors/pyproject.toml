@@ -1,0 +1,16 @@
+[project]
+name = "timenet-connectors"
+version = "0.0.1"
+description = "Dataset connectors for TimeNet: dataset-specific logic to fetch and convert sources into the TimeF format."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["timenet>=0.0.1"]
+
+[tool.uv.sources]
+# Dev-time override so the workspace resolves timenet locally. This is uv-only
+# and never reaches published metadata; Requires-Dist comes from the floor above.
+timenet = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"

@@ -9,8 +9,8 @@ TimeNet is infrastructure for registering, querying, downloading, converting, an
 Clone the repo and install locally:
 
 ```bash
-git clone https://github.com/AI-X-Labs/Timenet2.0.git
-cd Timenet2.0
+git clone https://github.com/AI-X-Labs/TimeNet.git
+cd TimeNet
 uv sync --all-groups   # runtime + dev + docs dependencies
 make install-hooks     # set up pre-commit hooks
 ```
