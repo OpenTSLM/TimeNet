@@ -2,21 +2,87 @@ name: Pre-commit hooks
 
 on:
   pull_request:
-    branches: [ "main" ]
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
     - name: Set up uv
       uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: true
+    - name: Cache pre-commit environments
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
     - name: Install dependencies
-      run: |
-        uv sync --all-groups
+      run: uv sync --all-groups
     - name: Run pre-commit hooks
+      id: precommit
+      continue-on-error: true
       run: |
-        uv run pre-commit run --all-files --show-diff-on-failure
+        set -o pipefail
+        uv run pre-commit run \
+          --from-ref origin/${{ github.base_ref }} \
+          --to-ref ${{ github.sha }} \
+          --show-diff-on-failure 2>&1 | tee /tmp/precommit-output.txt
+    - name: Report pre-commit failure
+      if: steps.precommit.outcome == 'failure'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        {
+          echo "## ⚠️ Pre-commit hooks failed"
+          echo ""
+          echo "Run locally to reproduce:"
+          echo '```bash'
+          echo "uv run pre-commit run --from-ref origin/${{ github.base_ref }} --to-ref HEAD"
+          echo '```'
+          echo ""
+          echo "<details><summary>CI output</summary>"
+          echo ""
+          echo '```'
+          head -c 60000 /tmp/precommit-output.txt
+          echo '```'
+          echo ""
+          echo "</details>"
+        } | tee /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+        gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/report.md
+    - name: Fail if pre-commit failed
+      if: steps.precommit.outcome == 'failure'
+      run: exit 1
     - name: Test with pytest
+      id: pytest
+      continue-on-error: true
       run: |
-        uv run pytest
+        set -o pipefail
+        uv run pytest 2>&1 | tee /tmp/pytest-output.txt
+    - name: Report pytest failure
+      if: steps.pytest.outcome == 'failure'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        {
+          echo "## ⚠️ Pytest failed"
+          echo ""
+          echo "<details><summary>Test output</summary>"
+          echo ""
+          echo '```'
+          head -c 60000 /tmp/pytest-output.txt
+          echo '```'
+          echo ""
+          echo "</details>"
+        } | tee /tmp/pytest-report.md >> "$GITHUB_STEP_SUMMARY"
+        gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/pytest-report.md
+    - name: Fail if pytest failed
+      if: steps.pytest.outcome == 'failure'
+      run: exit 1

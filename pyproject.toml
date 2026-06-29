@@ -3,6 +3,7 @@ members = ["packages/*"]
 
 [tool.uv]
 default-groups = ["dev"]
+required-version = ">=0.10.10"
 
 [dependency-groups]
 dev = [
