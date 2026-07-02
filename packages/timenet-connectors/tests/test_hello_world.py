@@ -10,7 +10,7 @@ from timenet.types import (
     QATask,
     View,
 )
-from timenet_connectors import HelloWorldConnector
+from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 
 
 def _convert() -> TimeFDataset:
@@ -23,7 +23,7 @@ def test_is_a_connector():
 
 
 def test_metadata():
-    assert HelloWorldConnector().metadata().dataset_id == "hello_world"
+    assert HelloWorldConnector().metadata().dataset_id == "timenet/hello-world"
 
 
 def test_download_is_deterministic_and_offline():

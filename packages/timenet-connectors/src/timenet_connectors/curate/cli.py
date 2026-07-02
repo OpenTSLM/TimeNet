@@ -1,7 +1,8 @@
 """``timenet-curate``: the producer CLI that runs connectors through the engine.
 
 Distinct from the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory (itself a
-valid local registry) that the SDK can then load.
+valid local registry) that the SDK can then load. Connectors are resolved lazily by dataset id, so
+adding one is just dropping a ``datasets/<org>/<name>.py`` module — no registration here.
 """
 
 from pathlib import Path
@@ -10,12 +11,9 @@ import typer
 
 from timenet.cli.runner import run_cli
 from timenet.config import settings
-from timenet.connectors import BaseConnector
 from timenet.engine import run_pipeline
-from timenet_connectors import HelloWorldConnector
+from timenet_connectors.discovery import resolve
 
-
-CONNECTORS: dict[str, type[BaseConnector]] = {"hello_world": HelloWorldConnector}
 
 app = typer.Typer(help="Curate TimeNet datasets from connectors.", no_args_is_help=True)
 
@@ -35,10 +33,12 @@ def build(
     Raises:
         BadParameter: If ``dataset_id`` has no known connector.
     """
-    if dataset_id not in CONNECTORS:
-        raise typer.BadParameter(f"unknown dataset id {dataset_id!r}; known: {sorted(CONNECTORS)}")
+    try:
+        connector_cls = resolve(dataset_id)
+    except LookupError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     root = Path(out) if out is not None else settings().registry_path
-    version_dir = run_pipeline(CONNECTORS[dataset_id](), root)
+    version_dir = run_pipeline(connector_cls(), root)
     typer.echo(str(version_dir))
 
 

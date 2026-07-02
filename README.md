@@ -49,10 +49,11 @@ make sync           # uv sync --all-groups (runtime + dev + docs)
 make install-hooks  # install pre-commit hooks (run once after cloning)
 ```
 
-Dependencies are split into groups in `pyproject.toml`:
+Dependencies are split in `pyproject.toml`:
 
-- runtime — `[project] dependencies` (none yet)
-- `dev` — ruff, ty, pytest, pre-commit (installed by default)
+- runtime — `timenet` needs numpy, pyarrow, pint, pydantic-settings, typer; `timenet-connectors` adds
+  its own. Optional extras: `timenet[torch]`, `timenet-connectors[huggingface]`.
+- `dev` — ruff, ty, pytest, pre-commit, hypothesis (installed by default)
 - `docs` — mkdocs-material
 
 ### Make targets

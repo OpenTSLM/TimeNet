@@ -7,10 +7,12 @@ required-version = ">=0.10.10"
 
 [dependency-groups]
 dev = [
+    "huggingface-hub>=0.24",
     "hypothesis>=6.140",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
+    "torch>=2.2",
     "ty>=0.0.34",
 ]
 docs = [

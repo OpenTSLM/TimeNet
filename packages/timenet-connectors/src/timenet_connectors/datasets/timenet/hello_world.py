@@ -78,7 +78,7 @@ def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Calla
 
 
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
-    """A deterministic, offline demo connector for the ``hello_world`` dataset.
+    """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset.
 
     Its descriptive identity lives in ``hello_world.yaml`` beside this module, not in code, so the card
     is the single source of truth for it.
@@ -196,3 +196,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ),
         )
         return dataset
+
+
+CONNECTOR = HelloWorldConnector
