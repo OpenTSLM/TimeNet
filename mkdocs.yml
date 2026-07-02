@@ -77,3 +77,4 @@ nav:
   - TimeFWriter: timef-writer.md
   - TimeFReader: timef-reader.md
   - Engine: engine.md
+  - Curation: curation.md

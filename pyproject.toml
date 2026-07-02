@@ -71,6 +71,10 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.flake8-bugbear]
+# Typer expects Option/Argument descriptors as parameter defaults.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-sort-within-sections = true
