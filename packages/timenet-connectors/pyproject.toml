@@ -4,7 +4,11 @@ version = "0.0.1"
 description = "Dataset connectors for TimeNet: dataset-specific logic to fetch and convert sources into the TimeF format."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["timenet>=0.0.1"]
+dependencies = [
+    "numpy>=2.1",
+    "pyarrow>=21",
+    "timenet>=0.0.1",
+]
 
 [tool.uv.sources]
 # Dev-time override so the workspace resolves timenet locally. This is uv-only
