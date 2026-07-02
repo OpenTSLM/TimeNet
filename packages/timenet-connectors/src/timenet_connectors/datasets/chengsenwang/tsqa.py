@@ -7,7 +7,6 @@ sample carrying the series plus a :class:`~timenet.types.QATask`.
 
 from collections.abc import Callable
 import json
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -57,7 +56,6 @@ class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-    FIXTURE = Path(__file__).parent / "fixtures" / "tsqa_sample.json"
 
     METADATA = DatasetMetadata(
         dataset_id="chengsenwang/tsqa",
@@ -68,14 +66,6 @@ class TSQAConnector(BaseHuggingFaceConnector):
         domains=(Domain.GENERAL,),
         tags=("qa", "time-series", "huggingface"),
     )
-
-    def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive identity.
-
-        Returns:
-            The connector's static :class:`~timenet.types.DatasetMetadata`.
-        """
-        return self.METADATA
 
     def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
         """Build one sample per row: the parsed series plus its QA task.
