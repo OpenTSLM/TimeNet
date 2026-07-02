@@ -9,6 +9,7 @@ from timenet.types.annotations import (
     PointAnnotation,
     StaticAnnotation,
     annotation_type_of,
+    value_type_of,
 )
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
@@ -57,4 +58,5 @@ __all__ = [
     "View",
     "annotation_type_of",
     "ureg",
+    "value_type_of",
 ]
