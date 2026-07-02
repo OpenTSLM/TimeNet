@@ -5,7 +5,9 @@ description = "TimeNet is infrastructure for registering, querying, downloading,
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "numpy>=2.1",
     "pint>=0.25",
+    "pyarrow>=21",
 ]
 
 [project.optional-dependencies]
