@@ -147,15 +147,25 @@ class TimeFReader:
         Yields:
             Each reconstructed :class:`Sample`.
         """
-        for row in pq.read_table(self._root / self._manifest.files.samples).to_pylist():
+        for row in self._read_rows(self._manifest.files.samples):
             yield self._build_sample(row)
 
     # ---- loading -------------------------------------------------------------------------------
 
+    def _read_rows(self, parts: tuple[str, ...]) -> Iterator[dict]:
+        """Yield every row across a multi-part artifact, in part order.
+
+        Args:
+            parts: The artifact's relative part paths from the manifest.
+
+        Yields:
+            Each row as a dict, concatenated across parts.
+        """
+        for rel in parts:
+            yield from pq.read_table(self._root / rel).to_pylist()
+
     def _check_files_exist(self) -> None:
-        files = self._manifest.files
-        listed = [files.samples, files.annotations, files.time_series_index, *files.tasks, *files.time_series]
-        for rel in listed:
+        for rel in self._manifest.files.all_parts():
             if not (self._root / rel).exists():
                 raise FileNotFoundError(f"manifest lists a missing file: {rel}")
 
@@ -186,7 +196,7 @@ class TimeFReader:
 
     def _load_annotations(self) -> dict[str, Annotation]:
         annotations: dict[str, Annotation] = {}
-        for row in pq.read_table(self._root / self._manifest.files.annotations).to_pylist():
+        for row in self._read_rows(self._manifest.files.annotations):
             key = row["key"]
             if key not in self._annotation_descriptors:
                 raise ValueError(f"annotation row references unknown key {key!r} (not in schema)")
@@ -212,7 +222,7 @@ class TimeFReader:
 
     def _load_index(self) -> dict[tuple[str, str], list[dict]]:
         index: dict[tuple[str, str], list[dict]] = {}
-        for row in pq.read_table(self._root / self._manifest.files.time_series_index).to_pylist():
+        for row in self._read_rows(self._manifest.files.time_series_index):
             key = (self._dec("sample_id", row["sample_id"]), self._dec("time_series_id", row["time_series_id"]))
             index.setdefault(key, []).append(row)
         for rows in index.values():
