@@ -11,6 +11,12 @@ from timenet.types import Domain, Version
 from timenet.writer import TimeFWriter
 
 
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    for var in ("TIMENET_HOME", "TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def registry_root(tmp_path):
     dataset = make_dataset()
@@ -18,6 +24,17 @@ def registry_root(tmp_path):
     with TimeFWriter(tmp_path / "reg", dataset) as writer:
         writer.write()
     return tmp_path / "reg"
+
+
+def test_no_args_uses_local_home_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:  # the default local registry
+        writer.write()
+    client = TimeNet()  # no registry, no storage
+    assert {m.dataset_id for m in client.list()} == {"hello_world"}
+    assert client.download("hello_world") == tmp_path / "home" / "storage" / "hello_world" / "1.0.0"
 
 
 def test_list(registry_root, tmp_path):
