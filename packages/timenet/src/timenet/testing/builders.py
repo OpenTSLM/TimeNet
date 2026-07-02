@@ -9,10 +9,13 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
+    DataSource,
     Domain,
     IntervalAnnotation,
+    LabelingTask,
     License,
     PointAnnotation,
+    QATask,
     StaticAnnotation,
     TimeSeriesSpec,
     Version,
@@ -61,11 +64,46 @@ def sine_loader(
     return load
 
 
-def make_dataset() -> TimeFDataset:
-    """Build a small, fully deterministic dataset exercising the common TimeF features.
+_RATE_HZ = 16.0
+_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
+_SINE = TimeSeriesSpec(
+    spec_type="sine",
+    name="Sine",
+    unit_sampling_rate=ureg.hertz,
+    unit_timestamp=ureg.second,
+    unit_value=ureg.dimensionless,
+    data_source=_SOURCE,
+)
+_COSINE = TimeSeriesSpec(
+    spec_type="cosine",
+    name="Cosine",
+    unit_sampling_rate=ureg.hertz,
+    unit_timestamp=ureg.second,
+    unit_value=ureg.dimensionless,
+    data_source=_SOURCE,
+)
 
-    Two samples over one shared modality, with static / point / interval annotations and a task. All ids
-    are fixed, so two calls produce equal datasets.
+
+def _series(spec, channel, n, time_series_id, source_id, phase=0.0):
+    return TimeSeries(
+        spec=spec,
+        channel=channel,
+        sampling_rate_hz=_RATE_HZ,
+        loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
+        source_id=source_id,
+        time_series_id=time_series_id,
+        t_start_s=0.0,
+        t_end_s=n / _RATE_HZ,
+    )
+
+
+def make_dataset() -> TimeFDataset:
+    """Build a fully deterministic dataset exercising every TimeF feature.
+
+    Two modalities over a shared data source; a series shared across two samples; a long series (to
+    exercise chunk splitting); a windowed sample; all three annotation shapes including one shared
+    across samples; and a classification -> QA task chain plus a labeling task. All ids are fixed, so
+    two calls produce equal datasets, making this the canonical writer/reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.
@@ -80,36 +118,44 @@ def make_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    spec = TimeSeriesSpec(
-        spec_type="sine",
-        name="Sine",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
-        unit_value=ureg.dimensionless,
+    shared = _series(_SINE, "a", 16, "ts-shared", "rec-0")
+    cohort = StaticAnnotation(key="cohort", value="A", id="cohort-shared")
+
+    sample0 = dataset.add_sample(
+        time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
+        view=View.FULL,
+        subject_ids=("subj-0",),
+        sample_id="sample-0",
     )
-    for index in range(2):
-        series = TimeSeries(
-            spec=spec,
-            channel="a",
-            sampling_rate_hz=16.0,
-            loader=sine_loader(n=16, freq_hz=1.0, sampling_rate_hz=16.0, phase=index),
-            source_id=f"rec-{index}",
-            time_series_id=f"ts-{index}",
-            t_start_s=0.0,
-            t_end_s=1.0,
+    sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
+    sample0.add_annotation(cohort)
+    sample0.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0"))
+    sample0.add_annotation(
+        IntervalAnnotation(
+            key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
         )
-        sample = dataset.add_sample(
-            time_series=(series,),
-            view=View.FULL,
-            subject_ids=(f"subj-{index}",),
-            sample_id=f"sample-{index}",
-        )
-        sample.add_annotation(StaticAnnotation(key="age", value=40 + index, unit="years", id=f"age-{index}"))
-        sample.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id=f"stim-{index}"))
-        sample.add_annotation(
-            IntervalAnnotation(key="artifact", start_time_s=0.0, end_time_s=1.0, id=f"artifact-{index}")
-        )
-        dataset.add_task(sample, ClassificationTask(label="normal", id=f"task-{index}"))
+    )
+    classification = dataset.add_task(sample0, ClassificationTask(label="normal", id="task-cls-0"))
+    dataset.add_task(
+        sample0, QATask(question="What rhythm?", answer="Normal.", id="task-qa-0"), from_tasks=(classification,)
+    )
+
+    sample1 = dataset.add_sample(
+        time_series=(shared, _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0)),
+        view=View.FULL,
+        subject_ids=("subj-1",),
+        sample_id="sample-1",
+    )
+    sample1.add_annotation(cohort)  # same instance/id => shared across samples
+
+    window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
+    sample2 = dataset.add_sample(time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2")
+    dataset.add_task(
+        sample2,
+        LabelingTask(
+            label="onset", time_series_ids=(window.time_series_id,), windows_s=((0.0, 0.25),), id="task-lbl-2"
+        ),
+    )
     return dataset
 
 
