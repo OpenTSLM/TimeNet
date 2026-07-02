@@ -9,21 +9,18 @@ code; producing datasets is the curation side.
 # resolving to the builtin rather than the method.
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import shutil
 import uuid
 
+from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
-from timenet.registry import BaseRegistry, open_registry
+from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.types import DatasetMetadata, Domain, License, Task
 
-
-DEFAULT_REGISTRY = "https://registry.timenet.io"
-DEFAULT_STORAGE_PATH = "~/.timenet/storage"
 
 # Defined at module scope, where `list` is the builtin (the class has a method named ``list`` that
 # would otherwise shadow it in type annotations).
@@ -58,21 +55,26 @@ class TimeNet:
     ) -> None:
         """Open a client against a registry.
 
-        Registry selection order: the ``registry`` argument, then ``$TIMENET_REGISTRY``, then the
-        default public registry.
+        Registry selection order: the ``registry`` argument, then ``$TIMENET_REGISTRY``, then the local
+        default registry (``<TIMENET_HOME>/registry``).
 
         Args:
             registry: A registry instance, URL, ``file://`` URI, or local path.
-            storage_path: Where downloads are cached (defaults to ``$TIMENET_DATA_ROOT`` or
-                ``~/.timenet/storage``).
+            storage_path: Where downloads are cached (defaults to ``$TIMENET_STORAGE`` or
+                ``<TIMENET_HOME>/storage``).
         """
-        if isinstance(registry, BaseRegistry):
-            self._registry = registry
+        given_registry = registry if isinstance(registry, BaseRegistry) else None
+        cfg = settings(
+            registry=None if given_registry is not None or registry is None else str(registry),
+            storage=storage_path,
+        )
+        if given_registry is not None:
+            self._registry = given_registry
+        elif cfg.registry is not None:
+            self._registry = open_registry(cfg.registry)
         else:
-            uri = str(registry) if registry is not None else os.environ.get("TIMENET_REGISTRY", DEFAULT_REGISTRY)
-            self._registry = open_registry(uri)
-        storage = storage_path or os.environ.get("TIMENET_DATA_ROOT") or DEFAULT_STORAGE_PATH
-        self._storage = Path(storage).expanduser()
+            self._registry = LocalRegistry(cfg.registry_path)
+        self._storage = cfg.storage_dir
 
     def list(self) -> _Metadatas:
         """Return the metadata of every dataset in the registry.

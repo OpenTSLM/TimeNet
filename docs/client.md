@@ -25,9 +25,23 @@ values = dataset.samples[0].time_series[0].to_numpy()
 TimeNet(registry=None, *, storage_path=None)
 ```
 
-Registry selection order: the `registry` argument, then `$TIMENET_REGISTRY`, then the default public
-registry. `registry` accepts a `BaseRegistry`, a URL, a `file://` URI, or a local path. `storage_path`
-defaults to `$TIMENET_DATA_ROOT` or `~/.timenet/storage`.
+Registry selection order: the `registry` argument, then `$TIMENET_REGISTRY`, then the local default
+registry. `registry` accepts a `BaseRegistry`, a URL, a `file://` URI, or a local path.
+
+## Configuration
+
+All local state lives under `~/.cache/timenet/` by default, mirroring HuggingFace's `HF_HOME`
+hierarchy. Precedence for any value is **CLI flag / argument > environment variable > default**.
+
+| Env var | Default | What |
+| --- | --- | --- |
+| `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
+| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets (like `HF_DATASETS_CACHE`). |
+| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources + Hub downloads (like `HF_HUB_CACHE`). |
+| `TIMENET_REGISTRY` | `<home>/registry` | The registry to use (path or URL). |
+
+Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be
+added there.
 
 ## Methods
 
