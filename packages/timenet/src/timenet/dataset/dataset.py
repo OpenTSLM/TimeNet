@@ -161,6 +161,32 @@ class TimeFDataset:
         )
         return self._schema
 
+    @classmethod
+    def from_parts(
+        cls,
+        *,
+        metadata: DatasetMetadata,
+        samples: Iterable[Sample],
+        tasks: Iterable[Task],
+        schema: DatasetSchema,
+    ) -> "TimeFDataset":
+        """Build a dataset from already-constructed parts (used by the reader on read-back).
+
+        Args:
+            metadata: The dataset's descriptive identity.
+            samples: Fully-built samples (their loaders pull from disk).
+            tasks: Fully-built tasks with resolved ``from_tasks``.
+            schema: The schema reconstructed from the manifest.
+
+        Returns:
+            The hydrated dataset.
+        """
+        dataset = cls(metadata=metadata)
+        dataset._samples = list(samples)
+        dataset._tasks = list(tasks)
+        dataset._schema = schema
+        return dataset
+
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
         """Return items with duplicates removed, preserving first-seen order."""
