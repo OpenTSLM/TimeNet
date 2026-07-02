@@ -874,11 +874,17 @@ name = "timenet-connectors"
 version = "0.0.1"
 source = { editable = "packages/timenet-connectors" }
 dependencies = [
+    { name = "numpy" },
+    { name = "pyarrow" },
     { name = "timenet" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "timenet", editable = "packages/timenet" }]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.1" },
+    { name = "pyarrow", specifier = ">=21" },
+    { name = "timenet", editable = "packages/timenet" },
+]
 
 [[package]]
 name = "ty"
