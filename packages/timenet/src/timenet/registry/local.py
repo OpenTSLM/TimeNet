@@ -31,19 +31,31 @@ class LocalRegistry(WritableRegistry):
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
+        Discovers datasets depth-agnostically so both flat (``hello_world``) and namespaced
+        (``org/name``) layouts are found. A dataset id is the path from the root to a version
+        directory's parent.
+
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
         if not self._root.is_dir():
             return []
-        metadatas: list[DatasetMetadata] = []
-        for entry in sorted(self._root.iterdir()):
-            if not entry.is_dir() or entry.name.startswith("."):
+        latest_versions: dict[str, str] = {}
+        for manifest_path in self._root.rglob(MANIFEST_FILE):
+            version_dir = manifest_path.parent
+            parts = version_dir.relative_to(self._root).parts
+            if any(part.startswith(".") or ".tmp-" in part for part in parts):
                 continue
-            latest = self._latest_version(entry.name)
-            if latest is not None:
-                metadatas.append(self.get_manifest(entry.name, latest).metadata)
-        return metadatas
+            dataset_id = "/".join(parts[:-1])
+            version = parts[-1]
+            if not dataset_id or not _is_version(version):
+                continue
+            current = latest_versions.get(dataset_id)
+            if current is None or Version.parse(version) > Version.parse(current):
+                latest_versions[dataset_id] = version
+        return [
+            self.get_manifest(dataset_id, version).metadata for dataset_id, version in sorted(latest_versions.items())
+        ]
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).

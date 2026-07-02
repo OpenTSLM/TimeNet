@@ -1,6 +1,7 @@
 """Dataset-level descriptive identity and derived type declaration."""
 
 from dataclasses import dataclass, field
+import re
 
 from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
@@ -10,12 +11,18 @@ from timenet.types.tasks import Task
 from timenet.types.version import Version
 
 
+# A flat id (``hello_world``) or a HuggingFace-style ``org/name`` (one slash, no leading/trailing).
+_DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)?$")
+
+
 @dataclass(frozen=True)
 class DatasetMetadata:
     """A dataset's descriptive identity: who it is, not what it emits.
 
     Authored in the dataset card. ``dataset_version`` is the upstream source's semantic version;
-    ``yaml_schema_version`` is the card's own field-schema version.
+    ``yaml_schema_version`` is the card's own field-schema version. ``dataset_id`` is a flat slug or an
+    ``org/name`` pair (HuggingFace style); ids are case-sensitive, so avoid casing-only differences on
+    case-insensitive filesystems.
     """
 
     dataset_id: str
@@ -27,6 +34,23 @@ class DatasetMetadata:
     tags: tuple[str, ...] = ()
     source_url: str | None = None
     yaml_schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        """Validate the ``dataset_id`` shape.
+
+        No segment may start with ``.``: dataset ids are joined into filesystem paths, so a ``.`` /
+        ``..`` segment could escape the registry/storage root, and a leading-dot name (e.g. ``.git``)
+        writes to disk but is skipped by discovery, which drops hidden directories.
+
+        Raises:
+            ValueError: If ``dataset_id`` is empty, not a flat / single-slash ``org/name`` slug, or
+                has a segment that starts with ``.``.
+        """
+        if not _DATASET_ID.match(self.dataset_id) or any(part.startswith(".") for part in self.dataset_id.split("/")):
+            raise ValueError(
+                f"dataset_id must be a slug or 'org/name' (letters, digits, ., _, -; no segment may "
+                f"start with '.'), got {self.dataset_id!r}"
+            )
 
 
 @dataclass(frozen=True)
