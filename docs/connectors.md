@@ -72,10 +72,19 @@ Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](clien
   annotation shapes (one shared), and a `ClassificationTask -> QATask` chain plus a `LabelingTask`. Its
   dataset card, `hello_world.yaml`, sits beside it.
 - **`chengsenwang/tsqa`** — a time-series QA dataset: each row's series becomes a `TimeSeries` and its
-  question/answer a `QATask`. `TIMENET_ROW_LIMIT` caps rows for large runs. Needs the `huggingface`
-  extra (`pip install 'timenet-connectors[huggingface]'`) since it downloads from the Hub.
+  question/answer a `QATask`. Needs the `huggingface` extra
+  (`pip install 'timenet-connectors[huggingface]'`) since it downloads from the Hub.
 
 ```bash
-timenet-curate build timenet/hello-world      # offline, synthetic
-timenet-curate build chengsenwang/tsqa        # downloads from the Hub
+timenet-curate build timenet/hello-world               # offline, synthetic
+timenet-curate build chengsenwang/tsqa                 # live download from the Hub into the local registry
+timenet-curate build chengsenwang/tsqa --keep-cache    # keep the raw sources for a faster rebuild
 ```
+
+A successful build removes the dataset's raw download cache (`<TIMENET_CACHE>/<dataset_id>`), since the
+sources are only needed during conversion; pass `--keep-cache` to retain them. For offline work and
+tests, `TIMENET_TESTING=1` serves the connector's checked-in fixture, and `TIMENET_ROW_LIMIT=N` caps
+rows for a quick sample.
+
+Once built, load and inspect a dataset with the SDK — see `examples/load_tsqa_arrow.py` for turning the
+loaded samples into Apache Arrow tables.

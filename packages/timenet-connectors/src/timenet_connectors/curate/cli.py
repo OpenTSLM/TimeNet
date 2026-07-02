@@ -31,6 +31,9 @@ def build(
     dataset_id: str,
     out: str | None = typer.Option(None, "--out", help="Output registry directory (default: the local registry)."),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already curated."),
+    keep_cache: bool = typer.Option(
+        False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
+    ),
 ) -> None:
     """Run a connector through the engine and write its dataset.
 
@@ -46,7 +49,9 @@ def build(
         raise typer.BadParameter(str(exc)) from exc
     root = Path(out) if out is not None else settings().registry_path
     console.status("🔧", f"Building '{dataset_id}'…")
-    version_dir = run_pipeline(connector_cls(), root, progress_cb=_report_progress, force=force)
+    version_dir = run_pipeline(
+        connector_cls(), root, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
+    )
     console.success(f"Built '{dataset_id}' → {version_dir.name}")
     typer.echo(str(version_dir))
 

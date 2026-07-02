@@ -159,8 +159,7 @@ class TimeNet:
         if (target / "manifest.json").exists() and not force:
             return target
 
-        files = manifest.files
-        relpaths = [files.samples, files.annotations, files.time_series_index, *files.tasks, *files.time_series]
+        relpaths = manifest.files.all_parts()
         # Fetch into a staging dir and swap it in atomically, so an interrupted (re-)download never
         # leaves a half-written copy in place of a good one — the live target is replaced only once
         # every file (manifest.json last) has landed.

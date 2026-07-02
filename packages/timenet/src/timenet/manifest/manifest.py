@@ -346,9 +346,9 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
-        "samples": files.samples,
-        "annotations": files.annotations,
-        "time_series_index": files.time_series_index,
+        "samples": list(files.samples),
+        "annotations": list(files.annotations),
+        "time_series_index": list(files.time_series_index),
         "tasks": list(files.tasks),
         "time_series": list(files.time_series),
     }
@@ -357,11 +357,30 @@ def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            samples=data["samples"],
-            annotations=data["annotations"],
-            time_series_index=data["time_series_index"],
+            samples=_parts(data, "samples"),
+            annotations=_parts(data, "annotations"),
+            time_series_index=_parts(data, "time_series_index"),
             tasks=_str_tuple(data.get("tasks", ()), "tasks"),
             time_series=_str_tuple(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise InvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
+
+
+def _parts(data: dict[str, Any], key: str) -> tuple[str, ...]:
+    """Read a required list-of-parts field, rejecting a bare string.
+
+    Args:
+        data: The manifest ``files`` block.
+        key: The field to read.
+
+    Returns:
+        The field's parts as a tuple.
+
+    Raises:
+        TypeError: If the field is a string rather than a list of paths.
+    """
+    value = data[key]
+    if isinstance(value, str):
+        raise TypeError(f"'files.{key}' must be a list of parts, not a string")
+    return tuple(value)

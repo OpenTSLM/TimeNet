@@ -1375,6 +1375,7 @@ dependencies = [
     { name = "pint" },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -1395,6 +1396,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=21" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pyyaml", marker = "extra == 'curation'", specifier = ">=6" },
+    { name = "rich", specifier = ">=13" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2" },
     { name = "typer", specifier = ">=0.12" },
 ]

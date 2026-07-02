@@ -37,9 +37,9 @@ the per-area variables override just their own path. Precedence for any value is
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets. |
-| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources and downloads. |
-| `TIMENET_REGISTRY` | `<home>/registry` | The registry to use (path or URL). |
+| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL); `timenet-curate build` writes curated datasets here. |
+| `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download`/`load` fetch from the registry to read. |
+| `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during curation (removed after a successful build). |
 
 Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be
 added there.
@@ -89,8 +89,11 @@ The `timenet` console script mirrors the SDK (built with [Typer](https://typer.t
 export TIMENET_REGISTRY=https://registry.timenet.io
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
-timenet info hello_world
-timenet download hello_world --storage ~/.timenet/storage
+timenet info chengsenwang/tsqa
+timenet download chengsenwang/tsqa
+
+timenet cache info            # datasets on disk (location, id, version, size) + total
+timenet cache clear           # remove downloads + raw cache (prompts; --all also clears curated, -y skips)
 ```
 
 Registry selection precedence: `--registry` > `$TIMENET_REGISTRY` > default. `search` flags map
