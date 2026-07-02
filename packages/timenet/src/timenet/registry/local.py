@@ -6,11 +6,11 @@ import shutil
 from typing import BinaryIO
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, TimeFValidationError
+from timenet.errors import DatasetNotFoundError, TimeFFormatError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.writable import WritableRegistry
-from timenet.types import DatasetMetadata, Version
+from timenet.types import DatasetMetadata, Version, validate_dataset_id
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -31,19 +31,31 @@ class LocalRegistry(WritableRegistry):
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
+        Discovers datasets depth-agnostically so both flat (``hello_world``) and namespaced
+        (``org/name``) layouts are found. A dataset id is the path from the root to a version
+        directory's parent.
+
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
         if not self._root.is_dir():
             return []
-        metadatas: list[DatasetMetadata] = []
-        for entry in sorted(self._root.iterdir()):
-            if not entry.is_dir() or entry.name.startswith("."):
+        latest_versions: dict[str, str] = {}
+        for manifest_path in self._root.rglob(MANIFEST_FILE):
+            version_dir = manifest_path.parent
+            parts = version_dir.relative_to(self._root).parts
+            if any(part.startswith(".") or ".tmp-" in part for part in parts):
                 continue
-            latest = self._latest_version(entry.name)
-            if latest is not None:
-                metadatas.append(self.get_manifest(entry.name, latest).metadata)
-        return metadatas
+            dataset_id = "/".join(parts[:-1])
+            version = parts[-1]
+            if not dataset_id or not _is_version(version):
+                continue
+            current = latest_versions.get(dataset_id)
+            if current is None or Version.parse(version) > Version.parse(current):
+                latest_versions[dataset_id] = version
+        return [
+            self.get_manifest(dataset_id, version).metadata for dataset_id, version in sorted(latest_versions.items())
+        ]
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).
@@ -57,11 +69,13 @@ class LocalRegistry(WritableRegistry):
 
         Raises:
             DatasetNotFoundError: If the dataset id or version has no committed manifest.
+            TimeFFormatError: If the stored manifest's own dataset id disagrees with the directory it
+                was loaded from (a misplaced or corrupt artifact).
         """
         resolved = self._latest_version(dataset_id) if version in (None, "", "latest") else version
         if resolved is None:
             raise DatasetNotFoundError(f"no committed version for dataset {dataset_id!r}")
-        path = self._root / dataset_id / resolved / MANIFEST_FILE
+        path = self._dataset_dir(dataset_id) / resolved / MANIFEST_FILE
         if not path.exists():
             raise DatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")
         mtime = path.stat().st_mtime
@@ -69,6 +83,11 @@ class LocalRegistry(WritableRegistry):
         if cached is not None and cached[0] == mtime:
             return cached[1]
         manifest = Manifest.from_json(path.read_text())
+        if manifest.metadata.dataset_id != dataset_id:
+            raise TimeFFormatError(
+                f"manifest under {dataset_id!r}/{resolved} declares dataset id "
+                f"{manifest.metadata.dataset_id!r}; the on-disk layout is inconsistent"
+            )
         self._manifest_cache[dataset_id, resolved] = (mtime, manifest)
         return manifest
 
@@ -87,7 +106,7 @@ class LocalRegistry(WritableRegistry):
             DatasetNotFoundError: If the dataset version directory does not exist.
             ValueError: If ``relpath`` escapes the dataset version directory.
         """
-        version_dir = self._root / dataset_id / version
+        version_dir = self._dataset_dir(dataset_id) / version
         if not version_dir.is_dir():
             raise DatasetNotFoundError(f"no dataset {dataset_id!r} version {version!r}")
         base = version_dir.resolve()
@@ -116,18 +135,14 @@ class LocalRegistry(WritableRegistry):
 
         Returns:
             The stored version string.
-
-        Raises:
-            TimeFValidationError: If the dataset id resolves outside the registry root (e.g. it
-                contains ``..``), which would let the write and ``force`` rmtree escape the root.
         """
         if dataset.schema is None:
             dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)
         dataset_id = dataset.metadata.dataset_id
-        final_dir = self._root / dataset_id / version
-        if not final_dir.resolve().is_relative_to(self._root.resolve()):
-            raise TimeFValidationError(f"dataset id {dataset_id!r} escapes registry root {self._root}")
+        # _dataset_dir validates the id (rejecting any ``..`` that would let the write or the force
+        # rmtree escape the root); dataset.metadata already enforces this at construction.
+        final_dir = self._dataset_dir(dataset_id) / version
         if self.exists(dataset_id, version) and not force:
             return version
         if force and final_dir.exists():
@@ -136,9 +151,21 @@ class LocalRegistry(WritableRegistry):
             writer.write()
         return version
 
+    def _dataset_dir(self, dataset_id: str) -> Path:
+        """Return the directory holding a dataset's versions.
+
+        Args:
+            dataset_id: The dataset id, used as a relative path under the root.
+
+        Returns:
+            The ``<root>/<dataset_id>/`` directory.
+        """
+        validate_dataset_id(dataset_id)  # rejects ids that would resolve outside the root
+        return self._root / dataset_id
+
     def _latest_version(self, dataset_id: str) -> str | None:
         """Return the highest committed version string for a dataset, or ``None``."""
-        dataset_dir = self._root / dataset_id
+        dataset_dir = self._dataset_dir(dataset_id)
         if not dataset_dir.is_dir():
             return None
         versions = [
