@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+from typing import TYPE_CHECKING
 import uuid
 
 from timenet.config import settings
@@ -20,6 +21,10 @@ from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.types import DatasetMetadata, Domain, License, Task
+
+
+if TYPE_CHECKING:
+    from timenet.torch import TimeFTorchDataset
 
 
 # Defined at module scope, where `list` is the builtin (the class has a method named ``list`` that
@@ -190,6 +195,23 @@ class TimeNet:
         """
         target = self.download(dataset_id, version)
         return TimeFReader(target).read()
+
+    def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
+        """Download if needed and return the dataset as a read-only PyTorch ``Dataset``.
+
+        Requires the ``torch`` extra (``pip install 'timenet[torch]'``); the torch view is imported
+        lazily so base users don't need torch.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest.
+
+        Returns:
+            A :class:`~timenet.torch.TimeFTorchDataset` over the loaded dataset.
+        """
+        from timenet.torch import TimeFTorchDataset
+
+        return TimeFTorchDataset(self.load(dataset_id, version))
 
     def _fetch(self, dataset_id: str, version: str, relpath: str, target: Path) -> None:
         """Copy one file from the registry into the local ``target`` directory."""

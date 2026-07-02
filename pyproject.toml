@@ -12,6 +12,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
+    "torch>=2.2",
     "ty>=0.0.34",
 ]
 docs = [
