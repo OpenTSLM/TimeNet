@@ -61,10 +61,9 @@ registry = open_writable_registry("~/.timenet/local")
 version = registry.store(dataset)   # schema derived if needed, atomic commit
 ```
 
-Dataset ids may be a flat slug (`hello_world`) or a HuggingFace-style `org/name` pair
-(`ChengsenWang/TSQA`), which nests one level deeper on disk (`<root>/ChengsenWang/TSQA/<version>/`).
-`list_datasets` discovers both depth-agnostically. Ids are case-sensitive, so avoid casing-only
-differences if you deploy on a case-insensitive filesystem.
+Dataset ids may be a flat slug (`hello_world`) or an `org/name` pair (`chengsenwang/tsqa`), which nests
+one level deeper on disk (`<root>/chengsenwang/tsqa/<version>/`). `list_datasets` discovers both
+depth-agnostically. Prefer lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
 ## `search`
 

@@ -1,8 +1,8 @@
-# Dataset Card for the hello_world connector.
+# Dataset Card for the timenet/hello-world connector.
 # Human-authored metadata; the curator compiles this plus the schema derived from the data into
-# manifest.json. The filename stem (hello_world) is the dataset id.
+# manifest.json. The connector lives at datasets/<org>/<name>.py; its metadata declares the id.
 yaml_schema_version: 1
-dataset_id: hello_world
+dataset_id: timenet/hello-world
 dataset_version: 1.0.0
 name: Hello World
 description: A synthetic demo dataset exercising every TimeF feature.

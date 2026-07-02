@@ -30,14 +30,15 @@ registry. `registry` accepts a `BaseRegistry`, a URL, a `file://` URI, or a loca
 
 ## Configuration
 
-All local state lives under `~/.cache/timenet/` by default, mirroring HuggingFace's `HF_HOME`
-hierarchy. Precedence for any value is **CLI flag / argument > environment variable > default**.
+All local state lives under `~/.cache/timenet/` by default. Setting the home relocates everything;
+the per-area variables override just their own path. Precedence for any value is
+**CLI flag / argument > environment variable > default**.
 
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets (like `HF_DATASETS_CACHE`). |
-| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources + Hub downloads (like `HF_HUB_CACHE`). |
+| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets. |
+| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources and downloads. |
 | `TIMENET_REGISTRY` | `<home>/registry` | The registry to use (path or URL). |
 
 Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be

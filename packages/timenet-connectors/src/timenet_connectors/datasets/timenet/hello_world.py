@@ -82,10 +82,10 @@ def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Calla
 
 
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
-    """A deterministic, offline demo connector for the ``hello_world`` dataset."""
+    """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
     METADATA = DatasetMetadata(
-        dataset_id="hello_world",
+        dataset_id="timenet/hello-world",
         dataset_version=Version(1, 0, 0),
         name="Hello World",
         description="A synthetic demo dataset exercising every TimeF feature.",
@@ -197,3 +197,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ),
         )
         return dataset
+
+
+CONNECTOR = HelloWorldConnector
