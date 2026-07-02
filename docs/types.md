@@ -1,800 +1,211 @@
 # Types
 
-## `DatasetMetadata`
-
-The dataset's descriptive identity: who the dataset is, not what it emits. Purely descriptive data: identifier, version, name, description, license, domains, source, tags. The typed entities the dataset emits live on [`DatasetSchema`](#datasetschema). Authored by the connector and returned from [`metadata()`](connectors.md#metadata).
-
-```python
-from timenet.domains import Domain
-from timenet.licenses import License
-from timenet.timef.metadata import DatasetMetadata
-from timenet.version import Version
-
-
-@dataclass(frozen=True)
-class DatasetMetadata:
-    dataset_id: str
-    version: Version
-    name: str
-    description: str
-    license: License
-    domains:    tuple[Domain, ...] = ()
-    source_url: str | None = None
-    tags:       tuple[str, ...] = ()
-```
-
-**Fields**
-
-| Name          | Type                 | Required | Description                                                      |
-| ------------- | -------------------- | -------- | ---------------------------------------------------------------- |
-| `dataset_id`  | `str`                | yes      | Snake-cased unique identifier. Must match the YAML registry key. |
-| `version`     | `Version`            | yes      | Semantic version (`major.minor.patch`). See [Version](#version). |
-| `name`        | `str`                | yes      | Human-readable display name.                                     |
-| `description` | `str`                | yes      | One-sentence human-readable description.                         |
-| `license`     | `License`            | yes      | Data license.                                                    |
-| `domains`     | `tuple[Domain, ...]` | no       | Clinical or application domains (e.g. `Domain.CARDIOLOGY`).      |
-| `source_url`  | `str \| None`        | no       | Canonical URL of the source dataset.                             |
-| `tags`        | `tuple[str, ...]`    | no       | Free-form labels for filtering.                                  |
+The TimeF value types live in `timenet.types` (one module per concept, re-exported from the package).
+Every schema-carrying type is a **plain frozen dataclass** so it pickles and round-trips through
+[`TimeFReader`](timef-reader.md) without runtime class synthesis. Errors live in `timenet.errors`.
 
 ---
 
-## `DatasetSchema`
+## Version
 
-The dataset's type declaration: every typed entity a dataset emits, across four class-reference catalogs (`time_series_specs`, `devices`, `annotations`, `tasks`). It is **derived, not declared**, a connector never constructs one. On the write path [`TimeFDataset.derive_schema()`](timef-dataset.md#derive_schema) builds it from the dataset's instances, and on the read path [`TimeFReader`](timef-reader.md) reconstructs it from the manifest.
+A semantic `major.minor.patch` version. Frozen and ordered, so versions compare with the usual
+precedence (`Version(1, 2, 0) > Version(1, 1, 9)`). Components must be non-negative integers.
 
 ```python
-from timenet.timef.metadata import DatasetSchema
-from timenet.timef.types import Annotation, Device, TimeSeriesSpec
-from timenet.tasks import Task
+from timenet.types import Version
 
-
-@dataclass(frozen=True)
-class DatasetSchema:
-    time_series_specs: tuple[type[TimeSeriesSpec], ...] = ()
-    devices:           tuple[type[Device], ...] = ()
-    annotations:       tuple[type[Annotation], ...] = ()
-    tasks:             tuple[type[Task], ...] = ()
+Version(1, 0, 0)
+Version.parse("1.0.0")   # equivalent
+str(Version(1, 2, 3))    # "1.2.3"
 ```
-
-**Fields**
-
-| Name                | Type                               | Required | Description                                                                                                                                      |
-| ------------------- | ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `time_series_specs` | `tuple[type[TimeSeriesSpec], ...]` | no       | Modality types the dataset records (channel, units, sampling rate, device). See [TimeSeriesSpec](#timeseriesspec).                               |
-| `devices`           | `tuple[type[Device], ...]`         | no       | Device types that produced the modalities. See [Device](#device).                                                                                |
-| `annotations`       | `tuple[type[Annotation], ...]`     | no       | Annotation types the dataset emits — `StaticAnnotation`, `PointAnnotation`, and `IntervalAnnotation` subclasses. See [Annotation](#annotations). |
-| `tasks`             | `tuple[type[Task], ...]`           | no       | Task types the dataset emits. See [Tasks](#tasks).                                                                                               |
-
-### Precomputed schema
-
-Because the schema is only known after a dataset is converted, the [registry](registry.md) cannot answer type queries (e.g. "which datasets emit `ClassificationTask`?") for a dataset that has never been built. To preserve the "query without executing the connector" behavior it is possible to ship a **precomputed schema**: a hand-written JSON file whose shape is identical to `manifest.json["schema"]`.
 
 ---
 
-## Specs
+## Units
 
-### `TimeSeriesSpec`
-
-The contract for a measurement modality. Every `TimeSeries` carries exactly one `TimeSeriesSpec` instance, and that spec describes exactly one channel.
+TimeNet uses [pint](https://pint.readthedocs.io) for all physical units. One process-wide registry,
+`ureg`, owns every definition and conversion, plus two custom units (`beat`, `bpm`) pint does not ship.
+Reference units through `ureg` (`ureg.hertz`, `ureg.millivolt`, `ureg.standard_gravity`,
+`ureg.dimensionless`), never a second registry, or comparisons and conversions fail.
 
 ```python
-from __future__ import annotations
+from timenet.types import ureg
 
-from dataclasses import dataclass
-from typing import ClassVar
-
-from timenet.units import SamplingRateUnit, TimestampUnit, ValueUnit
-
-from timenet.timef.metadata import Device
-
-
-@dataclass(frozen=True)
-class TimeSeriesSpec:
-    channel: str                                       # per-series, e.g. "II", "f4", "V1", "APPL"
-    spec_id: ClassVar[str]                              # modality tag (machine), e.g. "ecg_lead"
-    name: ClassVar[str]                                 # modality tag (readable), e.g. "ECG Lead"
-    unit_sampling_rate: ClassVar[SamplingRateUnit]
-    unit_timestamp: ClassVar[TimestampUnit]
-    unit_value: ClassVar[ValueUnit]
-    device: ClassVar[type[Device] | None] = None        # typed back-ref (set by subclass)
+(5.0 * ureg.millivolt).to(ureg.volt).magnitude   # 0.005
 ```
-
-| Field                | Type                             | Scope    | Required | Description                                                                                                                   |
-| -------------------- | -------------------------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `channel`            | `str`                            | instance | yes      | The single channel this series carries (e.g. `"II"`, `"f4"`, `"V1", "APPL"`).                                                 |
-| `spec_id`            | `ClassVar[str]`                  | modality | yes      | Dataset-unique modality tag (machine), e.g. `"ecg_lead"`.                                                                     |
-| `name`               | `ClassVar[str]`                  | modality | yes      | Human-readable modality label.                                                                                                |
-| `unit_sampling_rate` | `ClassVar[SamplingRateUnit]`     | modality | yes      | Unit for sampling-rate values. See [SamplingRateUnit](#samplingrateunit).                                                     |
-| `unit_timestamp`     | `ClassVar[TimestampUnit]`        | modality | yes      | Unit for timestamp values. See [TimestampUnit](#timestampunit).                                                               |
-| `unit_value`         | `ClassVar[ValueUnit]`            | modality | yes      | Unit for channel values. See [ValueUnit](#valueunit).                                                                         |
-| `device`             | `ClassVar[type[Device] \| None]` | modality | no       | Typed back-ref to the [`Device`](#device) subclass that produced this modality. `None` if hardware is unknown or not modeled. |
-
-The base `TimeSeriesSpec` is never instantiated directly. It is used through a subclass
 
 ---
 
-### `Device`
+## DataSource
 
-The contract for the hardware used to collect timeseries. Connectors subclass it per device. The base class is never instantiated directly — subclasses declare every field as a `ClassVar`.
+The origin that produced a modality: a device, an API feed, a model, an institution. A flat frozen
+dataclass built directly.
 
 ```python
-from __future__ import annotations
+from timenet.types import DataSource
 
-from dataclasses import dataclass
-from typing import ClassVar
-
-
-@dataclass(frozen=True)
-class Device:
-    device_id: ClassVar[str]
-    name: ClassVar[str]
-    manufacturer: ClassVar[str | None] = None
-    model: ClassVar[str | None] = None
+DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
 ```
 
-| Field          | Type                    | Required | Description                                                                       |
-| -------------- | ----------------------- | -------- | --------------------------------------------------------------------------------- |
-| `device_id`    | `ClassVar[str]`         | yes      | Dataset-unique identifier. Referenced by `TimeSeriesSpec.device`.                 |
-| `name`         | `ClassVar[str]`         | yes      | Human-readable device name (e.g. `"Apple Watch Series 9"`, `"Holter Monitor X"`). |
-| `manufacturer` | `ClassVar[str \| None]` | no       | Vendor.                                                                           |
-| `model`        | `ClassVar[str \| None]` | no       | Model identifier.                                                                 |
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `data_source_type` | `str` | yes | Dataset-unique type tag, referenced by `TimeSeriesSpec.data_source`. |
+| `name` | `str` | yes | Human-readable name. |
+| `provider` | `str \| None` | no | Vendor / originator. |
 
 ---
 
-## Tasks
+## TimeSeriesSpec
 
-One labeled training segment that references one or more samples. The class is the type tag, it can be used as a filter argument (`query(tasks=[ClassificationTask])`),and the instance carries the payload.
-
-Tasks are attached to samples via `TimeFDataset.add_task(samples, task)`.
-
-### `Task`
+The contract for a measurement **modality**: its type tag, display name, and the units of its three
+axes. One spec is shared across every channel of a modality; the per-channel identifier lives on
+[`TimeSeries.channel`](timef-dataset.md), not here.
 
 ```python
-from __future__ import annotations
+from timenet.types import TimeSeriesSpec, ureg
 
-import uuid
-from dataclasses import dataclass, field
-from typing import ClassVar
-
-
-@dataclass(kw_only=True)
-class Task:
-    task_id: ClassVar[str]
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    sample_ids: tuple[str, ...] = ()
-    from_tasks: tuple[Task, ...] = ()
-
-    @property
-    def from_task_ids(self) -> tuple[str, ...]: ...
-```
-
-| Field        | Type               | Scope    | Description                                                                                                                        |
-| ------------ | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `task_id`    | `ClassVar[str]`    | class    | Stable string identifier for this task class. Drives both the disk partition name and the [Task registry](#task-registry) key.     |
-| `id`         | `str`              | instance | Auto-generated unique identifier (uuid4-based).                                                                                    |
-| `sample_ids` | `tuple[str, ...]`  | instance | IDs of the samples this task is attached to. Populated by `TimeFDataset.add_task()`; resolve against `TimeFDataset.samples`.       |
-| `from_tasks` | `tuple[Task, ...]` | instance | Source tasks this task was derived from. Used to build composition chains (e.g. a `ReasoningTask` built on prior `LabelingTask`s). |
-
-**Property**
-
-| Name            | Returns           | Description                                                    |
-| --------------- | ----------------- | -------------------------------------------------------------- |
-| `from_task_ids` | `tuple[str, ...]` | IDs of all tasks in `from_tasks`. Shorthand for serialization. |
-
-### `ClassificationTask`
-
-One discrete label applied to the whole sample (e.g. rhythm type for an ECG recording).
-
-```python
-@dataclass(kw_only=True)
-class ClassificationTask(Task):
-    task_id: ClassVar[str] = "classification"
-    label: str
-    schema: str | None = None
-```
-
-| Field    | Type          | Description                                                                                                                                 |
-| -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `label`  | `str`         | Class label (e.g. `"afib"`).                                                                                                                |
-| `schema` | `str \| None` | Optional named label schema (e.g. `"Willets2018"`). Set when there is a fixed label vocabulary; leave `None` for free-form discrete labels. |
-
-### `LabelingTask`
-
-Time-localized labels within a sample (e.g. beat type at a specific window). The difference vs `ClassificationTask` is granularity: classification is whole-sample, labeling is windowed and may target specific series.
-
-```python
-@dataclass(kw_only=True)
-class LabelingTask(Task):
-    task_id: ClassVar[str] = "labeling"
-    label: str
-    schema: str | None = None
-    time_series_ids: tuple[str, ...] | None = None
-    windows_s: tuple[tuple[float, float], ...] | None = None
-```
-
-| Field             | Type                                      | Description                                                                                                                                      |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `label`           | `str`                                     | Discrete class label.                                                                                                                            |
-| `schema`          | `str \| None`                             | Optional named label schema. Same convention as `ClassificationTask.schema`.                                                                     |
-| `time_series_ids` | `tuple[str, ...] \| None`                 | Series of the parent sample the task targets. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = whole sample. |
-| `windows_s`       | `tuple[tuple[float, float], ...] \| None` | Time spans in seconds the task covers. `None` = full duration.                                                                                   |
-
-### `CaptioningTask`
-
-Free-form text describing the sample. No question, just an answer.
-
-```python
-@dataclass(kw_only=True)
-class CaptioningTask(Task):
-    task_id: ClassVar[str] = "captioning"
-    answer: str
-```
-
-| Field    | Type  | Description                           |
-| -------- | ----- | ------------------------------------- |
-| `answer` | `str` | Free-form text describing the sample. |
-
-### `QATask`
-
-Question and answer pair.
-
-```python
-@dataclass(kw_only=True)
-class QATask(Task):
-    task_id: ClassVar[str] = "question_and_answer"
-    question: str
-    answer: str
-```
-
-| Field      | Type  | Description    |
-| ---------- | ----- | -------------- |
-| `question` | `str` | Question text. |
-| `answer`   | `str` | Answer text.   |
-
-### `ForecastingTask`
-
-Predict future values of a time series. Carries the context/target relation as a field.
-
-```python
-@dataclass(kw_only=True)
-class ForecastingTask(Task):
-    task_id: ClassVar[str] = "forecasting"
-    context_sample_ids: tuple[str, ...]
-    target_sample_id: str
-```
-
-| Field                | Type              | Description                                                      |
-| -------------------- | ----------------- | ---------------------------------------------------------------- |
-| `context_sample_ids` | `tuple[str, ...]` | Historical samples the forecast is conditioned on. At least one. |
-| `target_sample_id`   | `str`             | Sample whose future values the model should predict.             |
-
-### `ReasoningTask`
-
-Higher-level analytical inference, often composed from multiple lower-level tasks (e.g. a longitudinal trend across recordings). Carries a question/answer pair like `QATask` but indicates that the conclusion was reached by reasoning over a chain (use `Task.from_tasks` to record that chain).
-
-```python
-@dataclass(kw_only=True)
-class ReasoningTask(Task):
-    task_id: ClassVar[str] = "reasoning"
-    question: str
-    answer: str
-```
-
-| Field      | Type  | Description    |
-| ---------- | ----- | -------------- |
-| `question` | `str` | Question text. |
-| `answer`   | `str` | Answer text.   |
-
-### Task registry
-
-Mapping from on-disk `task_id` to `Task` subclass. `TimeFReader` uses this table to rebuild `Task` instances when reading the task partitions. An unknown `task_id` raises `ValueError`.
-
-```python
-from timenet.tasks import (
-    CaptioningTask,
-    ClassificationTask,
-    ForecastingTask,
-    LabelingTask,
-    QATask,
-    ReasoningTask,
-    Task,
+ecg_lead = TimeSeriesSpec(
+    spec_type="ecg_lead",
+    name="ECG Lead",
+    unit_sampling_rate=ureg.hertz,
+    unit_timestamp=ureg.second,
+    unit_value=ureg.millivolt,
 )
-
-
-TASKS: dict[str, type[Task]] = {
-    "classification":      ClassificationTask,
-    "labeling":            LabelingTask,
-    "captioning":          CaptioningTask,
-    "question_and_answer": QATask,
-    "forecasting":         ForecastingTask,
-    "reasoning":           ReasoningTask,
-}
 ```
 
-Each key matches the `task_id` `ClassVar` declared on the corresponding subclass. The directory name `tasks/task=<task_id>/` written by `TimeFWriter` uses the same string.
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `spec_type` | `str` | yes | Dataset-unique modality tag (e.g. `"ecg_lead"`). |
+| `name` | `str` | yes | Human-readable modality label. |
+| `unit_sampling_rate` | `pint.Unit` | yes | Must be a frequency, else `ValueError`. |
+| `unit_timestamp` | `pint.Unit` | yes | Must be a time, else `ValueError`. |
+| `unit_value` | `pint.Unit` | yes | Any unit (mV, g, bpm, dimensionless, ...). |
+| `data_source` | `DataSource \| None` | no | The source that produced this modality. |
 
-### Examples
+Connectors that reuse a modality can subclass with field defaults:
 
 ```python
-from timenet.tasks import (
-    ClassificationTask, LabelingTask, QATask, ForecastingTask,
-)
+from dataclasses import dataclass
 
-dataset.add_task(sample, ClassificationTask(label="afib"))
-
-dataset.add_task(sample, LabelingTask(
-    label="walking",
-    time_series_ids=(accel_x.series_id, accel_y.series_id, accel_z.series_id),
-    windows_s=((120.0, 480.0),),
-))
-
-dataset.add_task(sample, QATask(
-    question="What is happening between 12s and 18s?",
-    answer="ST elevation in V2.",
-))
-
-dataset.add_task(target, ForecastingTask(
-    context_sample_ids=("rec_001::history",),
-    target_sample_id="rec_001::future",
-))
+@dataclass(frozen=True)
+class ECGLead(TimeSeriesSpec):
+    spec_type: str = "ecg_lead"
+    name: str = "ECG Lead"
+    unit_sampling_rate: object = ureg.hertz
+    unit_timestamp: object = ureg.second
+    unit_value: object = ureg.millivolt
 ```
 
 ---
 
 ## Annotations
 
-Contextual metadata attached to a `Sample`. An annotation is either **static** (sample-scoped and time-independent like demographics, device serial, ticker symbol) or **temporal** (anchored to a point or a bounded interval in the original recording timeline). All three share one base. The base `Annotation` is never instantiated directly, and connectors do not subclass it directly either, they subclass one of the three shapes below, one subclass per `key`. Annotations are attached with [`Sample.add_annotation()`](timef-dataset.md#add_annotation).
+Contextual metadata attached to a [`Sample`](timef-dataset.md). Three shapes, one flat frozen dataclass
+each. `key` / `unit` / `description` are instance fields (so they round-trip without synthesis); the
+per-key metadata is hoisted into the manifest at write time.
 
-### `Annotation`
+| Class | Extra fields | Meaning |
+| --- | --- | --- |
+| `StaticAnnotation` | `value` (required) | Sample-scoped, time-independent context (age, sex, ticker). |
+| `PointAnnotation` | `start_time_s`, `time_series_ids` | Anchored to one instant in the recording timeline. |
+| `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | Anchored to a bounded interval (`end > start`). |
 
-```python
-from __future__ import annotations
-
-import uuid
-from dataclasses import dataclass, field
-from typing import Any, ClassVar
-
-
-@dataclass(frozen=True, kw_only=True)
-class Annotation:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    value: Any = None
-    key: ClassVar[str]                               # subclass sets
-    unit: ClassVar[str | None] = None
-    description: ClassVar[str | None] = None
-```
-
-| Field         | Type                        | Scope    | Required | Description                                                                                                                            |
-| ------------- | --------------------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `key`         | `ClassVar[str]`             | class    | yes      | Stable string identifier for this annotation class. Discriminator in `manifest.schema.annotations`.                                    |
-| `unit`        | `ClassVar[str \| None]`     | class    | no       | Physical unit for the value (e.g. `"years"`).                                                                                          |
-| `description` | `ClassVar[str \| None]`     | class    | no       | Human-readable description of what this annotation represents.                                                                         |
-| `id`          | `str`                       | instance | no       | Auto-generated unique identifier (uuid4-based). The writer dedupes annotation instances by `id`.                                       |
-| `value`       | subclass-narrowed `\| None` | instance | varies   | The annotation's value. Required on [`StaticAnnotation`](#staticannotation); optional on the temporal subtypes (`None` = pure marker). |
-
-### `StaticAnnotation`
-
-Sample-scoped, time-independent context. Carries a required `value` and no time fields.
+Shared fields on every annotation: `key: str`, `value: Any = None`, `unit: str | None = None`,
+`description: str | None = None`, `id: str` (auto uuid4). `time_series_ids` is `None` for trial-level
+(whole-sample) temporal annotations.
 
 ```python
-@dataclass(frozen=True, kw_only=True)
-class StaticAnnotation(Annotation):
-    value: Any                                       # required; subclass narrows
+from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
+
+StaticAnnotation(key="age", value=64, unit="years")
+PointAnnotation(key="stimulus_light", start_time_s=4.0)
+IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0, time_series_ids=("s1",))
 ```
 
-### `PointAnnotation`
-
-Anchored to a single instant in the original recording timeline.
-
-```python
-@dataclass(frozen=True, kw_only=True)
-class PointAnnotation(Annotation):
-    start_time_s: float
-    time_series_ids: tuple[str, ...] | None = None
-```
-
-| Field             | Type                        | Required | Description                                                                                                                                                             |
-| ----------------- | --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start_time_s`    | `float`                     | yes      | Instant in the **original recording timeline**.                                                                                                                         |
-| `time_series_ids` | `tuple[str, ...] \| None`   | no       | Series of the parent sample the annotation applies to. Each id must match a `TimeSeries.series_id` on one of `Sample.time_series`. `None` = trial-level (whole sample). |
-| `value`           | subclass-narrowed `\| None` | no       | Optional label for the point. `None` for a pure marker.                                                                                                                 |
-
-### `IntervalAnnotation`
-
-Anchored to a bounded interval in the original recording timeline.
-
-```python
-@dataclass(frozen=True, kw_only=True)
-class IntervalAnnotation(Annotation):
-    start_time_s: float
-    end_time_s: float
-    time_series_ids: tuple[str, ...] | None = None
-```
-
-| Field             | Type                        | Required | Description                                                                            |
-| ----------------- | --------------------------- | -------- | -------------------------------------------------------------------------------------- |
-| `start_time_s`    | `float`                     | yes      | Interval start in the **original recording timeline**.                                 |
-| `end_time_s`      | `float`                     | yes      | Interval end. Strictly greater than `start_time_s`.                                    |
-| `time_series_ids` | `tuple[str, ...] \| None`   | no       | Series the annotation applies to. `None` = trial-level (whole sample).                 |
-| `value`           | subclass-narrowed `\| None` | no       | Optional label for the interval (e.g. a sleep stage `"N2"`). `None` for a pure marker. |
-
-**Attachment.** Annotations are attached with `Sample.add_annotation()` on the sample returned by `TimeFDataset.add_sample()`. Attaching the same `Annotation` instance to multiple samples (or two instances sharing the same `id`) declares reuse; the writer dedupes by `id`.
-
-A connector declares the subclasses it emits.
-
-```python
-from typing import ClassVar, Literal
-
-
-# Static context.
-@dataclass(frozen=True, kw_only=True)
-class Age(StaticAnnotation):
-    key: ClassVar[str] = "age"
-    unit: ClassVar[str | None] = "years"
-    value: int                                       # narrowed type
-
-
-@dataclass(frozen=True, kw_only=True)
-class Sex(StaticAnnotation):
-    key: ClassVar[str] = "sex"
-    value: Literal["M", "F", "O"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class DeviceSerial(StaticAnnotation):
-    key: ClassVar[str] = "device_serial"
-    value: str
-
-
-@dataclass(frozen=True, kw_only=True)
-class Ticker(StaticAnnotation):
-    key: ClassVar[str] = "ticker"
-    value: str
-
-
-@dataclass(frozen=True, kw_only=True)
-class RecordingSite(StaticAnnotation):
-    key: ClassVar[str] = "recording_site"
-    description: ClassVar[str | None] = "Seismometer station code (FDSN convention)."
-    value: str
-
-
-# Temporal markers (formerly events).
-@dataclass(frozen=True, kw_only=True)
-class StimulusLight(PointAnnotation):
-    key: ClassVar[str] = "stimulus_light"
-
-
-@dataclass(frozen=True, kw_only=True)
-class Artifact(IntervalAnnotation):
-    key: ClassVar[str] = "artifact"
-
-
-age_64 = Age(value=64)
-sex_m  = Sex(value="M")
-stimulus_onset = StimulusLight(start_time_s=4.0)
-artifact = Artifact(start_time_s=10.0, end_time_s=12.0, time_series_ids=(lead_v1.series_id,))
-
-# Same instance attached to every sample of subject 42 — declares reuse.
-for sample in subject_42_samples:
-    sample.add_annotation(age_64)
-    sample.add_annotation(sex_m)
-```
+`annotation_type_of(ann)` returns the `AnnotationType` (`STATIC` / `POINT` / `INTERVAL`);
+`ANNOTATION_BASES` maps each `AnnotationType` back to its class. `AnnotationDescriptor` is the
+type-level projection (`key`, `annotation_type`, `value_type`, `unit`, `description`) stored in the
+schema and manifest.
 
 ---
 
-## Version
+## Tasks
 
-A semantic version value type. Enforces `major.minor.patch` with non-negative integer components. Set on `DatasetMetadata.version`. Frozen and ordered, so versions compare with the usual precedence (`Version(1, 2, 0) > Version(1, 1, 9)`).
+One labeled training target referencing one or more samples. The class is the type tag (usable as a
+search filter); the instance carries the payload. Tasks are mutable so
+[`add_task`](timef-dataset.md) can populate `sample_ids` after construction.
 
-```python
-from __future__ import annotations
+| Class | `task_type` | Payload |
+| --- | --- | --- |
+| `ClassificationTask` | `classification` | `label`, `label_schema` |
+| `LabelingTask` | `labeling` | `label`, `label_schema`, `time_series_ids`, `windows_s` |
+| `CaptioningTask` | `captioning` | `answer` |
+| `QATask` | `question_and_answer` | `question`, `answer` |
+| `ForecastingTask` | `forecasting` | `context_sample_ids`, `target_sample_id` |
+| `ReasoningTask` | `reasoning` | `question`, `answer` |
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True, order=True)
-class Version:
-    major: int
-    minor: int
-    patch: int
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("major", self.major),
-            ("minor", self.minor),
-            ("patch", self.patch),
-        ):
-            if not isinstance(value, int) or value < 0:
-                raise ValueError(
-                    f"Version.{name} must be a non-negative int, got {value!r}"
-                )
-
-    @classmethod
-    def parse(cls, s: str) -> Version:
-        parts = s.split(".")
-        if len(parts) != 3:
-            raise ValueError(f"Version must be 'major.minor.patch', got {s!r}")
-        try:
-            major, minor, patch = (int(p) for p in parts)
-        except ValueError:
-            raise ValueError(
-                f"Version components must be integers, got {s!r}"
-            ) from None
-        return cls(major, minor, patch)
-
-    def __str__(self) -> str:
-        return f"{self.major}.{self.minor}.{self.patch}"
-```
-
-| Field   | Type  | Required | Description                    |
-| ------- | ----- | -------- | ------------------------------ |
-| `major` | `int` | yes      | Incompatible API changes.      |
-| `minor` | `int` | yes      | Backward-compatible additions. |
-| `patch` | `int` | yes      | Backward-compatible fixes.     |
-
-Construct directly or parse from a string:
-
-```python
-from timenet.version import Version
-
-Version(1, 0, 0)
-Version.parse("1.0.0")          # equivalent
-str(Version(1, 2, 3))           # "1.2.3"
-```
+Every task carries `id` (auto uuid4), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
+`TaskType` is the enum of type tags; `TASKS` maps each `TaskType` to its class and is **derived** from
+`Task.__subclasses__()`, so it can never drift. Unlike specs and annotations, task payloads are fixed
+in code and resolved on read against `TASKS`, not reconstructed from the manifest.
 
 ---
 
-## Frequency
+## DatasetMetadata
 
-A sampling rate as a validated value object.
+A dataset's descriptive identity (authored in the card).
 
-```python
-import math
-from dataclasses import dataclass
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `dataset_id` | `str` | yes | Snake-cased unique id; matches the card / connector filename. |
+| `dataset_version` | `Version` | yes | The upstream source's semantic version. |
+| `name` | `str` | yes | Display name. |
+| `description` | `str` | yes | One-sentence description. |
+| `license` | `License` | yes | SPDX-style license id. |
+| `domains` | `tuple[Domain, ...]` | no | Application/clinical domains. |
+| `tags` | `tuple[str, ...]` | no | Free-form labels. |
+| `source_url` | `str \| None` | no | Canonical source URL. |
+| `yaml_schema_version` | `int` | no | The card's field-schema version (default `1`). |
 
+---
 
-@dataclass(frozen=True)
-class Frequency:
-    hz: float                                    # canonical value, samples per second
+## DatasetSchema
 
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.hz) or self.hz <= 0:
-            raise ValueError(
-                f"frequency must be a positive, finite number of Hz, got {self.hz!r}"
-            )
-
-    @classmethod
-    def Hz(cls, value: float) -> "Frequency":
-        return cls(float(value))
-
-    @classmethod
-    def kHz(cls, value: float) -> "Frequency":
-        return cls(float(value) * 1_000.0)
-
-    @classmethod
-    def MHz(cls, value: float) -> "Frequency":
-        return cls(float(value) * 1_000_000.0)
-```
-
-| Member          | Signature                     | Description                                                  |
-| --------------- | ----------------------------- | ------------------------------------------------------------ |
-| `hz`            | `float`                       | Canonical rate in samples per second. The only stored field. |
-| `Frequency.Hz`  | `(value: float) -> Frequency` | Build from a value already in hertz.                         |
-| `Frequency.kHz` | `(value: float) -> Frequency` | Build from kilohertz; `Frequency.kHz(0.5).hz == 500.0`.      |
-| `Frequency.MHz` | `(value: float) -> Frequency` | Build from megahertz; `Frequency.MHz(1).hz == 1_000_000.0`.  |
+A dataset's type declaration, **derived** from its data (never hand-authored), then serialized into the
+manifest. Holds flat descriptors for specs / data sources / annotations and the real built-in `Task`
+subclasses.
 
 ```python
-from timenet.units import Frequency
-
-Frequency.Hz(500.0)            # ECG at 500 Hz
-Frequency.kHz(0.5)             # same rate, written in kHz
-Frequency.MHz(2.0)             # high-rate sensor, 2 MHz
-Frequency.Hz(-1.0)             # ValueError
+DatasetSchema(
+    time_series_specs: tuple[TimeSeriesSpec, ...] = (),
+    data_sources:      tuple[DataSource, ...] = (),
+    annotations:       tuple[AnnotationDescriptor, ...] = (),
+    tasks:             tuple[type[Task], ...] = (),
+)
 ```
 
 ---
 
 ## Enums
 
-### `View`
+- **`View`** — which slice of a source a sample is: `FULL`, `SINGLE_CHANNEL`, `SUBSET`, `WINDOW`.
+- **`Domain`** — `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
+- **`License`** — SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, `CC0-1.0`, ...).
 
-Identifies which slice of the source a sample represents. Set on `Sample.view`.
-
-```python
-from enum import StrEnum
-
-
-class View(StrEnum):
-    FULL = "full"
-    SINGLE_CHANNEL = "single_channel"
-    SUBSET = "subset"
-    WINDOW = "window"
-```
-
-| Value            | Identifier         | Meaning                                                                         |
-| ---------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `FULL`           | `"full"`           | The whole recording with every available channel.                               |
-| `SINGLE_CHANNEL` | `"single_channel"` | One channel isolated out of a multi-channel recording.                          |
-| `SUBSET`         | `"subset"`         | A subset of channels (more than one, fewer than all).                           |
-| `WINDOW`         | `"window"`         | A bounded time range sliced out of the source (`TimeSeries.t_start_s/t_end_s`). |
-
-```python
-from timenet.views import View
-
-sample = dataset.add_sample(time_series=(...), view=View.FULL)
-```
+All are `StrEnum`, so members compare equal to their string values.
 
 ---
 
-### `Domain`
+## Errors
 
-Describes what kind of data a dataset contains. A dataset can declare more than one domain.
+`timenet.errors` defines the exception hierarchy. `TimeNetError` is the base; validation and manifest
+errors also derive from `ValueError` so existing handlers keep working.
 
-Set on `DatasetMetadata.domains`. Used as filter input on `query()` / `filter()`.
-
-```python
-from enum import StrEnum
-
-
-class Domain(StrEnum):
-    HEALTH = "health"
-    CARDIOLOGY = "cardiology"
-    SLEEP = "sleep"
-    ACTIVITY = "activity"
-    ECONOMICS = "economics"
-    FINANCE = "finance"
-    GENERAL = "general"
-```
-
-| Value        | Identifier     | Meaning                                                                           |
-| ------------ | -------------- | --------------------------------------------------------------------------------- |
-| `HEALTH`     | `"health"`     | Any medical or physiological data. Broad parent of more specific medical domains. |
-| `CARDIOLOGY` | `"cardiology"` | Heart-specific (ECG, PPG, hemodynamics).                                          |
-| `SLEEP`      | `"sleep"`      | Sleep recordings (polysomnography, actigraphy).                                   |
-| `ACTIVITY`   | `"activity"`   | Human activity recognition (accelerometer, IMU).                                  |
-| `ECONOMICS`  | `"economics"`  | Macroeconomic indicators.                                                         |
-| `FINANCE`    | `"finance"`    | Market data.                                                                      |
-| `GENERAL`    | `"general"`    | Catch-all for cross-domain or synthetic datasets.                                 |
-
-```python
-from timenet.domains import Domain
-
-# A heart-rate-during-sleep dataset would declare three domains:
-domains = (Domain.HEALTH, Domain.SLEEP, Domain.CARDIOLOGY)
-```
-
----
-
-### `License`
-
-The legal license of the source data. Required on `DatasetMetadata.license`. Used as filter input on `query()` / `filter()`.
-
-```python
-from enum import StrEnum
-
-
-class License(StrEnum):
-    MIT = "mit"
-    APACHE_2 = "apache-2.0"
-    CC_BY_4 = "CC BY 4.0"
-    ODC_BY_1 = "ODC-By v1.0"
-```
-
-| Value      | Identifier      | Notes                                                      |
-| ---------- | --------------- | ---------------------------------------------------------- |
-| `MIT`      | `"mit"`         | Permissive, attribution not required.                      |
-| `APACHE_2` | `"apache-2.0"`  | Permissive with explicit patent grant.                     |
-| `CC_BY_4`  | `"CC BY 4.0"`   | Attribution required. Common for academic/health datasets. |
-| `ODC_BY_1` | `"ODC-By v1.0"` | Attribution required. Common for open data corpora.        |
-
-```python
-from timenet.licenses import License
-
-metadata = DatasetMetadata(
-    ...,
-    license=License.CC_BY_4,
-)
-```
-
----
-
-### `SamplingRateUnit`
-
-Unit for a time series' sampling-rate values. Set on `TimeSeriesSpec.unit_sampling_rate`. This is the modality's declared display unit, not the actual rate of any one series — that is [`Frequency`](#frequency) on `TimeSeries.sampling_rate`.
-
-```python
-from enum import StrEnum
-
-
-class SamplingRateUnit(StrEnum):
-    HZ = "Hz"
-    KHZ = "kHz"
-```
-
-| Value | Identifier | Meaning                      |
-| ----- | ---------- | ---------------------------- |
-| `HZ`  | `"Hz"`     | Samples per second.          |
-| `KHZ` | `"kHz"`    | Thousand samples per second. |
-
-```python
-from timenet.units import SamplingRateUnit
-
-class ECGLeadSpec(TimeSeriesSpec):
-    unit_sampling_rate = SamplingRateUnit.HZ
-    # ... other modality ClassVars (spec_id, name, unit_timestamp, unit_value)
-```
-
----
-
-### `TimestampUnit`
-
-Unit for a time series' timestamp axis. Set on `TimeSeriesSpec.unit_timestamp`.
-
-```python
-from enum import StrEnum
-
-
-class TimestampUnit(StrEnum):
-    SECONDS = "s"
-    MILLISECONDS = "ms"
-    MICROSECONDS = "us"
-    NANOSECONDS = "ns"
-```
-
-| Value          | Identifier | Meaning       |
-| -------------- | ---------- | ------------- |
-| `SECONDS`      | `"s"`      | Seconds.      |
-| `MILLISECONDS` | `"ms"`     | Milliseconds. |
-| `MICROSECONDS` | `"us"`     | Microseconds. |
-| `NANOSECONDS`  | `"ns"`     | Nanoseconds.  |
-
-```python
-from timenet.units import TimestampUnit
-
-class ECGLeadSpec(TimeSeriesSpec):
-    unit_timestamp = TimestampUnit.SECONDS
-    # ... other modality ClassVars (spec_id, name, unit_sampling_rate, unit_value)
-```
-
----
-
-### `ValueUnit`
-
-Physical unit of a time series channel's values. Set on `TimeSeriesSpec.unit_value`.
-
-```python
-from enum import StrEnum
-
-
-class ValueUnit(StrEnum):
-    VOLT = "V"
-    MILLIVOLT = "mV"
-    MICROVOLT = "uV"
-    METER_PER_SECOND_SQUARED = "m/s^2"
-    G = "g"
-    BEATS_PER_MINUTE = "bpm"
-    CELSIUS = "degC"
-    PERCENT = "%"
-    DIMENSIONLESS = ""
-```
-
-| Value                      | Identifier | Meaning                             |
-| -------------------------- | ---------- | ----------------------------------- |
-| `VOLT`                     | `"V"`      | Volts.                              |
-| `MILLIVOLT`                | `"mV"`     | Millivolts (e.g. ECG).              |
-| `MICROVOLT`                | `"uV"`     | Microvolts (e.g. EEG).              |
-| `METER_PER_SECOND_SQUARED` | `"m/s^2"`  | Acceleration in SI units.           |
-| `G`                        | `"g"`      | Acceleration in standard gravities. |
-| `BEATS_PER_MINUTE`         | `"bpm"`    | Heart / pulse rate.                 |
-| `CELSIUS`                  | `"degC"`   | Temperature.                        |
-| `PERCENT`                  | `"%"`      | Ratio as a percentage (e.g. SpO₂).  |
-| `DIMENSIONLESS`            | `""`       | Unitless / normalized values.       |
-
-```python
-from timenet.units import ValueUnit
-
-class ECGLeadSpec(TimeSeriesSpec):
-    unit_value = ValueUnit.MILLIVOLT
-    # ... other modality ClassVars (spec_id, name, unit_sampling_rate, unit_timestamp)
-```
+| Exception | Base(s) | Raised when |
+| --- | --- | --- |
+| `TimeNetError` | `Exception` | base for all TimeNet errors |
+| `RegistryError` | `TimeNetError` | a registry can't be loaded/reached/served |
+| `DatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
+| `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
+| `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
+| `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |

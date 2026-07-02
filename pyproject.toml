@@ -7,6 +7,7 @@ required-version = ">=0.10.10"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.140",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
@@ -61,8 +62,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
-# Don't require docstrings for test modules and functions.
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC"]
+# Don't require docstrings for test modules and functions. Pickle round-trips are intentional
+# (they prove serializability), and we deserialize only our own freshly-pickled objects.
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -73,8 +75,11 @@ force-sort-within-sections = true
 lines-after-imports = 2
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib"]
+addopts = ["--import-mode=importlib", "--strict-markers"]
 testpaths = ["packages"]
+markers = [
+    "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
+]
 
 [tool.ty.environment]
 python-version = "3.13"

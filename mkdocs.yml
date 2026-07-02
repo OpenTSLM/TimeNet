@@ -67,6 +67,7 @@ markdown_extensions:
 
 nav:
   - Overview: index.md
+  - Architecture: architecture.md
   - Client: client.md
   - Registry: registry.md
   - Connectors: connectors.md

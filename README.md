@@ -2,6 +2,18 @@
 
 TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format.
 
+## Terminology
+
+| Term | What it is |
+| --- | --- |
+| **Dataset Card** | The human-authored `card.yaml` beside a connector (license, domains, tags, description). |
+| **Dataset Connector** | The Python recipe that fetches a raw source and converts it into a `TimeFDataset`. |
+| **Dataset Curation** | The process of running a connector through the engine to produce a dataset. |
+| **TimeF Version** | The semantic version of one serialized `TimeFDataset` in a registry. |
+| **Dataset Manifest** | The compiled `manifest.json` (card metadata + derived schema + counts + file pointers); the single source of truth the SDK reads. |
+
+See [docs/architecture.md](docs/architecture.md) for how these fit together.
+
 ## Installation
 
 ### From source
