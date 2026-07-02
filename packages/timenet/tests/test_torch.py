@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 
 from torch.utils.data import Dataset  # noqa: E402
 
+from timenet.errors import TimeFValidationError  # noqa: E402
 from timenet.testing import make_dataset  # noqa: E402
 from timenet.torch import TimeFTorchDataset  # noqa: E402
 
@@ -43,3 +44,10 @@ def test_tasks_resolved():
 def test_transform_applied():
     ds = TimeFTorchDataset(make_dataset(), transform=lambda item: item["series"][0])
     assert isinstance(ds[0], torch.Tensor)
+
+
+def test_dangling_task_id_raises():
+    dataset = make_dataset()
+    dataset.samples[0].task_ids = ("no-such-task",)
+    with pytest.raises(TimeFValidationError, match="unknown task id"):
+        TimeFTorchDataset(dataset)[0]

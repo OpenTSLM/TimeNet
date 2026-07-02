@@ -15,13 +15,9 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
-    DatasetMetadata,
-    Domain,
-    License,
     QATask,
     StaticAnnotation,
     TimeSeriesSpec,
-    Version,
     View,
     ureg,
 )
@@ -57,25 +53,8 @@ class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-    FIXTURE = Path(__file__).parent / "fixtures" / "tsqa_sample.json"
 
-    METADATA = DatasetMetadata(
-        dataset_id="chengsenwang/tsqa",
-        dataset_version=Version(1, 0, 0),
-        name="TSQA",
-        description="Time-series question answering: a series plus a question/answer per sample.",
-        license=License.APACHE_2_0,
-        domains=(Domain.GENERAL,),
-        tags=("qa", "time-series", "huggingface"),
-    )
-
-    def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive identity.
-
-        Returns:
-            The connector's static :class:`~timenet.types.DatasetMetadata`.
-        """
-        return self.METADATA
+    CARD = Path(__file__).with_name("tsqa.yaml")
 
     def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
         """Build one sample per row: the parsed series plus its QA task.
@@ -86,7 +65,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        dataset = TimeFDataset(metadata=self.METADATA)
+        dataset = TimeFDataset(metadata=self.metadata())
         for index, row in enumerate(raw_refs):
             series = json.loads(row["Series"])
             channels = series if series and isinstance(series[0], list) else [series]

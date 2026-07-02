@@ -11,22 +11,16 @@ from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
 
-FIXTURE = Path(__file__).parents[1] / "src/timenet_connectors/datasets/chengsenwang/fixtures/tsqa_sample.json"
+FIXTURE = Path(__file__).parent / "fixtures" / "tsqa_sample.json"
 
 
 def _fixture_rows():
     return json.loads(FIXTURE.read_text())
 
 
-@pytest.fixture(autouse=True)
-def _testing_mode(monkeypatch):
-    monkeypatch.setenv("TIMENET_TESTING", "1")
-    monkeypatch.delenv("TIMENET_ROW_LIMIT", raising=False)
-
-
 def _convert() -> TimeFDataset:
-    connector = TSQAConnector()
-    return connector.convert(connector.download(Path("cache")))
+    # The Hub rows are plain dicts; the fixture is exactly that shape, so convert() takes it directly.
+    return TSQAConnector().convert(_fixture_rows())
 
 
 def test_is_a_connector():
@@ -37,10 +31,6 @@ def test_is_a_connector():
 def test_metadata():
     assert TSQAConnector().metadata().dataset_id == "chengsenwang/tsqa"
     assert str(TSQAConnector().metadata().license) == "Apache-2.0"
-
-
-def test_testing_download_returns_fixture_rows():
-    assert len(TSQAConnector().download(Path("cache"))) == len(_fixture_rows())
 
 
 def test_convert_builds_one_sample_per_row():
@@ -71,13 +61,7 @@ def test_task_annotation_present():
     assert "task" in keys
 
 
-def test_row_limit(monkeypatch):
-    monkeypatch.setenv("TIMENET_ROW_LIMIT", "2")
-    assert len(TSQAConnector().download(Path("cache"))) == 2
-
-
 def test_missing_hf_library_raises_helpful_error(monkeypatch):
-    monkeypatch.delenv("TIMENET_TESTING")  # force the real download path
     monkeypatch.setitem(sys.modules, "huggingface_hub", None)  # `import huggingface_hub` -> ImportError
     with pytest.raises(ImportError, match="huggingface"):
         TSQAConnector().download(Path("cache"))
@@ -89,7 +73,6 @@ def test_real_download_reads_auto_converted_parquet(monkeypatch, tmp_path):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    monkeypatch.delenv("TIMENET_TESTING")  # force the real download path
     table = pa.table({"Series": ["[1.0, 2.0]"], "Question": ["q"], "Answer": ["a"], "Task": ["t"], "Label": [""]})
     parquet_path = tmp_path / "default" / "train" / "0000.parquet"
     parquet_path.parent.mkdir(parents=True)

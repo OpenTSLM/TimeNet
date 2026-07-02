@@ -10,8 +10,10 @@ from pathlib import Path
 import typer
 
 from timenet.cli.runner import run_cli
+from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import run_pipeline
+from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.discovery import resolve
 
 
@@ -19,16 +21,21 @@ app = typer.Typer(help="Curate TimeNet datasets from connectors.", no_args_is_he
 
 
 @app.callback()
-def _root() -> None:
+def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress status output.")) -> None:
     """Curate TimeNet datasets from connectors."""  # forces subcommand mode (so ``build`` is named)
+    console.quiet = quiet
 
 
 @app.command()
 def build(
     dataset_id: str,
     out: str | None = typer.Option(None, "--out", help="Output registry directory (default: the local registry)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already curated."),
 ) -> None:
-    """Run a connector through the engine and write its dataset, printing the version directory.
+    """Run a connector through the engine and write its dataset.
+
+    Prints an emoji build summary to stderr and the version directory to stdout (for scripts to
+    capture). An already-curated version is reused unless ``--force`` is given.
 
     Raises:
         BadParameter: If ``dataset_id`` has no known connector.
@@ -38,8 +45,20 @@ def build(
     except LookupError as exc:
         raise typer.BadParameter(str(exc)) from exc
     root = Path(out) if out is not None else settings().registry_path
-    version_dir = run_pipeline(connector_cls(), root)
+    console.status("🔧", f"Building '{dataset_id}'…")
+    version_dir = run_pipeline(connector_cls(), root, progress_cb=_report_progress, force=force)
+    console.success(f"Built '{dataset_id}' → {version_dir.name}")
     typer.echo(str(version_dir))
+
+
+def _report_progress(event: WriteProgressEvent) -> None:
+    """Relay writer progress to the shared console.
+
+    Args:
+        event: The writer progress event.
+    """
+    if event.stage is ProgressStage.SHARD_FINALIZED:
+        console.status("💾", f"wrote shard {event.completed}")
 
 
 def main() -> None:

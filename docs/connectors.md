@@ -72,9 +72,10 @@ Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](clien
   annotation shapes (one shared), and a `ClassificationTask -> QATask` chain plus a `LabelingTask`. Its
   dataset card, `hello_world.yaml`, sits beside it.
 - **`chengsenwang/tsqa`** — a time-series QA dataset: each row's series becomes a `TimeSeries` and its
-  question/answer a `QATask`. `TIMENET_ROW_LIMIT` caps rows for large runs.
+  question/answer a `QATask`. `TIMENET_ROW_LIMIT` caps rows for large runs. Needs the `huggingface`
+  extra (`pip install 'timenet-connectors[huggingface]'`) since it downloads from the Hub.
 
 ```bash
-TIMENET_TESTING=1 timenet-curate build chengsenwang/tsqa   # offline, uses the connector's fixture
-timenet-curate build chengsenwang/tsqa                     # live download
+timenet-curate build timenet/hello-world      # offline, synthetic
+timenet-curate build chengsenwang/tsqa        # downloads from the Hub
 ```
