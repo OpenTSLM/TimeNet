@@ -23,7 +23,7 @@ from timenet.types import (
 
 def _metadata():
     return DatasetMetadata(
-        dataset_id="hello_world",
+        dataset_id="timenet/hello-world",
         dataset_version=Version(1, 0, 0),
         name="Hello World",
         description="demo",

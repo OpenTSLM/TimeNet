@@ -14,12 +14,12 @@ from timenet.types.tasks import Task
 from timenet.types.version import Version
 
 
-# A flat id (``hello_world``) or a HuggingFace-style ``org/name`` (one slash, no leading/trailing).
-_DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)?$")
+# A HuggingFace-style ``org/name`` pair: exactly one slash, no leading/trailing/empty segment.
+_DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 
 def validate_dataset_id(dataset_id: str) -> None:
-    """Check that a dataset id is a safe flat slug or ``org/name`` pair.
+    """Check that a dataset id is a safe ``org/name`` pair.
 
     Ids are joined into filesystem paths by the registry, the writer, and the download cache, so this
     is the single gate that keeps an id from naming a location outside its root.
@@ -28,13 +28,13 @@ def validate_dataset_id(dataset_id: str) -> None:
         dataset_id: The id to check.
 
     Raises:
-        TimeFValidationError: If the id is empty, is not a flat / single-slash slug, or has a segment
+        TimeFValidationError: If the id is not a single-slash ``org/name`` pair, or has a segment
             starting with ``.``.
     """
     if not _DATASET_ID.match(dataset_id) or any(part.startswith(".") for part in dataset_id.split("/")):
         raise TimeFValidationError(
-            f"dataset_id must be a slug or 'org/name' (letters, digits, ., _, -; no segment may "
-            f"start with '.'), got {dataset_id!r}"
+            f"dataset_id must be 'org/name' (letters, digits, ., _, -; exactly one slash; no "
+            f"segment may start with '.'), got {dataset_id!r}"
         )
 
 
@@ -51,9 +51,9 @@ class DatasetMetadata:
     """A dataset's descriptive identity: who it is, not what it emits.
 
     Authored in the dataset card. ``dataset_version`` is the upstream source's semantic version;
-    ``yaml_schema_version`` is the card's own field-schema version. ``dataset_id`` is a flat slug or an
-    ``org/name`` pair (HuggingFace style); ids are case-sensitive, so avoid casing-only differences on
-    case-insensitive filesystems.
+    ``yaml_schema_version`` is the card's own field-schema version. ``dataset_id`` is an ``org/name``
+    pair (HuggingFace style, exactly one slash); ids are case-sensitive, so avoid casing-only
+    differences on case-insensitive filesystems.
     """
 
     dataset_id: str

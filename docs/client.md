@@ -15,7 +15,7 @@ client = TimeNet("https://registry.timenet.io")      # a remote registry
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
 
-dataset = client.load("hello_world")                 # download if needed + read
+dataset = client.load("timenet/hello-world")         # download if needed + read
 values = dataset.samples[0].time_series[0].to_numpy()
 ```
 

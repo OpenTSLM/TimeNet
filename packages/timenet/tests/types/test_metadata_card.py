@@ -6,7 +6,7 @@ from timenet.types import DatasetMetadata
 
 _VALID_CARD = """
 yaml_schema_version: 1
-dataset_id: hello_world
+dataset_id: demo/hello-world
 dataset_version: 1.0.0
 name: Hello World
 description: A synthetic demo dataset.
@@ -25,7 +25,7 @@ def _write(tmp_path, text):
 
 def test_from_yaml_round_trips_a_valid_card(tmp_path):
     m = DatasetMetadata.from_yaml(_write(tmp_path, _VALID_CARD))
-    assert m.dataset_id == "hello_world"
+    assert m.dataset_id == "demo/hello-world"
     assert m.name == "Hello World"
     assert [str(d) for d in m.domains] == ["general"]
     assert m.tags == ("demo", "synthetic")
@@ -33,7 +33,7 @@ def test_from_yaml_round_trips_a_valid_card(tmp_path):
 
 def test_from_yaml_rejects_a_card_missing_required_fields(tmp_path):
     with pytest.raises(InvalidCardError, match="failed validation"):
-        DatasetMetadata.from_yaml(_write(tmp_path, "dataset_id: hello_world\n"))
+        DatasetMetadata.from_yaml(_write(tmp_path, "dataset_id: demo/hello-world\n"))
 
 
 def test_from_yaml_rejects_a_non_mapping(tmp_path):

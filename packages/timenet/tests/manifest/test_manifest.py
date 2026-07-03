@@ -39,7 +39,7 @@ def _manifest() -> Manifest:
         tasks=(ClassificationTask, QATask),
     )
     metadata = DatasetMetadata(
-        dataset_id="ecg_dataset",
+        dataset_id="demo/ecg",
         dataset_version=Version(1, 2, 0),
         name="ECG Dataset",
         description="demo",
@@ -48,7 +48,7 @@ def _manifest() -> Manifest:
         tags=("demo",),
     )
     return Manifest(
-        dataset_id="ecg_dataset",
+        dataset_id="demo/ecg",
         metadata=metadata,
         schema=schema,
         counts=ManifestCounts(
@@ -97,7 +97,7 @@ def test_json_roundtrip():
 def test_to_dict_shape():
     d = _manifest().to_dict()
     assert d["timef_format_version"] == 1
-    assert d["dataset_id"] == "ecg_dataset"
+    assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
     assert d["schema"]["time_series_specs"][0]["unit_value"] == "millivolt"
@@ -208,9 +208,9 @@ def test_null_block_rejected(block):
 )
 def test_codec_roundtrip_property(version, samples, task_counts):
     manifest = Manifest(
-        dataset_id="ds",
+        dataset_id="demo/ds",
         metadata=DatasetMetadata(
-            dataset_id="ds",
+            dataset_id="demo/ds",
             dataset_version=Version(*version),
             name="n",
             description="d",

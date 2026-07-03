@@ -52,7 +52,7 @@ def test_round_trip_with_chunk_splitting(tmp_path):
 def test_metadata_and_schema(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
-        assert reader.metadata.dataset_id == "hello_world"
+        assert reader.metadata.dataset_id == "timenet/hello-world"
         assert {s.spec_type for s in reader.schema.time_series_specs} == {"sine", "cosine"}
         assert ClassificationTask in reader.schema.tasks
 
