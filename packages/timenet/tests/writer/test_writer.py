@@ -1,3 +1,4 @@
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -265,3 +266,78 @@ def test_int32_guard_is_exposed():
     from timenet.writer.writer import MAX_ELEMENTS_PER_ROW_GROUP
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
+
+
+def _dup_dataset():
+    return TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="dup",
+            dataset_version=Version(1, 0, 0),
+            name="Dup",
+            description="d",
+            license=License.MIT,
+        )
+    )
+
+
+def test_same_id_different_series_rejected(tmp_path):
+    # Two samples reaching different series under one time_series_id: only one can be written, so the
+    # other sample would silently read back the wrong channel. Must fail loudly, not first-wins.
+    spec = TimeSeriesSpec(
+        spec_type="s",
+        name="S",
+        unit_sampling_rate=ureg.hertz,
+        unit_timestamp=ureg.second,
+        unit_value=ureg.dimensionless,
+    )
+    dataset = _dup_dataset()
+    a = TimeSeries(
+        spec=spec,
+        channel="a",
+        sampling_rate_hz=1.0,
+        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+        time_series_id="ts-x",
+    )
+    b = TimeSeries(  # same id, different channel and window
+        spec=spec,
+        channel="b",
+        sampling_rate_hz=1.0,
+        loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
+        time_series_id="ts-x",
+    )
+    dataset.add_sample(time_series=(a,), view=View.FULL, sample_id="s-a")
+    dataset.add_sample(time_series=(b,), view=View.FULL, sample_id="s-b")
+    dataset.derive_schema()
+    with (
+        pytest.raises(TimeFValidationError, match="claimed by two different series"),
+        TimeFWriter(tmp_path, dataset) as writer,
+    ):
+        writer.write()
+
+
+def test_same_series_shared_across_samples_still_dedupes(tmp_path):
+    # The supported sharing path: the same instance in two samples must still collapse to one shard.
+    spec = TimeSeriesSpec(
+        spec_type="s",
+        name="S",
+        unit_sampling_rate=ureg.hertz,
+        unit_timestamp=ureg.second,
+        unit_value=ureg.dimensionless,
+    )
+    dataset = _dup_dataset()
+    shared = TimeSeries(
+        spec=spec,
+        channel="a",
+        sampling_rate_hz=1.0,
+        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+        time_series_id="ts-shared",
+    )
+    dataset.add_sample(time_series=(shared,), view=View.FULL, sample_id="s-a")
+    dataset.add_sample(time_series=(shared,), view=View.FULL, sample_id="s-b")
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    manifest = Manifest.from_json((tmp_path / "dup" / "1.0.0" / "manifest.json").read_text())
+    # the shared series is written once, though two samples reference it
+    assert manifest.counts.time_series_chunks == 1
+    assert manifest.counts.samples == 2

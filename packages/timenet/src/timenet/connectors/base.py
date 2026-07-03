@@ -2,18 +2,16 @@
 
 A connector fetches raw data and converts it into a :class:`~timenet.dataset.TimeFDataset`. It has no
 knowledge of the registry, engine, or any other connector. The engine drives it
-``download -> convert -> derive_schema -> store``; the consumer SDK never runs connector code.
+``download -> convert``, then stores the result itself; the consumer SDK never runs connector code.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 import inspect
 from pathlib import Path
 from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class BaseConnector[TRaw](ABC):
@@ -76,29 +74,3 @@ class BaseConnector[TRaw](ABC):
         Returns:
             The populated dataset.
         """
-
-    def store(
-        self,
-        dataset: TimeFDataset,
-        root: Path,
-        *,
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    ) -> Path:
-        """Serialize a populated dataset to the TimeF format under ``root``.
-
-        Derives the schema first if the dataset has none, then streams it through a
-        :class:`~timenet.writer.TimeFWriter`. Most connectors do not override this.
-
-        Args:
-            dataset: The populated dataset from :meth:`convert`.
-            root: Parent directory; the version directory is created beneath it.
-            progress_cb: Optional writer progress callback.
-
-        Returns:
-            The committed version directory.
-        """
-        if dataset.schema is None:
-            dataset.derive_schema()
-        with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
-            writer.write()
-        return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)

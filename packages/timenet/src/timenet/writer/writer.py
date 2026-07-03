@@ -8,7 +8,6 @@ group. Everything is staged in a temporary directory and published with a single
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,10 +20,8 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
-from timenet.types import Task, annotation_type_of
-from timenet.writer import encodings
-from timenet.writer.constants import (
+from timenet.format.checksums import file_checksum
+from timenet.format.constants import (
     ANNOTATIONS_FILE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
@@ -37,8 +34,7 @@ from timenet.writer.constants import (
     SHARD_TEMPLATE,
     TASK_PART_TEMPLATE,
 )
-from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.schemas import (
+from timenet.format.schemas import (
     ANNOTATIONS_SCHEMA,
     INDEX_SCHEMA,
     SAMPLES_SCHEMA,
@@ -46,11 +42,14 @@ from timenet.writer.schemas import (
     TASK_COMMON_NAMES,
     task_schema,
 )
+from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.types import Task, annotation_type_of
+from timenet.writer import encodings
+from timenet.writer.progress import ProgressStage, WriteProgressEvent
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
 _BYTES_PER_FLOAT32 = 4
-_CHECKSUM_BLOCK_BYTES = 1 << 20  # hash parquet files a block at a time, not all-in-memory
 
 
 @dataclass
@@ -208,7 +207,10 @@ class TimeFWriter:
             raise RuntimeError("write() must run successfully before close()")
         self._write_manifest()
         if self._final_dir.exists():
-            shutil.rmtree(self._final_dir)  # a manifest-less partial dir; readers ignore it anyway
+            # Only reachable when the caller pre-created the target, or a previous run died between
+            # this rmtree and the replace() below: run_pipeline returns early on a committed version
+            # and drops it itself on --force, so a *committed* dataset is never deleted here.
+            shutil.rmtree(self._final_dir)
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
         self._staging_dir.replace(self._final_dir)
         self._emit(ProgressStage.COMMIT, 1, 1)
@@ -222,16 +224,34 @@ class TimeFWriter:
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> sample-ids map.
 
+        Sharing one series across samples is the supported dedupe path, but two *different* series
+        claiming one ``time_series_id`` is a contradiction: only one can be written, so the other's
+        samples would silently read back the wrong data. Series reached under the same id must
+        therefore describe the same channel, and disagreement is rejected rather than resolved by
+        first-wins.
+
         Returns:
             The sorted unique series and a mapping from ``time_series_id`` to the ids of the samples
             that reference it (first-seen order).
+
+        Raises:
+            TimeFValidationError: If two series share a ``time_series_id`` but describe different
+                channels.
         """
         unique: dict[str, TimeSeries] = {}
         series_to_samples: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
         for sample in self._dataset.samples:
             for ts in sample.time_series:
-                unique.setdefault(ts.time_series_id, ts)
+                existing = unique.get(ts.time_series_id)
+                if existing is None:
+                    unique[ts.time_series_id] = ts
+                elif existing is not ts and _series_identity(existing) != _series_identity(ts):
+                    raise TimeFValidationError(
+                        f"time_series_id {ts.time_series_id!r} is claimed by two different series: "
+                        f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
+                        f"per channel, or reuse the same series instance to share it across samples"
+                    )
                 pair = (ts.time_series_id, sample.sample_id)
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
@@ -494,7 +514,7 @@ class TimeFWriter:
         checksums: dict[str, str] = {}
         for path in sorted(self._staging_dir.rglob("*.parquet")):
             rel = path.relative_to(self._staging_dir).as_posix()
-            checksums[rel] = "sha256:" + _sha256_hex(path)
+            checksums[rel] = file_checksum(path)
         return checksums
 
     def _write_table(
@@ -610,6 +630,22 @@ class _ShardStream:
         self._shard = None
 
 
+def _series_identity(ts: TimeSeries) -> tuple:
+    """Return the fields that must agree for two series to be the same channel.
+
+    Compares the descriptive fields the writer persists, not the values: ``loader`` is a callable
+    (so two equal series built separately would compare unequal), and materializing every shared
+    series purely to compare it would defeat the lazy read path on exactly the largest datasets.
+
+    Args:
+        ts: The series to describe.
+
+    Returns:
+        The identifying fields, suitable for equality comparison and for error messages.
+    """
+    return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.t_end_s)
+
+
 def _shard_table(buffer: list[_Chunk]) -> pa.Table:
     return pa.Table.from_pydict(
         {
@@ -641,22 +677,6 @@ def _values_column(chunks: list[pa.Array]) -> pa.ListArray:
     offsets = np.zeros(len(chunks) + 1, dtype=np.int32)
     offsets[1:] = np.cumsum([len(chunk) for chunk in chunks])
     return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(chunks))
-
-
-def _sha256_hex(path: Path) -> str:
-    """Return the SHA-256 of a file, hashing it a block at a time.
-
-    Args:
-        path: The file to hash.
-
-    Returns:
-        The hex digest.
-    """
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(_CHECKSUM_BLOCK_BYTES), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _time_series_struct(ts: TimeSeries) -> dict:

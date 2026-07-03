@@ -1,16 +1,47 @@
 from pathlib import Path
+import tempfile
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.engine import run_pipeline
+from timenet.engine import run_pipeline, store_dataset
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
-from timenet.types import DatasetMetadata
+
+
+def _write_demo_card() -> Path:
+    """Write a dataset.yaml mirroring ``make_dataset()``'s metadata, for the demo connector's card.
+
+    The demo connector declares its identity in a card like a real connector, rather than overriding
+    ``metadata()``. Generating the card from ``make_dataset().metadata`` keeps the two in step as the
+    fixture's id/version change across the stack.
+
+    Returns:
+        Path to the written card.
+    """
+    m = make_dataset().metadata
+    lines = [
+        f"dataset_id: {m.dataset_id}",
+        f"dataset_version: {m.dataset_version}",
+        f'name: "{m.name}"',
+        f'description: "{m.description}"',
+        f"license: {m.license}",
+    ]
+    if m.domains:
+        lines.append("domains:")
+        lines += [f"  - {d}" for d in m.domains]
+    if m.tags:
+        lines.append("tags:")
+        lines += [f"  - {t}" for t in m.tags]
+    card = Path(tempfile.mkdtemp()) / "dataset.yaml"
+    card.write_text("\n".join(lines) + "\n")
+    return card
+
+
+_DEMO_CARD = _write_demo_card()
 
 
 class _DemoConnector(BaseConnector[str]):
-    def metadata(self) -> DatasetMetadata:
-        return make_dataset().metadata
+    CARD = _DEMO_CARD
 
     def download(self, cache_dir: Path) -> list[str]:
         return ["ref"]
@@ -22,7 +53,7 @@ class _DemoConnector(BaseConnector[str]):
 def test_store_writes_a_readable_layout(tmp_path):
     connector = _DemoConnector()
     dataset = connector.convert(connector.download(tmp_path))
-    version_dir = connector.store(dataset, tmp_path)
+    version_dir = store_dataset(dataset, tmp_path)
     assert (version_dir / "manifest.json").exists()
     assert version_dir == tmp_path / "hello_world" / "1.0.0"
 
@@ -31,7 +62,7 @@ def test_store_derives_schema_if_needed(tmp_path):
     connector = _DemoConnector()
     dataset = connector.convert(connector.download(tmp_path))
     assert dataset.schema is None
-    connector.store(dataset, tmp_path)  # should derive schema itself
+    store_dataset(dataset, tmp_path)  # should derive schema itself
     assert dataset.schema is not None
 
 

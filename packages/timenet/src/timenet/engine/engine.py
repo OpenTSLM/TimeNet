@@ -5,8 +5,9 @@ from pathlib import Path
 import shutil
 
 from timenet.connectors import BaseConnector
-from timenet.writer import WriteProgressEvent
-from timenet.writer.constants import MANIFEST_FILE
+from timenet.dataset import TimeFDataset
+from timenet.format.constants import MANIFEST_FILE
+from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 def run_pipeline(
@@ -35,7 +36,9 @@ def run_pipeline(
     Returns:
         The committed version directory.
     """
-    metadata = connector.metadata()  # cheap by contract: no I/O, so we can check before downloading
+    # Reads the connector's dataset.yaml card only (a tiny local file), not the dataset itself, so we
+    # can resolve the version directory and skip the expensive download/convert when it already exists.
+    metadata = connector.metadata()
     version_dir = root / metadata.dataset_id / str(metadata.dataset_version)
     committed = (version_dir / MANIFEST_FILE).exists()
     if committed and not force:
@@ -46,7 +49,38 @@ def run_pipeline(
 
     raw_refs = connector.download(cache)
     dataset = connector.convert(raw_refs)
+    # Derived here, before the force-rebuild rmtree below, so a schema failure aborts while the old
+    # committed version is still on disk. store_dataset() re-derives only if a caller reaches it
+    # directly with an underived dataset, so this is not redundant with that guard.
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
-    return connector.store(dataset, root, progress_cb=progress_cb)
+    return store_dataset(dataset, root, progress_cb=progress_cb)
+
+
+def store_dataset(
+    dataset: TimeFDataset,
+    root: Path,
+    *,
+    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+) -> Path:
+    """Serialize a populated dataset to the TimeF format under ``root``.
+
+    Derives the schema first if the dataset has none, then streams it through a
+    :class:`~timenet.writer.TimeFWriter`. This lives on the engine rather than on
+    :class:`~timenet.connectors.BaseConnector` because it reads only ``dataset``: keeping it here
+    leaves the connector contract at fetch-and-convert and avoids a connector-to-writer dependency.
+
+    Args:
+        dataset: The populated dataset from ``convert``.
+        root: Parent directory; the version directory is created beneath it.
+        progress_cb: Optional writer progress callback.
+
+    Returns:
+        The committed version directory.
+    """
+    if dataset.schema is None:
+        dataset.derive_schema()
+    with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
+        writer.write()
+    return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
