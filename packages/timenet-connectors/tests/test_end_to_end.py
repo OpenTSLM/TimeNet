@@ -16,7 +16,7 @@ runner = CliRunner()
 
 def test_discovery_resolves_and_lists():
     assert resolve("timenet/hello-world") is HelloWorldConnector
-    assert set(available()) >= {"timenet/hello-world", "chengsenwang/tsqa"}
+    assert set(available()) >= {"timenet/hello-world", "chengsenwang/tsqa", "physionet/ecg-qa-cot"}
 
 
 def test_curate_build_then_load_round_trips(tmp_path):
