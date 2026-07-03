@@ -19,7 +19,7 @@ def test_base_connector_cannot_instantiate():
 
 
 _DEMO_CARD = """
-dataset_id: demo
+dataset_id: demo/thing
 dataset_version: 1.0.0
 name: Demo
 description: d
@@ -41,7 +41,7 @@ def test_concrete_connector_implements_contract(tmp_path):
             return make_dataset()
 
     connector = DemoConnector()
-    assert connector.metadata().dataset_id == "demo"
+    assert connector.metadata().dataset_id == "demo/thing"
     assert connector.download(tmp_path) == ["ref"]
     assert isinstance(connector.convert(["ref"]), TimeFDataset)
 
@@ -60,4 +60,4 @@ def test_card_defaults_to_dataset_yaml_beside_the_connector(tmp_path, monkeypatc
             return make_dataset()
 
     monkeypatch.setattr("inspect.getfile", lambda _cls: str(module))
-    assert DemoConnector().metadata().dataset_id == "demo"
+    assert DemoConnector().metadata().dataset_id == "demo/thing"
