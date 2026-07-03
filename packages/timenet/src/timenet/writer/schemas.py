@@ -96,7 +96,7 @@ _TASK_PAYLOAD: dict[TaskType, list[tuple[str, pa.DataType]]] = {
     TaskType.CAPTIONING: [("answer", pa.string())],
     TaskType.QUESTION_AND_ANSWER: [("question", pa.string()), ("answer", pa.string())],
     TaskType.FORECASTING: [("context_sample_ids", pa.list_(pa.string())), ("target_sample_id", pa.string())],
-    TaskType.REASONING: [("question", pa.string()), ("answer", pa.string())],
+    TaskType.REASONING: [("question", pa.string()), ("rationale", pa.string()), ("answer", pa.string())],
 }
 
 
