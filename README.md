@@ -2,6 +2,8 @@
 
 TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format.
 
+Documentation: <https://ai-x-labs.github.io/TimeNet/>
+
 ## Terminology
 
 | Term | What it is |
@@ -85,3 +87,6 @@ Don't bypass the hooks with `--no-verify`. If a hook fails, fix the underlying i
 make docs-serve   # live preview at http://127.0.0.1:8000
 make docs         # build static site into site/
 ```
+
+Published at <https://ai-x-labs.github.io/TimeNet/>, deployed from `main` by
+`.github/workflows/docs.yml` (enable Pages in the repo settings with source "GitHub Actions").

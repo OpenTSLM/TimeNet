@@ -1,6 +1,6 @@
 site_name: TimeNet2.0
 site_description: Architecture and design proposal for the TimeNet time-series dataset framework.
-site_url: ""
+site_url: https://ai-x-labs.github.io/TimeNet/
 use_directory_urls: false
 
 repo_url: https://github.com/AI-X-Labs/TimeNet
