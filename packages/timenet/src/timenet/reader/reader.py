@@ -17,6 +17,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
+from timenet.errors import TimeFFormatError
+from timenet.format.checksums import file_checksum
+from timenet.format.constants import MANIFEST_FILE
+from timenet.format.schemas import TASK_COMMON_NAMES, task_schema
 from timenet.manifest import Manifest
 from timenet.types import (
     ANNOTATION_BASES,
@@ -29,8 +33,6 @@ from timenet.types import (
     TaskType,
     View,
 )
-from timenet.writer.constants import MANIFEST_FILE
-from timenet.writer.schemas import TASK_COMMON_NAMES, task_schema
 
 
 _ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared row group decodes once
@@ -51,6 +53,10 @@ class TimeFReader:
         Raises:
             FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
                 missing.
+            TimeFFormatError: If a listed parquet file is unreadable or disagrees with the manifest
+                (an unknown task partition, a column the schema does not declare, a dangling
+                reference). Corrupt bytes on disk are a format failure, not a caller error, so they
+                do not surface as the raw ``ValueError`` / ``KeyError`` the parsing happens to raise.
         """
         self._root = Path(root)
         if not self._root.exists():
@@ -63,9 +69,17 @@ class TimeFReader:
 
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        self._tasks = self._load_tasks()
-        self._annotations = self._load_annotations()
-        self._index = self._load_index()
+        # The loaders parse on-disk parquet against the manifest's schema. Anything they raise means
+        # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
+        # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
+        try:
+            self._tasks = self._load_tasks()
+            self._annotations = self._load_annotations()
+            self._index = self._load_index()
+        except TimeFFormatError:
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
+            raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
         self._shard_cache: dict[Path, pq.ParquetFile] = {}
         self._row_group_cache: OrderedDict[tuple[str, int], pa.ChunkedArray] = OrderedDict()
 
@@ -109,6 +123,24 @@ class TimeFReader:
         self._row_group_cache.clear()
 
     # ---- public API ----------------------------------------------------------------------------
+
+    def verify(self) -> None:
+        """Check every file the manifest lists against its recorded ``sha256:`` checksum.
+
+        Not done on open: hashing every shard would read the whole dataset and defeat the lazy read
+        path this class exists to provide. Call it explicitly when integrity matters more than
+        latency (after a download, before a long training run, in a fsck-style command).
+
+        Raises:
+            TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
+        """
+        for rel, expected in sorted(self._manifest.checksums.items()):
+            path = self._root / rel
+            if not path.exists():
+                raise TimeFFormatError(f"manifest lists a missing file: {rel}")
+            actual = file_checksum(path)
+            if actual != expected:
+                raise TimeFFormatError(f"checksum mismatch for {rel}: manifest says {expected}, file is {actual}")
 
     @property
     def metadata(self) -> DatasetMetadata:

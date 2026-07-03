@@ -14,6 +14,7 @@ from timenet.types import (
     IntervalAnnotation,
     PointAnnotation,
     QATask,
+    ReasoningTask,
     StaticAnnotation,
     View,
 )
@@ -85,6 +86,32 @@ def test_task_chain_round_trips(tmp_path):
     qa = tasks["task-qa-0"]
     assert isinstance(qa, QATask)
     assert qa.from_tasks and qa.from_tasks[0].id == "task-cls-0"
+
+
+def test_reasoning_task_rationale_round_trips(tmp_path):
+    dataset = make_dataset()
+    sample = dataset.samples[0]
+    dataset.add_task(
+        sample,
+        ReasoningTask(
+            question="Is the rhythm normal?",
+            rationale="Regular R-R intervals with a P wave before each QRS.",
+            answer="Yes.",
+            id="task-reason-0",
+        ),
+    )
+    dataset.add_task(sample, ReasoningTask(question="Any ectopy?", answer="No.", id="task-reason-1"))  # rationale=None
+    version_dir = _write(tmp_path, dataset=dataset)
+    with TimeFReader(version_dir) as reader:
+        tasks = {t.id: t for t in reader.tasks}
+    with_rationale = tasks["task-reason-0"]
+    assert isinstance(with_rationale, ReasoningTask)
+    assert with_rationale.question == "Is the rhythm normal?"
+    assert with_rationale.rationale == "Regular R-R intervals with a P wave before each QRS."
+    assert with_rationale.answer == "Yes."
+    without_rationale = tasks["task-reason-1"]
+    assert isinstance(without_rationale, ReasoningTask)
+    assert without_rationale.rationale is None  # optional field round-trips as None
 
 
 def test_iter_samples_matches_read(tmp_path):
@@ -164,4 +191,50 @@ def test_missing_listed_file_raises(tmp_path):
     version_dir = _write(tmp_path)
     (version_dir / "samples.parquet").unlink()
     with pytest.raises(FileNotFoundError):
+        TimeFReader(version_dir)
+
+
+def test_verify_passes_on_an_intact_dataset(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        reader.verify()  # must not raise
+
+
+def test_verify_detects_a_corrupted_shard(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        # a shard: read lazily, so __init__ still succeeds and verify() is what catches it
+        rel = next(r for r in reader._manifest.checksums if r.startswith("time_series/shard-"))
+    target = version_dir / rel
+    target.write_bytes(target.read_bytes() + b"corruption")
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="checksum mismatch"):
+        reader.verify()
+
+
+def test_verify_detects_a_deleted_file(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        rel = next(r for r in reader._manifest.checksums if r.startswith("time_series/shard-"))
+    (version_dir / rel).unlink()
+    # __init__ already refuses a manifest-listed file that is gone
+    with pytest.raises(FileNotFoundError):
+        TimeFReader(version_dir)
+
+
+def test_corrupt_task_partition_raises_format_error(tmp_path):
+    # An unknown task partition name is corrupt on-disk data, so it must surface as TimeFFormatError
+    # rather than the bare ValueError that TaskType() happens to raise.
+    version_dir = _write(tmp_path)
+    tasks_dir = next((version_dir / "tasks").iterdir())
+    tasks_dir.rename(tasks_dir.parent / "task=not_a_real_task_type")
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["tasks"] = [
+        p.replace(tasks_dir.name, "task=not_a_real_task_type") for p in manifest["files"]["tasks"]
+    ]
+    manifest["checksums"] = {
+        k.replace(tasks_dir.name, "task=not_a_real_task_type"): v for k, v in manifest["checksums"].items()
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(TimeFFormatError):
         TimeFReader(version_dir)
