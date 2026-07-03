@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 import uuid
 
 from timenet.config import settings
@@ -29,8 +29,9 @@ if TYPE_CHECKING:
 
 # Defined at module scope, where `list` is the builtin (the class has a method named ``list`` that
 # would otherwise shadow it in type annotations).
-type _Metadatas = list[DatasetMetadata]
-type _OrList[T] = T | list[T] | None
+T = TypeVar("T")
+_Metadatas: TypeAlias = list[DatasetMetadata]
+_OrList: TypeAlias = T | list[T] | None
 
 
 def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]:
