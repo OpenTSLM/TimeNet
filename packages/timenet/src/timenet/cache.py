@@ -5,11 +5,12 @@ download cache. All three sit under the home directory.
 """
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shutil
 
 from timenet.config import settings
-from timenet.writer.constants import MANIFEST_FILE
+from timenet.format.constants import MANIFEST_FILE
 
 
 @dataclass(frozen=True)
@@ -100,9 +101,10 @@ def _delete_and_measure(path: Path) -> int:
         The total size in bytes of the files removed.
     """
     freed = 0
-    for parent, _dirs, files in path.walk(top_down=False):
+    for parent, _dirs, files in os.walk(path, topdown=False):  # os.walk: Path.walk is 3.12+
+        parent_dir = Path(parent)
         for name in files:
-            entry = parent / name
+            entry = parent_dir / name
             if entry.is_file():
                 freed += entry.stat().st_size
             entry.unlink()

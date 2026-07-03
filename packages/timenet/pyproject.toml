@@ -3,7 +3,7 @@ name = "timenet"
 version = "0.1.0"
 description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.1",
     "pint>=0.25",

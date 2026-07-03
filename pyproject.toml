@@ -22,7 +22,7 @@ docs = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py311"
 # Members live under packages/*/src; the glob makes isort treat each package as
 # first-party. Config is discovered from the repo root, not shared by uv.
 src = ["packages/*/src"]
@@ -90,4 +90,4 @@ markers = [
 ]
 
 [tool.ty.environment]
-python-version = "3.13"
+python-version = "3.11"

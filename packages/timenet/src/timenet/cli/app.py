@@ -1,6 +1,7 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
 from collections.abc import Callable, Iterable
+from typing import TypeVar
 
 from rich.console import Console
 from rich.table import Table
@@ -19,6 +20,8 @@ console = Console()
 
 _registry_option = typer.Option(None, "--registry", "-r", help="Registry URL or path (else $TIMENET_REGISTRY).")
 
+T = TypeVar("T")
+
 
 @app.callback()
 def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress status output.")) -> None:
@@ -26,7 +29,7 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
     ui.quiet = quiet
 
 
-def _enum_list[T](values: list[str], factory: Callable[[str], T], flag: str, choices: Iterable[str]) -> list[T] | None:
+def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choices: Iterable[str]) -> list[T] | None:
     """Parse a repeated string option into enum values, reporting a bad value as a clean CLI error.
 
     Args:

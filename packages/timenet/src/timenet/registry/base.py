@@ -6,10 +6,13 @@ implement the three data-access methods; :meth:`BaseRegistry.search` is shared, 
 """
 
 from abc import ABC, abstractmethod
-from typing import BinaryIO
+from typing import BinaryIO, TypeVar
 
 from timenet.manifest import Manifest
 from timenet.types import DatasetMetadata, Domain, License, Task
+
+
+T = TypeVar("T")
 
 
 class BaseRegistry(ABC):
@@ -126,7 +129,7 @@ class BaseRegistry(ABC):
         return not (specs and not set(specs) <= {spec.spec_type for spec in schema.time_series_specs})
 
 
-def _as_list[T](value: T | list[T] | None) -> list[T]:
+def _as_list(value: T | list[T] | None) -> list[T]:
     """Normalize a scalar-or-list-or-None filter to a list.
 
     Args:

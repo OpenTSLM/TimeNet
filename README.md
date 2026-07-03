@@ -18,6 +18,8 @@ See [docs/architecture.md](docs/architecture.md) for how these fit together.
 
 ## Installation
 
+Requires Python 3.11 or newer (tested on 3.11–3.13).
+
 ### From source
 
 Clone the repo and install locally:
@@ -25,8 +27,8 @@ Clone the repo and install locally:
 ```bash
 git clone https://github.com/AI-X-Labs/TimeNet.git
 cd TimeNet
-uv sync --all-groups   # runtime + dev + docs dependencies
-make install-hooks     # set up pre-commit hooks
+uv sync --all-groups --all-extras   # dev/docs deps + optional extras (cli, torch, huggingface)
+make install-hooks                  # set up pre-commit hooks
 ```
 
 Once installed, the CLI is available:
