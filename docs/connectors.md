@@ -86,5 +86,5 @@ sources are only needed during conversion; pass `--keep-cache` to retain them. F
 tests, `TIMENET_TESTING=1` serves the connector's checked-in fixture, and `TIMENET_ROW_LIMIT=N` caps
 rows for a quick sample.
 
-Once built, load and inspect a dataset with the SDK — see `examples/load_tsqa_arrow.py` for turning the
-loaded samples into Apache Arrow tables.
+Once built, load and inspect a dataset with the SDK — see `examples/load_tsqa.py`, which loads a dataset
+and calls `describe()` to print its identity, counts, per-spec columns, and a sample preview.
