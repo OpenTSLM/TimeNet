@@ -1,0 +1,29 @@
+[
+  {
+    "question": "Does this ECG show atrial fibrillation?",
+    "answer": "no",
+    "rationale": "The rhythm is regular with a consistent P wave before each QRS, so it is not atrial fibrillation.",
+    "template_id": 0,
+    "question_type": "single-verify",
+    "ecg_id": 1,
+    "clinical_context": "12-lead ECG recording."
+  },
+  {
+    "question": "What is the cardiac rhythm?",
+    "answer": "sinus rhythm",
+    "rationale": "Regular R-R intervals with an upright P wave in lead II indicate normal sinus rhythm.",
+    "template_id": 1,
+    "question_type": "single-query",
+    "ecg_id": 1,
+    "clinical_context": "12-lead ECG recording."
+  },
+  {
+    "question": "Is there evidence of a myocardial infarction?",
+    "answer": "not sure",
+    "rationale": "ST segments are near baseline without clear pathological Q waves, so infarction cannot be confirmed.",
+    "template_id": 0,
+    "question_type": "single-verify",
+    "ecg_id": 2,
+    "clinical_context": "12-lead ECG recording."
+  }
+]
