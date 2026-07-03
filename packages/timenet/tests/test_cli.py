@@ -1,19 +1,20 @@
 import importlib
 import re
+import subprocess
 import sys
 
 import pytest
 from typer.testing import CliRunner
 
-from timenet.cli import app
+from timenet.cli.app import app
 from timenet.errors import DatasetNotFoundError
 from timenet.testing import make_dataset
 from timenet.writer import TimeFWriter
 
 
 runner = CliRunner()
-# The package re-exports the Typer object as ``timenet.cli.app``, shadowing the submodule; fetch the
-# actual module so we can patch its module-global ``app`` when testing main()'s error handling.
+# Import the app submodule directly so we can patch its module-global ``app`` when testing main()'s
+# error handling.
 _cli_module = importlib.import_module("timenet.cli.app")
 
 
@@ -128,3 +129,14 @@ def test_main_reports_expected_errors_without_traceback(monkeypatch, capsys):
         _cli_module.main()
     assert exit_info.value.code == 1
     assert "no such dataset" in capsys.readouterr().err
+
+
+def test_importing_cli_package_stays_lazy():
+    # The console entry point must load in a base install without the cli extra, so importing the
+    # package must not pull in Typer/Rich (they live behind the lazily-loaded app module).
+    code = (
+        "import sys, timenet.cli; "
+        "loaded = [m for m in sys.modules if m in ('typer', 'rich') or m.startswith(('typer.', 'rich.'))]; "
+        "assert not loaded, loaded"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

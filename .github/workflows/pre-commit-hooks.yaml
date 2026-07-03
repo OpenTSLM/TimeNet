@@ -25,7 +25,7 @@ jobs:
         path: ~/.cache/pre-commit
         key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
     - name: Install dependencies
-      run: uv sync --all-groups
+      run: uv sync --all-groups --all-extras
     - name: Run pre-commit hooks
       id: precommit
       continue-on-error: true

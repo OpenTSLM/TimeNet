@@ -10,12 +10,10 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "huggingface-hub", specifier = ">=0.24" },
     { name = "hypothesis", specifier = ">=6.140" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "ruff", specifier = ">=0.15.12" },
-    { name = "torch", specifier = ">=2.2" },
     { name = "ty", specifier = ">=0.0.34" },
 ]
 docs = [
@@ -1245,11 +1243,18 @@ dependencies = [
     { name = "pint" },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
-    { name = "rich" },
-    { name = "typer" },
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "rich" },
+    { name = "torch" },
+    { name = "typer" },
+]
+cli = [
+    { name = "rich" },
+    { name = "typer" },
+]
 torch = [
     { name = "torch" },
 ]
@@ -1260,11 +1265,12 @@ requires-dist = [
     { name = "pint", specifier = ">=0.25" },
     { name = "pyarrow", specifier = ">=21" },
     { name = "pydantic-settings", specifier = ">=2.4" },
-    { name = "rich", specifier = ">=13" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+    { name = "timenet", extras = ["cli", "torch"], marker = "extra == 'all'" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2" },
-    { name = "typer", specifier = ">=0.12" },
+    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12" },
 ]
-provides-extras = ["torch"]
+provides-extras = ["cli", "torch", "all"]
 
 [[package]]
 name = "timenet-connectors"

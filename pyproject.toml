@@ -6,13 +6,13 @@ default-groups = ["dev"]
 required-version = ">=0.10.10"
 
 [dependency-groups]
+# Optional runtime deps (torch, typer/rich, huggingface-hub) are NOT duplicated here: they come from the
+# packages' extras, installed for dev/test/CI via `uv sync --all-groups --all-extras` (see `make sync`).
 dev = [
-    "huggingface-hub>=0.24",
     "hypothesis>=6.140",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
-    "torch>=2.2",
     "ty>=0.0.34",
 ]
 docs = [
@@ -66,7 +66,7 @@ ignore = [
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
 # Don't require docstrings for test modules and functions. Pickle round-trips are intentional
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "ARG"]
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 
