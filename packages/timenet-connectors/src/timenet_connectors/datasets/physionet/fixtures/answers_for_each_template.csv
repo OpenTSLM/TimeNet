@@ -1,0 +1,3 @@
+template_id,question_type,classes
+0,single-verify,"['yes', 'no', 'not sure']"
+1,single-query,"['sinus rhythm', 'atrial fibrillation', 'not sure']"
