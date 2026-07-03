@@ -91,10 +91,16 @@ class ForecastingTask(Task):
 
 @dataclass(kw_only=True)
 class ReasoningTask(Task):
-    """Higher-level analytical inference, often composed from lower-level tasks via ``from_tasks``."""
+    """A question answered by reasoning to a final answer. Often composed via ``from_tasks``.
+
+    Unlike :class:`QATask` (single-label answer), a reasoning task carries the chain of thought in
+    ``rationale``. The ``answer`` is the evaluation target; the ``rationale`` is the reasoning trace to
+    train / fine-tune on (``None`` when the source has no stored rationale).
+    """
 
     task_type: ClassVar[TaskType] = TaskType.REASONING
     question: str
+    rationale: str | None = None
     answer: str
 
 

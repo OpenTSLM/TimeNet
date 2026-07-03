@@ -100,40 +100,74 @@ class ECGLead(TimeSeriesSpec):
 
 ## Annotations
 
-Contextual metadata attached to a [`Sample`](timef-dataset.md). Three shapes, one flat frozen dataclass
-each. `key` / `unit` / `description` are instance fields (so they round-trip without synthesis); the
-per-key metadata is hoisted into the manifest at write time.
+An annotation is **extra context attached to a [`Sample`](timef-dataset.md)** — side information a task
+can read as input, or that can itself become a task's question/answer. It is scoped at one of three
+levels, and the scopes combine:
 
-| Class | Extra fields | Meaning |
+- **sample** — the whole sample (a static fact, or a trial-level temporal marker),
+- **time range** — a span in the recording timeline (`start_time_s` … `end_time_s`),
+- **signal** — one or more specific channels (`time_series_ids`).
+
+Three shapes, one flat frozen dataclass each. `key` / `value` / `unit` / `description` / `id` are
+**instance fields**, so connectors author annotations directly (or subclass with field defaults for
+reuse) and they round-trip without runtime class synthesis.
+
+| Class | Extra fields | Scope |
 | --- | --- | --- |
-| `StaticAnnotation` | `value` (required) | Sample-scoped, time-independent context (age, sex, ticker). |
-| `PointAnnotation` | `start_time_s`, `time_series_ids` | Anchored to one instant in the recording timeline. |
-| `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | Anchored to a bounded interval (`end > start`). |
+| `StaticAnnotation` | `value` (required) | Whole sample, time-independent (age, sex, device, ticker). |
+| `PointAnnotation` | `start_time_s`, `time_series_ids` | One instant, on specific signals or the whole sample. |
+| `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
 
-Shared fields on every annotation: `key: str`, `value: Any = None`, `unit: str | None = None`,
-`description: str | None = None`, `id: str` (auto uuid4). `time_series_ids` is `None` for trial-level
-(whole-sample) temporal annotations.
+Shared fields: `key: str`, `value: Any = None`, `unit: str | None = None`,
+`description: str | None = None`, `id: str` (auto uuid4). On the temporal shapes,
+`time_series_ids=None` means **trial-level** (the whole sample); a non-empty tuple restricts the
+annotation to those channels (each id must match a `TimeSeries.time_series_id` on the sample).
 
 ```python
 from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
 
+# sample scope
 StaticAnnotation(key="age", value=64, unit="years")
-PointAnnotation(key="stimulus_light", start_time_s=4.0)
-IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0, time_series_ids=("s1",))
+
+# time range on the whole sample (trial-level)
+IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
+
+# signal + time range: leads V1 and V2, seconds 5–6
+IntervalAnnotation(
+    key="st_elevation",
+    value="ST elevation",
+    start_time_s=5.0,
+    end_time_s=6.0,
+    time_series_ids=("lead_v1", "lead_v2"),
+)
+
+# one instant on a single channel
+PointAnnotation(key="r_peak", start_time_s=4.2, time_series_ids=("lead_v1",))
+```
+
+A connector that emits the same key repeatedly can subclass with field defaults:
+
+```python
+from dataclasses import dataclass
+
+@dataclass(frozen=True, kw_only=True)
+class Age(StaticAnnotation):
+    key: str = "age"
+    unit: str | None = "years"
 ```
 
 `annotation_type_of(ann)` returns the `AnnotationType` (`STATIC` / `POINT` / `INTERVAL`);
-`ANNOTATION_BASES` maps each `AnnotationType` back to its class. `AnnotationDescriptor` is the
-type-level projection (`key`, `annotation_type`, `value_type`, `unit`, `description`) stored in the
-schema and manifest.
+`ANNOTATION_BASES` maps each back to its class. `AnnotationDescriptor` is the type-level projection
+(`key`, `annotation_type`, `value_type`, `unit`, `description`) hoisted into the schema and manifest at
+write time.
 
 ---
 
 ## Tasks
 
-One labeled training target referencing one or more samples. The class is the type tag (usable as a
-search filter); the instance carries the payload. Tasks are mutable so
-[`add_task`](timef-dataset.md) can populate `sample_ids` after construction.
+A task is **one labeled training target** referencing one or more samples. The class is the type tag
+(usable as a search filter, e.g. `search(task=ReasoningTask)`); the instance carries the payload. Tasks
+are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after construction.
 
 | Class | `task_type` | Payload |
 | --- | --- | --- |
@@ -142,12 +176,79 @@ search filter); the instance carries the payload. Tasks are mutable so
 | `CaptioningTask` | `captioning` | `answer` |
 | `QATask` | `question_and_answer` | `question`, `answer` |
 | `ForecastingTask` | `forecasting` | `context_sample_ids`, `target_sample_id` |
-| `ReasoningTask` | `reasoning` | `question`, `answer` |
+| `ReasoningTask` | `reasoning` | `question`, `rationale`, `answer` |
 
-Every task carries `id` (auto uuid4), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
-`TaskType` is the enum of type tags; `TASKS` maps each `TaskType` to its class and is **derived** from
-`Task.__subclasses__()`, so it can never drift. Unlike specs and annotations, task payloads are fixed
-in code and resolved on read against `TASKS`, not reconstructed from the manifest.
+Every task also carries `id` (auto uuid4), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
+`TaskType` is the enum of type tags; `TASKS` is **derived** from `Task.__subclasses__()`, so it can
+never drift. Unlike specs and annotations, task payloads are fixed in code and resolved on read against
+`TASKS`, not reconstructed from the manifest.
+
+### Per-type payloads
+
+- **`ClassificationTask`** — one discrete label for the whole sample; `label_schema` names the
+  vocabulary the label is drawn from (`None` for free-form).
+  ```python
+  dataset.add_task(sample, ClassificationTask(label="afib", label_schema="AAMI"))
+  ```
+- **`LabelingTask`** — a label localized to specific signals and/or time windows: `time_series_ids`
+  picks the channels (`None` = all), `windows_s` the spans (`None` = full duration).
+  ```python
+  dataset.add_task(sample, LabelingTask(
+      label="walking",
+      time_series_ids=(accel_x.time_series_id, accel_y.time_series_id),
+      windows_s=((120.0, 480.0),),
+  ))
+  ```
+- **`CaptioningTask`** — free-form text describing the sample (no question).
+  ```python
+  dataset.add_task(sample, CaptioningTask(answer="A 10-second sinus rhythm with one PVC."))
+  ```
+- **`QATask`** — a question and its single-label answer.
+  ```python
+  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="ST elevation in V2."))
+  ```
+- **`ForecastingTask`** — predict a target sample from context samples.
+  ```python
+  dataset.add_task(target, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
+  ```
+- **`ReasoningTask`** — a question, the reasoning trace, then the answer. The `answer` is the
+  evaluation target; the `rationale` (chain of thought) is the training signal and is optional.
+  ```python
+  dataset.add_task(sample, ReasoningTask(
+      question="Does this ECG show atrial fibrillation?",
+      rationale="R-R intervals are irregularly irregular and no P waves precede the QRS complexes.",
+      answer="Yes.",
+  ))
+  ```
+
+### Composition (`from_tasks`)
+
+A task can derive from earlier tasks (or from the annotations that motivated them) via `from_tasks`.
+The derived task records the chain it was built from, which is how a handful of base labels multiply
+into many higher-level training samples:
+
+```python
+base = dataset.add_task(sample, ClassificationTask(label="afib"))
+dataset.add_task(sample, ReasoningTask(
+    question="Is this recording normal?",
+    rationale="The rhythm is classified atrial fibrillation, which is abnormal.",
+    answer="No.",
+    from_tasks=(base,),
+))
+```
+
+### Annotations vs tasks
+
+An annotation is context; a task is a learning target. The same annotation can play either role:
+
+- **as task input** — the annotation is fed to the model as grounding. "Here are 12 ECG leads. In lead
+  V1, seconds 5–6, there is ST elevation. What is wrong with this patient?" The `IntervalAnnotation`
+  supplies the detail the `QATask` / `ReasoningTask` question builds on.
+- **as the task itself** — the annotation's content becomes what the model must produce. "What do you
+  see in lead V1 between seconds 5 and 6?" → an answer derived from that same `st_elevation` annotation.
+
+Because annotations carry signal + time-range scope, one recording yields many targets — a whole-sample
+classification, per-lead labelings, windowed QA, and reasoning that composes them via `from_tasks`.
 
 ---
 
