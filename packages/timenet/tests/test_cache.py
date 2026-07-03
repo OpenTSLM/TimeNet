@@ -42,8 +42,8 @@ def test_cached_datasets_lists_registry_and_storage(_home):
     _write(_home / "storage")
     cached = cached_datasets()
     locations = {(c.location, c.dataset_id, c.version) for c in cached}
-    assert ("registry", "hello_world", "1.0.0") in locations
-    assert ("storage", "hello_world", "1.0.0") in locations
+    assert ("registry", "timenet/hello-world", "1.0.0") in locations
+    assert ("storage", "timenet/hello-world", "1.0.0") in locations
     assert all(c.size_bytes > 0 for c in cached)
 
 

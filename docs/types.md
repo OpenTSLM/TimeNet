@@ -258,7 +258,7 @@ A dataset's descriptive identity (authored in the card).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `dataset_id` | `str` | yes | Snake-cased unique id; matches the card / connector filename. |
+| `dataset_id` | `str` | yes | `org/name` pair (one slash); matches the card / connector module path. |
 | `dataset_version` | `Version` | yes | The upstream source's semantic version. |
 | `name` | `str` | yes | Display name. |
 | `description` | `str` | yes | One-sentence description. |

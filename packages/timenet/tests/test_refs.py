@@ -6,11 +6,11 @@ from timenet.refs import split_ref
 @pytest.mark.parametrize(
     "ref,expected",
     [
-        ("hello_world", ("hello_world", None)),
+        ("timenet/hello-world", ("timenet/hello-world", None)),
         ("org/name", ("org/name", None)),
         ("org/name@latest", ("org/name", None)),
         ("org/name@1.2.3", ("org/name", "1.2.3")),
-        ("hello_world@0.0.1", ("hello_world", "0.0.1")),
+        ("timenet/hello-world@0.0.1", ("timenet/hello-world", "0.0.1")),
     ],
 )
 def test_split_ref_ok(ref, expected):
