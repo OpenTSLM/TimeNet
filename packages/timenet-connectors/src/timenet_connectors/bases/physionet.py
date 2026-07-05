@@ -3,14 +3,11 @@
 Subclasses download a PhysioNet database archive (a zip served from PhysioNet's open S3 bucket) and
 read its records with `wfdb <https://wfdb.readthedocs.io>`_. ``wfdb`` is imported lazily so base users
 who only curate offline datasets don't need it (install the ``physionet`` extra); a missing library
-raises an actionable error. Testing mode (``TIMENET_TESTING=1``) lets a subclass serve a small
-checked-in fixture instead of hitting the network, mirroring
-:class:`~timenet_connectors.bases.huggingface.BaseHuggingFaceConnector`.
+raises an actionable error.
 """
 
 from abc import ABC
 from collections.abc import Callable
-import os
 from pathlib import Path
 from typing import Any, TypeVar
 import zipfile
@@ -27,12 +24,6 @@ _DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB streamed per write when fetching an arc
 
 class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
     """Base class for PhysioNet-backed connectors: WFDB record I/O plus archive caching."""
-
-    def __init__(self) -> None:
-        """Read testing mode and an optional row limit from the environment."""
-        self.testing = os.environ.get("TIMENET_TESTING") == "1"
-        limit = os.environ.get("TIMENET_ROW_LIMIT")
-        self.row_limit = int(limit) if limit else None
 
     def _ensure_archive(self, url: str, cache_dir: Path, sentinel: str) -> Path:
         """Download and extract a PhysioNet zip archive into ``cache_dir`` once.

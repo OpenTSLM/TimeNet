@@ -8,13 +8,12 @@ training target and the short answer is the evaluation label, so each sample car
 Sources: signals from PhysioNet PTB-XL; the per-template answer options from the ``Jwoo5/ecg-qa``
 GitHub repo; the precomputed CoT rows (question / answer / rationale / template) from the OpenTSLM
 release (the only public source for the rationales). Real curation needs the network and a multi-GB
-PTB-XL download; tests run offline against a small checked-in fixture via ``TIMENET_TESTING=1``.
+PTB-XL download.
 """
 
 import ast
 import csv
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import ClassVar
 
@@ -44,7 +43,6 @@ ECG_QA_TEMPLATE_ANSWERS_URL = (
 # public source; kept as a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
-_FIXTURES = Path(__file__).parent / "fixtures"
 _SOURCE = DataSource(data_source_type="physionet", name="PTB-XL", provider="PhysioNet")
 _ECG = TimeSeriesSpec(
     spec_type="ecg",
@@ -98,7 +96,7 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
     with path.open(newline="") as handle:
         for row in csv.DictReader(handle):
             classes = ast.literal_eval(row["classes"])
-            answers[int(row["template_id"])] = tuple(str(option) for option in classes)
+            answers[int(float(row["template_id"]))] = tuple(str(option) for option in classes)
     return answers
 
 
@@ -129,7 +127,7 @@ def _build_refs(
         ecg_id = _parse_ecg_id(row["ecg_id"])
         stem = f"{ecg_id:05d}_hr"
         record_base = records_dir / stem if flat_records else records_dir / f"{ecg_id // 1000 * 1000:05d}" / stem
-        template_id = int(str(row["template_id"]))
+        template_id = int(float(str(row["template_id"])))
         refs.append(
             EcgQaCotRef(
                 split=split,
@@ -189,37 +187,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         source_url="https://physionet.org/content/ptb-xl/",
     )
 
-    def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive identity.
-
-        Returns:
-            The connector's static :class:`~timenet.types.DatasetMetadata`.
-        """
-        return self.METADATA
-
     def download(self, cache_dir: Path) -> list[EcgQaCotRef]:
-        """Return CoT references: the offline fixture in testing mode, else fetched from source.
-
-        Args:
-            cache_dir: Directory downloaded archives are cached under.
-
-        Returns:
-            One reference per CoT row (capped at ``TIMENET_ROW_LIMIT`` when set).
-        """
-        refs = self._fixture_refs() if self.testing else self._download_refs(cache_dir)
-        return refs if self.row_limit is None else refs[: self.row_limit]
-
-    def _fixture_refs(self) -> list[EcgQaCotRef]:
-        """Build references from the checked-in fixture (testing mode).
-
-        Returns:
-            The fixture references (a single ``train`` split).
-        """
-        rows = json.loads((_FIXTURES / "ecg_qa_cot_sample.json").read_text())
-        answers = _load_template_answers(_FIXTURES / "answers_for_each_template.csv")
-        return _build_refs(rows, _FIXTURES / "records", answers, split="train", start_index=0, flat_records=True)
-
-    def _download_refs(self, cache_dir: Path) -> list[EcgQaCotRef]:
         """Fetch PTB-XL, the template answers, and the CoT CSVs, and resolve references.
 
         Args:
