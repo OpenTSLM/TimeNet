@@ -9,25 +9,28 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.types import ReasoningTask
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.datasets.physionet.ecg_qa_cot import EcgQaCotConnector
+from timenet_connectors.datasets.physionet.ecg_qa_cot import (
+    EcgQaCotConnector,
+    _build_refs,
+    _load_template_answers,
+)
 
 
-_FIXTURES = Path(__file__).parents[1] / "src/timenet_connectors/datasets/physionet/fixtures"
+_FIXTURES = Path(__file__).parent / "fixtures" / "ecg_qa_cot"
 
 
 def _rows():
     return json.loads((_FIXTURES / "ecg_qa_cot_sample.json").read_text())
 
 
-@pytest.fixture(autouse=True)
-def _testing_mode(monkeypatch):
-    monkeypatch.setenv("TIMENET_TESTING", "1")
-    monkeypatch.delenv("TIMENET_ROW_LIMIT", raising=False)
+def _refs():
+    # Build the same refs the real download() would, but from the checked-in fixture (flat records).
+    answers = _load_template_answers(_FIXTURES / "answers_for_each_template.csv")
+    return _build_refs(_rows(), _FIXTURES / "records", answers, split="train", start_index=0, flat_records=True)
 
 
 def _convert() -> TimeFDataset:
-    connector = EcgQaCotConnector()
-    return connector.convert(connector.download(Path("cache")))
+    return EcgQaCotConnector().convert(_refs())
 
 
 def test_is_a_connector():
@@ -38,10 +41,6 @@ def test_is_a_connector():
 def test_metadata():
     assert EcgQaCotConnector().metadata().dataset_id == "physionet/ecg-qa-cot"
     assert str(EcgQaCotConnector().metadata().license) == "CC-BY-4.0"
-
-
-def test_testing_download_returns_fixture_refs():
-    assert len(EcgQaCotConnector().download(Path("cache"))) == len(_rows())
 
 
 def test_convert_builds_one_sample_per_row():
@@ -93,14 +92,7 @@ def test_answer_options_come_from_template():
     assert options == ["yes", "no", "not sure"]  # template_id 0 in the fixture CSV
 
 
-def test_row_limit(monkeypatch):
-    monkeypatch.setenv("TIMENET_ROW_LIMIT", "2")
-    assert len(EcgQaCotConnector().download(Path("cache"))) == 2
-
-
 def test_missing_wfdb_raises_helpful_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError
-    connector = EcgQaCotConnector()
-    refs = connector.download(Path("cache"))
     with pytest.raises(ImportError, match="physionet"):
-        connector.convert(refs)
+        EcgQaCotConnector().convert(_refs())
