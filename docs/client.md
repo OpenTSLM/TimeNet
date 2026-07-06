@@ -1,3 +1,12 @@
+---
+icon: lucide/terminal
+description: "The TimeNet client: browse a registry and load datasets from Python or the CLI."
+tags:
+  - guide
+  - client
+  - cli
+---
+
 # Client
 
 `TimeNet` is the single Python entry point for using TimeNet from code. It wraps a
@@ -8,9 +17,9 @@ connector code. Lives in `timenet.client`.
 from timenet.client import TimeNet
 from timenet.types import Domain
 
-client = TimeNet()                                   # default public registry
+client = TimeNet()                                   # default local registry (~/.cache/timenet/registry)
 client = TimeNet("~/.timenet/local")                 # a local registry
-client = TimeNet("https://registry.timenet.io")      # a remote registry
+client = TimeNet("timenet://")                        # the hosted registry (deferred)
 
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
@@ -26,7 +35,9 @@ TimeNet(registry=None, *, storage_path=None)
 ```
 
 Registry selection order: the `registry` argument, then `$TIMENET_REGISTRY`, then the local default
-registry. `registry` accepts a `BaseRegistry`, a URL, a `file://` URI, or a local path.
+registry (`<home>/registry`). `registry` accepts a `BaseRegistry`, a local path or `file://` URI, an
+`s3://` URI, or a hosted `timenet://` / `http(s)://` URL. The `s3://` and remote backends are deferred,
+so today only local registries serve data; see [Registry](registry.md).
 
 ## Configuration
 
@@ -103,7 +114,7 @@ in the `cli` extra: `pip install 'timenet[cli]'`. Running `timenet` without it p
 hint.
 
 ```bash
-export TIMENET_REGISTRY=https://registry.timenet.io
+export TIMENET_REGISTRY=~/.timenet/local   # a local registry (build one via curation)
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
 timenet info chengsenwang/tsqa@1.0.0     # pin a version; omit @ for latest
@@ -116,3 +127,7 @@ timenet cache clear           # remove downloads + raw cache (prompts; --all als
 Registry selection precedence: `--registry` > `$TIMENET_REGISTRY` > default. `search` flags map
 one-to-one to the SDK's `search` arguments and are repeatable for list values (`--spec` -> `time_series_spec`,
 `--id` -> `dataset_id`).
+
+---
+
+See the [API reference for `timenet.client`](api/client.md) for the full symbol listing.

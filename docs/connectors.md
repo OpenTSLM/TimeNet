@@ -1,3 +1,11 @@
+---
+icon: lucide/cable
+description: "Write a BaseConnector to turn a raw source into a TimeFDataset."
+tags:
+  - guide
+  - connectors
+---
+
 # Connectors
 
 The unit of dataset integration: one connector class per dataset. A connector fetches raw data and
@@ -15,29 +23,31 @@ connectors live in the `timenet-connectors` repo alongside their [dataset card](
 from pathlib import Path
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.types import DatasetMetadata
 
 class MyConnector(BaseConnector[MyRawRef]):
-    def metadata(self) -> DatasetMetadata: ...
     def download(self, cache_dir: Path) -> list[MyRawRef]: ...
     def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
 ```
 
-Three abstract stages, kept distinct so the engine can drive
+Two abstract stages, kept distinct so the engine can drive
 `download -> convert -> derive_schema -> store`:
 
 | Method | Nature | Contract |
 | --- | --- | --- |
-| `metadata()` | pure | Return `DatasetMetadata`; derivable from constructor state, no I/O. `metadata().dataset_id` must match the id the connector is curated under. |
 | `download(cache_dir)` | I/O only | Fetch/discover raw files, return lightweight references. Idempotent; no parsing. |
 | `convert(raw_refs)` | CPU only | Parse references into a `TimeFDataset` with lazy Arrow loaders. No network. |
+
+`metadata()` and `store()` are concrete methods you inherit, not stages you implement:
+
+- `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk
+  (`DatasetMetadata.from_yaml`), so it does file I/O; override it only to point at a different card.
+  `metadata().dataset_id` must match the id the connector is curated under.
+- `store()` writes the dataset through a [`TimeFWriter`](timef-writer.md), deriving the schema first if
+  absent, and returns the committed version directory; most connectors never override it.
 
 Connectors take **no constructor arguments** — configuration comes from environment variables read in
 `__init__`. `TRaw` is whatever reference type the connector defines (a path, a small dataclass, an S3
 key). Generic via PEP 695: `class MyConnector(BaseConnector[MyRawRef])`.
-
-`store()` (writing the dataset to disk) is not part of the connector — it is the engine/writer's job and
-lands with [`TimeFWriter`](timef-writer.md).
 
 ---
 
@@ -87,3 +97,7 @@ rows for a quick sample.
 
 Once built, load and inspect a dataset with the SDK — see `examples/load_tsqa.py`, which loads a dataset
 and calls `describe()` to print its identity, counts, per-spec columns, and a sample preview.
+
+---
+
+See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.

@@ -1,0 +1,426 @@
+/* TimeNet docs: "Copy page" split-button dropdown + datasets catalog.
+   All colors use --md-* tokens so light (default) and dark (slate) track automatically. */
+
+.sr-only,
+.ds-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Copy page control ------------------------------------------------ */
+
+.md-content__inner {
+  position: relative;
+}
+
+.copy-page {
+  float: right;
+  display: inline-flex;
+  position: relative;
+  margin: 0.2rem 0 0.2rem 0.8rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  background: var(--md-default-bg-color);
+  font-size: 0.62rem;
+}
+
+.copy-page__main,
+.copy-page__toggle {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--md-default-fg-color--light);
+  cursor: pointer;
+  padding: 0.35em 0.6em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  line-height: 1.2;
+}
+
+.copy-page__main {
+  border-radius: 0.4rem 0 0 0.4rem;
+  font-weight: 600;
+}
+
+.copy-page__toggle {
+  border-left: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0 0.4rem 0.4rem 0;
+  padding-inline: 0.45em;
+}
+
+.copy-page__toggle svg {
+  width: 0.9em;
+  height: 0.9em;
+  fill: none;
+  stroke: currentColor;
+}
+
+.copy-page__main:hover,
+.copy-page__toggle:hover,
+.copy-page__main:focus-visible,
+.copy-page__toggle:focus-visible {
+  color: var(--md-accent-fg-color);
+  background: var(--md-default-fg-color--lightest);
+}
+
+.copy-page__main:focus-visible,
+.copy-page__toggle:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: -2px;
+}
+
+.copy-page__menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 5;
+  min-width: 15rem;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+/* Override Material's .md-typeset ul/li list markers (higher specificity). */
+.md-typeset .copy-page__menu,
+.md-typeset .copy-page__menu li {
+  list-style: none;
+  margin: 0;
+}
+
+.copy-page__menu[hidden] {
+  display: none;
+}
+
+.copy-page__menu a,
+.copy-page__menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--md-default-fg-color);
+  cursor: pointer;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.3rem;
+  text-decoration: none;
+}
+
+.copy-page__menu a:hover,
+.copy-page__menu button:hover,
+.copy-page__menu a:focus-visible,
+.copy-page__menu button:focus-visible {
+  background: var(--md-default-fg-color--lightest);
+  outline: none;
+}
+
+.copy-page__title {
+  display: block;
+  font-weight: 400;
+}
+
+/* ---- mkdocstrings "source" links -------------------------------------- */
+
+.doc-source-link {
+  float: right;
+  margin-left: 0.6rem;
+  font-size: 0.62rem;
+  font-weight: 400;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.8rem;
+  color: var(--md-default-fg-color--light) !important;
+  text-decoration: none;
+}
+
+.doc-source-link:hover {
+  color: var(--md-accent-fg-color) !important;
+  border-color: var(--md-accent-fg-color);
+}
+
+/* ---- Datasets catalog ------------------------------------------------- */
+
+.ds-catalog {
+  margin: 1rem 0;
+}
+
+.ds-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ds-search-wrap {
+  flex: 1 1 14rem;
+}
+
+.ds-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.72rem;
+  color: var(--md-default-fg-color);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: 0.4rem;
+}
+
+.ds-search:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+.ds-dd {
+  position: relative;
+}
+
+.ds-dd__btn {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.66rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: 0.4rem;
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color--light);
+}
+
+.ds-dd__btn::after {
+  content: "\25BE";
+  margin-left: 0.35rem;
+}
+
+.ds-dd__btn[aria-expanded="true"] {
+  color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+.ds-dd__menu {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 12rem;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.3rem;
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.ds-dd__menu[hidden] {
+  display: none;
+}
+
+.ds-opt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.3rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.ds-opt:hover {
+  background: var(--md-default-fg-color--lightest);
+}
+
+.ds-opt input {
+  margin: 0;
+}
+
+.ds-clear {
+  appearance: none;
+  cursor: pointer;
+  font-size: 0.66rem;
+  padding: 0.45rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--md-accent-fg-color);
+}
+
+.ds-count {
+  font-size: 0.66rem;
+  color: var(--md-default-fg-color--light);
+  margin: 0.4rem 0 0.6rem;
+}
+
+.ds-icon {
+  width: 0.85em;
+  height: 0.85em;
+  flex: none;
+}
+
+.ds-table-wrap {
+  overflow-x: auto;
+}
+
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.ds-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--md-default-fg-color--light);
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--md-default-fg-color--lighter);
+}
+
+/* Summary row: one table row, clickable to expand its paired detail row. */
+.ds-row {
+  cursor: pointer;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.ds-row:hover {
+  background: var(--md-default-fg-color--lightest);
+}
+
+.ds-row:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: -2px;
+}
+
+.ds-row[hidden] {
+  display: none;
+}
+
+.ds-row > td {
+  padding: 0.5rem 0.6rem;
+  vertical-align: middle;
+}
+
+.ds-toggle {
+  width: 1rem;
+  padding-right: 0;
+}
+
+.ds-toggle::before {
+  content: "\203A";
+  display: inline-block;
+  color: var(--md-default-fg-color--light);
+  transition: transform 0.15s ease;
+}
+
+.ds-row[aria-expanded="true"] .ds-toggle::before {
+  transform: rotate(90deg);
+}
+
+.ds-id {
+  white-space: nowrap;
+}
+
+.ds-id code {
+  font-size: 0.82em;
+}
+
+.ds-name {
+  color: var(--md-default-fg-color);
+}
+
+.ds-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6rem;
+  white-space: nowrap;
+  margin: 0.1rem 0.25rem 0.1rem 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.8rem;
+  background: var(--md-default-fg-color--lightest);
+  color: var(--md-default-fg-color--light);
+}
+
+.ds-license {
+  white-space: nowrap;
+  font-size: 0.66rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.ds-detail-row[hidden] {
+  display: none;
+}
+
+.ds-detail-row > td {
+  padding: 0;
+}
+
+.ds-detail {
+  padding: 0.2rem 0.7rem 0.8rem 1.6rem;
+  background: var(--md-default-fg-color--lightest);
+}
+
+.ds-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.7rem;
+  margin: 0.6rem 0;
+  font-size: 0.72rem;
+}
+
+.ds-meta dt {
+  font-weight: 600;
+  color: var(--md-default-fg-color--light);
+}
+
+.ds-meta dd {
+  margin: 0;
+}
+
+.ds-tag {
+  display: inline-block;
+  font-size: 0.6rem;
+  padding: 0.05rem 0.4rem;
+  margin: 0 0.2rem 0.2rem 0;
+  border-radius: 0.8rem;
+  border: 1px solid var(--md-default-fg-color--lighter);
+  color: var(--md-default-fg-color--light);
+}
+
+.ds-schema table {
+  width: 100%;
+  font-size: 0.68rem;
+  border-collapse: collapse;
+  margin-top: 0.4rem;
+}
+
+.ds-schema th,
+.ds-schema td {
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+@media screen and (max-width: 40rem) {
+  .ds-table thead {
+    display: none;
+  }
+  .ds-row > td {
+    padding: 0.4rem 0.4rem;
+  }
+}

@@ -1,3 +1,11 @@
+---
+icon: lucide/shapes
+description: "TimeF value types: versions, units, specs, tasks, annotations, and metadata."
+tags:
+  - reference
+  - types
+---
+
 # Types
 
 The TimeF value types live in `timenet.types` (one module per concept, re-exported from the package).
@@ -100,8 +108,8 @@ class ECGLead(TimeSeriesSpec):
 
 ## Annotations
 
-An annotation is **extra context attached to a [`Sample`](timef-dataset.md)** — side information a task
-can read as input, or that can itself become a task's question/answer. It is scoped at one of three
+An annotation is extra context attached to a [`Sample`](timef-dataset.md): side information a task
+can read as input, or that can itself become a task's question or answer. It is scoped at one of three
 levels, and the scopes combine:
 
 - **sample** — the whole sample (a static fact, or a trial-level temporal marker),
@@ -165,7 +173,7 @@ write time.
 
 ## Tasks
 
-A task is **one labeled training target** referencing one or more samples. The class is the type tag
+A task is one labeled training target referencing one or more samples. The class is the type tag
 (usable as a search filter, e.g. `search(task=ReasoningTask)`); the instance carries the payload. Tasks
 are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after construction.
 
@@ -241,14 +249,15 @@ dataset.add_task(sample, ReasoningTask(
 
 An annotation is context; a task is a learning target. The same annotation can play either role:
 
-- **as task input** — the annotation is fed to the model as grounding. "Here are 12 ECG leads. In lead
-  V1, seconds 5–6, there is ST elevation. What is wrong with this patient?" The `IntervalAnnotation`
-  supplies the detail the `QATask` / `ReasoningTask` question builds on.
-- **as the task itself** — the annotation's content becomes what the model must produce. "What do you
-  see in lead V1 between seconds 5 and 6?" → an answer derived from that same `st_elevation` annotation.
+- As task input, the annotation is fed to the model as grounding. An `IntervalAnnotation` marking ST
+  elevation in lead V1 over seconds 5 to 6 supplies the detail a `QATask` or `ReasoningTask` question
+  builds on.
+- As the task itself, the annotation's content becomes what the model must produce: a question about
+  what happens in lead V1 over that window, answered from the same `st_elevation` annotation.
 
-Because annotations carry signal + time-range scope, one recording yields many targets — a whole-sample
-classification, per-lead labelings, windowed QA, and reasoning that composes them via `from_tasks`.
+Because annotations carry signal and time-range scope, one recording yields many targets: a
+whole-sample classification, per-lead labelings, windowed QA, and reasoning that composes them via
+`from_tasks`.
 
 ---
 
@@ -310,3 +319,7 @@ errors also derive from `ValueError` so existing handlers keep working.
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
 | `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
+
+---
+
+See the [API reference for `timenet.types`](api/types.md) for the full symbol listing.

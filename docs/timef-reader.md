@@ -1,3 +1,11 @@
+---
+icon: lucide/book-open
+description: "TimeFReader: read a TimeF version directory back into a TimeFDataset."
+tags:
+  - reference
+  - reader
+---
+
 # TimeFReader
 
 Deserializes a TimeF version directory into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
@@ -57,3 +65,7 @@ For a dataset that passes writer validation, `TimeFReader(...).read()` restores 
 `sample_id`, `view`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
 `source_id`, `time_series_id`, window, and exact `float32` values; and each task's payload and resolved
 `from_tasks`. `TimeSeries` object identity is not preserved — `time_series_id` is the durable handle.
+
+---
+
+See the [API reference for `timenet.reader`](api/reader.md) for the full symbol listing.

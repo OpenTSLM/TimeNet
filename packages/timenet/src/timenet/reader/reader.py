@@ -389,8 +389,11 @@ class _SeriesLoader:
     """
 
     reader: "TimeFReader"
+    """The reader that reads and decodes the series' values."""
     sample_id: str
+    """The owning sample's id."""
     time_series_id: str
+    """The id of the series to read."""
 
     def __call__(self) -> pa.Array:
         """Read the series' values.

@@ -18,8 +18,11 @@ class DataSource:
     """The origin that produced a modality: a device, an API feed, a model, an institution."""
 
     data_source_type: str
+    """Type tag identifying the kind of source; keys the spec-to-source link in the manifest."""
     name: str
+    """Human-readable display name of the source."""
     provider: str | None = None
+    """Organization or platform behind the source, if any."""
 
 
 @dataclass(frozen=True)
@@ -27,11 +30,17 @@ class TimeSeriesSpec:
     """The contract for a measurement modality: type tag, name, and the units of its axes."""
 
     spec_type: str
+    """Type tag identifying the modality; used to filter datasets by spec type."""
     name: str
+    """Human-readable display name of the modality."""
     unit_sampling_rate: pint.Unit
+    """Unit of the sampling rate; must have frequency dimensionality."""
     unit_timestamp: pint.Unit
+    """Unit of the timestamp axis; must have time dimensionality."""
     unit_value: pint.Unit
+    """Unit of the measured values."""
     data_source: DataSource | None = None
+    """Origin that produced this modality, if known."""
 
     def __post_init__(self) -> None:
         """Validate that the sampling-rate and timestamp units have the right dimensionality.
