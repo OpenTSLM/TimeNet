@@ -29,8 +29,9 @@ from timenet.types import (
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 
 
-# PTB-XL 500 Hz records from PhysioNet's open bucket; ``_hr`` = high-rate (500 Hz) recordings.
-PTBXL_ZIP_URL = "https://physionet-open.s3.amazonaws.com/ptb-xl/ptb-xl-1.0.3.zip"
+# PTB-XL 500 Hz records from PhysioNet's open S3 bucket; ``_hr`` = high-rate (500 Hz) recordings.
+# Fetched via boto3 (unsigned for this public bucket, or signed if AWS creds are in the environment).
+PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
 # The per-template answer options (the multiple-choice candidates), keyed by template_id.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
     "https://raw.githubusercontent.com/Jwoo5/ecg-qa/master/ecgqa/ptbxl/answers_for_each_template.csv"

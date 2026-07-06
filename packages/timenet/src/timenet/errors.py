@@ -36,7 +36,3 @@ class TimeFFormatError(TimeNetError):
 
 class InvalidManifestError(TimeFFormatError, ValueError):
     """A ``manifest.json`` is missing required blocks/fields or cannot be parsed."""
-
-
-class InvalidCardError(TimeNetError, ValueError):
-    """A dataset card YAML is malformed or fails schema validation (raised while curating)."""
