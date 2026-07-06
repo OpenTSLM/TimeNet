@@ -2,7 +2,8 @@
 
 Distinct from the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory (itself a
 valid local registry) that the SDK can then load. Connectors are resolved lazily by dataset id, so
-adding one is just dropping a ``datasets/<org>/<name>.py`` module — no registration here.
+adding one is just dropping a ``datasets/<org>/<name>/`` package (a ``connector.py`` exposing
+``CONNECTOR`` plus a ``dataset.yaml`` card). No registration here.
 """
 
 from pathlib import Path
