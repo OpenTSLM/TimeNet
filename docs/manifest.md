@@ -1,3 +1,11 @@
+---
+icon: lucide/file-json
+description: "The compiled manifest.json: the single source of truth the SDK reads."
+tags:
+  - reference
+  - manifest
+---
+
 # Manifest
 
 The **Dataset Manifest** (`manifest.json`) is the compiled single source of truth the SDK reads: the
@@ -72,3 +80,7 @@ Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_ver
 
 Relative paths within the version directory: `samples`, `annotations`, `time_series_index` (required),
 plus `tasks` and `time_series` (tuples, default empty). Readers use this list, never a directory glob.
+
+---
+
+See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.

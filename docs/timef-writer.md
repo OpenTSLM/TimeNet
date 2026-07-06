@@ -1,3 +1,11 @@
+---
+icon: lucide/pencil
+description: "TimeFWriter: stream a TimeFDataset to the TimeF on-disk format."
+tags:
+  - reference
+  - writer
+---
+
 # TimeFWriter
 
 Serializes a [`TimeFDataset`](timef-dataset.md) to the TimeF on-disk format. A context manager that
@@ -114,3 +122,7 @@ surviving samples can no longer resolve. A task that would lose a **required** r
 `target_sample_id` / `context_sample_ids`, its last remaining sample, or a `from_task` edge to a removed
 task) makes the edit fail with `TimeFEditError` unless `cascade=True`, which removes the invalidated
 dependents transitively. The new manifest's `derived_from` records the base version and the operation.
+
+---
+
+See the [API reference for `timenet.writer`](api/writer.md) for the full symbol listing.

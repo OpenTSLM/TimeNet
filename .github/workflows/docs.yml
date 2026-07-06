@@ -24,14 +24,19 @@ jobs:
       with:
         python-version: "3.13"
     - name: Install docs dependencies
-      run: uv sync --group docs
+      run: uv sync --group docs --extra curation
+    - name: Generate dataset pages
+      run: uv run --group docs --extra curation python scripts/gen_dataset_docs.py
+    - name: Generate API reference pages
+      run: uv run --group docs python scripts/gen_api_docs.py
     - name: Build site
-      run: uv run mkdocs build --strict
+      run: uv run zensical build --strict
+    - name: Enhance site (markdown mirrors, llms.txt, social meta, JSON-LD)
+      run: uv run --group docs --extra curation python scripts/gen_site_extras.py
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:
         path: site
-
   deploy:
     needs: build
     runs-on: ubuntu-latest

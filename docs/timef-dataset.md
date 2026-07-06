@@ -1,3 +1,11 @@
+---
+icon: lucide/table-2
+description: "The in-memory TimeFDataset model: samples, tasks, and time series."
+tags:
+  - reference
+  - dataset
+---
+
 # TimeFDataset
 
 The in-memory model a connector populates during `convert()`. Holds samples and their tasks as Python
@@ -127,3 +135,7 @@ samples (first 5 of 48000)
   sample_id  view  channels  length  tasks  annotations
   row-0      full  1         64      1      1
 ```
+
+---
+
+See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
