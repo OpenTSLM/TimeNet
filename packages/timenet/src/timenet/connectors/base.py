@@ -7,6 +7,7 @@ knowledge of the registry, engine, or any other connector. The engine drives it
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+import inspect
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar
 
@@ -21,22 +22,37 @@ TRaw = TypeVar("TRaw")
 class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
-    Subclasses set the ``METADATA`` class attribute and implement the two abstract stages, kept
-    distinct: ``download`` is I/O-only and ``convert`` is CPU-only. Connectors take no constructor
-    arguments.
+    A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
+    card beside it (read by :meth:`metadata`); set :attr:`CARD` to point elsewhere. Subclasses
+    implement the two abstract stages, kept distinct: ``download`` is I/O-only and ``convert`` is
+    CPU-only. Connectors take no constructor arguments.
     """
 
-    METADATA: ClassVar[DatasetMetadata]
-    """The dataset's descriptive identity, set by each concrete connector."""
+    CARD: ClassVar[str | Path | None] = None
+    """Optional explicit path to the dataset card YAML. When ``None`` (the default), the card is read
+    from ``dataset.yaml`` in the connector's own folder."""
 
-    def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive identity.
+    @classmethod
+    def _card_path(cls) -> Path:
+        """Resolve the dataset card path by convention.
 
         Returns:
-            The connector's static :class:`~timenet.types.DatasetMetadata`; its ``dataset_id`` must
-            match the id the connector is registered/curated under.
+            :attr:`CARD` if set, otherwise ``dataset.yaml`` in the directory of the connector's module.
         """
-        return self.METADATA
+        if cls.CARD is not None:
+            return Path(cls.CARD)
+        return Path(inspect.getfile(cls)).with_name("dataset.yaml")
+
+    def metadata(self) -> DatasetMetadata:
+        """Return the dataset's descriptive identity, loaded and validated from its card YAML.
+
+        Reads the card by convention (``dataset.yaml`` beside the connector, unless :attr:`CARD`
+        overrides it). Its ``dataset_id`` must match the id the connector is registered/curated under.
+
+        Returns:
+            The dataset's :class:`~timenet.types.DatasetMetadata`.
+        """
+        return DatasetMetadata.from_yaml(self._card_path())
 
     @abstractmethod
     def download(self, cache_dir: Path) -> list[TRaw]:

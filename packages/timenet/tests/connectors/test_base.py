@@ -6,7 +6,6 @@ import pytest
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import make_dataset
-from timenet.types import DatasetMetadata, License, Version
 
 
 def test_base_connector_is_abstract():
@@ -20,14 +19,11 @@ def test_base_connector_cannot_instantiate():
 
 
 def test_concrete_connector_implements_contract(tmp_path):
+    card = tmp_path / "dataset.yaml"
+    card.write_text("dataset_id: demo/thing\ndataset_version: 1.0.0\nname: Demo\ndescription: d\nlicense: MIT\n")
+
     class DemoConnector(BaseConnector[str]):
-        METADATA = DatasetMetadata(
-            dataset_id="demo/thing",
-            dataset_version=Version(1, 0, 0),
-            name="Demo",
-            description="d",
-            license=License.MIT,
-        )
+        CARD = card
 
         def download(self, cache_dir: Path) -> list[str]:
             return ["ref"]

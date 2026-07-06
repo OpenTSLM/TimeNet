@@ -1,6 +1,7 @@
-# Dataset Card for the physionet/ecg-qa-cot connector.
-# Human-authored metadata; the curator compiles this plus the schema derived from the data into
-# manifest.json. The connector lives at datasets/<org>/<name>.py; its metadata declares the id.
+# yaml-language-server: $schema=https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json
+# Dataset Card for the physionet/ecg-qa-cot connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the curator compiles it plus the schema
+# derived from the data into manifest.json.
 #
 # Training convention: each sample carries a ReasoningTask whose `answer` is the short evaluation
 # label and whose `rationale` is the chain-of-thought target to fine-tune on. The multiple-choice
@@ -23,3 +24,4 @@ tags:
   - qa
   - cot
   - physionet
+source_url: https://physionet.org/content/ptb-xl/

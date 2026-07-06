@@ -6,9 +6,10 @@ them into the shared TimeF format. The connector contract itself lives in the `t
 
 ## Layout
 
-Concrete connectors live at `datasets/<org>/<name>.py` (lowercase) and each exposes a module-level
-`CONNECTOR`. They are discovered lazily by dataset id, so there is no central registry. Reusable bases
-(e.g. for the HuggingFace Hub) live under `bases/`.
+Concrete connectors live at `datasets/<org>/<name>/` (lowercase), each a package with a `connector.py`
+that exposes a module-level `CONNECTOR` and a `dataset.yaml` card beside it. They are discovered lazily
+by dataset id, so there is no central registry. Reusable bases (for the HuggingFace Hub and PhysioNet)
+live under `bases/`.
 
 ## Curate
 

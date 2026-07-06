@@ -8,7 +8,7 @@ Documentation: <https://ai-x-labs.github.io/TimeNet/>
 
 | Term | What it is |
 | --- | --- |
-| **Dataset Card** | The human-authored `card.yaml` beside a connector (license, domains, tags, description). |
+| **Dataset Card** | The human-authored `dataset.yaml` in a connector's folder (license, domains, tags, description); validated against a JSON Schema when loaded. |
 | **Dataset Connector** | The Python recipe that fetches a raw source and converts it into a `TimeFDataset`. |
 | **Dataset Curation** | The process of running a connector through the engine to produce a dataset. |
 | **TimeF Version** | The semantic version of one serialized `TimeFDataset` in a registry. |
