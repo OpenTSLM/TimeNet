@@ -8,6 +8,10 @@ the [reader](timef-reader.md) reads it first. Lives in `timenet.manifest`.
 Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors, the manifest's
 `schema` block is a direct serialization of it — there are no separate "entry" types to keep in sync.
 
+The on-disk shape is published as [`manifest-v1.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/manifest-v1.schema.json)
+(JSON Schema draft 2020-12), the formal contract for external consumers. It ships in the `timenet`
+package (`timenet.schemas.MANIFEST_SCHEMA`); a test validates `to_dict()` output against it.
+
 ---
 
 ## `Manifest`

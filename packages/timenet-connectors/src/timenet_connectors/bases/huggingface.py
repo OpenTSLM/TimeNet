@@ -1,6 +1,6 @@
 """A reusable base for connectors that pull rows from a HuggingFace Hub dataset.
 
-Subclasses set ``HF_REPO`` and the ``METADATA`` class attribute and implement ``convert()``. Real
+Subclasses set ``HF_REPO``, ship a ``dataset.yaml`` card beside the connector, and implement ``convert()``. Real
 downloads read the Hub's auto-generated parquet ref, which the Hub produces for public datasets (gated
 ones included). ``huggingface_hub`` is imported lazily so base users don't need it (install the
 ``huggingface`` extra) and reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra

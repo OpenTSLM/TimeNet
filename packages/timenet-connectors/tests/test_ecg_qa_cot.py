@@ -9,7 +9,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.types import ReasoningTask
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.datasets.physionet.ecg_qa_cot import (
+from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import (
     EcgQaCotConnector,
     _build_refs,
     _load_template_answers,

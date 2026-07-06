@@ -24,7 +24,7 @@ There can be several registries: one public, private internal ones, or a local d
 ## The two flows
 
 ```
-PRODUCE  card.yaml + connector ─► engine (download → convert → derive_schema → store) ─► publish ─┐
+PRODUCE  dataset.yaml + connector ─► engine (download → convert → derive_schema → store) ─► publish ─┐
                                                                                                   ▼
                                                                                               registry
 CONSUME  SDK ─► get_manifest ─► fetch parquet ─► TimeFReader ─► Arrow  ◄───────────────────────────┘
@@ -69,8 +69,8 @@ consumer needs to interpret the parquet lives in the manifest.
 
 ## Lifecycle of a dataset
 
-1. **Author** a connector at `datasets/<org>/<name>.py` (exposing `CONNECTOR`) with its dataset card
-   beside it, in `timenet-connectors`.
+1. **Author** a connector at `datasets/<org>/<name>/` (its `__init__.py` exposes `CONNECTOR`) with its
+   `dataset.yaml` card beside it, in `timenet-connectors`.
 2. **Curate**: `timenet-curate build <org>/<name>` runs the engine, compiles the manifest, and writes parquet.
 3. **Verify** locally by pointing the SDK at the output directory (itself a valid local registry).
 4. **Publish** the manifest + parquet to a registry.
