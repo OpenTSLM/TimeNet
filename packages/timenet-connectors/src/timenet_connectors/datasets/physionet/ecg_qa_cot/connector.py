@@ -19,14 +19,10 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
-    DatasetMetadata,
     DataSource,
-    Domain,
-    License,
     ReasoningTask,
     StaticAnnotation,
     TimeSeriesSpec,
-    Version,
     View,
     ureg,
 )
@@ -173,20 +169,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         ("test", "ecg_qa_cot_test.csv"),
     )
 
-    METADATA = DatasetMetadata(
-        dataset_id="physionet/ecg-qa-cot",
-        dataset_version=Version(1, 0, 0),
-        name="ECG-QA CoT",
-        description=(
-            "12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought "
-            "rationales for reasoning fine-tuning."
-        ),
-        license=License.CC_BY_4_0,
-        domains=(Domain.CARDIOLOGY, Domain.HEALTH),
-        tags=("ecg", "qa", "cot", "physionet"),
-        source_url="https://physionet.org/content/ptb-xl/",
-    )
-
     def download(self, cache_dir: Path) -> list[EcgQaCotRef]:
         """Fetch PTB-XL, the template answers, and the CoT CSVs, and resolve references.
 
@@ -222,7 +204,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        dataset = TimeFDataset(metadata=self.METADATA)
+        dataset = TimeFDataset(metadata=self.metadata())
         leads_by_ecg: dict[int, tuple[TimeSeries, ...]] = {}
         for ref in raw_refs:
             leads = leads_by_ecg.get(ref.ecg_id)

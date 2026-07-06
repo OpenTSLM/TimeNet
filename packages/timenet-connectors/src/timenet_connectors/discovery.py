@@ -1,9 +1,9 @@
 """Lazy, convention-based connector discovery.
 
-Concrete connectors live at ``datasets/<org>/<name>.py`` (or ``datasets/<name>.py`` for a flat id) and
-expose a module-level ``CONNECTOR`` class. A dataset id maps to that module by convention, so there is
-no central registry to maintain and only the requested connector is imported. Each connector declares
-its own id via ``metadata()``.
+Each connector lives in its own folder at ``datasets/<org>/<name>/`` (or ``datasets/<name>/`` for a
+flat id): the package's ``__init__.py`` exposes a ``CONNECTOR`` class and a ``dataset.yaml`` card sits
+beside it. A dataset id maps to that package by convention, so there is no central registry to maintain
+and only the requested connector is imported. Each connector declares its own id via ``metadata()``.
 """
 
 import importlib
@@ -58,13 +58,13 @@ def available() -> list[str]:
     Returns:
         The declared dataset ids, sorted.
     """
-    ids: list[str] = []
+    ids: set[str] = set()
     for info in pkgutil.walk_packages(_datasets.__path__, _DATASETS + "."):
-        if info.ispkg:
-            continue
+        # A connector package re-exports CONNECTOR from its ``connector`` submodule, so both the
+        # package and that submodule surface it; a set dedupes them. Org packages expose none.
         connector = getattr(importlib.import_module(info.name), "CONNECTOR", None)
         if connector is not None:
-            ids.append(connector().metadata().dataset_id)
+            ids.add(connector().metadata().dataset_id)
     return sorted(ids)
 
 

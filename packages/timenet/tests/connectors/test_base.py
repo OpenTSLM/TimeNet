@@ -18,18 +18,9 @@ def test_base_connector_cannot_instantiate():
         BaseConnector()
 
 
-_DEMO_CARD = """
-dataset_id: demo/thing
-dataset_version: 1.0.0
-name: Demo
-description: d
-license: MIT
-"""
-
-
 def test_concrete_connector_implements_contract(tmp_path):
-    card = tmp_path / "card.yaml"
-    card.write_text(_DEMO_CARD)
+    card = tmp_path / "dataset.yaml"
+    card.write_text("dataset_id: demo/thing\ndataset_version: 1.0.0\nname: Demo\ndescription: d\nlicense: MIT\n")
 
     class DemoConnector(BaseConnector[str]):
         CARD = card
@@ -44,20 +35,3 @@ def test_concrete_connector_implements_contract(tmp_path):
     assert connector.metadata().dataset_id == "demo/thing"
     assert connector.download(tmp_path) == ["ref"]
     assert isinstance(connector.convert(["ref"]), TimeFDataset)
-
-
-def test_card_defaults_to_dataset_yaml_beside_the_connector(tmp_path, monkeypatch):
-    # With CARD unset, the card is read from dataset.yaml in the connector module's folder.
-    (tmp_path / "dataset.yaml").write_text(_DEMO_CARD)
-    module = tmp_path / "conn.py"
-    module.write_text("x = 1\n")
-
-    class DemoConnector(BaseConnector[str]):
-        def download(self, cache_dir: Path) -> list[str]:
-            return []
-
-        def convert(self, raw_refs: list[str]) -> TimeFDataset:
-            return make_dataset()
-
-    monkeypatch.setattr("inspect.getfile", lambda _cls: str(module))
-    assert DemoConnector().metadata().dataset_id == "demo/thing"

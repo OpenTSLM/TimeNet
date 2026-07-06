@@ -24,8 +24,8 @@
   "$defs": {
     "datasetId": {
       "type": "string",
-      "pattern": "^(?!\\.)[A-Za-z0-9._-]+(?:/(?!\\.)[A-Za-z0-9._-]+)?$",
-      "description": "A dataset id: a single segment, or an org/name pair with one slash; letters, digits, dot, underscore, hyphen; no segment may start with '.'."
+      "pattern": "^(?!\\.)[A-Za-z0-9._-]+/(?!\\.)[A-Za-z0-9._-]+$",
+      "description": "HuggingFace-style org/name: exactly one slash, and no segment may start with '.'."
     },
     "semver": {
       "type": "string",

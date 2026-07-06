@@ -2876,11 +2876,11 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pyyaml", marker = "extra == 'curation'", specifier = ">=6" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
-    { name = "timenet", extras = ["cli", "curation", "torch"], marker = "extra == 'all'" },
+    { name = "timenet", extras = ["cli", "torch", "curation"], marker = "extra == 'all'" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12" },
 ]
-provides-extras = ["curation", "cli", "torch", "all"]
+provides-extras = ["cli", "torch", "curation", "all"]
 
 [[package]]
 name = "timenet-connectors"
@@ -2890,7 +2890,7 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pyarrow" },
-    { name = "timenet" },
+    { name = "timenet", extra = ["curation"] },
     { name = "typer" },
 ]
 
@@ -2907,7 +2907,7 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.24" },
     { name = "numpy", specifier = ">=2.1" },
     { name = "pyarrow", specifier = ">=21" },
-    { name = "timenet", editable = "packages/timenet" },
+    { name = "timenet", extras = ["curation"], editable = "packages/timenet" },
     { name = "typer", specifier = ">=0.12" },
     { name = "wfdb", marker = "extra == 'physionet'", specifier = ">=4.1" },
 ]

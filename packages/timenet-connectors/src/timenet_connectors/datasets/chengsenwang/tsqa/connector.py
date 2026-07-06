@@ -7,7 +7,6 @@ sample carrying the series plus a :class:`~timenet.types.QATask`.
 
 from collections.abc import Callable
 import json
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -53,8 +52,6 @@ class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-
-    CARD = Path(__file__).with_name("tsqa.yaml")
 
     def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
         """Build one sample per row: the parsed series plus its QA task.

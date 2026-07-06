@@ -18,3 +18,4 @@ def _load(name: str) -> dict[str, Any]:
 
 
 DATASET_CARD_SCHEMA: dict[str, Any] = _load("dataset-card.schema.json")
+MANIFEST_SCHEMA: dict[str, Any] = _load("manifest.schema.json")
