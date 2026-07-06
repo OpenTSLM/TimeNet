@@ -1,3 +1,11 @@
+---
+icon: lucide/box
+description: "How TimeNet's packages, registries, and curation fit together."
+tags:
+  - guide
+  - architecture
+---
+
 # Architecture
 
 How TimeNet's packages, registries, and curation fit together. This page is the map; follow the links
@@ -36,6 +44,29 @@ consumer needs to interpret the parquet lives in the manifest.
 
 ---
 
+## Curation roles: connector, engine, curator
+
+Three producer-side pieces, each with one job:
+
+| Role | What it is | Job |
+| --- | --- | --- |
+| **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
+| **Engine** | `run_pipeline` ([engine](engine.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
+| **Curator** | the `timenet-curate` CLI ([curation](curation.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
+
+```
+timenet-curate build org/name                          curator
+  └─ discovery.resolve("org/name") → Connector class    (datasets/<org>/<name>/ exposes CONNECTOR)
+      └─ run_pipeline(connector, <registry>)            engine
+           metadata → download → convert → derive_schema → store → <registry>/org/name/<version>/
+```
+
+`metadata()` reads the `dataset.yaml` card and `store()` streams through
+[`TimeFWriter`](timef-writer.md). The output directory is itself a valid local registry, so the consume
+flow reads it straight back.
+
+---
+
 ## Where each component lives
 
 | Component | Package | Side |
@@ -49,19 +80,19 @@ consumer needs to interpret the parquet lives in the manifest.
 
 ## Design principles
 
-- **The manifest is self-describing.** The SDK reads schema, counts, and file pointers from
-  `manifest.json`; it never runs connector code or globs the directory.
-- **Types are plain frozen dataclasses.** Specs, data sources, and annotations are frozen
+- The manifest is self-describing. The SDK reads schema, counts, and file pointers from
+  `manifest.json`. It never runs connector code or globs the directory.
+- Types are plain frozen dataclasses. Specs, data sources, and annotations are frozen
   [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
-  synthesis (safe for multiprocessing `DataLoader` workers).
-- **Values are Arrow in, Arrow out.** A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()` /
-  `to_numpy()` over a private lazy loader; the writer stores `float32` values as Parquet with
-  `BYTE_STREAM_SPLIT` + zstd.
-- **Units go through [pint](https://pint.readthedocs.io).** One shared registry owns every definition
+  synthesis. That keeps multiprocessing `DataLoader` workers safe.
+- Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()` and
+  `to_numpy()` over a private lazy loader. The writer stores `float32` values as Parquet with
+  `BYTE_STREAM_SPLIT` and zstd.
+- Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
   and conversion.
-- **Commits are atomic.** The writer stages a version into a temp directory and publishes it with a
-  single atomic rename; `manifest.json` present means committed.
-- **Versions are immutable; edits are copy-on-write.** Removing a row writes a new version through the
+- Commits are atomic. The writer stages a version into a temp directory and publishes it with a
+  single atomic rename. Once `manifest.json` is present, the version is committed.
+- Versions are immutable; edits are copy-on-write. Removing a row writes a new version through the
   same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)); stable never-reused ids keep
   references valid, and content-defined chunking keeps the rewrite cheap on a deduplicating backend.
 

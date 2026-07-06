@@ -22,13 +22,21 @@ class TimeSeries:
     """
 
     spec: TimeSeriesSpec
+    """Measurement-modality contract: type tag, name, and axis units."""
     channel: str
+    """Name of this channel within the modality; must be non-empty."""
     sampling_rate_hz: float
+    """Sampling rate in hertz; must be positive and finite."""
     loader: Callable[[], pa.Array]
+    """Lazy callable returning the series' values as an Arrow array."""
     source_id: str | None = None
+    """Optional identifier of the raw source recording."""
     time_series_id: str = field(default_factory=new_id)
+    """Stable identity used to dedupe and share chunks; defaults to a UUIDv7."""
     t_start_s: float = 0.0
+    """Start of the series window in seconds; must be non-negative."""
     t_end_s: float | None = None
+    """Optional end of the series window in seconds; must exceed t_start_s."""
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.

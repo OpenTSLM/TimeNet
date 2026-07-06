@@ -15,11 +15,17 @@ class Sample:
     """
 
     time_series: tuple[TimeSeries, ...]
+    """One :class:`TimeSeries` per channel the sample uses."""
     view: View
+    """Which slice of the source this sample represents."""
     sample_id: str = field(default_factory=new_id)
+    """Unique id for the sample (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()
+    """Subjects this sample belongs to (empty for subject-less domains)."""
     task_ids: tuple[str, ...] = ()
+    """Ids of the tasks attached to this sample."""
     annotations: tuple[Annotation, ...] = ()
+    """Annotations attached to the sample."""
 
     def add_annotation(self, annotation: Annotation) -> Annotation:
         """Attach an annotation to the sample and return it.

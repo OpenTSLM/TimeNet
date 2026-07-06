@@ -34,8 +34,11 @@ class Task:
 
     task_type: ClassVar[TaskType]
     id: str = field(default_factory=new_id)
+    """Unique task identifier, a UUIDv7 string by default."""
     sample_ids: tuple[str, ...] = ()
+    """Ids of the samples this task targets, populated by ``add_task``."""
     from_tasks: tuple["Task", ...] = ()
+    """Source tasks this one was derived from."""
 
     @property
     def from_task_ids(self) -> tuple[str, ...]:
@@ -53,7 +56,9 @@ class ClassificationTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
     label: str
+    """The discrete class label for the sample."""
     label_schema: str | None = None
+    """Name of the label vocabulary the label belongs to."""
 
 
 @dataclass(kw_only=True)
@@ -62,8 +67,11 @@ class LabelingTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.LABELING
     label: str
+    """The label applied to the targeted region."""
     label_schema: str | None = None
+    """Name of the label vocabulary the label belongs to."""
     time_series_ids: tuple[str, ...] | None = None
+    """Series the label targets, or None for all series in the sample."""
     windows_s: tuple[tuple[float, float], ...] | None = None
     """Spans in the **source recording timeline**, the same frame as ``TimeSeries.t_start_s``.
     ``None`` means the sample's full duration. That a window actually falls inside the target
@@ -92,6 +100,7 @@ class CaptioningTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.CAPTIONING
     answer: str
+    """Free-form text describing the sample."""
 
 
 @dataclass(kw_only=True)
@@ -100,7 +109,9 @@ class QATask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.QUESTION_AND_ANSWER
     question: str
+    """The question posed about the sample."""
     answer: str
+    """The answer to the question."""
 
 
 @dataclass(kw_only=True)
@@ -109,7 +120,9 @@ class ForecastingTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
     context_sample_ids: tuple[str, ...]
+    """Ids of the samples that provide forecasting context."""
     target_sample_id: str
+    """Id of the sample whose future values are predicted."""
 
 
 @dataclass(kw_only=True)
@@ -123,8 +136,11 @@ class ReasoningTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.REASONING
     question: str
+    """The question to be answered by reasoning."""
     rationale: str | None = None
+    """The reasoning trace to train on, or None when the source stores none."""
     answer: str
+    """The final answer used as the evaluation target."""
 
 
 def _concrete_task_classes() -> list[type[Task]]:

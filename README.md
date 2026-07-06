@@ -39,7 +39,7 @@ uv run timenet
 
 ## Development
 
-This project uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, [ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and [mkdocs-material](https://squidfunk.github.io/mkdocs-material/) for docs.
+This project uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, [ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and [Zensical](https://zensical.org/) for docs.
 
 ### Setup
 
@@ -58,7 +58,7 @@ Dependencies are split in `pyproject.toml`:
 - runtime — `timenet` needs numpy, pyarrow, pint, pydantic-settings, typer; `timenet-connectors` adds
   its own. Optional extras: `timenet[torch]`, `timenet-connectors[huggingface]`.
 - `dev` — ruff, ty, pytest, pre-commit, hypothesis (installed by default)
-- `docs` — mkdocs-material
+- `docs` — zensical
 
 ### Make targets
 

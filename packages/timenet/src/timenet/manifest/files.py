@@ -13,10 +13,15 @@ class ManifestFiles:
     """
 
     samples: tuple[str, ...]
+    """Relative path parts of the samples table."""
     annotations: tuple[str, ...]
+    """Relative path parts of the annotations table."""
     time_series_index: tuple[str, ...]
+    """Relative path parts of the time series index table."""
     tasks: tuple[str, ...] = ()
+    """Relative path parts of the task tables, one per task type."""
     time_series: tuple[str, ...] = ()
+    """Relative path parts (shards) of the time series data."""
 
     def all_parts(self) -> tuple[str, ...]:
         """Return every file part across all artifacts, in a stable order.
