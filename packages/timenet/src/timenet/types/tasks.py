@@ -11,9 +11,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
 from typing import ClassVar
-import uuid
 
 from timenet.errors import TimeFValidationError
+from timenet.types.ids import new_id
 
 
 @unique
@@ -33,7 +33,7 @@ class Task:
     """Base for all tasks. Not instantiated directly; subclasses declare ``task_type`` and a payload."""
 
     task_type: ClassVar[TaskType]
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    id: str = field(default_factory=new_id)
     sample_ids: tuple[str, ...] = ()
     from_tasks: tuple["Task", ...] = ()
 

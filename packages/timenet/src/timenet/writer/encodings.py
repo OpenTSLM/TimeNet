@@ -72,6 +72,9 @@ def parquet_kwargs(
         "write_statistics": True,
         "write_page_index": True,
         "write_page_checksum": True,
+        # Content-defined chunking aligns data pages to content, so a re-curated or copy-on-write-edited
+        # version re-stores only the chunks that changed on a dedup backend (e.g. Xet). Requires pyarrow>=21.
+        "use_content_defined_chunking": True,
     }
 
 

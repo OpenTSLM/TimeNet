@@ -22,6 +22,10 @@ class TimeFValidationError(TimeNetError, ValueError):
     """A dataset or its arrays violate a TimeF invariant (raised while building or writing)."""
 
 
+class TimeFEditError(TimeFValidationError):
+    """An edit would leave a dataset referentially inconsistent (e.g. a dangling reference)."""
+
+
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
 

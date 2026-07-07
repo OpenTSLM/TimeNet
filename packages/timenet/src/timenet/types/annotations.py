@@ -12,9 +12,9 @@ and manifest.
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
 from typing import Any
-import uuid
 
 from timenet.errors import TimeFValidationError
+from timenet.types.ids import new_id
 
 
 @unique
@@ -34,7 +34,7 @@ class Annotation:
     value: Any = None
     unit: str | None = None
     description: str | None = None
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    id: str = field(default_factory=new_id)
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list.

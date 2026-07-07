@@ -45,6 +45,8 @@ class Manifest:
     schema: DatasetSchema = field(default_factory=DatasetSchema)
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     checksums: dict[str, str] = field(default_factory=dict)
+    id_encoding: dict[str, str] = field(default_factory=dict)
+    derived_from: dict[str, str] | None = None
     timef_format_version: int = 1
 
     def __post_init__(self) -> None:
@@ -84,6 +86,8 @@ class Manifest:
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
             "checksums": dict(self.checksums),
+            "id_encoding": dict(self.id_encoding),
+            "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
         }
 
     def to_json(self) -> str:
@@ -110,10 +114,9 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise InvalidManifestError(f"manifest missing required key {required!r}")
-        try:
-            checksums = dict(data.get("checksums", {}))
-        except (ValueError, TypeError) as exc:
-            raise InvalidManifestError(f"invalid manifest 'checksums' block: {exc}") from exc
+        checksums = _dict_block(data, "checksums")
+        id_encoding = _dict_block(data, "id_encoding")
+        derived_from = _optional_dict_block(data, "derived_from")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
@@ -121,6 +124,8 @@ class Manifest:
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
             checksums=checksums,
+            id_encoding=id_encoding,
+            derived_from=derived_from,
             timef_format_version=data["timef_format_version"],
         )
 
@@ -142,6 +147,47 @@ class Manifest:
         except json.JSONDecodeError as exc:
             raise InvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
         return cls.from_dict(data)
+
+
+def _dict_block(data: dict[str, Any], key: str) -> dict:
+    """Coerce an optional manifest dict block to a ``dict``, naming it on failure.
+
+    Args:
+        data: The manifest dict.
+        key: The block's key.
+
+    Returns:
+        The block as a ``dict`` (empty when absent).
+
+    Raises:
+        InvalidManifestError: If the block is present but not a mapping.
+    """
+    try:
+        return dict(data.get(key, {}))
+    except (ValueError, TypeError) as exc:
+        raise InvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
+
+
+def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
+    """Coerce a nullable manifest dict block to a ``dict`` or ``None``, naming it on failure.
+
+    Args:
+        data: The manifest dict.
+        key: The block's key.
+
+    Returns:
+        The block as a ``dict``, or ``None`` when the value is ``null``/absent.
+
+    Raises:
+        InvalidManifestError: If the block is present, non-null, and not a mapping.
+    """
+    value = data.get(key)
+    if value is None:
+        return None
+    try:
+        return dict(value)
+    except (ValueError, TypeError) as exc:
+        raise InvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
 
 
 def _str_tuple(value: Any, key: str) -> tuple[str, ...]:

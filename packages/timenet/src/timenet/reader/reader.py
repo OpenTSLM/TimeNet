@@ -20,7 +20,7 @@ from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.errors import TimeFFormatError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
-from timenet.format.schemas import TASK_COMMON_NAMES, task_schema
+from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
 from timenet.types import (
     ANNOTATION_BASES,
@@ -67,6 +67,7 @@ class TimeFReader:
         self._manifest = Manifest.from_json(manifest_path.read_text())
         self._check_files_exist()
 
+        self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
         # The loaders parse on-disk parquet against the manifest's schema. Anything they raise means
@@ -196,10 +197,16 @@ class TimeFReader:
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
             for row in pq.read_table(self._root / rel).to_pylist():
-                payload = {name: _as_tuple_if_list(row[name]) for name in payload_cols}
-                task = cls(id=row["id"], sample_ids=tuple(row["sample_ids"]), **payload)  # ty: ignore[invalid-argument-type]
+                payload = {
+                    name: self._codec.decode_payload(name, _as_tuple_if_list(row[name])) for name in payload_cols
+                }
+                task = cls(
+                    id=self._codec.decode("task_id", row["id"]),
+                    sample_ids=tuple(self._codec.decode_list("sample_id", row["sample_ids"])),
+                    **payload,  # ty: ignore[invalid-argument-type]
+                )
                 by_id[task.id] = task
-                pending[task.id] = tuple(row["from_task_ids"])
+                pending[task.id] = tuple(self._codec.decode_list("task_id", row["from_task_ids"]))
         for task_id, from_ids in pending.items():
             resolved = []
             for from_id in from_ids:
@@ -218,8 +225,9 @@ class TimeFReader:
             descriptor = self._annotation_descriptors[key]
             base = ANNOTATION_BASES[AnnotationType(row["annotation_type"])]
             value = None if row["value"] is None else json.loads(row["value"])
+            annotation_id = self._codec.decode("annotation_id", row["id"])
             fields: dict = {
-                "id": row["id"],
+                "id": annotation_id,
                 "key": key,
                 "value": value,
                 "unit": descriptor.unit,
@@ -230,14 +238,18 @@ class TimeFReader:
             if row["end_time_s"] is not None:
                 fields["end_time_s"] = row["end_time_s"]
             if row["time_series_ids"] is not None:
-                fields["time_series_ids"] = tuple(row["time_series_ids"])
-            annotations[row["id"]] = base(**fields)
+                fields["time_series_ids"] = tuple(self._codec.decode_list("time_series_id", row["time_series_ids"]))
+            annotations[annotation_id] = base(**fields)
         return annotations
 
     def _load_index(self) -> dict[tuple[str, str], list[dict]]:
         index: dict[tuple[str, str], list[dict]] = {}
         for row in pq.read_table(self._root / self._manifest.files.time_series_index).to_pylist():
-            index.setdefault((row["sample_id"], row["time_series_id"]), []).append(row)
+            key = (
+                self._codec.decode("sample_id", row["sample_id"]),
+                self._codec.decode("time_series_id", row["time_series_id"]),
+            )
+            index.setdefault(key, []).append(row)
         for rows in index.values():
             rows.sort(key=lambda r: r["chunk_idx"])
         return index
@@ -245,14 +257,18 @@ class TimeFReader:
     # ---- sample construction -------------------------------------------------------------------
 
     def _build_sample(self, row: dict) -> Sample:
-        series = tuple(self._build_series(row["sample_id"], struct) for struct in row["time_series"])
-        annotations = tuple(self._resolve_annotation(row["sample_id"], aid) for aid in row["annotation_ids"])
+        sample_id = self._codec.decode("sample_id", row["sample_id"])
+        series = tuple(self._build_series(sample_id, struct) for struct in row["time_series"])
+        annotations = tuple(
+            self._resolve_annotation(sample_id, aid)
+            for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
+        )
         return Sample(
-            sample_id=row["sample_id"],
+            sample_id=sample_id,
             time_series=series,
             view=View(row["view"]),
-            subject_ids=tuple(row["subject_ids"]),
-            task_ids=tuple(row["task_ids"]),
+            subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
+            task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
             annotations=annotations,
         )
 
@@ -260,13 +276,14 @@ class TimeFReader:
         spec_type = struct["spec_type"]
         if spec_type not in self._spec_by_type:
             raise ValueError(f"sample {sample_id!r} references unknown spec_type {spec_type!r}")
+        time_series_id = self._codec.decode("time_series_id", struct["time_series_id"])
         return TimeSeries(
             spec=self._spec_by_type[spec_type],
             channel=struct["channel"],
             sampling_rate_hz=struct["sampling_rate_hz"],
-            loader=_SeriesLoader(self, sample_id, struct["time_series_id"]),
-            source_id=struct["source_id"],
-            time_series_id=struct["time_series_id"],
+            loader=_SeriesLoader(self, sample_id, time_series_id),
+            source_id=self._codec.decode_opt("source_id", struct["source_id"]),
+            time_series_id=time_series_id,
             t_start_s=struct["t_start_s"],
             t_end_s=struct["t_end_s"],
         )
@@ -275,6 +292,8 @@ class TimeFReader:
         if annotation_id not in self._annotations:
             raise ValueError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
         return self._annotations[annotation_id]
+
+    # ---- id decoding ---------------------------------------------------------------------------
 
     def _load_values(self, sample_id: str, time_series_id: str) -> pa.Array:
         """Read and concatenate a series' chunk values across its shards.

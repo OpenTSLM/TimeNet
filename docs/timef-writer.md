@@ -59,11 +59,23 @@ Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay
 - monotonic ints (`chunk_idx`, `row_group`, `row_offset`) → DELTA_BINARY_PACKED.
 - bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `label`, `shard_path`)
   → dictionary + RLE.
-- id-like columns → plain.
+- id columns → plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
+  UUID (see below), otherwise as a UTF-8 string.
 
-Every file is written with `write_statistics`, `write_page_index`, and `write_page_checksum` on.
-Content-defined chunking is deferred (not available in the pinned pyarrow, and its dedup payoff only
-applies to content-addressable backends).
+Every file is written with `write_statistics`, `write_page_index`, `write_page_checksum`, and
+**`use_content_defined_chunking`** on. Content-defined chunking aligns data pages to content so a
+re-curated or [edited](#copy-on-write-edits) version re-stores only the chunks that changed on a
+deduplicating backend (e.g. Xet); the reader treats the files as ordinary Parquet.
+
+### Id storage
+
+Entity ids default to a **UUIDv7** string (`timenet.types.new_id`), time-ordered so sorting by id — which
+the writer already does — clusters values by creation time and compresses their shared prefix. For each
+of the six logical ids (`sample_id`, `time_series_id`, `annotation_id`, `task_id`, `source_id`,
+`subject_id`) the writer checks whether every value is a canonical UUID; if so it stores that id's columns
+as 16 raw bytes (`binary(16)`) instead of a 36-char string and records `"<id>": "uuid16"` in the
+manifest's `id_encoding`. Connector-supplied non-UUID ids (e.g. `ecgqa-test-0`) stay strings. The reader
+decodes `binary(16)` back to the canonical string, so callers always see string ids.
 
 ## Validation
 
@@ -84,4 +96,21 @@ the staging directory, so a partial dataset is never visible.
 ## Manifest
 
 The writer assembles the [manifest](manifest.md) from `dataset.schema`, write-time counts, the file
-list, and a per-file sha256 checksum for every parquet artifact.
+list, a per-file sha256 checksum for every parquet artifact, and the `id_encoding` map. A copy-on-write
+edit also records a `derived_from` lineage block.
+
+## Copy-on-write edits
+
+A committed version is immutable, so removing a row means writing a **new** version with the row gone.
+`timenet.dataset.edit.edit_version(base_dir, out_root, *, dataset_version, remove_sample_ids=(),
+cascade=False)` reads the base version into memory (values stay lazy, pulled from the base shards),
+applies the removals, repairs every cross-reference, and writes a fresh version through the normal
+atomic-commit writer. Because ids are stable and never reused, surviving references stay valid without
+renumbering, and with content-defined chunking the rewrite re-stores only the chunks that changed.
+
+Referential integrity is enforced *before* the write (never filtered on read), so a committed version is
+always consistent. Removing a sample strips its id from every task's `sample_ids` and drops task ids the
+surviving samples can no longer resolve. A task that would lose a **required** reference (a forecasting
+`target_sample_id` / `context_sample_ids`, its last remaining sample, or a `from_task` edge to a removed
+task) makes the edit fail with `TimeFEditError` unless `cascade=True`, which removes the invalidated
+dependents transitively. The new manifest's `derived_from` records the base version and the operation.

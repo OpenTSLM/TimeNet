@@ -225,3 +225,12 @@ def test_string_for_list_field_rejected(block, key):
     d[block][key] = "oops"
     with pytest.raises(InvalidManifestError):
         Manifest.from_dict(d)
+
+
+@pytest.mark.parametrize("block", ["checksums", "id_encoding", "derived_from"])
+def test_bad_dict_block_names_itself(block):
+    # each block gets its own error message, rather than one shared "checksums/id_encoding/..." string
+    d = _manifest().to_dict()
+    d[block] = "oops"
+    with pytest.raises(InvalidManifestError, match=block):
+        Manifest.from_dict(d)
