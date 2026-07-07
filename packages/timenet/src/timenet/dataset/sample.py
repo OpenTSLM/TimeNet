@@ -1,10 +1,9 @@
 """The :class:`Sample` type: one logical unit of time-series data."""
 
 from dataclasses import dataclass, field
-import uuid
 
 from timenet.dataset.time_series import TimeSeries
-from timenet.types import Annotation, IntervalAnnotation, PointAnnotation, View
+from timenet.types import Annotation, IntervalAnnotation, PointAnnotation, View, new_id
 
 
 @dataclass(kw_only=True)
@@ -17,7 +16,7 @@ class Sample:
 
     time_series: tuple[TimeSeries, ...]
     view: View
-    sample_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    sample_id: str = field(default_factory=new_id)
     subject_ids: tuple[str, ...] = ()
     task_ids: tuple[str, ...] = ()
     annotations: tuple[Annotation, ...] = ()

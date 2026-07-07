@@ -45,6 +45,8 @@ class Manifest:
     schema: DatasetSchema = field(default_factory=DatasetSchema)
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     checksums: dict[str, str] = field(default_factory=dict)
+    id_encoding: dict[str, str] = field(default_factory=dict)
+    derived_from: dict[str, str] | None = None
     timef_format_version: int = 1
 
     def __post_init__(self) -> None:
@@ -84,6 +86,8 @@ class Manifest:
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
             "checksums": dict(self.checksums),
+            "id_encoding": dict(self.id_encoding),
+            "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
         }
 
     def to_json(self) -> str:
@@ -112,8 +116,13 @@ class Manifest:
                 raise InvalidManifestError(f"manifest missing required key {required!r}")
         try:
             checksums = dict(data.get("checksums", {}))
+            id_encoding = dict(data.get("id_encoding", {}))
+            derived = data.get("derived_from")
+            derived_from = dict(derived) if derived is not None else None
         except (ValueError, TypeError) as exc:
-            raise InvalidManifestError(f"invalid manifest 'checksums' block: {exc}") from exc
+            raise InvalidManifestError(
+                f"invalid manifest 'checksums'/'id_encoding'/'derived_from' block: {exc}"
+            ) from exc
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
@@ -121,6 +130,8 @@ class Manifest:
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
             checksums=checksums,
+            id_encoding=id_encoding,
+            derived_from=derived_from,
             timef_format_version=data["timef_format_version"],
         )
 

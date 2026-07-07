@@ -119,7 +119,7 @@ reuse) and they round-trip without runtime class synthesis.
 | `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | None = None`,
-`description: str | None = None`, `id: str` (auto uuid4). On the temporal shapes,
+`description: str | None = None`, `id: str` (auto uuid7). On the temporal shapes,
 `time_series_ids=None` means **trial-level** (the whole sample); a non-empty tuple restricts the
 annotation to those channels (each id must match a `TimeSeries.time_series_id` on the sample).
 
@@ -178,7 +178,7 @@ are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after co
 | `ForecastingTask` | `forecasting` | `context_sample_ids`, `target_sample_id` |
 | `ReasoningTask` | `reasoning` | `question`, `rationale`, `answer` |
 
-Every task also carries `id` (auto uuid4), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
+Every task also carries `id` (auto uuid7), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
 `TaskType` is the enum of type tags; `TASKS` is **derived** from `Task.__subclasses__()`, so it can
 never drift. Unlike specs and annotations, task payloads are fixed in code and resolved on read against
 `TASKS`, not reconstructed from the manifest.

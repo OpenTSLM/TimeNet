@@ -12,6 +12,7 @@ from timenet.types.annotations import (
     value_type_of,
 )
 from timenet.types.domains import Domain
+from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.specs import DataSource, TimeSeriesSpec
@@ -57,6 +58,8 @@ __all__ = [
     "Version",
     "View",
     "annotation_type_of",
+    "new_id",
     "ureg",
+    "uuid7",
     "value_type_of",
 ]
