@@ -37,7 +37,7 @@ function initCopyPage() {
       const original = label.textContent; // captured once, so a rapid re-click can't stick it
       let resetTimer;
       btn.addEventListener("click", async () => {
-        // Directory URLs (the site root "/TimeNet/") have no ".html" — target index.md there.
+        // Directory URLs (the site root "/TimeNet/") have no ".html", so target index.md there.
         const path = location.pathname;
         const url = path.endsWith("/") ? path + "index.md" : path.replace(/\.html$/, ".md");
         try {

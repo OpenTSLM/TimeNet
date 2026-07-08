@@ -99,8 +99,8 @@ consumer CLI mirrors this one-to-one (`timenet search`).
 | `dataset_id` | dataset id is any of these |
 | `tag` | dataset declares all of these tags |
 
-The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest —
-no `precomputed_schema` is needed because the manifest always carries the derived schema.
+The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest.
+No `precomputed_schema` is needed because the manifest always carries the derived schema.
 
 ---
 

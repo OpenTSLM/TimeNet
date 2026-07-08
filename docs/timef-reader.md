@@ -9,7 +9,7 @@ tags:
 # TimeFReader
 
 Deserializes a TimeF version directory into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
-of [`TimeFWriter`](timef-writer.md), driven entirely by `manifest.json` — it never runs connector code.
+of [`TimeFWriter`](timef-writer.md), driven entirely by `manifest.json`: it never runs connector code.
 Lives in `timenet.reader`.
 
 ```python
@@ -31,8 +31,8 @@ one at a time without building a `TimeFDataset`.
 
 ## Type reconstruction
 
-Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors —
-there is **no runtime class synthesis**. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor for its
+Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors.
+There is no runtime class synthesis. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor for its
 `spec_type`; annotations are rebuilt as real `StaticAnnotation` / `PointAnnotation` /
 `IntervalAnnotation` instances (values decoded from JSON); tasks are resolved against the built-in
 `TASKS` registry with `from_tasks` linked. Everything pickles and compares equal to the originals
@@ -64,7 +64,7 @@ manifest. Every id cross-reference (annotation, `from_task`, spec type, index lo
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every sample's
 `sample_id`, `view`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
 `source_id`, `time_series_id`, window, and exact `float32` values; and each task's payload and resolved
-`from_tasks`. `TimeSeries` object identity is not preserved — `time_series_id` is the durable handle.
+`from_tasks`. `TimeSeries` object identity is not preserved. `time_series_id` is the durable handle.
 
 ---
 
