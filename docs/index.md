@@ -14,7 +14,7 @@ API.
 
 !!! info "Scope"
     TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation
-    metrics are out of scope — it stops at handing you the data.
+    metrics are out of scope. It stops at handing you the data.
 
 ## How it fits together
 

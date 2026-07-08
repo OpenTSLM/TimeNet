@@ -1,10 +1,9 @@
 ---
-icon: lucide/terminal
-description: "The TimeNet client: browse a registry and load datasets from Python or the CLI."
+icon: lucide/code
+description: "The TimeNet client: browse a registry and load datasets from Python."
 tags:
   - guide
   - client
-  - cli
 ---
 
 # Client
@@ -61,7 +60,7 @@ added there.
 | --- | --- |
 | `list()` | Every dataset's metadata. |
 | `get(dataset_id, version=None)` | A dataset's [manifest](manifest.md). |
-| `search(...)` | Filter datasets — mirrors [`registry.search`](registry.md#search). |
+| `search(...)` | Filter datasets, mirrors [`registry.search`](registry.md#search). |
 | `download(dataset_id, version=None, *, force=False)` | Copy a version's files into local storage; returns the directory. Idempotent unless `force`. |
 | `load(dataset_id, version=None)` | `download` if needed, then read into a `TimeFDataset` with lazy per-series values. |
 | `load_torch(dataset_id, version=None)` | `load`, wrapped in a read-only `torch.utils.data.Dataset` (needs the `torch` extra). |
@@ -83,7 +82,7 @@ client.load("chengsenwang/tsqa@latest")  # latest, explicit
 
 ## PyTorch
 
-`load_torch` returns a `TimeFTorchDataset` — a read-only, map-style `torch.utils.data.Dataset`. Each
+`load_torch` returns a `TimeFTorchDataset`, a read-only, map-style `torch.utils.data.Dataset`. Each
 item is a dict with the sample's `series` as float32 tensors (one per channel), plus `sample_id`,
 `tasks`, and `annotations`.
 
@@ -107,26 +106,9 @@ loader = DataLoader(ds, batch_size=8, collate_fn=lambda b: [(x["series"][0], x["
 
 The torch module is imported lazily, so base users who never call `load_torch` don't need torch.
 
-## CLI
+## Command line
 
-The `timenet` console script mirrors the SDK (built with [Typer](https://typer.tiangolo.com)). It ships
-in the `cli` extra: `pip install 'timenet[cli]'`. Running `timenet` without it prints a one-line install
-hint.
-
-```bash
-export TIMENET_REGISTRY=~/.timenet/local   # a local registry (build one via curation)
-timenet list
-timenet search --query ecg --domain cardiology --limit 10
-timenet info chengsenwang/tsqa@1.0.0     # pin a version; omit @ for latest
-timenet download chengsenwang/tsqa
-
-timenet cache info            # datasets on disk (location, id, version, size) + total
-timenet cache clear           # remove downloads + raw cache (prompts; --all also clears curated, -y skips)
-```
-
-Registry selection precedence: `--registry` > `$TIMENET_REGISTRY` > default. `search` flags map
-one-to-one to the SDK's `search` arguments and are repeatable for list values (`--spec` -> `time_series_spec`,
-`--id` -> `dataset_id`).
+Every method here has a shell equivalent. See the [`timenet` CLI](cli/timenet.md).
 
 ---
 

@@ -117,7 +117,7 @@ def _schema_html(manifest: Manifest) -> str:
         f"<td>{html.escape(str(s.unit_value))}</td></tr>"
         for s in manifest.schema.time_series_specs
     )
-    tasks = ", ".join(f"{html.escape(name)} ({n})" for name, n in sorted(counts.tasks.items())) or "—"
+    tasks = ", ".join(f"{html.escape(name)} ({n})" for name, n in sorted(counts.tasks.items())) or "n/a"
     return (
         '<div class="ds-schema"><table><thead><tr><th>Modality</th><th>Name</th><th>Unit</th></tr></thead>'
         f"<tbody>{rows}</tbody></table>"
@@ -136,10 +136,10 @@ def _source_link(url: str | None) -> str:
         url: The card's ``source_url``, or ``None``.
 
     Returns:
-        An anchor for web URLs, escaped text for other schemes, or ``"—"`` when absent.
+        An anchor for web URLs, escaped text for other schemes, or ``"n/a"`` when absent.
     """
     if not url:
-        return "—"
+        return "n/a"
     safe = html.escape(url)
     if url.startswith(("http://", "https://")):
         return f'<a href="{safe}" target="_blank" rel="noopener">{safe}</a>'
@@ -165,7 +165,7 @@ def _render_catalog_row(metadata: DatasetMetadata, manifest: Manifest | None) ->
         "".join(f'<span class="ds-cat">{_icon(d)}<span>{html.escape(d)}</span></span>' for d in domains)
         or '<span class="ds-cat">uncategorized</span>'
     )
-    tag_badges = "".join(f'<span class="ds-tag">{html.escape(t)}</span>' for t in tags) or "—"
+    tag_badges = "".join(f'<span class="ds-tag">{html.escape(t)}</span>' for t in tags) or "n/a"
     snippet = (
         f'from timenet.client import TimeNet\n\ndataset = TimeNet().load("{metadata.dataset_id}")\ndataset.describe()'
     )

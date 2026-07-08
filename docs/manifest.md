@@ -10,11 +10,11 @@ tags:
 
 The **Dataset Manifest** (`manifest.json`) is the compiled single source of truth the SDK reads: the
 card's metadata plus the schema derived from the data, counts, and file pointers. It is pure data with
-no file I/O — the [writer](timef-writer.md) writes it last (its presence marks a committed version) and
+no file I/O. The [writer](timef-writer.md) writes it last (its presence marks a committed version) and
 the [reader](timef-reader.md) reads it first. Lives in `timenet.manifest`.
 
 Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors, the manifest's
-`schema` block is a direct serialization of it — there are no separate "entry" types to keep in sync.
+`schema` block is a direct serialization of it. There are no separate "entry" types to keep in sync.
 
 The on-disk shape is published as [`manifest-v1.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/manifest-v1.schema.json)
 (JSON Schema draft 2020-12), the formal contract for external consumers. It ships in the `timenet`
