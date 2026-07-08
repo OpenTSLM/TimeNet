@@ -20,8 +20,8 @@ with TimeFWriter(root, dataset) as writer:
 # committed at <root>/<dataset_id>/<version>/
 ```
 
-Most connectors don't use `TimeFWriter` directly — `BaseConnector.store()` and the
-[engine](engine.md) wrap it.
+Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and the
+[engine](curation.md) wrap it.
 
 ---
 
@@ -48,7 +48,7 @@ Most connectors don't use `TimeFWriter` directly — `BaseConnector.store()` and
 | `compression_level` | 3 | Pinned level (zstd) for reproducible output. |
 | `progress_cb` | `None` | Called with each `WriteProgressEvent`. |
 
-Targets are measured in **uncompressed value bytes**; on disk (zstd) files are smaller.
+Targets are measured in uncompressed value bytes; on disk (zstd) files are smaller.
 
 ## Streaming and chunking
 
@@ -63,11 +63,11 @@ values (`list<float32>` uses 32-bit offsets); the byte-based flush keeps it well
 
 Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay stable:
 
-- `values.list.element` → **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
-- monotonic ints (`chunk_idx`, `row_group`, `row_offset`) → DELTA_BINARY_PACKED.
+- `values.list.element` -> **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
+- monotonic ints (`chunk_idx`, `row_group`, `row_offset`) -> DELTA_BINARY_PACKED.
 - bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `label`, `shard_path`)
-  → dictionary + RLE.
-- id columns → plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
+  -> dictionary + RLE.
+- id columns -> plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
   UUID (see below), otherwise as a UTF-8 string.
 
 Every file is written with `write_statistics`, `write_page_index`, `write_page_checksum`, and
@@ -77,8 +77,8 @@ deduplicating backend (e.g. Xet); the reader treats the files as ordinary Parque
 
 ### Id storage
 
-Entity ids default to a **UUIDv7** string (`timenet.types.new_id`), time-ordered so sorting by id — which
-the writer already does — clusters values by creation time and compresses their shared prefix. For each
+Entity ids default to a **UUIDv7** string (`timenet.types.new_id`), time-ordered so sorting by id (which
+the writer already does) clusters values by creation time and compresses their shared prefix. For each
 of the six logical ids (`sample_id`, `time_series_id`, `annotation_id`, `task_id`, `source_id`,
 `subject_id`) the writer checks whether every value is a canonical UUID; if so it stores that id's columns
 as 16 raw bytes (`binary(16)`) instead of a 36-char string and records `"<id>": "uuid16"` in the
@@ -90,8 +90,8 @@ decodes `binary(16)` back to the canonical string, so callers always see string 
 Intrinsic per-sample/annotation/task checks happen at insertion (see [TimeFDataset](timef-dataset.md)).
 The writer adds two checks, raising `TimeFValidationError`:
 
-- **Cross-sample** (before any I/O): annotations sharing an `id` across samples must be field-equal.
-- **Per-series** (as each loader runs): values are a non-empty, finite `float32` array; when `t_end_s`
+- Cross-sample (before any I/O): annotations sharing an `id` across samples must be field-equal.
+- Per-series (as each loader runs): values are a non-empty, finite `float32` array; when `t_end_s`
   is set, `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)`.
 
 ## Commit protocol

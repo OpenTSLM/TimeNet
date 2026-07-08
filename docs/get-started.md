@@ -75,7 +75,7 @@ print(df.head())
 ```
 
 !!! tip "pandas is optional"
-    The DataFrame step uses pandas (`uv add pandas`) — it isn't a TimeNet dependency. Drop it for a
+    The DataFrame step uses pandas (`uv add pandas`). It isn't a TimeNet dependency. Drop it for a
     pure-NumPy workflow.
 
 `load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values;

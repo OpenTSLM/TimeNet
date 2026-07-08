@@ -8,4 +8,7 @@ tags:
 
 # Benchmarks
 
-Coming soon.
+Benchmarks will pair TimeNet datasets with standard tasks and metrics so you can compare models on a common footing.
+
+!!! warning "Planned"
+    This is not built yet. The benchmark suite and results are still in progress.

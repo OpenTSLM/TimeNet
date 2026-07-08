@@ -32,10 +32,10 @@ There can be several registries: one public, private internal ones, or a local d
 ## The two flows
 
 ```
-PRODUCE  dataset.yaml + connector ─► engine (download → convert → derive_schema → store) ─► publish ─┐
-                                                                                                  ▼
-                                                                                              registry
-CONSUME  SDK ─► get_manifest ─► fetch parquet ─► TimeFReader ─► Arrow  ◄───────────────────────────┘
+PRODUCE  dataset.yaml + connector ─► engine (download -> convert -> derive_schema -> store) ─► publish ─┐
+                                                                                                     ▼
+                                                                                                 registry
+CONSUME  SDK ─► get_manifest ─► fetch parquet ─► TimeFReader ─► Arrow  ◄──────────────────────────────┘
 ```
 
 The compiled `manifest.json` (the card's human-authored metadata plus the schema derived from the data)
@@ -51,14 +51,14 @@ Three producer-side pieces, each with one job:
 | Role | What it is | Job |
 | --- | --- | --- |
 | **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
-| **Engine** | `run_pipeline` ([engine](engine.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
+| **Engine** | `run_pipeline` ([curate & publish](curation.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
 | **Curator** | the `timenet-curate` CLI ([curation](curation.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
 
 ```
 timenet-curate build org/name                          curator
-  └─ discovery.resolve("org/name") → Connector class    (datasets/<org>/<name>/ exposes CONNECTOR)
+  └─ discovery.resolve("org/name") -> Connector class   (datasets/<org>/<name>/ exposes CONNECTOR)
       └─ run_pipeline(connector, <registry>)            engine
-           metadata → download → convert → derive_schema → store → <registry>/org/name/<version>/
+           metadata -> download -> convert -> derive_schema -> store -> <registry>/org/name/<version>/
 ```
 
 `metadata()` reads the `dataset.yaml` card and `store()` streams through

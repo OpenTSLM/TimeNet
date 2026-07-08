@@ -140,9 +140,9 @@ An annotation is extra context attached to a [`Sample`](timef-dataset.md): side 
 can read as input, or that can itself become a task's question or answer. It is scoped at one of three
 levels, and the scopes combine:
 
-- **sample** — the whole sample (a static fact, or a trial-level temporal marker),
-- **time range** — a span in the recording timeline (`start_time_s` … `end_time_s`),
-- **signal** — one or more specific channels (`time_series_ids`).
+- sample: the whole sample (a static fact, or a trial-level temporal marker),
+- time range: a span in the recording timeline (`start_time_s` … `end_time_s`),
+- signal: one or more specific channels (`time_series_ids`).
 
 Three shapes, one flat frozen dataclass each. `key` / `value` / `unit` / `description` / `id` are
 **instance fields**, so connectors author annotations directly (or subclass with field defaults for
@@ -168,7 +168,7 @@ StaticAnnotation(key="age", value=64, unit="years")
 # time range on the whole sample (trial-level)
 IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
 
-# signal + time range: leads V1 and V2, seconds 5–6
+# signal + time range: leads V1 and V2, seconds 5 to 6
 IntervalAnnotation(
     key="st_elevation",
     value="ST elevation",
@@ -223,12 +223,12 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
 
 ### Per-type payloads
 
-- **`ClassificationTask`** — one discrete label for the whole sample; `label_schema` names the
+- `ClassificationTask`: one discrete label for the whole sample; `label_schema` names the
   vocabulary the label is drawn from (`None` for free-form).
   ```python
   dataset.add_task(sample, ClassificationTask(label="afib", label_schema="AAMI"))
   ```
-- **`LabelingTask`** — a label localized to specific signals and/or time windows: `time_series_ids`
+- `LabelingTask`: a label localized to specific signals and/or time windows: `time_series_ids`
   picks the channels (`None` = all), `windows_s` the spans (`None` = full duration).
   ```python
   dataset.add_task(sample, LabelingTask(
@@ -237,19 +237,19 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
       windows_s=((120.0, 480.0),),
   ))
   ```
-- **`CaptioningTask`** — free-form text describing the sample (no question).
+- `CaptioningTask`: free-form text describing the sample (no question).
   ```python
   dataset.add_task(sample, CaptioningTask(answer="A 10-second sinus rhythm with one PVC."))
   ```
-- **`QATask`** — a question and its single-label answer.
+- `QATask`: a question and its single-label answer.
   ```python
   dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="ST elevation in V2."))
   ```
-- **`ForecastingTask`** — predict a target sample from context samples.
+- `ForecastingTask`: predict a target sample from context samples.
   ```python
   dataset.add_task(target, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
   ```
-- **`ReasoningTask`** — a question, the reasoning trace, then the answer. The `answer` is the
+- `ReasoningTask`: a question, the reasoning trace, then the answer. The `answer` is the
   evaluation target; the `rationale` (chain of thought) is the training signal and is optional.
   ```python
   dataset.add_task(sample, ReasoningTask(
@@ -328,9 +328,9 @@ DatasetSchema(
 
 ## Enums
 
-- **`View`** — which slice of a source a sample is: `FULL`, `SINGLE_CHANNEL`, `SUBSET`, `WINDOW`.
-- **`Domain`** — `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
-- **`License`** — SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, `CC0-1.0`, ...).
+- `View`: which slice of a source a sample is: `FULL`, `SINGLE_CHANNEL`, `SUBSET`, `WINDOW`.
+- `Domain`: `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
+- `License`: SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, `CC0-1.0`, ...).
 
 All are `StrEnum`, so members compare equal to their string values.
 
@@ -350,15 +350,16 @@ errors also derive from `ValueError` so existing handlers keep working.
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
 | `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
 
-The value types above raise `TimeFValidationError` when a value that would be *stored in a dataset*
-violates an invariant: a negative `Version` component, a `unit_value` that isn't a frequency, an
-`IntervalAnnotation` that ends before it starts, a `DatasetSchema` whose specs and data sources
-disagree. Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.
+`TimeFValidationError` covers both a value that would be *stored in a dataset* violating an invariant (a
+negative `Version` component, a `unit_value` that isn't a frequency, an `IntervalAnnotation` that ends
+before it starts, a `DatasetSchema` whose specs and data sources disagree) and an *invalid input to the
+API* (a malformed dataset ref, a `dataset_id` that isn't an `org/name` pair, a version supplied twice).
+Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.
 
-Plain `ValueError` is reserved for mistakes in *calling code* rather than in dataset content:
+Plain `ValueError` is reserved for genuine programming bugs rather than bad data or input:
 `annotation_type_of()` handed something that isn't one of the three shapes, or two `Task` classes
-declaring the same `task_type` (a definition bug, raised at import). Those are never data problems, so
-tagging them as TimeF validation failures would make the distinction useless.
+declaring the same `task_type` (a definition bug, raised at import). Those are never data or input
+problems, so tagging them as TimeF validation failures would make the distinction useless.
 
 ---
 

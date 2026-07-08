@@ -1,40 +1,57 @@
 ---
 icon: lucide/factory
-description: "The timenet-curate CLI: run a connector through the engine into a registry."
+description: "Curation: run a connector through the pipeline and publish a dataset to a registry."
 tags:
   - guide
   - curation
 ---
 
-# Curation CLI
+# Curate & publish
 
-`timenet-curate` is the producer command-line interface, run from a `timenet-connectors` checkout. It
-drives a [connector](connectors.md) through the [engine](engine.md) and produces a dataset-layout
-directory (a `manifest.json` plus its parquet) ready for a [registry](registry.md). It ships with
-`timenet-connectors`, distinct from the consumer [`timenet`](client.md#cli) CLI. Built with
-[Typer](https://typer.tiangolo.com).
+Curation turns a [connector](connectors.md)'s raw source into a stored dataset: a `manifest.json` plus
+its parquet, written into a [registry](registry.md). It runs on your machine and publishes to a local
+registry today, with a hosted backend planned. The command that drives it is
+[`timenet-curate build`](cli/curate.md); this page covers what happens underneath.
 
-## `timenet-curate build`
+## The pipeline
 
-```bash
-timenet-curate build <dataset_id> [--out <dir>] [--force] [--keep-cache]
+The engine runs one connector through four stages, in `timenet.engine.run_pipeline`:
+
+```python
+from timenet.engine import run_pipeline
+
+run_pipeline(connector, root, *, cache_dir=None, clean_cache=False, progress_cb=None, force=False)
 ```
 
-Runs the connector for `<dataset_id>` through the engine (`download -> convert -> derive_schema ->
-store`) and writes the dataset into `--out <dir>` (default: the local registry `<home>/registry`). An
-already-curated version is reused unless `--force`/`-f` is given; the raw download cache is removed after
-a successful build unless you pass `--keep-cache`. `timenet-curate --quiet`/`-q` suppresses progress
-output. The output directory is itself a valid local registry, so you can verify the result immediately:
+1. cache: create `cache_dir` (defaults to `<TIMENET_CACHE>/<dataset_id>`). With `clean_cache=True` it is
+   removed after a successful build.
+2. download: `connector.download(cache_dir)` fetches the raw references. This is the only stage that
+   touches the network.
+3. convert: `connector.convert(raw_refs)` builds an in-memory [`TimeFDataset`](timef-dataset.md).
+4. derive_schema and store: derive the schema, then `connector.store()` streams it through
+   [`TimeFWriter`](timef-writer.md) and returns the committed version directory.
 
-```bash
-timenet-curate build timenet/hello-world --out ./local_registry
-python -c "from timenet.client import TimeNet; print(TimeNet('./local_registry').list())"
-```
+`run_pipeline` is idempotent: an already-committed version short-circuits unless you pass `force=True`.
+Distributed (Ray-backed) scheduling is out of scope for now.
 
-The curator loop: add a connector at `datasets/<org>/<name>/` (its `__init__.py` exposes a
-[`BaseConnector`](connectors.md) as `CONNECTOR`) with its [dataset card](manifest.md),
-`dataset.yaml`, beside it, `build` locally, verify with the SDK, then publish. The card is validated
-against the packaged [`dataset-card.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json)
-when the connector loads it (`BaseConnector` reads `dataset.yaml` by convention; set `CARD` to override
-the path). This needs the `timenet[curation]` extra, pulled in by `timenet-connectors`. Additional verbs
-(`validate`, `inspect`, `publish`) and a remote registry backend are planned.
+## Publishing
+
+For a local registry, `store` is the publish step, since the output directory is itself a valid local
+registry. [`WritableRegistry.store`](registry.md#writing-to-a-registry) is the general primitive the S3
+and hosted backends will implement, so publishing to those arrives when they do.
+
+## The authoring loop
+
+Building a dataset follows one path:
+
+1. Add a connector at `datasets/<org>/<name>/` in `timenet-connectors`. Its `__init__.py` exposes a
+   [`BaseConnector`](connectors.md) as `CONNECTOR`.
+2. Put its [dataset card](manifest.md), `dataset.yaml`, beside it. The card is validated against the
+   packaged [`dataset-card.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json)
+   when the connector loads it.
+3. Build it with [`timenet-curate build`](cli/curate.md).
+4. Verify by pointing the SDK at the output directory, which is itself a valid local registry.
+5. Publish once a hosted backend is available.
+
+See [Connectors](connectors.md) for how to write the `download` and `convert` steps, and the
+[`timenet.engine` API](api/engine.md) for the full symbol listing.

@@ -32,6 +32,9 @@ registry = open_registry("timenet://")                # the hosted TimeNet regis
 | `http(s)://` | `RemoteRegistry` (deferred) |
 | `timenet://` | `RemoteRegistry`, an alias for the hosted `https://registry.timenet.ai` |
 
+An unrecognized scheme (`gs://`, `az://`, ...) raises `ValueError` instead of silently becoming a local
+path, and `~` is expanded in a local path or `file://` URI.
+
 !!! warning "Only local registries today"
     `LocalRegistry` is the only working backend. The `s3://`, `http(s)://`, and `timenet://`
     backends are stubs that raise `NotImplementedError` until they land.
@@ -43,7 +46,7 @@ The contract every backend implements (three data-access methods) plus a shared 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
-| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version. |
+| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for binary reading. |
 | `search(...)` | Filter datasets (shared implementation). |
 
@@ -87,7 +90,8 @@ registry.search(
 ```
 
 Every filter takes a scalar or a list; `None` filters are ignored and non-`None` filters are ANDed. The
-consumer CLI mirrors this one-to-one (`timenet search`).
+consumer CLI mirrors this one-to-one (`timenet search`). `limit` caps the result count (default 100);
+`limit=0` returns nothing and a negative `limit` raises `ValueError`.
 
 | Filter | Matches |
 | --- | --- |
@@ -99,8 +103,8 @@ consumer CLI mirrors this one-to-one (`timenet search`).
 | `dataset_id` | dataset id is any of these |
 | `tag` | dataset declares all of these tags |
 
-The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest —
-no `precomputed_schema` is needed because the manifest always carries the derived schema.
+The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest.
+No `precomputed_schema` is needed because the manifest always carries the derived schema.
 
 ---
 
