@@ -192,3 +192,22 @@ def test_missing_listed_file_raises(tmp_path):
     (version_dir / "samples.parquet").unlink()
     with pytest.raises(FileNotFoundError):
         TimeFReader(version_dir)
+
+
+def test_t0_unix_ns_round_trips_exactly(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        samples = {s.sample_id: s for s in reader.iter_samples()}
+    # The fixture anchor is not representable in float64, so this catches any float coercion.
+    assert samples["sample-0"].t0_unix_ns == 1_700_000_000_000_000_001
+    assert samples["sample-1"].t0_unix_ns is None
+    assert samples["sample-2"].t0_unix_ns is None
+
+
+def test_samples_file_without_t0_column_reads_as_none(tmp_path):
+    version_dir = _write(tmp_path)
+    samples_path = version_dir / "samples.parquet"
+    table = pq.read_table(samples_path)
+    pq.write_table(table.drop_columns(["t0_unix_ns"]), samples_path)
+    with TimeFReader(version_dir) as reader:
+        assert all(s.t0_unix_ns is None for s in reader.iter_samples())

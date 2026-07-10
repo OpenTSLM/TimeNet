@@ -59,3 +59,21 @@ def test_trial_level_point_needs_no_common_span(make_series):
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     # A point marker imposes no common-span requirement.
     sample.add_annotation(PointAnnotation(key="stimulus", start_time_s=1.0))
+
+
+def test_t0_unix_ns_defaults_to_none(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    assert sample.t0_unix_ns is None
+
+
+def test_t0_unix_ns_accepts_int64(make_series):
+    anchor = 1_700_000_000_000_000_001
+    sample = Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=anchor)
+    assert sample.t0_unix_ns == anchor
+
+
+def test_t0_unix_ns_rejects_out_of_int64_range(make_series):
+    with pytest.raises(ValueError, match="int64"):
+        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=2**63)
+    with pytest.raises(ValueError, match="int64"):
+        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=-(2**63) - 1)
