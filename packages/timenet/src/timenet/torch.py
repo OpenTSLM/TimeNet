@@ -7,10 +7,12 @@ imports this module lazily, so base users who never touch PyTorch don't need it 
 from collections.abc import Callable
 from typing import Any
 
+from jaxtyping import Shaped
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset
 
-from timenet.dataset import TimeFDataset
+from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import Task
 
@@ -42,8 +44,7 @@ class TimeFTorchDataset(Dataset):
         sample = self._samples[index]
         item: dict[str, Any] = {
             "sample_id": sample.sample_id,
-            # copy(): Arrow's zero-copy numpy view is read-only, which torch.from_numpy warns about.
-            "series": tuple(torch.from_numpy(ts.to_numpy().copy()) for ts in sample.time_series),
+            "series": tuple(_series_tensor(ts) for ts in sample.time_series),
             "tasks": tuple(self._resolve_task(task_id, sample.sample_id) for task_id in sample.task_ids),
             "annotations": sample.annotations,
         }
@@ -66,3 +67,16 @@ class TimeFTorchDataset(Dataset):
         if task is None:
             raise TimeFValidationError(f"sample {sample_id!r} references unknown task id {task_id!r}")
         return task
+
+
+def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
+    """Materialize one series as a tensor with its temporal and per-step dimensions.
+
+    Args:
+        ts: The series to load.
+
+    Returns:
+        The values with shape ``(n_steps, *spec.value_shape)``.
+    """
+    # copy(): Arrow's zero-copy numpy view is read-only, which torch.from_numpy warns about.
+    return torch.from_numpy(ts.to_numpy().copy())

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
+from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
@@ -178,7 +179,7 @@ class _ArrayAppender:
         self._array = array
         self._shard_len = shard_len
         self._written = 0
-        self._buffer: list[np.ndarray] = []
+        self._buffer: list[Shaped[np.ndarray, " time *value"]] = []
         self._buffer_len = 0
 
     @property
@@ -186,11 +187,11 @@ class _ArrayAppender:
         """The array's length including not-yet-flushed values (the next append's base offset)."""
         return self._written + self._buffer_len
 
-    def append(self, values: np.ndarray) -> None:
+    def append(self, values: Shaped[np.ndarray, " time *value"]) -> None:
         """Buffer one series' values, flushing every completed shard.
 
         Args:
-            values: The series' float32 values.
+            values: The series values with their per-step dimensions.
         """
         self._buffer.append(values)
         self._buffer_len += len(values)
