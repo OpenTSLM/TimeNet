@@ -274,6 +274,7 @@ class TimeFReader:
             subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
             task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
             annotations=annotations,
+            t0_unix_ns=row.get("t0_unix_ns"),  # absent in pre-anchor files; treated as no anchor
         )
 
     def _build_series(self, sample_id: str, struct: dict) -> TimeSeries:
