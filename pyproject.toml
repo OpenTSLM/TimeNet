@@ -60,6 +60,7 @@ select = [
 ]
 ignore = [
     "E501",  # Line too long — handled by the formatter
+    "F722",  # jaxtyping shape strings (e.g. Float32[np.ndarray, " time"]) read as forward references
     "D417",  # Don't require documentation for every function parameter
     "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
