@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 import math
 
+from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
@@ -62,7 +63,7 @@ class TimeSeries:
         """
         return self.loader()
 
-    def to_numpy(self) -> np.ndarray:
+    def to_numpy(self) -> Shaped[np.ndarray, " time *value"]:
         """Read the series' values as a NumPy array.
 
         Returns:

@@ -14,6 +14,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
@@ -29,7 +30,7 @@ class ZarrValuesReader:
     def __init__(self) -> None:
         """Start with empty (per-process) array and chunk caches."""
         self._array_cache: dict[str, Any] = {}
-        self._chunk_cache: OrderedDict[tuple[str, int], np.ndarray] = OrderedDict()
+        self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
     def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
@@ -76,7 +77,7 @@ class ZarrValuesReader:
         self._chunk_cache.clear()
         self._chunk_cache_bytes = 0
 
-    def _read_range(self, root: Path, rel_path: str, start: int, stop: int) -> np.ndarray:
+    def _read_range(self, root: Path, rel_path: str, start: int, stop: int) -> Shaped[np.ndarray, " time *value"]:
         """Assemble ``array[start:stop]`` from cached decoded storage chunks.
 
         Args:
@@ -86,7 +87,7 @@ class ZarrValuesReader:
             stop: One past the last element of the range.
 
         Returns:
-            The range's float32 values.
+            The range's values with their per-step dimensions preserved.
         """
         array = self._array(root, rel_path)
         chunk_len = array.chunks[0]
@@ -98,7 +99,7 @@ class ZarrValuesReader:
             segments.append(chunk[lo:hi])
         return segments[0] if len(segments) == 1 else np.concatenate(segments)
 
-    def _chunk(self, rel_path: str, array: Any, chunk_idx: int, chunk_len: int) -> np.ndarray:
+    def _chunk(self, rel_path: str, array: Any, chunk_idx: int, chunk_len: int) -> Shaped[np.ndarray, " chunk *value"]:
         """Return one decoded storage chunk, decoding each chunk at most once (LRU).
 
         Args:
@@ -108,7 +109,7 @@ class ZarrValuesReader:
             chunk_len: The array's chunk length in elements.
 
         Returns:
-            The chunk's float32 values.
+            The chunk's values with their per-step dimensions preserved.
         """
         key = (rel_path, chunk_idx)
         cached = self._chunk_cache.get(key)
@@ -173,7 +174,7 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
     return runs
 
 
-def _to_arrow(values: np.ndarray, spec: TimeSeriesSpec) -> pa.Array:
+def _to_arrow(values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec) -> pa.Array:
     """Wrap a backend NumPy buffer in the spec's canonical Arrow representation.
 
     Returns:

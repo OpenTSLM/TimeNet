@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from jaxtyping import Float, Float64
 import numpy as np
 import pyarrow as pa
 
@@ -58,7 +59,9 @@ class HelloWorldRecording:
     n_values: int
 
 
-def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Callable[[], pa.Array]:
+def _wave(
+    fn: Callable[[Float64[np.ndarray, " time"]], Float[np.ndarray, " time"]], n: int, phase: float
+) -> Callable[[], pa.Array]:
     """Build a deterministic loader for a closed-form wave (no RNG, no I/O).
 
     Args:
