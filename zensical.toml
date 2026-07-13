@@ -71,6 +71,11 @@ features = [
 repo = "fontawesome/brands/github"
 logo = "lucide/rocket"
 
+# A roadmap callout, distinct from `warning` (a limitation you can hit today). The theme only ships
+# CSS for its own admonition types, so the colors for `planned` live in stylesheets/extra.css.
+[project.theme.icon.admonition]
+planned = "lucide/construction"
+
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"
 toggle.icon = "lucide/sun-moon"

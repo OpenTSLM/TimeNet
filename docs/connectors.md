@@ -91,9 +91,11 @@ timenet-curate build chengsenwang/tsqa --keep-cache    # keep the raw sources fo
 ```
 
 A successful build removes the dataset's raw download cache (`<TIMENET_CACHE>/<dataset_id>`), since the
-sources are only needed during conversion; pass `--keep-cache` to retain them. For offline work and
-tests, `TIMENET_TESTING=1` serves the connector's checked-in fixture, and `TIMENET_ROW_LIMIT=N` caps
-rows for a quick sample.
+sources are only needed during conversion; pass `--keep-cache` to retain them.
+
+Keeping `download` and `convert` apart is what makes a connector testable offline: `convert` takes raw
+references and touches no network, so a test hands it a checked-in fixture and skips `download`
+entirely. See `packages/timenet-connectors/tests/fixtures/` and the `_convert()` helpers beside them.
 
 Once built, load and inspect a dataset with the SDK. See `examples/load_tsqa.py`, which loads a dataset
 and calls `describe()` to print its identity, counts, per-spec columns, and a sample preview.

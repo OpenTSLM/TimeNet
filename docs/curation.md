@@ -47,8 +47,7 @@ Building a dataset follows one path:
 1. Add a connector at `datasets/<org>/<name>/` in `timenet-connectors`. Its `__init__.py` exposes a
    [`BaseConnector`](connectors.md) as `CONNECTOR`.
 2. Put its [dataset card](manifest.md), `dataset.yaml`, beside it. The card is validated against the
-   packaged [`dataset-card.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json)
-   when the connector loads it.
+   packaged `dataset-card.schema.json` when the connector loads it.
 3. Build it with [`timenet-curate build`](cli/curate.md).
 4. Verify by pointing the SDK at the output directory, which is itself a valid local registry.
 5. Publish once a hosted backend is available.
