@@ -18,9 +18,14 @@ Both are built with [Typer](https://typer.tiangolo.com) and gate their heavier d
 extra, so the core package stays small. `timenet` needs the `cli` extra (`pip install 'timenet[cli]'`);
 run it without the extra and it prints a one-line install hint instead of a traceback.
 
+Both split their output the same way: status lines on stderr, the machine-readable result (a path) on
+stdout. `--quiet`/`-q` silences the status, and belongs to the tool rather than the subcommand, so it
+goes first: `timenet --quiet list`, `timenet-curate --quiet build <id>`.
+
 Every command reads the same configuration the SDK does. The registry to talk to is resolved as
-`--registry` flag, then `$TIMENET_REGISTRY`, then the local default at `<home>/registry`. See
-[Configuration](../client.md#configuration) for the full set of `TIMENET_*` variables.
+`--registry` flag (or `--out` for `timenet-curate build`), then `$TIMENET_REGISTRY`, then the local
+default at `<home>/registry`. See [Configuration](../client.md#configuration) for the full set of
+`TIMENET_*` variables.
 
 Start with [`timenet`](timenet.md) if you want to use datasets, or [`timenet-curate`](curate.md) if you
 are building one.
