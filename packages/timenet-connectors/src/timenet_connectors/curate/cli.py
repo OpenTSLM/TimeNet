@@ -13,6 +13,8 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import run_pipeline
+from timenet.errors import RegistryError
+from timenet.registry import local_registry_path
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.discovery import resolve
 
@@ -26,10 +28,33 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
     console.quiet = quiet
 
 
+def _default_root() -> Path:
+    """The registry directory a build writes to when ``--out`` is not given.
+
+    Mirrors the consumer side's selection order, so the CLI that writes a dataset and the SDK that
+    reads it land on the same directory.
+
+    Returns:
+        ``$TIMENET_REGISTRY`` when it names a local directory, else ``<home>/registry``.
+
+    Raises:
+        BadParameter: If ``$TIMENET_REGISTRY`` names a remote registry, which cannot be built into.
+    """
+    cfg = settings()
+    if cfg.registry is None:
+        return cfg.registry_path
+    try:
+        return local_registry_path(cfg.registry)
+    except RegistryError as exc:
+        raise typer.BadParameter(f"$TIMENET_REGISTRY {cfg.registry!r} is remote; pass --out <dir>") from exc
+
+
 @app.command()
 def build(
     dataset_id: str,
-    out: str | None = typer.Option(None, "--out", help="Output registry directory (default: the local registry)."),
+    out: str | None = typer.Option(
+        None, "--out", help="Output registry directory (default: $TIMENET_REGISTRY, else the local registry)."
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already curated."),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
@@ -41,13 +66,13 @@ def build(
     capture). An already-curated version is reused unless ``--force`` is given.
 
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector.
+        BadParameter: If ``dataset_id`` has no known connector, or ``$TIMENET_REGISTRY`` is remote.
     """
     try:
         connector_cls = resolve(dataset_id)
     except LookupError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    root = Path(out) if out is not None else settings().registry_path
+    root = Path(out).expanduser() if out is not None else _default_root()
     console.status("🔧", f"Building '{dataset_id}'…")
     version_dir = run_pipeline(
         connector_cls(), root, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
