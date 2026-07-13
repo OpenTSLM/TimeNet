@@ -17,8 +17,6 @@ from timenet.client import TimeNet
 from timenet.types import Domain
 
 client = TimeNet()                                   # default local registry (~/.cache/timenet/registry)
-client = TimeNet("~/.timenet/local")                 # a local registry
-client = TimeNet("timenet://")                        # the hosted registry (deferred)
 
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
@@ -35,8 +33,15 @@ TimeNet(registry=None, *, storage_path=None)
 
 Registry selection order: the `registry` argument, then `$TIMENET_REGISTRY`, then the local default
 registry (`<home>/registry`). `registry` accepts a `BaseRegistry`, a local path or `file://` URI, an
-`s3://` URI, or a hosted `timenet://` / `http(s)://` URL. The `s3://` and remote backends are deferred,
-so today only local registries serve data; see [Registry](registry.md).
+`s3://` URI, or a hosted `timenet://` / `http(s)://` URL:
+
+```python
+client = TimeNet("./local_registry")                 # any directory a build wrote to
+```
+
+The `s3://` and remote backends are deferred. Constructing `TimeNet("timenet://")` succeeds, but every
+call against it raises `NotImplementedError`, so today only local registries serve data; see
+[Registry](registry.md).
 
 ## Configuration
 
@@ -47,7 +52,7 @@ the per-area variables override just their own path. Precedence for any value is
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL); `timenet-curate build` writes curated datasets here. |
+| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-curate build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
 | `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download`/`load` fetch from the registry to read. |
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during curation (removed after a successful build). |
 

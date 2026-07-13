@@ -60,7 +60,7 @@ sample.
 
 === "Spark"
 
-    !!! warning "Planned"
+    !!! planned "Planned"
         No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
         directory of parquet files, which `spark.read.parquet` can point at directly, but the
         documented recipe lands later.
