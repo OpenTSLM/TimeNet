@@ -4,8 +4,8 @@ site_description = "Register, query, download, convert, and explore time-series 
 site_url = "https://docs.timenet.ai"
 use_directory_urls = false
 
-repo_url = "https://github.com/AI-X-Labs/TimeNet"
-repo_name = "AI-X-Labs/TimeNet"
+repo_url = "https://github.com/OpenTSLM/TimeNet"
+repo_name = "OpenTSLM/TimeNet"
 edit_uri = "edit/main/docs/"
 docs_dir = "docs"
 
@@ -48,7 +48,7 @@ nav = [
 #data = 0
 #note = """
 #  Thanks for your feedback! Help us improve this page by
-#  <a href="https://github.com/AI-X-Labs/TimeNet/issues" target="_blank" rel="noopener">creating an issue</a>.
+#  <a href="https://github.com/OpenTSLM/TimeNet/issues" target="_blank" rel="noopener">creating an issue</a>.
 #"""
 
 [project.theme]
@@ -164,7 +164,7 @@ emoji_generator = "zensical.extensions.emoji.to_svg"
 
 [project.markdown_extensions.pymdownx.magiclink]
 repo_url_shorthand = true
-user = "AI-X-Labs"
+user = "OpenTSLM"
 repo = "TimeNet"
 
 [project.markdown_extensions.pymdownx.smartsymbols]
