@@ -1,13 +1,14 @@
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from timenet.client import TimeNet
 from timenet.config import settings
 from timenet.engine import run_pipeline
 from timenet.testing import assert_datasets_equal
-from timenet_connectors.curate.cli import app as curate_app
+from timenet_connectors.curate.cli import _default_root, app as curate_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
 
@@ -77,9 +78,11 @@ def test_curate_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp
 
 def test_curate_build_rejects_remote_timenet_registry(clean_env, monkeypatch):
     monkeypatch.setenv("TIMENET_REGISTRY", "timenet://")
-    result = runner.invoke(curate_app, ["build", "timenet/hello-world"])
-    assert result.exit_code == 2
-    assert "--out" in result.output
+    # A bare build into a remote registry is rejected with exit code 2. The message is a
+    # Rich-rendered error panel, so assert it on the raising helper, not the console output.
+    assert runner.invoke(curate_app, ["build", "timenet/hello-world"]).exit_code == 2
+    with pytest.raises(typer.BadParameter, match="--out"):
+        _default_root()
 
 
 def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):
