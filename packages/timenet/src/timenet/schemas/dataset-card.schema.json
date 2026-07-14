@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json",
+  "$id": "https://docs.timenet.ai/schemas/dataset-card-v1.schema.json",
   "title": "TimeNet Dataset Card",
   "description": "Human-authored metadata for a TimeNet dataset: the card YAML that sits beside a connector and is the single source for the dataset's descriptive identity.",
   "type": "object",
