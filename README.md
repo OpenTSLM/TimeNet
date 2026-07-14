@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 TimeNet is a Python library and CLI for registering, fetching, and exploring time-series datasets
 in a shared format called TimeF. Every dataset gets one on-disk shape and one way to load it, so a
@@ -97,3 +98,7 @@ bypass hooks with `--no-verify`; if one fails, run `make check` / `make lint-fix
 `make docs-serve` gives a live preview at http://127.0.0.1:8000; `make docs` builds the static site
 into `site/`. Published at <https://docs.timenet.ai/>, deployed from `main` by
 `.github/workflows/docs.yml`.
+
+## License
+
+TimeNet is released under the [MIT License](LICENSE).
