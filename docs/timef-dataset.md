@@ -36,7 +36,7 @@ TimeSeries(
 | `spec` | `TimeSeriesSpec` | yes | The modality (shared across channels). |
 | `channel` | `str` | yes | The single channel this series carries (e.g. `"II"`). |
 | `sampling_rate_hz` | `float` | yes | Sampling rate in canonical Hz; positive and finite. |
-| `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning the 1-D `float32` values. |
+| `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning scalar values or an Arrow fixed-shape tensor array. |
 | `source_id` | `str \| None` | no | Identifier of the raw recording this series came from. |
 | `time_series_id` | `str` | no | Persistent handle (auto uuid7). The writer dedupes by it. |
 | `t_start_s` | `float` | no | Window start in the source timeline (default `0.0`). |
@@ -45,7 +45,14 @@ TimeSeries(
 `TimeSeries` is frozen with identity equality (`eq=False`): the writer dedupes by `time_series_id`, so
 reusing one instance (or giving two instances the same explicit id) collapses to one chunk on disk.
 Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`; `loader` is plumbing
-supplied by the connector at curation and by [`TimeFReader`](timef-reader.md) on read-back.
+supplied by the connector at curation and by [`TimeFReader`](timef-reader.md) on read-back, and remains
+the lazy boundary. `read_steps(start, stop)` lets range-aware storage loaders select a
+temporal subsection before returning Arrow; older connector callables fall back to a full-read slice.
+
+`TimeSeriesSpec.dtype`, `value_shape`, and `dimension_names` describe one timestep. Scalar series keep
+the defaults `float32`, `()`, and `()`. For an RGB camera, for example, use `dtype="uint8"`,
+`value_shape=(height, width, 3)`, and names `("height", "width", "color")`; the full logical shape is
+always `(n_steps, *value_shape)`.
 
 ---
 
