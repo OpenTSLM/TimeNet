@@ -35,7 +35,7 @@ class Manifest:
         InvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str
     """Denormalized copy of ``metadata.dataset_id``, readable without parsing metadata."""
@@ -55,7 +55,7 @@ class Manifest:
     """Storage backend for the time-series values plane."""
     derived_from: dict[str, str] | None = None
     """Copy-on-write lineage (base version + operation), or ``None`` for a freshly built version."""
-    timef_format_version: int = 1
+    timef_format_version: int = 2
     """TimeF manifest format version; must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
