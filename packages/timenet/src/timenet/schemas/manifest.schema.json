@@ -16,6 +16,11 @@
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "Map of version-relative path to a 'sha256:...' digest."
+    },
+    "values_backend": {
+      "type": "string",
+      "enum": ["parquet"],
+      "description": "Storage backend for the time-series values plane. Determines how files.time_series and the index's chunk locator are interpreted. Defaults to 'parquet' when absent."
     }
   },
   "$defs": {
