@@ -66,6 +66,12 @@ class TimeSeriesSpec:
         """
         hertz = ureg.hertz.dimensionality
         second = ureg.second.dimensionality
+        if not self.spec_type:
+            raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
+        if self.spec_type in (".", ".."):
+            # The Zarr backend derives a per-spec_type array path from spec_type; "." and ".." would be
+            # filesystem-special path segments that percent-encoding leaves untouched.
+            raise TimeFValidationError(f"TimeSeriesSpec.spec_type must not be '.' or '..', got {self.spec_type!r}")
         if self.unit_sampling_rate.dimensionality != hertz:
             raise TimeFValidationError(
                 f"unit_sampling_rate must be a frequency (dimensionality {hertz}), got {self.unit_sampling_rate!r}"
@@ -90,6 +96,8 @@ class TimeSeriesSpec:
             raise TimeFValidationError("TimeSeriesSpec.dimension_names must be empty or match value_shape length")
         if any(not name for name in self.dimension_names):
             raise TimeFValidationError("TimeSeriesSpec.dimension_names must not contain empty names")
+        if len(set(self.dimension_names)) != len(self.dimension_names):
+            raise TimeFValidationError("TimeSeriesSpec.dimension_names must be unique")
 
     def __getstate__(self) -> dict[str, object]:
         """Pickle every unit by name rather than as a registry-bound object.
