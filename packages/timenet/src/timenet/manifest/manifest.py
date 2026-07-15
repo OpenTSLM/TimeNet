@@ -24,6 +24,7 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.values_backends import PARQUET_VALUES_BACKEND, SUPPORTED_VALUES_BACKENDS
 
 
 @dataclass(frozen=True)
@@ -50,13 +51,15 @@ class Manifest:
     """Per-file checksums keyed by relative path, each ``sha256:`` prefixed."""
     id_encoding: dict[str, str] = field(default_factory=dict)
     """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
+    values_backend: str = PARQUET_VALUES_BACKEND
+    """Storage backend for the time-series values plane."""
     derived_from: dict[str, str] | None = None
     """Copy-on-write lineage (base version + operation), or ``None`` for a freshly built version."""
     timef_format_version: int = 1
     """TimeF manifest format version; must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
-        """Validate the format version and the denormalized ``dataset_id``.
+        """Validate the format version, values backend, and denormalized ``dataset_id``.
 
         ``dataset_id`` is a top-level copy of ``metadata.dataset_id`` so a consumer can read the id
         without parsing the metadata block; the two must agree.
@@ -69,6 +72,10 @@ class Manifest:
             raise InvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
+            )
+        if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
+            raise InvalidManifestError(
+                f"unsupported values_backend {self.values_backend!r}; supported: {sorted(SUPPORTED_VALUES_BACKENDS)}"
             )
         if self.dataset_id != self.metadata.dataset_id:
             raise InvalidManifestError(
@@ -93,6 +100,7 @@ class Manifest:
             "files": _files_to_dict(self.files),
             "checksums": dict(self.checksums),
             "id_encoding": dict(self.id_encoding),
+            "values_backend": self.values_backend,
             "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
         }
 
@@ -131,6 +139,7 @@ class Manifest:
             counts=_counts_from_dict(data.get("counts", {})),
             checksums=checksums,
             id_encoding=id_encoding,
+            values_backend=data.get("values_backend", PARQUET_VALUES_BACKEND),
             derived_from=derived_from,
             timef_format_version=data["timef_format_version"],
         )

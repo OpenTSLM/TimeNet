@@ -6,7 +6,6 @@ construction lazy. Types are reconstructed from the manifest's flat descriptors 
 synthesis), so read-back objects pickle and match the originals field-for-field.
 """
 
-from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
 import json
@@ -22,6 +21,7 @@ from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
+from timenet.reader.values import ValuesReader, make_values_reader
 from timenet.types import (
     ANNOTATION_BASES,
     TASKS,
@@ -33,9 +33,6 @@ from timenet.types import (
     TaskType,
     View,
 )
-
-
-_ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared row group decodes once
 
 
 class TimeFReader:
@@ -81,24 +78,22 @@ class TimeFReader:
             raise
         except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
-        self._shard_cache: dict[Path, pq.ParquetFile] = {}
-        self._row_group_cache: OrderedDict[tuple[str, int], pa.ChunkedArray] = OrderedDict()
+        self._values: ValuesReader | None = None  # built lazily; dropped on pickle, rebuilt per process
 
     # ---- pickling ------------------------------------------------------------------------------
 
     def __getstate__(self) -> dict:
-        """Drop the open shard handles and cached row groups so the reader (and its loaders) pickle.
+        """Drop the values backend (open handles/caches) so the reader (and its loaders) pickle.
 
         The lazy loaders returned by :meth:`read` reference this reader, so a read-back dataset is
-        only picklable (e.g. for a multi-worker torch ``DataLoader``) if the reader is. The handle and
-        row-group caches are per-process scratch, rebuilt lazily after unpickling.
+        only picklable (e.g. for a multi-worker torch ``DataLoader``) if the reader is. The values
+        backend holds per-process scratch (file handles, decode caches), rebuilt lazily after unpickling.
 
         Returns:
-            The reader's state without its file caches.
+            The reader's state without its values backend.
         """
         state = self.__dict__.copy()
-        state["_shard_cache"] = {}
-        state["_row_group_cache"] = OrderedDict()
+        state["_values"] = None
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -117,11 +112,10 @@ class TimeFReader:
         self.close()
 
     def close(self) -> None:
-        """Close every cached shard file handle and drop cached row groups."""
-        for handle in self._shard_cache.values():
-            handle.close()
-        self._shard_cache.clear()
-        self._row_group_cache.clear()
+        """Close the values backend (its open handles and caches), if one was built."""
+        if self._values is not None:
+            self._values.close()
+            self._values = None
 
     # ---- public API ----------------------------------------------------------------------------
 
@@ -306,7 +300,7 @@ class TimeFReader:
     # ---- id decoding ---------------------------------------------------------------------------
 
     def _load_values(self, sample_id: str, time_series_id: str) -> pa.Array:
-        """Read and concatenate a series' chunk values across its shards.
+        """Read and concatenate a series' chunk values through the values backend.
 
         Args:
             sample_id: The owning sample's id.
@@ -321,43 +315,12 @@ class TimeFReader:
         rows = self._index.get((sample_id, time_series_id))
         if not rows:
             raise ValueError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
+        if self._values is None:
+            self._values = make_values_reader(self._manifest.values_backend)
         try:
-            chunks = [
-                self._row_group_values(row["shard_path"], row["row_group"])[row["row_offset"]].values for row in rows
-            ]
-        except (OSError, IndexError, ValueError) as exc:
+            return self._values.load(self._root, rows)
+        except (KeyError, OSError, IndexError, ValueError) as exc:
             raise ValueError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
-        return pa.concat_arrays([chunk.cast(pa.float32()) for chunk in chunks])
-
-    def _row_group_values(self, rel_path: str, row_group: int) -> pa.ChunkedArray:
-        """Return a shard row group's ``values`` column, decoding each row group at most once.
-
-        Chunks of different series can share a row group; without this cache every per-series read
-        would re-decode the whole column, making value materialization quadratic in chunks per group.
-
-        Args:
-            rel_path: The shard's path relative to the version directory.
-            row_group: The row-group index within the shard.
-
-        Returns:
-            The decoded ``values`` column of the row group.
-        """
-        key = (rel_path, row_group)
-        cached = self._row_group_cache.get(key)
-        if cached is not None:
-            self._row_group_cache.move_to_end(key)
-            return cached
-        values = self._shard(rel_path).read_row_group(row_group, columns=["values"]).column("values")
-        self._row_group_cache[key] = values
-        while len(self._row_group_cache) > _ROW_GROUP_CACHE_SIZE:
-            self._row_group_cache.popitem(last=False)
-        return values
-
-    def _shard(self, rel_path: str) -> pq.ParquetFile:
-        path = self._root / rel_path
-        if path not in self._shard_cache:
-            self._shard_cache[path] = pq.ParquetFile(path)
-        return self._shard_cache[path]
 
 
 @dataclass(frozen=True)

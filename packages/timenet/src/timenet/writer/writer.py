@@ -7,7 +7,6 @@ group. Everything is staged in a temporary directory and published with a single
 """
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 import json
 from pathlib import Path
 import shutil
@@ -31,7 +30,6 @@ from timenet.format.constants import (
     INDEX_FILE,
     MANIFEST_FILE,
     SAMPLES_FILE,
-    SHARD_TEMPLATE,
     TASK_PART_TEMPLATE,
 )
 from timenet.format.schemas import (
@@ -43,62 +41,15 @@ from timenet.format.schemas import (
     annotations_schema,
     index_schema,
     samples_schema,
-    shard_schema,
     task_schema,
 )
 from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 from timenet.types import Task, annotation_type_of
 from timenet.types.ids import is_canonical_uuid
+from timenet.values_backends import PARQUET_VALUES_BACKEND, SUPPORTED_VALUES_BACKENDS
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-
-
-MAX_ELEMENTS_PER_ROW_GROUP = 2**31
-_BYTES_PER_FLOAT32 = 4
-
-
-@dataclass
-class _Chunk:
-    """One sub-chunk of a series buffered for the current row group."""
-
-    time_series_id: str
-    """Id of the series this chunk belongs to."""
-    spec_type: str
-    """Spec type of the source series."""
-    channel: str
-    """Channel name of the source series."""
-    chunk_idx: int
-    """Zero-based index of this chunk within the series."""
-    t_start_s: float
-    """Start time of the chunk in seconds."""
-    n_values: int
-    """Number of values in this chunk."""
-    sampling_rate_hz: float
-    """Sampling rate of the series in Hz."""
-    values: pa.Array
-    """The chunk's float32 values."""
-
-
-@dataclass
-class _Placement:
-    """Where a chunk landed on disk, plus the metadata needed to build the index."""
-
-    shard_path: str
-    """Path of the shard file, relative to the staging directory."""
-    row_group: int
-    """Index of the row group within the shard."""
-    row_offset: int
-    """Row offset of the chunk within its row group."""
-    spec_type: str
-    """Spec type of the source series."""
-    channel: str
-    """Channel name of the source series."""
-    t_start_s: float
-    """Start time of the chunk in seconds."""
-    n_values: int
-    """Number of values in the chunk."""
-    sampling_rate_hz: float
-    """Sampling rate of the series in Hz."""
+from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, make_values_backend
 
 
 class TimeFWriter:
@@ -114,6 +65,7 @@ class TimeFWriter:
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int = DEFAULT_COMPRESSION_LEVEL,
+        values_backend: str = PARQUET_VALUES_BACKEND,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         derived_from: dict[str, str] | None = None,
     ) -> None:
@@ -127,15 +79,21 @@ class TimeFWriter:
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Parquet codec.
             compression_level: Pinned level (applied for zstd) for reproducible output.
+            values_backend: Storage backend for the values plane.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
             derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
                 another (e.g. ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty.
+            ValueError: If ``values_backend`` is unsupported.
         """
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
+        if values_backend not in SUPPORTED_VALUES_BACKENDS:
+            raise ValueError(
+                f"unknown values_backend {values_backend!r}; supported: {sorted(SUPPORTED_VALUES_BACKENDS)}"
+            )
         self._root = Path(root)
         self._dataset = dataset
         self._derived_from = derived_from
@@ -144,6 +102,7 @@ class TimeFWriter:
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
         self._compression_level = compression_level
+        self._values_backend_name = values_backend
         self._progress_cb = progress_cb
 
         version = str(dataset.metadata.dataset_version)
@@ -151,7 +110,6 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
-        self._bss_checked = False
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -215,7 +173,7 @@ class TimeFWriter:
         self._resolve_id_types()
 
         unique_series, series_to_samples = self._dedupe_series()
-        placements = self._write_shards(unique_series)
+        placements = self._write_values(unique_series)
         self._write_samples()
         self._write_annotations()
         self._write_tasks()
@@ -251,7 +209,7 @@ class TimeFWriter:
         """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string.
 
         Stores the resolved Arrow types, the set of ``uuid16`` logical ids, the manifest ``id_encoding``
-        map (only the uuid16 entries; an absent entry means string), and the shard schema.
+        map (only the uuid16 entries; an absent entry means string), and the shared codec.
         """
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
         for sample in self._dataset.samples:
@@ -275,9 +233,8 @@ class TimeFWriter:
         self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
         self._id_encoding = dict.fromkeys(self._uuid16, "uuid16")
         self._codec = IdCodec.from_uuid16(self._uuid16)
-        self._shard_schema = shard_schema(id_types)
 
-    # ---- shards --------------------------------------------------------------------------------
+    # ---- values --------------------------------------------------------------------------------
 
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> sample-ids map.
@@ -317,79 +274,35 @@ class TimeFWriter:
         ordered = sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, ts.channel, ts.time_series_id))
         return ordered, series_to_samples
 
-    def _write_shards(self, unique_series: list[TimeSeries]) -> dict[tuple[str, int], _Placement]:
-        """Stream all series into rotating shard files and return chunk placements.
+    def _write_values(self, unique_series: list[TimeSeries]) -> dict[tuple[str, int], ChunkPlacement]:
+        """Write all series' values through the configured backend.
 
         Args:
             unique_series: The deduped, sorted series to serialize.
 
         Returns:
-            A mapping from ``(time_series_id, chunk_idx)`` to its on-disk :class:`_Placement`.
+            A mapping from ``(time_series_id, chunk_idx)`` to its on-disk placement.
         """
-        max_values_per_chunk = max(1, self._chunk_max_bytes // _BYTES_PER_FLOAT32)
-        stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes)
-        total = len(unique_series)
-        for completed, ts in enumerate(unique_series, start=1):
-            values = self._read_and_validate(ts)
-            for chunk_idx, start in enumerate(range(0, len(values), max_values_per_chunk)):
-                sub = values.slice(start, max_values_per_chunk)
-                stream.add(
-                    _Chunk(
-                        time_series_id=ts.time_series_id,
-                        spec_type=ts.spec.spec_type,
-                        channel=ts.channel,
-                        chunk_idx=chunk_idx,
-                        t_start_s=ts.t_start_s + start / ts.sampling_rate_hz,
-                        n_values=len(sub),
-                        sampling_rate_hz=ts.sampling_rate_hz,
-                        values=sub,
-                    )
-                )
-            self._emit(ProgressStage.TIME_SERIES, completed, total)
-        stream.finish()
-        self._shard_paths = stream.shard_paths
-        return stream.placements
-
-    def _new_shard_writer(self, rel_path: str) -> pq.ParquetWriter:
-        """Open a ParquetWriter for a shard at ``rel_path`` under the staging directory.
-
-        Args:
-            rel_path: The shard's path relative to the staging directory.
-
-        Returns:
-            The open ParquetWriter for the shard.
-        """
-        path = self._staging_dir / rel_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return pq.ParquetWriter(
-            path,
-            self._shard_schema,
-            **encodings.parquet_kwargs(
-                dictionary_columns=encodings.SHARD_DICTIONARY,
-                column_encoding=encodings.SHARD_ENCODING,
+        backend = make_values_backend(
+            ParquetValuesConfig(
+                staging_dir=self._staging_dir,
+                id_types=self._id_types,
+                codec=self._codec,
+                shard_target_bytes=self._shard_target_bytes,
+                row_group_target_bytes=self._row_group_target_bytes,
+                chunk_max_bytes=self._chunk_max_bytes,
                 compression=self._compression,
                 compression_level=self._compression_level,
-            ),
+            )
         )
-
-    def _verify_bss_once(self, rel_path: str) -> None:
-        """Verify BYTE_STREAM_SPLIT was applied on a finalized shard (guards silent path mismatch).
-
-        Args:
-            rel_path: The finalized shard's path relative to the staging directory.
-
-        Raises:
-            TimeFValidationError: If the values column is not BYTE_STREAM_SPLIT encoded.
-        """
-        if self._bss_checked:
-            return
-        path = self._staging_dir / rel_path
-        applied = encodings.values_encoding_of(str(path))
-        if not applied:  # empty shard (no values written yet); nothing to verify
-            return
-        if "BYTE_STREAM_SPLIT" not in applied:
-            raise TimeFValidationError(f"expected BYTE_STREAM_SPLIT on shard values, got {sorted(applied)}")
-        self._bss_checked = True
+        result = backend.write_series(
+            unique_series,
+            read_and_validate=self._read_and_validate,
+            on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),
+            on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
+        )
+        self._value_files = result.files
+        return result.placements
 
     def _read_and_validate(self, ts: TimeSeries) -> pa.Array:
         """Read a series' values and enforce the per-series array contract.
@@ -490,7 +403,7 @@ class TimeFWriter:
             self._task_files.append(rel)
 
     def _write_index(
-        self, placements: dict[tuple[str, int], _Placement], series_to_samples: dict[str, list[str]]
+        self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
     ) -> None:
         codec = self._codec
         rows = []
@@ -536,10 +449,11 @@ class TimeFWriter:
                 annotations=(ANNOTATIONS_FILE,),
                 time_series_index=(INDEX_FILE,),
                 tasks=tuple(self._task_files),
-                time_series=tuple(self._shard_paths),
+                time_series=tuple(self._value_files),
             ),
             checksums=checksums,
             id_encoding=self._id_encoding,
+            values_backend=self._values_backend_name,
             derived_from=self._derived_from,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
@@ -564,7 +478,7 @@ class TimeFWriter:
     def _build_counts(
         self,
         unique_series: list[TimeSeries],
-        placements: dict[tuple[str, int], _Placement],
+        placements: dict[tuple[str, int], ChunkPlacement],
     ) -> ManifestCounts:
         tasks_by_type: dict[str, int] = {}
         for task in self._dataset.tasks:
@@ -583,8 +497,15 @@ class TimeFWriter:
         )
 
     def _checksums(self) -> dict[str, str]:
+        """Checksum every staged artifact except the not-yet-written manifest.
+
+        Returns:
+            A mapping from version-relative file paths to prefixed SHA-256 digests.
+        """
         checksums: dict[str, str] = {}
-        for path in sorted(self._staging_dir.rglob("*.parquet")):
+        for path in sorted(self._staging_dir.rglob("*")):
+            if not path.is_file() or path.name == MANIFEST_FILE:
+                continue
             rel = path.relative_to(self._staging_dir).as_posix()
             checksums[rel] = file_checksum(path)
         return checksums
@@ -615,93 +536,6 @@ class TimeFWriter:
             self._progress_cb(WriteProgressEvent(stage=stage, completed=completed, total=total))
 
 
-class _ShardStream:
-    """Buffers chunks into rotating shard files and records each chunk's on-disk placement.
-
-    Holds the row-group buffer and shard-rotation counters as instance state (rather than as shared
-    closure variables) so the writer's series loop stays a plain iteration. Shards open lazily, so a
-    rotation triggered by the final row group never leaves an empty trailing shard.
-    """
-
-    def __init__(self, writer: TimeFWriter, row_group_target_bytes: int, shard_target_bytes: int) -> None:
-        """Bind the stream to its owning writer and the byte targets that trigger flush/rotation.
-
-        Args:
-            writer: The owning writer, used to open shards, verify encoding, and emit progress.
-            row_group_target_bytes: Flush a row group once buffered values exceed this.
-            shard_target_bytes: Rotate to a new shard once a shard's written values exceed this.
-        """
-        self._writer = writer
-        self._row_group_target_bytes = row_group_target_bytes
-        self._shard_target_bytes = shard_target_bytes
-        self._shard: pq.ParquetWriter | None = None
-        self._shard_idx = 0
-        self._row_group = 0
-        self._shard_bytes = 0
-        self._buffer: list[_Chunk] = []
-        self._buffer_bytes = 0
-        self.shard_paths: list[str] = []
-        self.placements: dict[tuple[str, int], _Placement] = {}
-
-    def add(self, chunk: _Chunk) -> None:
-        """Buffer one chunk, flushing a row group and rotating shards as the byte targets are reached.
-
-        Args:
-            chunk: The next sub-chunk to write.
-        """
-        self._buffer.append(chunk)
-        self._buffer_bytes += chunk.n_values * _BYTES_PER_FLOAT32
-        if self._buffer_bytes >= self._row_group_target_bytes:
-            self._flush()
-            if self._shard_bytes >= self._shard_target_bytes:
-                self._close_shard()
-                self._shard_idx += 1
-                self._row_group = 0
-                self._shard_bytes = 0
-
-    def finish(self) -> None:
-        """Flush any remaining buffered chunks and close the final shard."""
-        self._flush()
-        self._close_shard()
-
-    def _flush(self) -> None:
-        if not self._buffer:
-            return
-        if sum(chunk.n_values for chunk in self._buffer) >= MAX_ELEMENTS_PER_ROW_GROUP:
-            raise TimeFValidationError("row group would exceed the 2^31 element limit")
-        shard = self._shard
-        if shard is None:
-            rel = SHARD_TEMPLATE.format(self._shard_idx)
-            self.shard_paths.append(rel)
-            shard = self._writer._new_shard_writer(rel)
-            self._shard = shard
-        shard.write_table(_shard_table(self._buffer, self._writer._shard_schema, self._writer._codec))
-        shard_path = self.shard_paths[self._shard_idx]
-        for offset, chunk in enumerate(self._buffer):
-            self.placements[chunk.time_series_id, chunk.chunk_idx] = _Placement(
-                shard_path=shard_path,
-                row_group=self._row_group,
-                row_offset=offset,
-                spec_type=chunk.spec_type,
-                channel=chunk.channel,
-                t_start_s=chunk.t_start_s,
-                n_values=chunk.n_values,
-                sampling_rate_hz=chunk.sampling_rate_hz,
-            )
-        self._row_group += 1
-        self._shard_bytes += self._buffer_bytes
-        self._buffer = []
-        self._buffer_bytes = 0
-
-    def _close_shard(self) -> None:
-        if self._shard is None:
-            return
-        self._shard.close()
-        self._writer._verify_bss_once(self.shard_paths[self._shard_idx])
-        self._writer._emit(ProgressStage.SHARD_FINALIZED, self._shard_idx + 1, None)
-        self._shard = None
-
-
 def _series_identity(ts: TimeSeries) -> tuple:
     """Return the fields that must agree for two series to be the same channel.
 
@@ -716,39 +550,6 @@ def _series_identity(ts: TimeSeries) -> tuple:
         The identifying fields, suitable for equality comparison and for error messages.
     """
     return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.t_end_s)
-
-
-def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.Table:
-    return pa.Table.from_pydict(
-        {
-            "time_series_id": codec.encode_list("time_series_id", [c.time_series_id for c in buffer]),
-            "spec_type": [c.spec_type for c in buffer],
-            "channel": [c.channel for c in buffer],
-            "chunk_idx": [c.chunk_idx for c in buffer],
-            "t_start_s": [c.t_start_s for c in buffer],
-            "n_values": [c.n_values for c in buffer],
-            "sampling_rate_hz": [c.sampling_rate_hz for c in buffer],
-            "values": _values_column([c.values for c in buffer]),
-        },
-        schema=schema,
-    )
-
-
-def _values_column(chunks: list[pa.Array]) -> pa.ListArray:
-    """Pack per-chunk float32 arrays into one ``list<float32>`` column without boxing to Python floats.
-
-    Builds the list column from the concatenated values plus offsets, so the waveform stays in Arrow
-    buffers instead of round-tripping through Python objects on the writer's hot path.
-
-    Args:
-        chunks: The per-row float32 value arrays (one per chunk in the row group).
-
-    Returns:
-        A ``list<float32>`` array with one row per chunk.
-    """
-    offsets = np.zeros(len(chunks) + 1, dtype=np.int32)
-    offsets[1:] = np.cumsum([len(chunk) for chunk in chunks])
-    return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(chunks))
 
 
 def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
