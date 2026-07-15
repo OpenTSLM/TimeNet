@@ -70,7 +70,16 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Returns:
             The chunk placements and the shard files written.
+
+        Raises:
+            TimeFValidationError: If a spec uses an N-D shape or non-float32 dtype.
         """
+        unsupported = [ts.spec.spec_type for ts in unique_series if ts.spec.value_shape or ts.spec.dtype != "float32"]
+        if unsupported:
+            raise TimeFValidationError(
+                "the Parquet values backend currently supports scalar float32 series only; "
+                f"use values_backend='zarr' for N-D/dtyped specs: {sorted(set(unsupported))}"
+            )
         stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes, on_file_done)
         total = len(unique_series)
         for completed, ts in enumerate(unique_series, start=1):

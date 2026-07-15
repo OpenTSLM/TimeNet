@@ -11,10 +11,16 @@ here, so one spec is shared across every channel of a modality.
 from dataclasses import dataclass
 from typing import cast
 
+import numpy as np
 import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.units import ureg
+
+
+SUPPORTED_VALUE_DTYPES = frozenset(
+    {"bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32"}
+)
 
 
 @dataclass(frozen=True)
@@ -45,13 +51,18 @@ class TimeSeriesSpec:
     """Unit of the measured values."""
     data_source: DataSource | None = None
     """Origin that produced this modality, if known."""
+    dtype: str = "float32"
+    """NumPy scalar dtype used for each value element."""
+    value_shape: tuple[int, ...] = ()
+    """Shape of one timestep, excluding the leading time axis; empty means scalar values."""
+    dimension_names: tuple[str, ...] = ()
+    """Optional names for the dimensions in :attr:`value_shape`."""
 
     def __post_init__(self) -> None:
-        """Validate that the sampling-rate and timestamp units have the right dimensionality.
+        """Validate units plus the per-timestep dtype and shape contract.
 
         Raises:
-            TimeFValidationError: If ``unit_sampling_rate`` is not a frequency or ``unit_timestamp`` is
-                not a time.
+            TimeFValidationError: If the units, dtype, shape, or dimension names are invalid.
         """
         hertz = ureg.hertz.dimensionality
         second = ureg.second.dimensionality
@@ -63,6 +74,22 @@ class TimeSeriesSpec:
             raise TimeFValidationError(
                 f"unit_timestamp must be a time (dimensionality {second}), got {self.unit_timestamp!r}"
             )
+        try:
+            normalized_dtype = np.dtype(self.dtype).name
+        except TypeError as exc:
+            raise TimeFValidationError(f"unsupported TimeSeriesSpec.dtype {self.dtype!r}") from exc
+        if normalized_dtype not in SUPPORTED_VALUE_DTYPES or normalized_dtype != self.dtype:
+            raise TimeFValidationError(
+                f"TimeSeriesSpec.dtype must be one of {sorted(SUPPORTED_VALUE_DTYPES)}, got {self.dtype!r}"
+            )
+        if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in self.value_shape):
+            raise TimeFValidationError(
+                f"TimeSeriesSpec.value_shape dimensions must be positive integers, got {self.value_shape!r}"
+            )
+        if self.dimension_names and len(self.dimension_names) != len(self.value_shape):
+            raise TimeFValidationError("TimeSeriesSpec.dimension_names must be empty or match value_shape length")
+        if any(not name for name in self.dimension_names):
+            raise TimeFValidationError("TimeSeriesSpec.dimension_names must not contain empty names")
 
     def __getstate__(self) -> dict[str, object]:
         """Pickle every unit by name rather than as a registry-bound object.

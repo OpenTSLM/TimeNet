@@ -326,14 +326,33 @@ class TimeFWriter:
                 disagrees with a set window.
         """
         values = ts.to_arrow()
-        if not isinstance(values, pa.Array) or values.type != pa.float32():
+        expected_type = pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+        if ts.spec.value_shape:
+            valid_type = (
+                isinstance(values, pa.FixedShapeTensorArray)
+                and values.type.value_type == expected_type
+                and tuple(values.type.shape) == ts.spec.value_shape
+            )
+        else:
+            valid_type = (
+                isinstance(values, pa.Array)
+                and not isinstance(values, pa.ExtensionArray)
+                and values.type == expected_type
+            )
+        if not valid_type:
             raise TimeFValidationError(
-                f"series {ts.time_series_id!r} must load a float32 pa.Array, got {values.type if isinstance(values, pa.Array) else type(values)!r}"
+                f"series {ts.time_series_id!r} must load dtype={ts.spec.dtype}, "
+                f"value_shape={ts.spec.value_shape} as Arrow, got "
+                f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
         if len(values) == 0:
             raise TimeFValidationError(f"series {ts.time_series_id!r} loaded an empty array")
-        as_numpy = values.to_numpy(zero_copy_only=False)
-        if not np.isfinite(as_numpy).all():
+        as_numpy = (
+            values.to_numpy_ndarray()
+            if isinstance(values, pa.FixedShapeTensorArray)
+            else values.to_numpy(zero_copy_only=False)
+        )
+        if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
             raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
         if ts.t_end_s is not None:
             expected = round((ts.t_end_s - ts.t_start_s) * ts.sampling_rate_hz)

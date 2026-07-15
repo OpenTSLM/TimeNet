@@ -18,6 +18,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.reader.values import BaseValuesReader
+from timenet.types import TimeSeriesSpec
 
 
 _CHUNK_CACHE_SIZE = 64  # decoded storage chunks kept (~64 MiB at the default 1 MiB chunk size)
@@ -31,7 +32,7 @@ class ZarrValuesReader(BaseValuesReader):
         self._array_cache: dict[str, Any] = {}
         self._chunk_cache: OrderedDict[tuple[str, int], np.ndarray] = OrderedDict()
 
-    def load(self, root: Path, rows: list[dict]) -> pa.Array:
+    def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values (``chunk_major_idx`` = element start; length is ``n_values``).
 
         Args:
@@ -39,11 +40,35 @@ class ZarrValuesReader(BaseValuesReader):
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
-            The series' 1-D float32 values.
+            The series' canonical scalar or fixed-shape tensor Arrow array.
         """
         parts = [self._read_range(root, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
-        return pa.array(combined, type=pa.float32())
+        return _to_arrow(combined, spec)
+
+    def load_range(self, root: Path, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec) -> pa.Array:
+        """Read only the storage chunks intersecting a temporal step range.
+
+        Returns:
+            The requested steps in their canonical Arrow representation.
+        """
+        total = sum(row["n_values"] for row in rows)
+        bounded_stop = min(stop, total)
+        if start >= bounded_stop:
+            empty = np.empty((0, *spec.value_shape), dtype=spec.dtype)
+            return _to_arrow(empty, spec)
+        runs = _coalesce_runs(rows)
+        parts = []
+        cursor = 0
+        for rel, run_start, run_stop in runs:
+            run_len = run_stop - run_start
+            if cursor + run_len > start and cursor < bounded_stop:
+                lo = max(start - cursor, 0)
+                hi = min(bounded_stop - cursor, run_len)
+                parts.append(self._read_range(root, rel, run_start + lo, run_start + hi))
+            cursor += run_len
+        combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
+        return _to_arrow(combined, spec)
 
     def close(self) -> None:
         """Drop cached arrays and decoded chunks (Zarr arrays hold no OS file handles to close)."""
@@ -90,7 +115,7 @@ class ZarrValuesReader(BaseValuesReader):
             self._chunk_cache.move_to_end(key)
             return cached
         lo = chunk_idx * chunk_len
-        data = np.asarray(array[lo : min(lo + chunk_len, array.shape[0])], dtype=np.float32)
+        data = np.asarray(array[lo : min(lo + chunk_len, array.shape[0])])
         self._chunk_cache[key] = data
         while len(self._chunk_cache) > _CHUNK_CACHE_SIZE:
             self._chunk_cache.popitem(last=False)
@@ -141,3 +166,23 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
         else:
             runs.append((rel, start, stop))
     return runs
+
+
+def _to_arrow(values: np.ndarray, spec: TimeSeriesSpec) -> pa.Array:
+    """Wrap a backend NumPy buffer in the spec's canonical Arrow representation.
+
+    Returns:
+        A primitive array for scalar values or a fixed-shape tensor array for N-D values.
+    """
+    contiguous = np.ascontiguousarray(values)
+    value_type = pa.from_numpy_dtype(np.dtype(spec.dtype))
+    if spec.value_shape:
+        dim_names = spec.dimension_names or None
+        if len(contiguous) == 0:
+            # pa.FixedShapeTensorArray.from_numpy_ndarray rejects a 0-length ndarray, which an empty
+            # range read (e.g. read_steps(n, n)) produces; build the empty tensor array from storage.
+            tensor_type = pa.fixed_shape_tensor(value_type, spec.value_shape, dim_names=dim_names)
+            storage = pa.FixedSizeListArray.from_arrays(pa.array([], type=value_type), int(np.prod(spec.value_shape)))
+            return pa.FixedShapeTensorArray.from_storage(tensor_type, storage)
+        return pa.FixedShapeTensorArray.from_numpy_ndarray(contiguous, dim_names=dim_names)
+    return pa.array(contiguous, type=value_type)

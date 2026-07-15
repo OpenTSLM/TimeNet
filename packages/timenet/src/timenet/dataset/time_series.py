@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pyarrow as pa
 
+from timenet.errors import TimeFValidationError
 from timenet.types import TimeSeriesSpec, new_id
 
 
@@ -110,6 +111,32 @@ class TimeSeries:
         """Read the series' values as a NumPy array.
 
         Returns:
-            The series' values as a 1-D ``np.ndarray``.
+            The series' values with shape ``(n_steps, *spec.value_shape)``.
         """
-        return self.to_arrow().to_numpy(zero_copy_only=False)
+        values = self.to_arrow()
+        if isinstance(values, pa.FixedShapeTensorArray):
+            return values.to_numpy_ndarray()
+        return values.to_numpy(zero_copy_only=False)
+
+    def read_steps(self, start: int, stop: int) -> pa.Array:
+        """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
+
+        Range-aware storage loaders read only the intersecting chunks. Connector loaders that only
+        implement the original no-argument callable remain compatible through a full-read slice.
+
+        Args:
+            start: First temporal step, inclusive.
+            stop: Last temporal step, exclusive.
+
+        Returns:
+            A primitive Arrow array for scalar series or a fixed-shape tensor array for N-D series.
+
+        Raises:
+            TimeFValidationError: If the range is negative or reversed.
+        """
+        if start < 0 or stop < start:
+            raise TimeFValidationError(f"expected 0 <= start <= stop, got start={start}, stop={stop}")
+        read_steps = getattr(self.loader, "read_steps", None)
+        if read_steps is not None:
+            return read_steps(start, stop)
+        return self.to_arrow().slice(start, stop - start)

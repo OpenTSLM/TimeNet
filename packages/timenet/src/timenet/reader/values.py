@@ -13,6 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
+from timenet.types import TimeSeriesSpec
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 
@@ -20,16 +21,25 @@ class BaseValuesReader(ABC):
     """Reads a series' values from the version directory given its index rows."""
 
     @abstractmethod
-    def load(self, root: Path, rows: list[dict]) -> pa.Array:
+    def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
         Args:
             root: The version directory.
             rows: The series' index rows, sorted by ``chunk_idx``; each holds ``chunk_file``,
                 ``chunk_major_idx``, and ``chunk_minor_idx``.
+            spec: The series' spec, for backends whose decoding depends on shape/dtype.
 
         Returns:
-            The series' 1-D float32 values.
+            The series' values in their canonical Arrow representation.
+        """
+
+    @abstractmethod
+    def load_range(self, root: Path, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec) -> pa.Array:
+        """Read only the steps of one series in the half-open step range ``[start, stop)``.
+
+        Returns:
+            The requested steps in their canonical Arrow representation.
         """
 
     @abstractmethod

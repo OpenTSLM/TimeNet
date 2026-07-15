@@ -246,6 +246,9 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "unit_timestamp": str(spec.unit_timestamp),
                 "unit_value": str(spec.unit_value),
                 "data_source": spec.data_source.data_source_type if spec.data_source else None,
+                "dtype": spec.dtype,
+                "value_shape": list(spec.value_shape),
+                "dimension_names": list(spec.dimension_names),
             }
             for spec in schema.time_series_specs
         ],
@@ -286,6 +289,9 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 unit_timestamp=ureg.Unit(entry["unit_timestamp"]),
                 unit_value=ureg.Unit(entry["unit_value"]),
                 data_source=_resolve_data_source(entry.get("data_source"), by_type),
+                dtype=entry.get("dtype", "float32"),
+                value_shape=tuple(entry.get("value_shape", ())),
+                dimension_names=tuple(entry.get("dimension_names", ())),
             )
             for entry in data.get("time_series_specs", ())
         )

@@ -3,7 +3,7 @@
 An alternative to the default Parquet shard store, laid out for Zarr's strengths rather than mirroring
 Parquet's:
 
-- Every series of a modality is appended to a single 1-D ``float32`` array named for its ``spec_type``
+- Every series of a modality is appended along time to one typed array named for its ``spec_type``
   inside a ``time_series.zarr`` group. Zarr chunks the storage itself, so a series is **one index row**
   (one placement spanning its full length), not a run of ``chunk_max_bytes`` logical chunks.
 - Appends are buffered per ``spec_type`` and flushed at shard-aligned boundaries, so every Zarr shard
@@ -19,7 +19,6 @@ needs it.
 """
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -36,7 +35,6 @@ from timenet.writer.values import (
 )
 
 
-_BYTES_PER_FLOAT32 = 4
 _STORE_DIR = "time_series.zarr"
 _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
 # One placement normally spans a whole series; split only to keep n_values inside int32 (the index
@@ -45,7 +43,7 @@ _MAX_PLACEMENT_VALUES = 2**30
 
 
 class ZarrValuesBackend(BaseValuesBackend):
-    """Streams each series into a per-``spec_type`` 1-D float32 Zarr array (chunked + sharded)."""
+    """Streams each series into a per-``spec_type`` typed N-D Zarr array (chunked + sharded)."""
 
     name = ValuesBackend.ZARR
 
@@ -55,10 +53,9 @@ class ZarrValuesBackend(BaseValuesBackend):
         Args:
             config: Typed Zarr backend options.
         """
-        self._staging_dir: Path = config.staging_dir
-        self._chunk_len = max(1, config.chunk_max_bytes // _BYTES_PER_FLOAT32)
-        shard_chunks = max(1, (config.shard_target_bytes // _BYTES_PER_FLOAT32) // self._chunk_len)
-        self._shard_len = shard_chunks * self._chunk_len
+        self._staging_dir = config.staging_dir
+        self._chunk_max_bytes = config.chunk_max_bytes
+        self._shard_target_bytes = config.shard_target_bytes
         self._cname = config.compression if config.compression in _BLOSC_CNAMES else "zstd"
         self._clevel = config.compression_level
 
@@ -99,23 +96,33 @@ class ZarrValuesBackend(BaseValuesBackend):
         active: str | None = None  # series arrive sorted by spec_type, so one appender is active at a time
         total = len(unique_series)
         for completed, ts in enumerate(unique_series, start=1):
-            values = read_and_validate(ts).to_numpy(zero_copy_only=False)
+            arrow_values = read_and_validate(ts)
+            values = (
+                arrow_values.to_numpy_ndarray()
+                if isinstance(arrow_values, pa.FixedShapeTensorArray)
+                else arrow_values.to_numpy(zero_copy_only=False)
+            )
             spec_type = ts.spec.spec_type
             if spec_type != active:
                 if active is not None:
                     appenders[active].finish()
                     on_file_done(len(appenders))
                 if spec_type not in appenders:
+                    bytes_per_step = np.dtype(ts.spec.dtype).itemsize * max(1, int(np.prod(ts.spec.value_shape)))
+                    chunk_len = max(1, self._chunk_max_bytes // bytes_per_step)
+                    shard_chunks = max(1, (self._shard_target_bytes // bytes_per_step) // chunk_len)
+                    shard_len = shard_chunks * chunk_len
+                    trailing = ts.spec.value_shape
                     appenders[spec_type] = _ArrayAppender(
                         group.create_array(
                             name=spec_type,
-                            shape=(0,),
-                            dtype="float32",
-                            chunks=(self._chunk_len,),
-                            shards=(self._shard_len,),
+                            shape=(0, *trailing),
+                            dtype=ts.spec.dtype,
+                            chunks=(chunk_len, *trailing),
+                            shards=(shard_len, *trailing),
                             compressors=codec,
                         ),
-                        self._shard_len,
+                        shard_len,
                     )
                 active = spec_type
             appender = appenders[spec_type]
@@ -182,7 +189,7 @@ class _ArrayAppender:
         if n == 0:
             return
         data = self._buffer[0] if len(self._buffer) == 1 else np.concatenate(self._buffer)
-        self._array.resize((self._written + n,))
+        self._array.resize((self._written + n, *self._array.shape[1:]))
         self._array[self._written : self._written + n] = data[:n]
         self._written += n
         remainder = data[n:]
