@@ -24,6 +24,7 @@ class WritableRegistry(BaseRegistry, ABC):
         dataset: TimeFDataset,
         *,
         force: bool = False,
+        values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and publish it to this registry.
@@ -34,6 +35,7 @@ class WritableRegistry(BaseRegistry, ABC):
         Args:
             dataset: The populated dataset to store.
             force: Overwrite an already-committed version instead of skipping it.
+            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
 
         Returns:

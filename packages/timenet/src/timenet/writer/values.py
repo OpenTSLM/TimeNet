@@ -7,15 +7,15 @@ the deduped, sorted series and writes their values however it likes, returning a
 :class:`ChunkPlacement` per chunk plus the list of value files to record in the manifest. The core
 writer stays ignorant of shards, row groups, or arrays.
 
-Concrete backends live in their own modules — :mod:`timenet.writer.parquet_values` (the default) — and
-are constructed via :func:`make_values_backend`.
+Concrete backends live in their own modules — :mod:`timenet.writer.parquet_values` (the default) and
+:mod:`timenet.writer.zarr_values` — and are constructed via :func:`make_values_backend`.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, assert_never
 
 import pyarrow as pa
 
@@ -97,7 +97,23 @@ class ParquetValuesConfig:
     """Parquet compression level."""
 
 
-ValuesBackendConfig = ParquetValuesConfig
+@dataclass(frozen=True)
+class ZarrValuesConfig:
+    """Typed construction options for the Zarr values backend."""
+
+    staging_dir: Path
+    """Version staging directory; the Zarr store is written beneath it."""
+    shard_target_bytes: int
+    """Target size of one Zarr shard."""
+    chunk_max_bytes: int
+    """Target size of one Zarr storage chunk."""
+    compression: str
+    """Blosc inner compression codec."""
+    compression_level: int
+    """Blosc compression level."""
+
+
+ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig
 
 
 class BaseValuesBackend(ABC):
@@ -136,12 +152,22 @@ class BaseValuesBackend(ABC):
 def make_values_backend(config: ValuesBackendConfig) -> BaseValuesBackend:
     """Construct the values backend described by ``config``.
 
+    Routes each backend the subset of the writer's value options it understands: Parquet takes all of
+    them; Zarr takes the chunk/shard byte targets and the codec (its store has no row groups or id
+    columns).
+
     Args:
         config: Backend-specific typed construction options.
 
     Returns:
         The constructed backend.
     """
-    from timenet.writer.parquet_values import ParquetValuesBackend
+    if isinstance(config, ParquetValuesConfig):
+        from timenet.writer.parquet_values import ParquetValuesBackend
 
-    return ParquetValuesBackend(config)
+        return ParquetValuesBackend(config)
+    if isinstance(config, ZarrValuesConfig):
+        from timenet.writer.zarr_values import ZarrValuesBackend
+
+        return ZarrValuesBackend(config)
+    assert_never(config)

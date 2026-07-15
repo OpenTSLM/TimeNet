@@ -152,6 +152,11 @@ class TimeFReader:
         """All tasks, with ``from_tasks`` resolved."""
         return self._tasks
 
+    @property
+    def values_backend(self) -> str:
+        """The manifest's values-plane backend tag (``"parquet"`` or ``"zarr"``)."""
+        return self._manifest.values_backend
+
     def read(self) -> TimeFDataset:
         """Materialize the full dataset.
 

@@ -11,6 +11,7 @@ class ValuesBackend(StrEnum):
     """
 
     PARQUET = "parquet"
+    ZARR = "zarr"
 
 
 SUPPORTED_VALUES_BACKENDS: frozenset[ValuesBackend] = frozenset(ValuesBackend)
