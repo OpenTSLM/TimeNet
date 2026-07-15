@@ -323,7 +323,8 @@ class TimeFReader:
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
-            return self._values.load(self._root, rows)
+            spec_type = rows[0]["spec_type"]
+            return self._values.load(self._root, rows, self._spec_by_type[spec_type])
         except (KeyError, OSError, IndexError, ValueError) as exc:
             raise ValueError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
 
@@ -351,6 +352,23 @@ class _SeriesLoader:
             The series' 1-D float32 Arrow array.
         """
         return self.reader._load_values(self.sample_id, self.time_series_id)
+
+    def read_steps(self, start: int, stop: int) -> pa.Array:
+        """Read a temporal subsection through the selected values backend.
+
+        Returns:
+            The requested steps in their canonical Arrow representation.
+
+        Raises:
+            ValueError: If this series has no index entry.
+        """
+        rows = self.reader._index.get((self.sample_id, self.time_series_id))
+        if not rows:
+            raise ValueError(f"no index entry for sample {self.sample_id!r} series {self.time_series_id!r}")
+        if self.reader._values is None:
+            self.reader._values = make_values_reader(self.reader._manifest.values_backend)
+        spec = self.reader._spec_by_type[rows[0]["spec_type"]]
+        return self.reader._values.load_range(self.reader._root, rows, start, stop, spec)
 
 
 def _as_tuple_if_list(value: object) -> object:

@@ -5,6 +5,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from timenet.reader.values import ParquetValuesReader
+from timenet.testing import make_dataset
 
 
 class _Shard:
@@ -21,6 +22,7 @@ def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda root, rel_path: _Shard(1.0 if root == Path("a") else 2.0))
     rows = [{"chunk_file": "time_series/shard-00000.parquet", "chunk_offset0": 0, "chunk_offset1": 0}]
+    spec = make_dataset().samples[0].time_series[0].spec
 
-    assert reader.load(Path("a"), rows).to_pylist() == [1.0]
-    assert reader.load(Path("b"), rows).to_pylist() == [2.0]
+    assert reader.load(Path("a"), rows, spec).to_pylist() == [1.0]
+    assert reader.load(Path("b"), rows, spec).to_pylist() == [2.0]
