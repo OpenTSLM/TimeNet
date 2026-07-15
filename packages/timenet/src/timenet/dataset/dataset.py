@@ -131,6 +131,14 @@ class TimeFDataset:
                 same key seen with different value types or units).
         """
         specs = self._ordered_unique(ts.spec for sample in self._samples for ts in sample.time_series)
+        by_spec_type: dict[str, object] = {}
+        for spec in specs:
+            existing = by_spec_type.get(spec.spec_type)
+            if existing is not None:
+                raise ValueError(
+                    f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
+                )
+            by_spec_type[spec.spec_type] = spec
         data_sources = self._ordered_unique(spec.data_source for spec in specs if spec.data_source is not None)
         annotations = self._ordered_unique(
             AnnotationDescriptor(
