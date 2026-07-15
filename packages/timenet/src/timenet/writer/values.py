@@ -14,7 +14,7 @@ The default :class:`ParquetValuesBackend` streams ``list<float32>`` chunks into 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, assert_never
 
 import numpy as np
 import pyarrow as pa
@@ -43,8 +43,8 @@ class ChunkPlacement:
     """Values file (relative to the staging directory) holding this chunk."""
     chunk_offset0: int
     """First backend-defined coordinate (the Parquet row group)."""
-    chunk_offset1: int
-    """Second backend-defined coordinate (the Parquet row offset)."""
+    chunk_offset1: int | None
+    """Second backend-defined coordinate (the Parquet row offset; unused by Zarr)."""
     spec_type: str
     """Spec type of the source series."""
     channel: str
@@ -89,11 +89,31 @@ class ParquetValuesConfig:
     """Parquet compression level."""
 
 
-ValuesBackendConfig = ParquetValuesConfig
+@dataclass(frozen=True)
+class ZarrValuesConfig:
+    """Typed construction options for the Zarr values backend."""
+
+    staging_dir: Path
+    """Version staging directory; the Zarr store is written beneath it."""
+    shard_target_bytes: int
+    """Target size of one Zarr shard."""
+    chunk_max_bytes: int
+    """Target size of one Zarr storage chunk."""
+    compression: str
+    """Blosc inner compression codec."""
+    compression_level: int
+    """Blosc compression level."""
+
+
+ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig
 
 
 def make_values_backend(config: ValuesBackendConfig) -> "ValuesBackend":
     """Construct the values backend described by ``config``.
+
+    Routes each backend the subset of the writer's value options it understands: Parquet takes all of
+    them; Zarr takes the chunk/shard byte targets and the codec (its store has no row groups or id
+    columns).
 
     Args:
         config: Backend-specific typed construction options.
@@ -101,7 +121,13 @@ def make_values_backend(config: ValuesBackendConfig) -> "ValuesBackend":
     Returns:
         The constructed backend.
     """
-    return ParquetValuesBackend(config)
+    if isinstance(config, ParquetValuesConfig):
+        return ParquetValuesBackend(config)
+    if isinstance(config, ZarrValuesConfig):
+        from timenet.writer.zarr_values import ZarrValuesBackend
+
+        return ZarrValuesBackend(config)
+    assert_never(config)
 
 
 class ValuesBackend(Protocol):

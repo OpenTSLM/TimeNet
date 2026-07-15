@@ -49,7 +49,7 @@ from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import PARQUET_VALUES_BACKEND, SUPPORTED_VALUES_BACKENDS
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, make_values_backend
+from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, ZarrValuesConfig, make_values_backend
 
 
 class TimeFWriter:
@@ -283,8 +283,8 @@ class TimeFWriter:
         Returns:
             A mapping from ``(time_series_id, chunk_idx)`` to its on-disk placement.
         """
-        backend = make_values_backend(
-            ParquetValuesConfig(
+        if self._values_backend_name == PARQUET_VALUES_BACKEND:
+            config = ParquetValuesConfig(
                 staging_dir=self._staging_dir,
                 id_types=self._id_types,
                 codec=self._codec,
@@ -294,8 +294,16 @@ class TimeFWriter:
                 compression=self._compression,
                 compression_level=self._compression_level,
             )
-        )
-        result = backend.write_series(
+        else:
+            config = ZarrValuesConfig(
+                staging_dir=self._staging_dir,
+                shard_target_bytes=self._shard_target_bytes,
+                chunk_max_bytes=self._chunk_max_bytes,
+                compression=self._compression,
+                compression_level=self._compression_level,
+            )
+        values_backend = make_values_backend(config)
+        result = values_backend.write_series(
             unique_series,
             read_and_validate=self._read_and_validate,
             on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),

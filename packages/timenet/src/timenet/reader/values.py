@@ -13,7 +13,7 @@ from typing import Protocol
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.values_backends import PARQUET_VALUES_BACKEND
+from timenet.values_backends import PARQUET_VALUES_BACKEND, ZARR_VALUES_BACKEND
 
 
 _ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared row group decodes once
@@ -54,7 +54,11 @@ def make_values_reader(name: str) -> ValuesReader:
     """
     if name == PARQUET_VALUES_BACKEND:
         return ParquetValuesReader()
-    raise ValueError(f"unknown values_backend {name!r}; expected {PARQUET_VALUES_BACKEND!r}")
+    if name == ZARR_VALUES_BACKEND:
+        from timenet.reader.zarr_values import ZarrValuesReader
+
+        return ZarrValuesReader()
+    raise ValueError(f"unknown values_backend {name!r}; expected {PARQUET_VALUES_BACKEND!r} or {ZARR_VALUES_BACKEND!r}")
 
 
 class ParquetValuesReader:

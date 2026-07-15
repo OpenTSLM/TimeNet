@@ -32,18 +32,22 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 # ---- round trip -------------------------------------------------------------------------------
 
 
-def test_full_round_trip(tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    version_dir = _write(tmp_path, dataset=make_dataset())
+    version_dir = _write(tmp_path, dataset=make_dataset(), values_backend=backend)
     with TimeFReader(version_dir) as reader:
         restored = reader.read()
     assert isinstance(restored, TimeFDataset)
     assert_datasets_equal(original, restored)
 
 
-def test_round_trip_with_chunk_splitting(tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_round_trip_with_chunk_splitting(tmp_path, backend):
     original = make_dataset()
-    version_dir = _write(tmp_path, dataset=make_dataset(), chunk_max_bytes=64, row_group_target_bytes=64)
+    version_dir = _write(
+        tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
+    )
     with TimeFReader(version_dir) as reader:
         restored = reader.read()
     assert_datasets_equal(original, restored)
@@ -151,13 +155,14 @@ def test_values_are_lazy(tmp_path, monkeypatch):
         assert opens["n"] >= 1  # reading values opened a shard
 
 
-def test_read_back_dataset_is_picklable(tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_read_back_dataset_is_picklable(tmp_path, backend):
     # A multi-worker torch DataLoader pickles the dataset to each worker, so lazy loaders must pickle
-    # even after values (and thus shard handles) have been touched.
-    version_dir = _write(tmp_path)
+    # even after values (and thus the backend's handles/caches) have been touched.
+    version_dir = _write(tmp_path, values_backend=backend)
     dataset = TimeFReader(version_dir).read()
     first = dataset.samples[0].time_series[0]
-    original = first.to_arrow()  # populates the reader's shard/row-group caches
+    original = first.to_arrow()  # populates the values backend's caches
 
     restored = pickle.loads(pickle.dumps(dataset))
     assert restored.samples[0].time_series[0].to_arrow().equals(original)
