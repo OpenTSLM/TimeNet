@@ -123,9 +123,14 @@ def test_spec_nd_value_contract():
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
+        ({"spec_type": ""}, "spec_type"),
         ({"dtype": "complex64"}, "dtype"),
         ({"value_shape": (32, 0, 3)}, "positive integers"),
         ({"value_shape": (32, 32, 3), "dimension_names": ("height",)}, "match value_shape"),
+        (
+            {"value_shape": (32, 32, 3), "dimension_names": ("space", "space", "color")},
+            "unique",
+        ),
     ],
 )
 def test_spec_rejects_invalid_nd_contract(overrides, message):

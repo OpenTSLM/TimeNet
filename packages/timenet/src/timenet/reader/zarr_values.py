@@ -20,7 +20,7 @@ import pyarrow as pa
 from timenet.types import TimeSeriesSpec
 
 
-_CHUNK_CACHE_SIZE = 64  # decoded storage chunks kept (~64 MiB at the default 1 MiB chunk size)
+_CHUNK_CACHE_MAX_BYTES = 64 * 2**20
 
 
 class ZarrValuesReader:
@@ -30,6 +30,7 @@ class ZarrValuesReader:
         """Start with empty (per-process) array and chunk caches."""
         self._array_cache: dict[str, Any] = {}
         self._chunk_cache: OrderedDict[tuple[str, int], np.ndarray] = OrderedDict()
+        self._chunk_cache_bytes = 0
 
     def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values (``chunk_offset0`` = element start; length is ``n_values``).
@@ -73,6 +74,7 @@ class ZarrValuesReader:
         """Drop cached arrays and decoded chunks (Zarr arrays hold no OS file handles to close)."""
         self._array_cache.clear()
         self._chunk_cache.clear()
+        self._chunk_cache_bytes = 0
 
     def _read_range(self, root: Path, rel_path: str, start: int, stop: int) -> np.ndarray:
         """Assemble ``array[start:stop]`` from cached decoded storage chunks.
@@ -115,9 +117,13 @@ class ZarrValuesReader:
             return cached
         lo = chunk_idx * chunk_len
         data = np.asarray(array[lo : min(lo + chunk_len, array.shape[0])])
+        if data.nbytes > _CHUNK_CACHE_MAX_BYTES:
+            return data
         self._chunk_cache[key] = data
-        while len(self._chunk_cache) > _CHUNK_CACHE_SIZE:
-            self._chunk_cache.popitem(last=False)
+        self._chunk_cache_bytes += data.nbytes
+        while self._chunk_cache_bytes > _CHUNK_CACHE_MAX_BYTES:
+            _, evicted = self._chunk_cache.popitem(last=False)
+            self._chunk_cache_bytes -= evicted.nbytes
         return data
 
     def _array(self, root: Path, rel_path: str) -> Any:

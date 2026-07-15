@@ -1,3 +1,4 @@
+import numpy as np
 import pyarrow as pa
 import pytest
 
@@ -130,6 +131,29 @@ def test_derive_schema_dedupes_specs(make_series):
     ds.add_sample(time_series=(a, b), view=View.SUBSET)
     schema = ds.derive_schema()
     assert len(schema.time_series_specs) == 1
+
+
+def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
+    ds = _dataset()
+    scalar = make_series(channel="scalar")
+    image_spec = TimeSeriesSpec(
+        spec_type=scalar.spec.spec_type,
+        name=scalar.spec.name,
+        unit_sampling_rate=scalar.spec.unit_sampling_rate,
+        unit_timestamp=scalar.spec.unit_timestamp,
+        unit_value=scalar.spec.unit_value,
+        dtype="uint8",
+        value_shape=(8, 8, 3),
+    )
+    image = TimeSeries(
+        spec=image_spec,
+        channel="image",
+        sampling_rate_hz=1.0,
+        loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(np.zeros((1, 8, 8, 3), dtype="uint8")),
+    )
+    ds.add_sample(time_series=(scalar, image), view=View.FULL)
+    with pytest.raises(ValueError, match="conflicting TimeSeriesSpec contracts"):
+        ds.derive_schema()
 
 
 def test_derive_schema_rejects_conflicting_annotation_descriptors(make_series):

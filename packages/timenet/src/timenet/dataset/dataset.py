@@ -138,10 +138,18 @@ class TimeFDataset:
             The derived :class:`DatasetSchema`.
 
         Raises:
-            ValueError: If one annotation key yields conflicting descriptors across samples (e.g. the
-                same key seen with different value types or units).
+            TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
+                across samples.
         """
         specs = self._ordered_unique(ts.spec for sample in self._samples for ts in sample.time_series)
+        by_spec_type: dict[str, object] = {}
+        for spec in specs:
+            existing = by_spec_type.get(spec.spec_type)
+            if existing is not None:
+                raise TimeFValidationError(
+                    f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
+                )
+            by_spec_type[spec.spec_type] = spec
         data_sources = self._ordered_unique(spec.data_source for spec in specs if spec.data_source is not None)
         annotations = self._ordered_unique(
             AnnotationDescriptor(
@@ -158,7 +166,7 @@ class TimeFDataset:
         for descriptor in annotations:
             existing = by_key.get(descriptor.key)
             if existing is not None:
-                raise ValueError(
+                raise TimeFValidationError(
                     f"annotation {descriptor.key!r} has conflicting descriptors across samples: "
                     f"{existing!r} and {descriptor!r}"
                 )

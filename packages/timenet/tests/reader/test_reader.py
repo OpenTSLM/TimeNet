@@ -53,6 +53,17 @@ def test_round_trip_with_chunk_splitting(tmp_path, backend):
     assert_datasets_equal(original, restored)
 
 
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_read_steps_matches_full_series_slice(tmp_path, backend):
+    version_dir = _write(
+        tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
+    )
+    with TimeFReader(version_dir) as reader:
+        series = next(iter(reader.iter_samples())).time_series[0]
+        expected = series.to_arrow().slice(3, 7)
+        assert series.read_steps(3, 10).equals(expected)
+
+
 def test_metadata_and_schema(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:

@@ -85,6 +85,12 @@ def test_default_format_version():
     assert _manifest().timef_format_version == 2
 
 
+def test_format_version_2_is_supported():
+    data = _manifest().to_dict()
+    data["timef_format_version"] = 2
+    assert Manifest.from_dict(data).timef_format_version == 2
+
+
 def test_dict_roundtrip():
     m = _manifest()
     assert Manifest.from_dict(m.to_dict()) == m
@@ -185,6 +191,13 @@ def test_values_backend_round_trips():
 def test_unknown_values_backend_rejected_when_parsing():
     with pytest.raises(InvalidManifestError, match="values_backend"):
         _manifest(values_backend="feather")
+
+
+def test_unknown_values_backend_rejected():
+    data = _manifest().to_dict()
+    data["values_backend"] = "hdf5"
+    with pytest.raises(InvalidManifestError, match="values_backend"):
+        Manifest.from_dict(data)
 
 
 def test_unmodeled_metadata_keys_dropped():

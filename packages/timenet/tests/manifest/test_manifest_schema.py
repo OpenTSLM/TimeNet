@@ -77,6 +77,12 @@ def test_to_dict_validates_against_schema():
     jsonschema.validate(_manifest().to_dict(), MANIFEST_SCHEMA)
 
 
+def test_v2_validates_against_schema():
+    data = _manifest().to_dict()
+    data["timef_format_version"] = 2
+    jsonschema.validate(data, MANIFEST_SCHEMA)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
