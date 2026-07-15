@@ -143,7 +143,7 @@ def test_write_without_schema_raises(tmp_path):
 def test_unknown_values_backend_rejected_before_staging(tmp_path):
     dataset = make_dataset()
     with pytest.raises(ValueError, match="values_backend"):
-        TimeFWriter(tmp_path, dataset, values_backend="zarr")
+        TimeFWriter(tmp_path, dataset, values_backend="hdf5")
     assert not list(tmp_path.rglob("*.tmp-*"))
 
 

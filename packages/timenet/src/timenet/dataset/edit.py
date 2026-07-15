@@ -163,6 +163,7 @@ def edit_version(
 
     with TimeFReader(base_dir) as reader:
         base = reader.read()
+        writer_kwargs.setdefault("values_backend", reader.values_backend)  # an edit keeps the base's backend
     base_version = str(base.metadata.dataset_version)
     if str(dataset_version) == base_version:
         raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
