@@ -9,10 +9,12 @@ import zarr
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import TimeFReader, zarr_values as zarr_reader_module
+from timenet.reader.zarr_values import ZarrValuesReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, View, ureg
 from timenet.writer import TimeFWriter
+from timenet.writer.zarr_values import _array_name
 
 
 def _write(tmp_path, **kwargs) -> Path:
@@ -38,6 +40,13 @@ def test_one_array_per_spec_type(tmp_path):
     version_dir = _write(tmp_path)
     group = zarr.open_group(store=version_dir / "time_series.zarr", mode="r")
     assert set(group.array_keys()) == {"sine", "cosine"}
+
+
+def test_spec_types_encode_to_distinct_single_path_segments():
+    logical = ("camera/front", "camera\\front", "/camera/front", "camera%2Ffront")
+    encoded = tuple(_array_name(name) for name in logical)
+    assert len(set(encoded)) == len(logical)
+    assert all("/" not in name and "\\" not in name for name in encoded)
 
 
 def test_index_locator_resolves_to_values(tmp_path):
@@ -86,6 +95,35 @@ def test_unknown_backend_rejected(tmp_path):
         w.write()
 
 
+def test_decoded_chunk_cache_is_byte_bounded(monkeypatch):
+    class FakeArray:
+        shape = (4,)
+
+        def __getitem__(self, item):
+            return np.arange(4, dtype=np.int64)[item]
+
+    reader = ZarrValuesReader()
+    monkeypatch.setattr(zarr_reader_module, "_CHUNK_CACHE_MAX_BYTES", 40)
+    reader._chunk("first", FakeArray(), 0, 4)
+    reader._chunk("second", FakeArray(), 0, 4)
+    assert list(reader._chunk_cache) == [("second", 0)]
+    assert reader._chunk_cache_bytes == 32
+
+
+def test_oversized_decoded_chunk_is_not_cached(monkeypatch):
+    class FakeArray:
+        shape = (4,)
+
+        def __getitem__(self, item):
+            return np.arange(4, dtype=np.int64)[item]
+
+    reader = ZarrValuesReader()
+    monkeypatch.setattr(zarr_reader_module, "_CHUNK_CACHE_MAX_BYTES", 16)
+    reader._chunk("large", FakeArray(), 0, 4)
+    assert not reader._chunk_cache
+    assert reader._chunk_cache_bytes == 0
+
+
 def test_nd_uint8_round_trip_and_range_read(tmp_path):
     frames = np.arange(7 * 4 * 5 * 3, dtype=np.uint8).reshape(7, 4, 5, 3)
     spec = TimeSeriesSpec(
@@ -125,6 +163,8 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    assert manifest.timef_format_version == 2
     with TimeFReader(version_dir) as reader:
         restored = next(iter(reader.iter_samples())).time_series[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
