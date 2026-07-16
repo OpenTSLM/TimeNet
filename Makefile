@@ -1,7 +1,7 @@
 .PHONY: sync test check install-hooks lint-fix build docs docs-serve clean
 
 sync:
-	uv sync --all-groups
+	uv sync --all-groups --all-extras
 
 test:
 	uv run pytest

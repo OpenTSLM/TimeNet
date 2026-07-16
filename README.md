@@ -2,6 +2,8 @@
 
 TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format.
 
+Documentation: <https://ai-x-labs.github.io/TimeNet/>
+
 ## Terminology
 
 | Term | What it is |
@@ -16,6 +18,8 @@ See [docs/architecture.md](docs/architecture.md) for how these fit together.
 
 ## Installation
 
+Requires Python 3.11 or newer (tested on 3.11–3.13).
+
 ### From source
 
 Clone the repo and install locally:
@@ -23,8 +27,8 @@ Clone the repo and install locally:
 ```bash
 git clone https://github.com/AI-X-Labs/TimeNet.git
 cd TimeNet
-uv sync --all-groups   # runtime + dev + docs dependencies
-make install-hooks     # set up pre-commit hooks
+uv sync --all-groups --all-extras   # dev/docs deps + optional extras (cli, torch, huggingface)
+make install-hooks                  # set up pre-commit hooks
 ```
 
 Once installed, the CLI is available:
@@ -85,3 +89,6 @@ Don't bypass the hooks with `--no-verify`. If a hook fails, fix the underlying i
 make docs-serve   # live preview at http://127.0.0.1:8000
 make docs         # build static site into site/
 ```
+
+Published at <https://ai-x-labs.github.io/TimeNet/>, deployed from `main` by
+`.github/workflows/docs.yml` (enable Pages in the repo settings with source "GitHub Actions").

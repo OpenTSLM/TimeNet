@@ -15,6 +15,7 @@ def run_pipeline(
     root: Path,
     *,
     cache_dir: Path | None = None,
+    clean_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> Path:
@@ -30,6 +31,9 @@ def run_pipeline(
         connector: The connector to curate.
         root: Output root; the dataset is written to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
+        clean_cache: Remove the cache directory once the dataset is stored. The raw sources are only
+            needed during conversion, so this reclaims disk after a successful build (they re-download
+            on the next run).
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -50,4 +54,7 @@ def run_pipeline(
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
-    return connector.store(dataset, root, progress_cb=progress_cb)
+    connector.store(dataset, root, progress_cb=progress_cb)
+    if clean_cache and cache.is_dir():
+        shutil.rmtree(cache)
+    return version_dir

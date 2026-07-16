@@ -60,12 +60,23 @@ def _manifest() -> Manifest:
             time_series_specs={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            samples="samples.parquet",
-            annotations="annotations.parquet",
-            time_series_index="time_series_index.parquet",
+            samples=("samples.parquet",),
+            annotations=("annotations.parquet",),
+            time_series_index=("time_series_index.parquet",),
             tasks=("tasks/task=classification/part-0.parquet",),
             time_series=("time_series/shard-00000.parquet",),
         ),
+    )
+
+
+def test_files_all_parts_concatenates_in_order():
+    files = _manifest().files
+    assert files.all_parts() == (
+        *files.samples,
+        *files.annotations,
+        *files.time_series_index,
+        *files.tasks,
+        *files.time_series,
     )
 
 
@@ -207,9 +218,9 @@ def test_codec_roundtrip_property(version, samples, task_counts):
         ),
         counts=ManifestCounts(samples=samples, tasks=task_counts),
         files=ManifestFiles(
-            samples="samples.parquet",
-            annotations="annotations.parquet",
-            time_series_index="time_series_index.parquet",
+            samples=("samples.parquet",),
+            annotations=("annotations.parquet",),
+            time_series_index=("time_series_index.parquet",),
         ),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest

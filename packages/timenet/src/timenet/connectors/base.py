@@ -8,14 +8,17 @@ knowledge of the registry, engine, or any other connector. The engine drives it
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Generic, TypeVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
-class BaseConnector[TRaw](ABC):
+TRaw = TypeVar("TRaw")
+
+
+class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
     Subclasses set the ``METADATA`` class attribute and implement the two abstract stages, kept

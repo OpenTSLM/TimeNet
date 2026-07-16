@@ -72,9 +72,17 @@ Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](clien
   annotation shapes (one shared), and a `ClassificationTask -> QATask` chain plus a `LabelingTask`. Its
   dataset card, `hello_world.yaml`, sits beside it.
 - **`chengsenwang/tsqa`** — a time-series QA dataset: each row's series becomes a `TimeSeries` and its
-  question/answer a `QATask`. `TIMENET_ROW_LIMIT` caps rows for large runs.
+  question/answer a `QATask`.
 
 ```bash
-TIMENET_TESTING=1 timenet-curate build chengsenwang/tsqa   # offline, uses the connector's fixture
-timenet-curate build chengsenwang/tsqa                     # live download
+timenet-curate build chengsenwang/tsqa                 # live download from the Hub into the local registry
+timenet-curate build chengsenwang/tsqa --keep-cache    # keep the raw sources for a faster rebuild
 ```
+
+A successful build removes the dataset's raw download cache (`<TIMENET_CACHE>/<dataset_id>`), since the
+sources are only needed during conversion; pass `--keep-cache` to retain them. For offline work and
+tests, `TIMENET_TESTING=1` serves the connector's checked-in fixture, and `TIMENET_ROW_LIMIT=N` caps
+rows for a quick sample.
+
+Once built, load and inspect a dataset with the SDK — see `examples/load_tsqa.py`, which loads a dataset
+and calls `describe()` to print its identity, counts, per-spec columns, and a sample preview.
