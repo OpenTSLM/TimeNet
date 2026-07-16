@@ -28,5 +28,12 @@ env/
 .env
 .env.*
 
-# mkdocs build output
+# docs build output
 site/
+
+# generated catalog (see scripts/gen_dataset_docs.py); catalog/benchmarks.md is hand-written
+docs/catalog/datasets.md
+docs/catalog/datasets.json
+
+# generated API reference (see scripts/gen_api_docs.py)
+docs/api/

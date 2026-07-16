@@ -1,3 +1,11 @@
+---
+icon: lucide/table-2
+description: "The in-memory TimeFDataset model: samples, tasks, and time series."
+tags:
+  - reference
+  - dataset
+---
+
 # TimeFDataset
 
 The in-memory model a connector populates during `convert()`. Holds samples and their tasks as Python
@@ -72,19 +80,31 @@ dataset.add_task(sample, ClassificationTask(label="afib"))
 dataset.derive_schema()
 ```
 
-### `add_sample(*, time_series, view, subject_ids=(), sample_id=None) -> Sample`
+### `add_sample()`
+
+```python
+add_sample(*, time_series, view, subject_ids=(), sample_id=None) -> Sample
+```
 
 Creates a sample, registers it, returns it. Raises `ValueError` if `time_series` is empty. Pass
 `sample_id` for deterministic output (e.g. golden fixtures).
 
-### `add_task(samples, task, *, from_tasks=()) -> Task`
+### `add_task()`
+
+```python
+add_task(samples, task, *, from_tasks=()) -> Task
+```
 
 Registers a task and links it to its samples: populates `task.sample_ids` and appends `task.id` to each
 sample's `task_ids`. `from_tasks` overrides the task's own value only when non-empty, so a task built
 with `from_tasks=` is never clobbered. Raises `ValueError` on empty `samples` or a `LabelingTask` whose
 `time_series_ids` do not resolve to every target sample.
 
-### `derive_schema() -> DatasetSchema`
+### `derive_schema()`
+
+```python
+derive_schema() -> DatasetSchema
+```
 
 Walks the dataset's instances and builds its [`DatasetSchema`](types.md#datasetschema): the distinct
 specs, data sources, annotation descriptors, and task types (order-preserving dedupe). Stores the result
@@ -96,7 +116,11 @@ before the writer runs.
 `metadata`, `samples` (tuple, read-only), `tasks` (tuple, read-only), and `schema`
 (`DatasetSchema | None`, `None` until `derive_schema()` runs or the reader populates it).
 
-### `describe(*, rows=5, file=None) -> None`
+### `describe()`
+
+```python
+describe(*, rows=5, file=None) -> None
+```
 
 Prints a plain-text summary, like pandas' `describe`/`info`: identity, counts, per-spec columns (name,
 units, and the value dtype sampled from one series), and a preview of the first `rows` samples. The
@@ -127,3 +151,7 @@ samples (first 5 of 48000)
   sample_id  view  channels  length  tasks  annotations
   row-0      full  1         64      1      1
 ```
+
+---
+
+See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.

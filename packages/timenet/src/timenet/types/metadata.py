@@ -28,14 +28,23 @@ class DatasetMetadata:
     """
 
     dataset_id: str
+    """HuggingFace-style ``org/name`` pair; case-sensitive, exactly one slash."""
     dataset_version: Version
+    """Semantic version of the upstream source data."""
     name: str
+    """Human-readable display name."""
     description: str
+    """Free-text description of the dataset."""
     license: License
+    """Legal license of the source data, as an SPDX-style identifier."""
     domains: tuple[Domain, ...] = ()
+    """Kinds of data the dataset contains."""
     tags: tuple[str, ...] = ()
+    """Free-form tags for search and grouping."""
     source_url: str | None = None
+    """Link to the dataset's origin, if any."""
     yaml_schema_version: int = 1
+    """Version of the card's own field schema."""
 
     def __post_init__(self) -> None:
         """Validate the ``dataset_id`` shape.
@@ -144,9 +153,13 @@ class DatasetSchema:
     """
 
     time_series_specs: tuple[TimeSeriesSpec, ...] = ()
+    """Descriptors for the dataset's measurement modalities."""
     data_sources: tuple[DataSource, ...] = ()
+    """Origins that produced the modalities, keyed by ``data_source_type``."""
     annotations: tuple[AnnotationDescriptor, ...] = ()
+    """Type-level descriptors for the dataset's annotation keys."""
     tasks: tuple[type[Task], ...] = field(default=())
+    """Built-in ``Task`` subclasses the dataset declares, resolved from the registry."""
 
     def __post_init__(self) -> None:
         """Reject a spec whose data source is absent from ``data_sources`` or is registered ambiguously.

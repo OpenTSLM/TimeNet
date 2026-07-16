@@ -1,8 +1,16 @@
+---
+icon: lucide/database
+description: "Registry backends that serve manifests and parquet to the SDK."
+tags:
+  - guide
+  - registry
+---
+
 # Registry
 
 A registry serves compiled manifests and parquet to the SDK. It never runs connector code. Lives in
 `timenet.registry`. There can be several registries: one public, private internal ones, or a local
-directory (the output of [curation](engine.md) is itself a valid local registry).
+directory (the output of [curation](curation.md) is itself a valid local registry).
 
 ## Choosing a registry
 
@@ -24,9 +32,13 @@ registry = open_registry("timenet://")                # the hosted TimeNet regis
 | `http(s)://` | `RemoteRegistry` (deferred) |
 | `timenet://` | `RemoteRegistry`, an alias for the hosted `https://registry.timenet.ai` |
 
+!!! warning "Only local registries today"
+    `LocalRegistry` is the only working backend. The `s3://`, `http(s)://`, and `timenet://`
+    backends are stubs that raise `NotImplementedError` until they land.
+
 ## `BaseRegistry`
 
-The read contract every backend implements (three data-access methods) plus a shared `search`:
+The contract every backend implements (three data-access methods) plus a shared `search`:
 
 | Method | Description |
 | --- | --- |
@@ -36,13 +48,17 @@ The read contract every backend implements (three data-access methods) plus a sh
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` is a placeholder for the
-versioned REST contract (`GET /v1/datasets`, `/v1/datasets/{id}/{version}/manifest`, ...) and `S3Registry`
-for the same layout under an S3 prefix; both currently raise `NotImplementedError`.
+versioned REST contract (`GET /v1/datasets`, `/v1/datasets/{id}/{version}/manifest`, ...) and
+`S3Registry` for the same layout under an S3 prefix; both currently raise `NotImplementedError`.
+
+Dataset ids are an `org/name` pair (`chengsenwang/tsqa`), which nests one level deep on disk
+(`<root>/chengsenwang/tsqa/<version>/`). `list_datasets` discovers them depth-agnostically. Prefer
+lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
 ## Writing to a registry
 
-A `WritableRegistry` adds one write primitive to the read contract, so [curation](engine.md) can publish
-into any backend, not just a local directory:
+A `WritableRegistry` adds one write primitive to the read contract, so [curation](curation.md) can
+publish into any backend, not just a local directory:
 
 | Method | Description |
 | --- | --- |
@@ -60,10 +76,6 @@ from timenet.registry import open_writable_registry
 registry = open_writable_registry("~/.timenet/local")
 version = registry.store(dataset)   # schema derived if needed, atomic commit
 ```
-
-Dataset ids are an `org/name` pair (`chengsenwang/tsqa`), which nests one level deep on disk
-(`<root>/chengsenwang/tsqa/<version>/`). `list_datasets` discovers them depth-agnostically. Prefer
-lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
 ## `search`
 
@@ -87,5 +99,9 @@ consumer CLI mirrors this one-to-one (`timenet search`).
 | `dataset_id` | dataset id is any of these |
 | `tag` | dataset declares all of these tags |
 
-The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest —
-no `precomputed_schema` is needed because the manifest always carries the derived schema.
+The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest.
+No `precomputed_schema` is needed because the manifest always carries the derived schema.
+
+---
+
+See the [API reference for `timenet.registry`](api/registry.md) for the full symbol listing.
