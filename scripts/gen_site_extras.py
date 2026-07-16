@@ -7,7 +7,7 @@ Runs after ``zensical build`` and works on the ``site/`` output plus the ``docs/
 2. Writes ``site/llms.txt`` (an llmstxt.org discovery index) and ``site/llms-full.txt`` (every
    page concatenated), both linking the raw ``.md`` URLs.
 3. Injects Open Graph / Twitter meta tags and a schema.org JSON-LD ``Article`` block (authored by
-   TimeNet / OpenTSLM) into each HTML page.
+   TimeNet / AI-X-Labs) into each HTML page.
 4. Adds a "Copy as Markdown" button that fetches the page's sibling ``.md`` mirror.
 
 Run it with the docs env::
@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
-import shutil
 import tomllib
 from urllib.parse import quote
 
@@ -34,7 +33,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 SITE_DIR = REPO_ROOT / "site"
 CONFIG_FILE = REPO_ROOT / "zensical.toml"
-SCHEMAS_DIR = REPO_ROOT / "packages" / "timenet" / "src" / "timenet" / "schemas"
 
 _FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n+", re.DOTALL)
 
@@ -267,7 +265,7 @@ def _source_url(index: dict, repo_url: str, qualified: str) -> str | None:
 
     Args:
         index: The Griffe package index from :func:`_load_griffe`.
-        repo_url: The repository URL (e.g. ``https://github.com/OpenTSLM/TimeNet``).
+        repo_url: The repository URL (e.g. ``https://github.com/AI-X-Labs/TimeNet``).
         qualified: The dotted symbol path (e.g. ``timenet.client.TimeNet.load``).
 
     Returns:
@@ -328,9 +326,6 @@ def _enhance_html(config: dict) -> None:
     name = config.get("site_name", "Documentation")
     image = f"{site_url}/assets/social-card.png"
     griffe_index = _load_griffe() if repo_url else {}
-    # The JSON-LD author org is the repo owner, derived from repo_url so a rename only touches config.
-    author_name = repo_url.rsplit("/", 2)[-2] if repo_url else name
-    author_url = repo_url.rsplit("/", 1)[0] if repo_url else site_url
 
     for html in SITE_DIR.rglob("*.html"):
         rel = html.relative_to(SITE_DIR).as_posix()
@@ -377,7 +372,7 @@ def _enhance_html(config: dict) -> None:
             "description": description,
             "url": page_url,
             "image": image,
-            "author": {"@type": "Organization", "name": author_name, "url": author_url},
+            "author": {"@type": "Organization", "name": "AI-X-Labs", "url": "https://github.com/AI-X-Labs"},
             "publisher": {"@type": "Organization", "name": name},
         }
         script = soup.new_tag("script", type="application/ld+json")
@@ -395,22 +390,6 @@ def _enhance_html(config: dict) -> None:
         html.write_text(str(soup), encoding="utf-8")
 
 
-def _copy_schemas() -> None:
-    """Publish the packaged JSON Schemas under ``site/schemas/`` at their ``$id`` basename.
-
-    The ``timenet`` package ships the schemas but loads them locally (``importlib.resources``), so the
-    ``$id`` URLs (``.../schemas/<name>-v1.schema.json``) resolve to nothing on their own. Copying each
-    schema to the filename its ``$id`` ends in makes those URLs serve for real, so external validators
-    and IDEs can fetch them.
-    """
-    dest_dir = SITE_DIR / "schemas"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for src in sorted(SCHEMAS_DIR.glob("*.schema.json")):
-        schema = json.loads(src.read_text(encoding="utf-8"))
-        name = str(schema["$id"]).rsplit("/", 1)[-1]  # e.g. manifest-v1.schema.json
-        shutil.copyfile(src, dest_dir / name)
-
-
 def main() -> None:
     """Run all post-build enhancements against ``site/``.
 
@@ -423,8 +402,7 @@ def main() -> None:
     _mirror_markdown()
     _generate_llms(config)
     _enhance_html(config)
-    _copy_schemas()
-    print("Enhanced site: .md mirrors, llms.txt, llms-full.txt, social meta, JSON-LD, copy button, schemas")
+    print("Enhanced site: .md mirrors, llms.txt, llms-full.txt, social meta, JSON-LD, copy button")
 
 
 if __name__ == "__main__":

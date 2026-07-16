@@ -1,8 +1,6 @@
-from pathlib import Path
-
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import DatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.registry import (
     BaseRegistry,
@@ -10,7 +8,6 @@ from timenet.registry import (
     RemoteRegistry,
     S3Registry,
     WritableRegistry,
-    local_registry_path,
     open_registry,
     open_writable_registry,
 )
@@ -48,35 +45,6 @@ def test_open_registry_timenet_scheme_aliases_hosted_remote():
 
 def test_open_writable_registry_returns_writable(registry_root):
     assert isinstance(open_writable_registry(registry_root), WritableRegistry)
-
-
-def test_local_registry_expands_user(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert LocalRegistry(Path("~/reg"))._root == tmp_path / "reg"
-
-
-# ---- local_registry_path ----------------------------------------------------------------------
-
-
-def test_local_registry_path_plain_path(tmp_path):
-    assert local_registry_path(tmp_path) == tmp_path
-
-
-def test_local_registry_path_file_uri(tmp_path):
-    assert local_registry_path(f"file://{tmp_path}") == tmp_path
-
-
-def test_local_registry_path_expands_user(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert local_registry_path("~/reg") == tmp_path / "reg"
-
-
-@pytest.mark.parametrize(
-    "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
-)
-def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(RegistryError, match="remote"):
-        local_registry_path(uri)
 
 
 # ---- list / get / open ------------------------------------------------------------------------

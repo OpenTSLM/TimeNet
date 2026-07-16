@@ -413,6 +413,7 @@ class TimeFWriter:
                 {
                     "sample_id": _enc_id(sample.sample_id, "sample_id" in u),
                     "view": str(sample.view),
+                    "t0_unix_ns": sample.t0_unix_ns,
                     "subject_ids": _enc_ids(list(sample.subject_ids), "subject_id" in u),
                     "source_ids": _enc_ids(
                         _ordered_unique(ts.source_id for ts in sample.time_series if ts.source_id),
