@@ -140,6 +140,13 @@ def test_write_without_schema_raises(tmp_path):
         writer.write()
 
 
+def test_unknown_values_backend_rejected_before_staging(tmp_path):
+    dataset = make_dataset()
+    with pytest.raises(ValueError, match="values_backend"):
+        TimeFWriter(tmp_path, dataset, values_backend="zarr")
+    assert not list(tmp_path.rglob("*.tmp-*"))
+
+
 def test_recommit_raises_file_exists(tmp_path):
     _written(tmp_path)
     dataset = make_dataset()
@@ -275,6 +282,6 @@ def test_tasks_partitioned_by_type(tmp_path):
 
 def test_int32_guard_is_exposed():
     # The guard is a documented invariant; verify the constant/limit exists.
-    from timenet.writer.writer import MAX_ELEMENTS_PER_ROW_GROUP
+    from timenet.writer.values import MAX_ELEMENTS_PER_ROW_GROUP
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
