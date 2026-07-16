@@ -11,6 +11,11 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.optional-dependencies]
+# Real HuggingFace downloads need huggingface_hub; base users who only curate synthetic/offline
+# datasets don't. Connectors lazily import it and raise an actionable error if it's missing.
+huggingface = ["huggingface_hub>=0.24"]
+
 [project.scripts]
 timenet-curate = "timenet_connectors.curate.cli:main"
 

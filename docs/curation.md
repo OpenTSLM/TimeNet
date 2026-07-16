@@ -17,10 +17,11 @@ store`) and writes the dataset into `<dir>`. The output directory is itself a va
 you can verify the result immediately:
 
 ```bash
-timenet-curate build hello_world --out ./local_registry
+timenet-curate build timenet/hello-world --out ./local_registry
 python -c "from timenet.client import TimeNet; print(TimeNet('./local_registry').list())"
 ```
 
-The curator loop: author `connectors/<id>.py` (a [`BaseConnector`](connectors.md)) and `connectors/<id>.yaml`
-(the [dataset card](manifest.md)), `build` locally, verify with the SDK, then publish. Additional verbs
+The curator loop: add a connector at `datasets/<org>/<name>.py` (a [`BaseConnector`](connectors.md)
+exposing `CONNECTOR`) with its [dataset card](manifest.md) beside it, `build` locally, verify with the
+SDK, then publish. Additional verbs
 (`validate`, `inspect`, `publish`) and a remote registry backend are planned.

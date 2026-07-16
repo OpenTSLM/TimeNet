@@ -100,6 +100,17 @@ def test_load_round_trips(registry_root, tmp_path):
     assert_datasets_equal(make_dataset(), restored)
 
 
+def test_load_torch(registry_root, tmp_path):
+    torch = pytest.importorskip("torch")
+    from torch.utils.data import Dataset
+
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    ds = client.load_torch("hello_world")
+    assert isinstance(ds, Dataset)
+    assert len(ds) == len(make_dataset().samples)
+    assert isinstance(ds[0]["series"][0], torch.Tensor)
+
+
 def test_registry_env_var(registry_root, tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_REGISTRY", str(registry_root))
     client = TimeNet(storage_path=tmp_path / "store")

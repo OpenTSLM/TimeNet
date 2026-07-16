@@ -49,13 +49,32 @@ bytes are stored once. The same applies to annotations, which the writer dedupes
 
 ---
 
-## The HelloWorld connector
+## Discovery and layout
 
-`timenet_connectors.HelloWorldConnector` is a synthetic, offline reference connector. It needs no
-network and produces a fully deterministic dataset, so it doubles as the fixture the writer and reader
-test suites round-trip against. `convert()` exercises every feature: two modalities over a shared data
-source, a series shared across samples, a windowed sample, a chunk-split-sized series, all three
-annotation shapes (one shared across samples), and a `ClassificationTask -> QATask` chain plus a
-`LabelingTask`.
+Connectors are found **lazily by dataset id** — there is no central registry to maintain. A concrete
+connector lives at `datasets/<org>/<name>.py` (lowercase Python package names) and exposes a
+module-level `CONNECTOR`; `timenet-curate build <org>/<name>` imports just that module. Reusable bases
+live under `bases/`. Each connector declares its own id in `metadata()`; ids are lowercase `org/name`.
 
-Its dataset card, `hello_world.yaml`, sits beside it; the filename stem is the dataset id.
+## Optional dependencies and credentials
+
+A connector may need libraries or credentials its source requires. Declare heavy libraries as an
+**optional extra** and import them lazily inside the connector so base users don't have to install them;
+a missing library should raise an actionable error. Credentials come from the environment — for the
+HuggingFace Hub, a token is read from `HF_TOKEN` automatically (needed only for gated/private sources).
+Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](client.md#configuration)).
+
+## Example connectors
+
+- **`timenet/hello-world`** — a synthetic, offline reference connector. It needs no network and produces
+  a fully deterministic dataset, so it doubles as the round-trip fixture: two modalities over a shared
+  data source, a series shared across samples, a windowed sample, a chunk-split-sized series, all three
+  annotation shapes (one shared), and a `ClassificationTask -> QATask` chain plus a `LabelingTask`. Its
+  dataset card, `hello_world.yaml`, sits beside it.
+- **`chengsenwang/tsqa`** — a time-series QA dataset: each row's series becomes a `TimeSeries` and its
+  question/answer a `QATask`. `TIMENET_ROW_LIMIT` caps rows for large runs.
+
+```bash
+TIMENET_TESTING=1 timenet-curate build chengsenwang/tsqa   # offline, uses the connector's fixture
+timenet-curate build chengsenwang/tsqa                     # live download
+```
