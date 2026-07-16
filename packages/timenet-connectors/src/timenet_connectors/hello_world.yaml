@@ -1,0 +1,14 @@
+# Dataset Card for the hello_world connector.
+# Human-authored metadata; the curator compiles this plus the schema derived from the data into
+# manifest.json. The filename stem (hello_world) is the dataset id.
+yaml_schema_version: 1
+dataset_id: hello_world
+dataset_version: 1.0.0
+name: Hello World
+description: A synthetic demo dataset exercising every TimeF feature.
+license: CC-BY-4.0
+domains:
+  - general
+tags:
+  - demo
+  - synthetic

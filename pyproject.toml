@@ -64,7 +64,7 @@ ignore = [
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
 # Don't require docstrings for test modules and functions. Pickle round-trips are intentional
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403"]
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "ARG"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 
