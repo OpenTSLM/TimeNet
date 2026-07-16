@@ -72,3 +72,22 @@ def test_spec_value_unit_unconstrained():
     # Any unit is a valid channel value unit (mV, g, bpm, dimensionless, ...).
     assert _ecg_spec(unit_value=ureg.dimensionless).unit_value == ureg.dimensionless
     assert _ecg_spec(unit_value=ureg.bpm).unit_value == ureg.bpm
+
+
+def test_spec_nd_value_contract():
+    spec = _ecg_spec(dtype="uint8", value_shape=(32, 32, 3), dimension_names=("height", "width", "color"))
+    assert spec.dtype == "uint8"
+    assert spec.value_shape == (32, 32, 3)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"dtype": "complex64"}, "dtype"),
+        ({"value_shape": (32, 0, 3)}, "positive integers"),
+        ({"value_shape": (32, 32, 3), "dimension_names": ("height",)}, "match value_shape"),
+    ],
+)
+def test_spec_rejects_invalid_nd_contract(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        _ecg_spec(**overrides)

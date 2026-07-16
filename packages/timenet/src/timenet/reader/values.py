@@ -13,6 +13,7 @@ from typing import Protocol
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.types import TimeSeriesSpec
 from timenet.values_backends import PARQUET_VALUES_BACKEND, ZARR_VALUES_BACKEND
 
 
@@ -22,7 +23,7 @@ _ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared 
 class ValuesReader(Protocol):
     """Reads a series' values from the version directory given its index rows."""
 
-    def load(self, root: Path, rows: list[dict]) -> pa.Array:
+    def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
         Args:
@@ -33,6 +34,10 @@ class ValuesReader(Protocol):
         Returns:
             The series' 1-D float32 values.
         """
+        ...
+
+    def load_range(self, root: Path, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec) -> pa.Array:
+        """Read a temporal subsection of one series."""
         ...
 
     def close(self) -> None:
@@ -69,8 +74,8 @@ class ParquetValuesReader:
         self._shard_cache: dict[Path, pq.ParquetFile] = {}
         self._row_group_cache: OrderedDict[tuple[Path, str, int], pa.ChunkedArray] = OrderedDict()
 
-    def load(self, root: Path, rows: list[dict]) -> pa.Array:
-        """Read a series' chunks from their Parquet row-group locations.
+    def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+        """Read a series' chunks (``chunk_offset0`` = row group, ``chunk_offset1`` = row offset).
 
         Args:
             root: The version directory.
@@ -79,11 +84,37 @@ class ParquetValuesReader:
         Returns:
             The series' 1-D float32 values.
         """
+        del spec  # Parquet is scalar float32-only in this format version.
         chunks = [
             self._row_group_values(root, row["chunk_file"], row["chunk_offset0"])[row["chunk_offset1"]].values
             for row in rows
         ]
         return pa.concat_arrays([chunk.cast(pa.float32()) for chunk in chunks])
+
+    def load_range(self, root: Path, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec) -> pa.Array:
+        """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
+
+        Returns:
+            The requested scalar float32 values.
+        """
+        del spec  # Parquet is scalar float32-only in this format version.
+        total = sum(row["n_values"] for row in rows)
+        bounded_stop = min(stop, total)
+        if start >= bounded_stop:
+            return pa.array([], type=pa.float32())
+        parts = []
+        cursor = 0
+        for row in rows:
+            row_stop = cursor + row["n_values"]
+            if row_stop > start and cursor < bounded_stop:
+                values = self._row_group_values(root, row["chunk_file"], row["chunk_offset0"])[
+                    row["chunk_offset1"]
+                ].values
+                lo = max(start - cursor, 0)
+                hi = min(bounded_stop - cursor, row["n_values"])
+                parts.append(values.slice(lo, hi - lo).cast(pa.float32()))
+            cursor = row_stop
+        return pa.concat_arrays(parts)
 
     def close(self) -> None:
         """Close every cached shard file handle and drop cached row groups."""

@@ -26,8 +26,8 @@ Use it as a context manager: `close()` (called by `__exit__`) closes the cached 
 
 `__init__` reads the manifest, tasks, annotations, and the time-series index up front. Per-series values
 and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with loader closures that
-pull from the shards only when `to_arrow()` / `to_numpy()` is called. `iter_samples()` streams samples
-one at a time without building a `TimeFDataset`.
+pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called. `iter_samples()`
+streams samples one at a time without building a `TimeFDataset`.
 
 ## Type reconstruction
 
@@ -40,10 +40,12 @@ field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
 
 ## Value reads
 
-A series' loader resolves its index rows (sorted by `chunk_idx`), interprets `chunk_file`,
-`chunk_offset0`, and `chunk_offset1` as the Parquet shard, row group, and row offset, reads each chunk,
-and concatenates them into one
-`float32` Arrow array. Shard handles are cached for the reader's lifetime and closed on `close()`.
+A series' loader resolves its index rows (sorted by `chunk_idx`). For Parquet, `chunk_file`,
+`chunk_offset0`, and `chunk_offset1` identify the shard, row group, and row offset. Chunks become one
+Arrow array. Scalars use a primitive Arrow array; N-D values use `pa.FixedShapeTensorArray`, whose
+length is the number of timesteps. `to_numpy()` is the explicit framework conversion. Range-aware
+read-back loaders select only the requested temporal chunks before constructing Arrow. Handles and
+decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 ## API
 
