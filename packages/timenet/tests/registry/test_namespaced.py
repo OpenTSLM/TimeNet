@@ -41,7 +41,7 @@ def _namespaced_dataset() -> TimeFDataset:
         t_end_s=8.0,
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ns-sample-0")
-    dataset.add_task(sample, ClassificationTask(label="x", id="ns-task-0"))
+    dataset.add_task(sample, ClassificationTask(target="x", id="ns-task-0"))
     return dataset
 
 

@@ -96,11 +96,11 @@ def test_reasoning_task_rationale_round_trips(tmp_path):
         ReasoningTask(
             question="Is the rhythm normal?",
             rationale="Regular R-R intervals with a P wave before each QRS.",
-            answer="Yes.",
+            target="Yes.",
             id="task-reason-0",
         ),
     )
-    dataset.add_task(sample, ReasoningTask(question="Any ectopy?", answer="No.", id="task-reason-1"))  # rationale=None
+    dataset.add_task(sample, ReasoningTask(question="Any ectopy?", target="No.", id="task-reason-1"))  # rationale=None
     version_dir = _write(tmp_path, dataset=dataset)
     with TimeFReader(version_dir) as reader:
         tasks = {t.id: t for t in reader.tasks}
@@ -108,7 +108,7 @@ def test_reasoning_task_rationale_round_trips(tmp_path):
     assert isinstance(with_rationale, ReasoningTask)
     assert with_rationale.question == "Is the rhythm normal?"
     assert with_rationale.rationale == "Regular R-R intervals with a P wave before each QRS."
-    assert with_rationale.answer == "Yes."
+    assert with_rationale.target == "Yes."
     without_rationale = tasks["task-reason-1"]
     assert isinstance(without_rationale, ReasoningTask)
     assert without_rationale.rationale is None  # optional field round-trips as None

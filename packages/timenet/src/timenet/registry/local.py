@@ -72,7 +72,11 @@ class LocalRegistry(WritableRegistry):
         """
         resolved = self._latest_version(dataset_id) if version in (None, "", "latest") else version
         if resolved is None:
-            raise DatasetNotFoundError(f"no committed version for dataset {dataset_id!r}")
+            known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
+            raise DatasetNotFoundError(
+                f"no committed version for dataset {dataset_id!r}; this registry has: {known}. "
+                "Curate one with `timenet-curate build <id>`."
+            )
         path = self._root / dataset_id / resolved / MANIFEST_FILE
         if not path.exists():
             raise DatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")

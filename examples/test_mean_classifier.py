@@ -1,0 +1,65 @@
+"""End-to-end TimeNet example: curate a dataset, load it, and train a classifier.
+
+The task is deliberately simple: each sample in ``timenet/test-mean`` is one noisy signal, labeled by
+whether its mean is above or below zero. The script runs the whole loop top to bottom: curate the
+dataset from its connector into the local registry, load it back through the SDK, turn the samples into
+an ``(X, y)`` training pair, and train a scikit-learn classifier.
+
+scikit-learn is not a TimeNet dependency; install it yourself, then run from the repo root::
+
+    pip install scikit-learn
+    python examples/test_mean_classifier.py
+"""
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+
+from timenet.client import TimeNet
+import timenet_connectors
+
+
+# Curate the connector's dataset into the local registry (idempotent), then load it back through the SDK.
+timenet_connectors.build("timenet/test-mean")
+dataset = TimeNet().load("timenet/test-mean")
+
+# A quick tour of what we loaded: identity, counts, specs, and a sample preview.
+dataset.describe()
+# timenet/test-mean @ 1.0.0
+#   name     Test Mean
+#   license  CC-BY-4.0
+#   domains  general
+#   tags     demo, synthetic, classification
+#
+# counts
+#   samples      1000
+#   series       signal=1000
+#   annotations  0
+#   tasks        classification=1000
+#
+# specs
+#   spec    name    value          rate   dtype
+#   signal  Signal  dimensionless  hertz  float
+#
+# samples (first 5 of 1000)
+#   sample_id   view  channels  length  tasks  annotations
+#   sample-0    full  1         64      1      0
+#   sample-1    full  1         64      1      0
+#   sample-10   full  1         64      1      0
+#   sample-100  full  1         64      1      0
+#   sample-101  full  1         64      1      0
+
+# Pair each sample's values with its label. Materialization is deferred by default (Arrow); ask for
+# output="numpy" here since scikit-learn needs it. test-mean has one task type, so the task is inferred.
+x, y = dataset.to_features_and_targets(output="numpy")
+# x: np.ndarray (1000, 64) float32   -- one 64-point signal per row
+# y: np.ndarray (1000,) object       -- "above_zero" / "below_zero" per row
+# (the default output="arrow" instead returns X as a FixedSizeListArray<float>[64] and y as a string array)
+
+# Train a classifier on a held-out split and report accuracy.
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, stratify=y, random_state=0)
+model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
+accuracy = accuracy_score(y_test, model.predict(x_test))
+
+print(f"loaded {len(dataset.samples)} samples")  # loaded 1000 samples
+print(f"test accuracy: {accuracy:.3f}")  # test accuracy: 1.000

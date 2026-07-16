@@ -126,10 +126,12 @@ reuse) and they round-trip without runtime class synthesis.
 | `PointAnnotation` | `start_time_s`, `time_series_ids` | One instant, on specific signals or the whole sample. |
 | `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
 
-Shared fields: `key: str`, `value: Any = None`, `unit: str | None = None`,
-`description: str | None = None`, `id: str` (auto uuid7). On the temporal shapes,
-`time_series_ids=None` means **trial-level** (the whole sample); a non-empty tuple restricts the
-annotation to those channels (each id must match a `TimeSeries.time_series_id` on the sample).
+Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
+`description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
+(`"years"`) or a `pint.Unit` (`ureg.millivolt`, stored as its canonical name); both are validated
+against the shared registry on construction, and an unrecognized unit string raises `ValueError`. On the temporal shapes, `time_series_ids=None` means **trial-level** (the whole
+sample); a non-empty tuple restricts the annotation to those channels (each id must match a
+`TimeSeries.time_series_id` on the sample).
 
 ```python
 from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
@@ -179,53 +181,59 @@ are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after co
 
 | Class | `task_type` | Payload |
 | --- | --- | --- |
-| `ClassificationTask` | `classification` | `label`, `label_schema` |
-| `LabelingTask` | `labeling` | `label`, `label_schema`, `time_series_ids`, `windows_s` |
-| `CaptioningTask` | `captioning` | `answer` |
-| `QATask` | `question_and_answer` | `question`, `answer` |
+| `ClassificationTask` | `classification` | `target`, `target_schema` |
+| `LabelingTask` | `labeling` | `target`, `target_schema`, `time_series_ids`, `windows_s` |
+| `CaptioningTask` | `captioning` | `target` |
+| `QATask` | `question_and_answer` | `question`, `target` |
 | `ForecastingTask` | `forecasting` | `context_sample_ids`, `target_sample_id` |
-| `ReasoningTask` | `reasoning` | `question`, `rationale`, `answer` |
+| `ReasoningTask` | `reasoning` | `question`, `rationale`, `target` |
 
 Every task also carries `id` (auto uuid7), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
-`TaskType` is the enum of type tags; `TASKS` is **derived** from `Task.__subclasses__()`, so it can
+`TaskType` is the enum of type tags; `TASKS` is **derived** by walking the task hierarchy, so it can
 never drift. Unlike specs and annotations, task payloads are fixed in code and resolved on read against
 `TASKS`, not reconstructed from the manifest.
 
+The five label-style tasks share a scalar `target` (a class label, region label, answer, or caption)
+through a `TargetTask` base, so generic training code reads `task.target` regardless of type. Forecasting
+is the exception: its target is a *series*, not a scalar, so it carries no `target` and instead points at
+the sample holding the ground-truth future values via `target_sample_id`.
+
 ### Per-type payloads
 
-- `ClassificationTask`: one discrete label for the whole sample; `label_schema` names the
-  vocabulary the label is drawn from (`None` for free-form).
+- `ClassificationTask`: one discrete label for the whole sample; `target_schema` names the
+  vocabulary the target is drawn from (`None` for free-form).
   ```python
-  dataset.add_task(sample, ClassificationTask(label="afib", label_schema="AAMI"))
+  dataset.add_task(sample, ClassificationTask(target="afib", target_schema="AAMI"))
   ```
 - `LabelingTask`: a label localized to specific signals and/or time windows: `time_series_ids`
   picks the channels (`None` = all), `windows_s` the spans (`None` = full duration).
   ```python
   dataset.add_task(sample, LabelingTask(
-      label="walking",
+      target="walking",
       time_series_ids=(accel_x.time_series_id, accel_y.time_series_id),
       windows_s=((120.0, 480.0),),
   ))
   ```
 - `CaptioningTask`: free-form text describing the sample (no question).
   ```python
-  dataset.add_task(sample, CaptioningTask(answer="A 10-second sinus rhythm with one PVC."))
+  dataset.add_task(sample, CaptioningTask(target="A 10-second sinus rhythm with one PVC."))
   ```
 - `QATask`: a question and its single-label answer.
   ```python
-  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="ST elevation in V2."))
+  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", target="ST elevation in V2."))
   ```
-- `ForecastingTask`: predict a target sample from context samples.
+- `ForecastingTask`: predict a sample's future values from context samples. Its target is that future
+  series, referenced by `target_sample_id` (not a scalar `target`).
   ```python
-  dataset.add_task(target, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
+  dataset.add_task(future, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
   ```
-- `ReasoningTask`: a question, the reasoning trace, then the answer. The `answer` is the
+- `ReasoningTask`: a question, the reasoning trace, then the answer. The `target` is the
   evaluation target; the `rationale` (chain of thought) is the training signal and is optional.
   ```python
   dataset.add_task(sample, ReasoningTask(
       question="Does this ECG show atrial fibrillation?",
       rationale="R-R intervals are irregularly irregular and no P waves precede the QRS complexes.",
-      answer="Yes.",
+      target="Yes.",
   ))
   ```
 
@@ -236,11 +244,11 @@ The derived task records the chain it was built from, which is how a handful of 
 into many higher-level training samples:
 
 ```python
-base = dataset.add_task(sample, ClassificationTask(label="afib"))
+base = dataset.add_task(sample, ClassificationTask(target="afib"))
 dataset.add_task(sample, ReasoningTask(
     question="Is this recording normal?",
     rationale="The rhythm is classified atrial fibrillation, which is abnormal.",
-    answer="No.",
+    target="No.",
     from_tasks=(base,),
 ))
 ```

@@ -13,7 +13,40 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+import pint
+
 from timenet.types.ids import new_id
+from timenet.types.units import ureg
+
+
+def _normalize_unit(unit: str | pint.Unit | None) -> str | None:
+    """Validate a unit against the shared pint registry, rejecting an unrecognized unit string.
+
+    A :class:`pint.Unit` is stored as its canonical name; a unit string is kept as written but validated
+    (an unknown one raises); ``None`` passes through. The result is always a string (or ``None``), so
+    serialization is unchanged.
+
+    Args:
+        unit: A :class:`pint.Unit`, a unit string (e.g. ``"years"``), or ``None``.
+
+    Returns:
+        The unit as a string, or ``None``.
+
+    Raises:
+        ValueError: If ``unit`` is a string the shared registry does not recognize.
+    """
+    if unit is None:
+        return None
+    if isinstance(unit, pint.Unit):
+        return str(unit)
+    try:
+        ureg.Unit(unit)
+    except pint.UndefinedUnitError as exc:
+        raise ValueError(
+            f"unknown unit {unit!r}; pass a pint unit (e.g. ureg.millivolt) or a unit string pint "
+            f"recognizes, or omit unit="
+        ) from exc
+    return unit
 
 
 class AnnotationType(StrEnum):
@@ -32,23 +65,26 @@ class Annotation:
     """Name identifying the annotation."""
     value: Any = None
     """The annotation's payload value."""
-    unit: str | None = None
-    """Optional physical unit of ``value``."""
+    unit: str | pint.Unit | None = None
+    """Optional physical unit of ``value`` — a unit string (e.g. ``"years"``) or a :class:`pint.Unit`.
+    Validated against the shared registry on construction; an unrecognized string raises ``ValueError``,
+    and a ``pint.Unit`` is stored as its canonical name."""
     description: str | None = None
     """Optional human-readable description of the annotation."""
     id: str = field(default_factory=new_id)
     """Unique identifier, a UUIDv7 string by default."""
 
     def __post_init__(self) -> None:
-        """Canonicalize a sequence ``value`` to a list.
+        """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
 
         ``value_type`` is ``"list"`` for any sequence and the manifest stores it as a JSON array,
-        which decodes back to a list. Normalizing a tuple here keeps an in-memory annotation equal to
-        its read-back form (the reader's field-for-field guarantee). Subclasses that override
-        ``__post_init__`` must call ``super().__post_init__()``.
+        which decodes back to a list. Normalizing a tuple here (and the unit to a string) keeps an
+        in-memory annotation equal to its read-back form (the reader's field-for-field guarantee).
+        Subclasses that override ``__post_init__`` must call ``super().__post_init__()``.
         """
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
+        object.__setattr__(self, "unit", _normalize_unit(self.unit))
 
 
 @dataclass(frozen=True, kw_only=True)

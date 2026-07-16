@@ -189,20 +189,20 @@ TASK_PAYLOAD_ID_COLUMNS: dict[str, str] = {
 
 def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataType]]]:
     return {
-        TaskType.CLASSIFICATION: [("label", pa.string()), ("label_schema", pa.string())],
+        TaskType.CLASSIFICATION: [("target", pa.string()), ("target_schema", pa.string())],
         TaskType.LABELING: [
-            ("label", pa.string()),
-            ("label_schema", pa.string()),
+            ("target", pa.string()),
+            ("target_schema", pa.string()),
             ("time_series_ids", pa.list_(id_types["time_series_id"])),
             ("windows_s", pa.list_(pa.list_(pa.float64()))),
         ],
-        TaskType.CAPTIONING: [("answer", pa.string())],
-        TaskType.QUESTION_AND_ANSWER: [("question", pa.string()), ("answer", pa.string())],
+        TaskType.CAPTIONING: [("target", pa.string())],
+        TaskType.QUESTION_AND_ANSWER: [("question", pa.string()), ("target", pa.string())],
         TaskType.FORECASTING: [
             ("context_sample_ids", pa.list_(id_types["sample_id"])),
             ("target_sample_id", id_types["sample_id"]),
         ],
-        TaskType.REASONING: [("question", pa.string()), ("rationale", pa.string()), ("answer", pa.string())],
+        TaskType.REASONING: [("question", pa.string()), ("rationale", pa.string()), ("target", pa.string())],
     }
 
 

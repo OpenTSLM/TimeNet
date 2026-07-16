@@ -15,7 +15,7 @@ from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import run_pipeline
 from timenet.errors import RegistryError
-from timenet.registry import local_registry_path
+from timenet.registry import default_registry_path
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.discovery import resolve
 
@@ -41,13 +41,10 @@ def _default_root() -> Path:
     Raises:
         BadParameter: If ``$TIMENET_REGISTRY`` names a remote registry, which cannot be built into.
     """
-    cfg = settings()
-    if cfg.registry is None:
-        return cfg.registry_path
     try:
-        return local_registry_path(cfg.registry)
+        return default_registry_path()
     except RegistryError as exc:
-        raise typer.BadParameter(f"$TIMENET_REGISTRY {cfg.registry!r} is remote; pass --out <dir>") from exc
+        raise typer.BadParameter(f"$TIMENET_REGISTRY {settings().registry!r} is remote; pass --out <dir>") from exc
 
 
 @app.command()

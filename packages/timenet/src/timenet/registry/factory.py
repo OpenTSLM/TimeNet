@@ -3,6 +3,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
+from timenet.config import settings
 from timenet.errors import RegistryError
 from timenet.registry.base import BaseRegistry
 from timenet.registry.local import LocalRegistry
@@ -39,8 +40,8 @@ def open_registry(uri: str | Path) -> BaseRegistry:
     if text.startswith("s3://"):
         return S3Registry(text)
     if text.startswith("file://"):
-        return LocalRegistry(Path(urlparse(text).path))
-    return LocalRegistry(Path(text))
+        return LocalRegistry(Path(urlparse(text).path).expanduser())
+    return LocalRegistry(Path(text).expanduser())
 
 
 def open_writable_registry(uri: str | Path) -> WritableRegistry:
@@ -82,3 +83,19 @@ def local_registry_path(uri: str | Path) -> Path:
     if text.startswith("file://"):
         return Path(urlparse(text).path).expanduser()
     return Path(text).expanduser()
+
+
+def default_registry_path() -> Path:
+    """Resolve the local registry directory a build writes to (and the SDK reads from) by default.
+
+    Honors ``$TIMENET_REGISTRY`` when it names a local directory, otherwise falls back to the default
+    ``<TIMENET_HOME>/registry``. The single source of truth shared by the curate CLI and the
+    ``timenet_connectors`` build/load helpers, so producer and consumer never disagree on where a
+    dataset lands. Propagates :class:`~timenet.errors.RegistryError` from :func:`local_registry_path`
+    when ``$TIMENET_REGISTRY`` names a remote registry, which cannot be built into.
+
+    Returns:
+        The local registry directory.
+    """
+    cfg = settings()
+    return cfg.registry_path if cfg.registry is None else local_registry_path(cfg.registry)

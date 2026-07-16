@@ -24,6 +24,7 @@ from timenet.types.tasks import (
     LabelingTask,
     QATask,
     ReasoningTask,
+    TargetTask,
     Task,
     TaskType,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "QATask",
     "ReasoningTask",
     "StaticAnnotation",
+    "TargetTask",
     "Task",
     "TaskType",
     "TimeSeriesSpec",

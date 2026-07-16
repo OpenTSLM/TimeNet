@@ -59,3 +59,14 @@ def test_trial_level_point_needs_no_common_span(make_series):
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     # A point marker imposes no common-span requirement.
     sample.add_annotation(PointAnnotation(key="stimulus", start_time_s=1.0))
+
+
+def test_to_numpy_single_channel(make_series):
+    sample = Sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    assert sample.to_numpy().tolist() == [1.0, 2.0, 3.0]
+
+
+def test_to_numpy_rejects_multi_channel(make_series):
+    sample = Sample(time_series=(make_series(channel="I"), make_series(channel="II")))
+    with pytest.raises(ValueError, match="single-channel"):
+        sample.to_numpy()

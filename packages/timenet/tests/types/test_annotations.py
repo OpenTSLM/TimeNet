@@ -12,6 +12,7 @@ from timenet.types import (
     PointAnnotation,
     StaticAnnotation,
     annotation_type_of,
+    ureg,
 )
 
 
@@ -23,7 +24,16 @@ def test_static_requires_value():
 def test_static_with_value():
     ann = StaticAnnotation(key="age", value=64, unit="years")
     assert ann.value == 64
-    assert ann.unit == "years"
+    assert ann.unit == "years"  # a recognized unit string is kept as written
+
+
+def test_unit_accepts_a_pint_unit_and_stores_its_canonical_name():
+    assert StaticAnnotation(key="v", value=1.0, unit=ureg.millivolt).unit == "millivolt"
+
+
+def test_unknown_unit_string_raises():
+    with pytest.raises(ValueError, match="unknown unit"):
+        StaticAnnotation(key="x", value=1, unit="foobar")
 
 
 def test_point_is_a_pure_marker_by_default():
