@@ -82,7 +82,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_default_format_version():
-    assert _manifest().timef_format_version == 1
+    assert _manifest().timef_format_version == 2
 
 
 def test_dict_roundtrip():
@@ -97,7 +97,7 @@ def test_json_roundtrip():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 1
+    assert d["timef_format_version"] == 2
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"

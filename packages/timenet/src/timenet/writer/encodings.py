@@ -16,11 +16,11 @@ import pyarrow.parquet as pq
 SHARD_DICTIONARY = ["spec_type", "channel"]
 SHARD_ENCODING = {"values.list.element": "BYTE_STREAM_SPLIT", "chunk_idx": "DELTA_BINARY_PACKED"}
 
-INDEX_DICTIONARY = ["spec_type", "channel", "shard_path"]
+INDEX_DICTIONARY = ["spec_type", "channel", "chunk_file"]
 INDEX_ENCODING = {
     "chunk_idx": "DELTA_BINARY_PACKED",
-    "row_group": "DELTA_BINARY_PACKED",
-    "row_offset": "DELTA_BINARY_PACKED",
+    "chunk_offset0": "DELTA_BINARY_PACKED",
+    "chunk_offset1": "DELTA_BINARY_PACKED",
 }
 
 SAMPLES_DICTIONARY = [
