@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import types as _types
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -29,8 +30,9 @@ from timenet.types import (
     TaskType,
     View,
 )
+from timenet.types.ids import id_from_bytes
 from timenet.writer.constants import MANIFEST_FILE
-from timenet.writer.schemas import TASK_COMMON_NAMES, task_schema
+from timenet.writer.schemas import TASK_COMMON_NAMES, TASK_PAYLOAD_ID_COLUMNS, task_schema
 
 
 _ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared row group decodes once
@@ -61,6 +63,7 @@ class TimeFReader:
         self._manifest = Manifest.from_json(manifest_path.read_text())
         self._check_files_exist()
 
+        self._uuid16 = {name for name, enc in self._manifest.id_encoding.items() if enc == "uuid16"}
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
         self._tasks = self._load_tasks()
@@ -164,10 +167,14 @@ class TimeFReader:
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
             for row in pq.read_table(self._root / rel).to_pylist():
-                payload = {name: _as_tuple_if_list(row[name]) for name in payload_cols}
-                task = cls(id=row["id"], sample_ids=tuple(row["sample_ids"]), **payload)  # ty: ignore[invalid-argument-type]
+                payload = {name: self._dec_payload(name, _as_tuple_if_list(row[name])) for name in payload_cols}
+                task = cls(
+                    id=self._dec("task_id", row["id"]),
+                    sample_ids=tuple(self._dec_list("sample_id", row["sample_ids"])),
+                    **payload,  # ty: ignore[invalid-argument-type]
+                )
                 by_id[task.id] = task
-                pending[task.id] = tuple(row["from_task_ids"])
+                pending[task.id] = tuple(self._dec_list("task_id", row["from_task_ids"]))
         for task_id, from_ids in pending.items():
             resolved = []
             for from_id in from_ids:
@@ -186,8 +193,9 @@ class TimeFReader:
             descriptor = self._annotation_descriptors[key]
             base = ANNOTATION_BASES[AnnotationType(row["annotation_type"])]
             value = None if row["value"] is None else json.loads(row["value"])
+            annotation_id = self._dec("annotation_id", row["id"])
             fields: dict = {
-                "id": row["id"],
+                "id": annotation_id,
                 "key": key,
                 "value": value,
                 "unit": descriptor.unit,
@@ -198,14 +206,15 @@ class TimeFReader:
             if row["end_time_s"] is not None:
                 fields["end_time_s"] = row["end_time_s"]
             if row["time_series_ids"] is not None:
-                fields["time_series_ids"] = tuple(row["time_series_ids"])
-            annotations[row["id"]] = base(**fields)
+                fields["time_series_ids"] = tuple(self._dec_list("time_series_id", row["time_series_ids"]))
+            annotations[annotation_id] = base(**fields)
         return annotations
 
     def _load_index(self) -> dict[tuple[str, str], list[dict]]:
         index: dict[tuple[str, str], list[dict]] = {}
         for row in pq.read_table(self._root / self._manifest.files.time_series_index).to_pylist():
-            index.setdefault((row["sample_id"], row["time_series_id"]), []).append(row)
+            key = (self._dec("sample_id", row["sample_id"]), self._dec("time_series_id", row["time_series_id"]))
+            index.setdefault(key, []).append(row)
         for rows in index.values():
             rows.sort(key=lambda r: r["chunk_idx"])
         return index
@@ -213,14 +222,17 @@ class TimeFReader:
     # ---- sample construction -------------------------------------------------------------------
 
     def _build_sample(self, row: dict) -> Sample:
-        series = tuple(self._build_series(row["sample_id"], struct) for struct in row["time_series"])
-        annotations = tuple(self._resolve_annotation(row["sample_id"], aid) for aid in row["annotation_ids"])
+        sample_id = self._dec("sample_id", row["sample_id"])
+        series = tuple(self._build_series(sample_id, struct) for struct in row["time_series"])
+        annotations = tuple(
+            self._resolve_annotation(sample_id, aid) for aid in self._dec_list("annotation_id", row["annotation_ids"])
+        )
         return Sample(
-            sample_id=row["sample_id"],
+            sample_id=sample_id,
             time_series=series,
             view=View(row["view"]),
-            subject_ids=tuple(row["subject_ids"]),
-            task_ids=tuple(row["task_ids"]),
+            subject_ids=tuple(self._dec_list("subject_id", row["subject_ids"])),
+            task_ids=tuple(self._dec_list("task_id", row["task_ids"])),
             annotations=annotations,
         )
 
@@ -228,13 +240,14 @@ class TimeFReader:
         spec_type = struct["spec_type"]
         if spec_type not in self._spec_by_type:
             raise ValueError(f"sample {sample_id!r} references unknown spec_type {spec_type!r}")
+        time_series_id = self._dec("time_series_id", struct["time_series_id"])
         return TimeSeries(
             spec=self._spec_by_type[spec_type],
             channel=struct["channel"],
             sampling_rate_hz=struct["sampling_rate_hz"],
-            loader=_SeriesLoader(self, sample_id, struct["time_series_id"]),
-            source_id=struct["source_id"],
-            time_series_id=struct["time_series_id"],
+            loader=_SeriesLoader(self, sample_id, time_series_id),
+            source_id=self._dec_opt("source_id", struct["source_id"]),
+            time_series_id=time_series_id,
             t_start_s=struct["t_start_s"],
             t_end_s=struct["t_end_s"],
         )
@@ -243,6 +256,63 @@ class TimeFReader:
         if annotation_id not in self._annotations:
             raise ValueError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
         return self._annotations[annotation_id]
+
+    # ---- id decoding ---------------------------------------------------------------------------
+
+    def _dec(self, logical: str, value: object) -> str:
+        """Decode one required id, turning 16 raw bytes back into a canonical string for uuid16 columns.
+
+        Args:
+            logical: The logical id the column holds (e.g. ``"sample_id"``).
+            value: The raw cell value (bytes for a uuid16 column, string otherwise).
+
+        Returns:
+            The canonical id string.
+        """
+        if logical in self._uuid16:
+            return id_from_bytes(cast(bytes, value))
+        return cast(str, value)
+
+    def _dec_opt(self, logical: str, value: object) -> str | None:
+        """Decode an optional id (e.g. ``source_id``), passing ``None`` through.
+
+        Args:
+            logical: The logical id the column holds.
+            value: The raw cell value, or ``None``.
+
+        Returns:
+            The canonical id string, or ``None``.
+        """
+        return None if value is None else self._dec(logical, value)
+
+    def _dec_list(self, logical: str, values: object) -> list[str]:
+        """Decode a list of id values element-wise via :meth:`_dec`.
+
+        Args:
+            logical: The logical id the column holds.
+            values: The raw cell values.
+
+        Returns:
+            The decoded id strings.
+        """
+        return [self._dec(logical, value) for value in cast(list, values)]
+
+    def _dec_payload(self, name: str, value: object) -> object:
+        """Decode a task payload cell if it holds ids, leaving non-id payload untouched.
+
+        Args:
+            name: The payload column name.
+            value: The (already tuple-normalized) cell value.
+
+        Returns:
+            The decoded value.
+        """
+        logical = TASK_PAYLOAD_ID_COLUMNS.get(name)
+        if logical is None or logical not in self._uuid16 or value is None:
+            return value
+        if isinstance(value, tuple):
+            return tuple(self._dec(logical, item) for item in value)
+        return self._dec(logical, value)
 
     def _load_values(self, sample_id: str, time_series_id: str) -> pa.Array:
         """Read and concatenate a series' chunk values across its shards.

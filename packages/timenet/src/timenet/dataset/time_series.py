@@ -3,12 +3,11 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import math
-import uuid
 
 import numpy as np
 import pyarrow as pa
 
-from timenet.types import TimeSeriesSpec
+from timenet.types import TimeSeriesSpec, new_id
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -27,7 +26,7 @@ class TimeSeries:
     sampling_rate_hz: float
     loader: Callable[[], pa.Array]
     source_id: str | None = None
-    time_series_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    time_series_id: str = field(default_factory=new_id)
     t_start_s: float = 0.0
     t_end_s: float | None = None
 
