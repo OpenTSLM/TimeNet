@@ -21,7 +21,7 @@ never runs connector code.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
-| **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (`pip install timenet`) |
+| **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (install coming soon) |
 | **registry** | a served location | compiled manifests + parquet | the SDK reads it; curation publishes to it |
 | **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-curate` CLI | connector authors (clone it) |
 

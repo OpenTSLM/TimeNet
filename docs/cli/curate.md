@@ -13,12 +13,12 @@ parquet) ready for a [registry](../registry.md). It ships with `timenet-connecto
 consumer [`timenet`](timenet.md) tool, and needs the `timenet[curation]` extra that
 `timenet-connectors` already pulls in.
 
-```bash
-uv tool install timenet-connectors
-```
+!!! info "Coming soon"
+    The `timenet` packages aren't on PyPI yet. Install instructions land here once they ship.
 
-The built-in connectors ship inside the package and are resolved by dataset id, so that install is
-enough to build them. Clone the repo only when you want to *author* a connector.
+The built-in connectors ship inside the package and are resolved by dataset id, so installing
+`timenet-connectors` is enough to build them. Clone the repo only when you want to *author* a
+connector.
 
 ## `timenet-curate build`
 

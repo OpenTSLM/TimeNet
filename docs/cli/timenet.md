@@ -8,11 +8,10 @@ tags:
 # `timenet`
 
 The consumer command-line tool. It mirrors the [client SDK](../client.md), so anything you can do in
-Python you can do from the shell. Install it with the `cli` extra:
+Python you can do from the shell. It lives in the `cli` extra.
 
-```bash
-pip install 'timenet[cli]'
-```
+!!! info "Coming soon"
+    The `timenet` packages aren't on PyPI yet. Install instructions land here once they ship.
 
 With a registry in place (build one first, see [Get started](../get-started.md)), browse and pull:
 

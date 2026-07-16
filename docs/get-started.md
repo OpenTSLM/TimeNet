@@ -12,33 +12,8 @@ tags:
 TimeNet needs Python 3.11 or newer. The core install stays lean; the CLI and PyTorch loader are
 extras you opt into.
 
-=== "uv (recommended)"
-
-    Add it to your project with [uv](https://docs.astral.sh/uv/):
-
-    ```bash
-    uv add timenet            # core: TimeF format, reader/writer, registry client
-    uv add 'timenet[cli]'     # add the timenet console command
-    uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset)
-    ```
-
-=== "pip"
-
-    ```bash
-    pip install timenet
-    pip install 'timenet[cli]'
-    pip install 'timenet[torch]'
-    ```
-
-=== "Global CLI"
-
-    Install the CLIs anywhere, each in its own isolated environment:
-
-    ```bash
-    uv tool install 'timenet[cli]'       # the `timenet` command
-    uv tool install timenet-connectors   # `timenet-curate` (for connector authors)
-    # or, with pipx:  pipx install 'timenet[cli]'
-    ```
+!!! info "Coming soon"
+    The `timenet` packages aren't on PyPI yet. Install instructions land here once they ship.
 
 To work on TimeNet or author connectors, clone the repo and sync with uv:
 

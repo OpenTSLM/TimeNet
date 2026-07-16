@@ -199,7 +199,7 @@ class TimeNet:
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
         """Download if needed and return the dataset as a read-only PyTorch ``Dataset``.
 
-        Requires the ``torch`` extra (``pip install 'timenet[torch]'``); the torch view is imported
+        Requires the ``torch`` extra (install coming soon); the torch view is imported
         lazily so base users don't need torch.
 
         Args:

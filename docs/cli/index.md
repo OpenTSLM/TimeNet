@@ -15,7 +15,7 @@ TimeNet ships two console scripts, one for each side of the workflow:
 | [`timenet-curate`](curate.md) | `timenet-connectors` | Producer: run a connector through the pipeline into a registry. | [Curate & publish](../curation.md). |
 
 Both are built with [Typer](https://typer.tiangolo.com) and gate their heavier dependencies behind an
-extra, so the core package stays small. `timenet` needs the `cli` extra (`pip install 'timenet[cli]'`);
+extra, so the core package stays small. `timenet` needs the `cli` extra (install coming soon);
 run it without the extra and it prints a one-line install hint instead of a traceback.
 
 Both split their output the same way: status lines on stderr, the machine-readable result (a path) on

@@ -94,7 +94,7 @@ item is a dict with the sample's `series` as float32 tensors (one per channel), 
 ```python
 from timenet.client import TimeNet
 
-ds = TimeNet().load_torch("chengsenwang/tsqa")   # pip install 'timenet[torch]'
+ds = TimeNet().load_torch("chengsenwang/tsqa")   # needs the timenet[torch] extra (coming soon)
 item = ds[0]
 series, question = item["series"][0], item["tasks"][0].question
 ```
