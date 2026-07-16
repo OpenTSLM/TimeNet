@@ -42,7 +42,7 @@ def home(tmp_path, monkeypatch):
 def test_cache_info_lists_datasets(home):
     result = runner.invoke(app, ["cache", "info"])
     assert result.exit_code == 0
-    assert "hello_world" in result.stdout
+    assert "timenet/hello-world" in result.stdout
     assert "registry" in result.stdout
 
 
@@ -79,35 +79,35 @@ def test_cache_clear_all_removes_everything(home):
 def test_list(registry_root):
     result = runner.invoke(app, ["list", "--registry", str(registry_root)])
     assert result.exit_code == 0
-    assert "hello_world" in result.stdout
+    assert "timenet/hello-world" in result.stdout
 
 
 def test_search_by_domain(registry_root):
     result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"])
     assert result.exit_code == 0
-    assert "hello_world" in result.stdout
+    assert "timenet/hello-world" in result.stdout
 
 
 def test_search_no_match(registry_root):
     result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"])
     assert result.exit_code == 0
-    assert "hello_world" not in result.stdout
+    assert "timenet/hello-world" not in result.stdout
 
 
 def test_info(registry_root):
-    result = runner.invoke(app, ["info", "hello_world", "--registry", str(registry_root)])
+    result = runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)])
     assert result.exit_code == 0
-    assert "hello_world" in result.stdout
+    assert "timenet/hello-world" in result.stdout
     assert "samples" in result.stdout.lower()
 
 
 def test_download(registry_root, tmp_path):
     result = runner.invoke(
         app,
-        ["download", "hello_world", "--registry", str(registry_root), "--storage", str(tmp_path / "store")],
+        ["download", "timenet/hello-world", "--registry", str(registry_root), "--storage", str(tmp_path / "store")],
     )
     assert result.exit_code == 0
-    assert (tmp_path / "store" / "hello_world" / "1.0.0" / "manifest.json").exists()
+    assert (tmp_path / "store" / "timenet/hello-world" / "1.0.0" / "manifest.json").exists()
 
 
 def test_search_rejects_unknown_filter_value(registry_root):

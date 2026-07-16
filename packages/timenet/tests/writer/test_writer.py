@@ -44,7 +44,7 @@ def test_writes_expected_layout(tmp_path):
 def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.dataset_id == "hello_world"
+    assert manifest.dataset_id == "timenet/hello-world"
     assert manifest.timef_format_version == 1
     assert manifest.counts.samples == 3
     assert len(manifest.schema.time_series_specs) == 2
@@ -173,7 +173,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
 
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="boom",
+            dataset_id="demo/boom",
             dataset_version=Version(1, 0, 0),
             name="Boom",
             description="d",
@@ -198,14 +198,14 @@ def test_abort_leaves_no_partial_dir(tmp_path):
     with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     # no committed dir and no staging leftovers
-    assert not (tmp_path / "boom" / "1.0.0").exists()
-    assert not list((tmp_path / "boom").glob("*.tmp-*")) if (tmp_path / "boom").exists() else True
+    assert not (tmp_path / "demo/boom" / "1.0.0").exists()
+    assert not list((tmp_path / "demo/boom").glob("*.tmp-*")) if (tmp_path / "demo/boom").exists() else True
 
 
 def test_per_series_array_contract_enforced(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="bad",
+            dataset_id="demo/bad",
             dataset_version=Version(1, 0, 0),
             name="Bad",
             description="d",

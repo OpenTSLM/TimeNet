@@ -20,7 +20,7 @@ from timenet.types import (
 
 def _metadata(**overrides):
     base = DatasetMetadata(
-        dataset_id="hello_world",
+        dataset_id="timenet/hello-world",
         dataset_version=Version(1, 0, 0),
         name="Hello World",
         description="A synthetic demo dataset.",
@@ -31,7 +31,7 @@ def _metadata(**overrides):
 
 def test_metadata_required_and_defaults():
     m = _metadata()
-    assert m.dataset_id == "hello_world"
+    assert m.dataset_id == "timenet/hello-world"
     assert m.dataset_version == Version(1, 0, 0)
     assert m.domains == ()
     assert m.tags == ()

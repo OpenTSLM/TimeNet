@@ -8,7 +8,7 @@ def test_describe_text_has_all_sections():
     dataset = make_dataset()
     dataset.derive_schema()
     text = describe_text(dataset, rows=5)
-    assert "hello_world @ 1.0.0" in text
+    assert "timenet/hello-world @ 1.0.0" in text
     assert "CC-BY-4.0" in text
     assert "counts" in text
     assert "classification=1" in text  # tasks histogram
@@ -23,7 +23,7 @@ def test_describe_works_without_derived_schema():
     dataset = make_dataset()  # derive_schema() not called
     assert dataset.schema is None
     text = describe_text(dataset, rows=5)
-    assert "hello_world @ 1.0.0" in text
+    assert "timenet/hello-world @ 1.0.0" in text
     assert "sample-0" in text
 
 
@@ -36,15 +36,15 @@ def test_describe_rows_limits_preview():
 
 def test_describe_prints_to_stdout(capsys):
     make_dataset().describe()
-    assert "hello_world @ 1.0.0" in capsys.readouterr().out
+    assert "timenet/hello-world @ 1.0.0" in capsys.readouterr().out
 
 
 def test_describe_empty_dataset_does_not_crash():
     empty = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="empty", dataset_version=Version(1, 0, 0), name="E", description="d", license=License.MIT
+            dataset_id="demo/empty", dataset_version=Version(1, 0, 0), name="E", description="d", license=License.MIT
         )
     )
     text = describe_text(empty, rows=5)
-    assert "empty @ 1.0.0" in text
+    assert "demo/empty @ 1.0.0" in text
     assert "samples      0" in text
