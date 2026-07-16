@@ -7,7 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.1",
     "pyarrow>=21",
-    "timenet>=0.0.1",
+    # [curation] pulls PyYAML + jsonschema: connectors load and validate their card YAML at build time.
+    "timenet[curation]>=0.0.1",
     "typer>=0.12",
 ]
 
@@ -15,6 +16,9 @@ dependencies = [
 # Real HuggingFace downloads need huggingface_hub; base users who only curate synthetic/offline
 # datasets don't. Connectors lazily import it and raise an actionable error if it's missing.
 huggingface = ["huggingface_hub>=0.24"]
+# PhysioNet connectors read WFDB records and download archives from the physionet-open S3 bucket via
+# boto3; wfdb pulls requests + scipy. All imported lazily with an actionable error when absent.
+physionet = ["wfdb>=4.1", "boto3>=1.34"]
 
 [project.scripts]
 timenet-curate = "timenet_connectors.curate.cli:main"

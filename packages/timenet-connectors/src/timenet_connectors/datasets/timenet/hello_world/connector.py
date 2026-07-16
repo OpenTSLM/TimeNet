@@ -18,17 +18,13 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
     ClassificationTask,
-    DatasetMetadata,
     DataSource,
-    Domain,
     IntervalAnnotation,
     LabelingTask,
-    License,
     PointAnnotation,
     QATask,
     StaticAnnotation,
     TimeSeriesSpec,
-    Version,
     View,
     ureg,
 )
@@ -84,16 +80,6 @@ def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Calla
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
-    METADATA = DatasetMetadata(
-        dataset_id="timenet/hello-world",
-        dataset_version=Version(1, 0, 0),
-        name="Hello World",
-        description="A synthetic demo dataset exercising every TimeF feature.",
-        license=License.CC_BY_4_0,
-        domains=(Domain.GENERAL,),
-        tags=("demo", "synthetic"),
-    )
-
     def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002 (synthetic: no cache needed)
         """Return deterministic recording descriptions (no network, ``cache_dir`` unused).
 
@@ -114,7 +100,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        dataset = TimeFDataset(metadata=self.METADATA)
+        dataset = TimeFDataset(metadata=self.metadata())
         short, long = raw_refs[0], raw_refs[1]
 
         # A series shared across two samples (dedupe-by-id path).

@@ -21,7 +21,10 @@ timenet-curate build timenet/hello-world --out ./local_registry
 python -c "from timenet.client import TimeNet; print(TimeNet('./local_registry').list())"
 ```
 
-The curator loop: add a connector at `datasets/<org>/<name>.py` (a [`BaseConnector`](connectors.md)
-exposing `CONNECTOR`) with its [dataset card](manifest.md) beside it, `build` locally, verify with the
-SDK, then publish. Additional verbs
+The curator loop: add a connector at `datasets/<org>/<name>/` (its `__init__.py` a
+[`BaseConnector`](connectors.md) exposing `CONNECTOR`) with its [dataset card](manifest.md),
+`dataset.yaml`, beside it, `build` locally, verify with the SDK, then publish. The card is validated
+against the packaged [`dataset-card.schema.json`](https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json)
+when the connector loads it (`BaseConnector` reads `dataset.yaml` by convention; set `CARD` to override
+the path). This needs the `timenet[curation]` extra, pulled in by `timenet-connectors`. Additional verbs
 (`validate`, `inspect`, `publish`) and a remote registry backend are planned.
