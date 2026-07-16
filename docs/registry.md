@@ -17,10 +17,7 @@ directory (the output of [curation](curation.md) is itself a valid local registr
 ```python
 from timenet.registry import open_registry
 
-registry = open_registry("~/.timenet/local")          # a local directory
-registry = open_registry("s3://my-bucket/registry")   # S3 (deferred)
-registry = open_registry("https://registry.example")  # remote HTTP (deferred)
-registry = open_registry("timenet://")                # the hosted TimeNet registry (deferred)
+registry = open_registry("./local_registry")
 ```
 
 `open_registry(uri)` dispatches by scheme:
@@ -68,14 +65,19 @@ publish into any backend, not just a local directory:
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
 which stages under `<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` and
 `S3Registry` are write stubs for now. `open_writable_registry(uri)` resolves a URI like `open_registry`
-but returns a `WritableRegistry`, raising if the backend can't be written to.
+but returns a `WritableRegistry`.
 
 ```python
 from timenet.registry import open_writable_registry
 
-registry = open_writable_registry("~/.timenet/local")
+registry = open_writable_registry("./local_registry")
 version = registry.store(dataset)   # schema derived if needed, atomic commit
 ```
+
+Every backend is a `WritableRegistry`, so that call can't tell a directory the engine may write to from
+a remote stub. `local_registry_path(uri)` can: it returns the directory a `file://` URI or plain path
+names, and raises `RegistryError` for a remote scheme. That is how
+[`timenet-curate build`](cli/curate.md) resolves its output when `--out` is absent.
 
 ## `search`
 

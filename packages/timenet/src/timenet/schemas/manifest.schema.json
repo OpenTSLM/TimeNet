@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-x-labs.github.io/TimeNet/schemas/manifest-v1.schema.json",
+  "$id": "https://docs.timenet.ai/schemas/manifest-v1.schema.json",
   "title": "TimeNet Dataset Manifest",
   "description": "The compiled manifest.json: the single source a consumer reads to interpret a dataset version. Describes the serialized shape produced by Manifest.to_dict().",
   "type": "object",

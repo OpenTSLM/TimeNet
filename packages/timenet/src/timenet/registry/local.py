@@ -21,9 +21,9 @@ class LocalRegistry(WritableRegistry):
         """Open a local registry rooted at a directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts.
+            root: The directory containing ``<dataset_id>/<version>/`` layouts. ``~`` is expanded.
         """
-        self._root = Path(root)
+        self._root = Path(root).expanduser()
         # (dataset_id, version) -> (manifest mtime, parsed manifest); avoids re-parsing on repeat reads
         # (e.g. list_datasets then search's schema filter). Invalidated when the file's mtime changes.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}

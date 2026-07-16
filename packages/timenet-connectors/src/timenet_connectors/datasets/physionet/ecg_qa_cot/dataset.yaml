@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 # Dataset Card for the physionet/ecg-qa-cot connector: the single source for this dataset's metadata.
 # The connector loads it via DatasetMetadata.from_yaml(); the curator compiles it plus the schema
 # derived from the data into manifest.json.

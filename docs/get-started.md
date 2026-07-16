@@ -43,29 +43,29 @@ extras you opt into.
 To work on TimeNet or author connectors, clone the repo and sync with uv:
 
 ```bash
-git clone https://github.com/AI-X-Labs/TimeNet.git
+git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
 uv sync --all-groups --all-extras
 ```
 
 ## Load a dataset
 
-!!! note "No public registry yet"
+!!! info "No public registry yet"
     There's no hosted registry to pull from, so build the offline `timenet/hello-world` dataset
     into a local registry first. It needs no network and comes from `timenet-connectors`.
 
 ```bash
-timenet-curate build timenet/hello-world --out ./local_registry
+timenet-curate build timenet/hello-world
 ```
 
-That output directory is itself a valid registry. Point the [`TimeNet`](client.md) client at it and
-load the dataset:
+That writes into your local registry, which is where the [`TimeNet`](client.md) client looks by
+default. Load the dataset:
 
 ```python
 import pandas as pd
 from timenet.client import TimeNet
 
-dataset = TimeNet("./local_registry").load("timenet/hello-world")
+dataset = TimeNet().load("timenet/hello-world")
 dataset.describe()                                # identity, counts, a quick preview
 
 # Each channel converts to Arrow or NumPy, so it drops straight into pandas:
