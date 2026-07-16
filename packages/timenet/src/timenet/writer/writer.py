@@ -50,7 +50,7 @@ from timenet.writer.schemas import (
     samples_schema,
     task_schema,
 )
-from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, make_values_backend
+from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, ZarrValuesConfig, make_values_backend
 
 
 _CHECKSUM_BLOCK_BYTES = 1 << 20  # hash files a block at a time, not all-in-memory
@@ -265,8 +265,8 @@ class TimeFWriter:
         Returns:
             A mapping from ``(time_series_id, chunk_idx)`` to its on-disk :class:`ChunkPlacement`.
         """
-        values_backend = make_values_backend(
-            ParquetValuesConfig(
+        if self._values_backend_name == PARQUET_VALUES_BACKEND:
+            config = ParquetValuesConfig(
                 staging_dir=self._staging_dir,
                 id_types=self._id_types,
                 tsid_uuid16="time_series_id" in self._uuid16,
@@ -276,7 +276,15 @@ class TimeFWriter:
                 compression=self._compression,
                 compression_level=self._compression_level,
             )
-        )
+        else:
+            config = ZarrValuesConfig(
+                staging_dir=self._staging_dir,
+                shard_target_bytes=self._shard_target_bytes,
+                chunk_max_bytes=self._chunk_max_bytes,
+                compression=self._compression,
+                compression_level=self._compression_level,
+            )
+        values_backend = make_values_backend(config)
         result = values_backend.write_series(
             unique_series,
             read_and_validate=self._read_and_validate,

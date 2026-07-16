@@ -34,31 +34,54 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
   annotations.parquet
   time_series_index.parquet
   tasks/task=<task_type>/part-0.parquet
-  time_series/shard-00000.parquet ...
+  time_series/shard-00000.parquet ...        # values_backend="parquet" (default)
+  time_series.zarr/<spec_type>/...           # values_backend="zarr" (alternative)
 ```
 
 ## Constructor options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `shard_target_bytes` | 128 MiB | Rotate to a new shard once a shard's buffered values exceed this. |
-| `row_group_target_bytes` | 4 MiB | Flush a row group once buffered values exceed this. |
+| `shard_target_bytes` | 128 MiB | Rotate to a new shard (Parquet) / Zarr shard size, once buffered values exceed this. |
+| `row_group_target_bytes` | 4 MiB | Flush a row group once buffered values exceed this (Parquet only). |
 | `chunk_max_bytes` | 1 MiB | Split a series into chunks no larger than this. |
-| `compression` | `"zstd"` | Parquet codec. |
+| `compression` | `"zstd"` | Values codec (Parquet codec / Zarr Blosc inner codec). |
 | `compression_level` | 3 | Pinned level (zstd) for reproducible output. |
+| `values_backend` | `"parquet"` | Storage backend for the values plane: `"parquet"` or `"zarr"`. |
 | `progress_cb` | `None` | Called with each `WriteProgressEvent`. |
 
 Targets are measured in uncompressed value bytes; on disk (zstd) files are smaller.
 
+## Values backends
+
+Only the **values plane** (each series' float32 waveform) is backend-specific; samples, annotations,
+tasks, and the time-series index are always Parquet. The manifest records the choice in
+`values_backend`, and the index locates every chunk with a backend-agnostic
+`(chunk_file, chunk_offset0, chunk_offset1)` locator:
+
+| Backend | Layout | Chunk locator |
+| --- | --- | --- |
+| `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows; a series is split into `chunk_max_bytes` chunks packed into row groups | `(shard path, row group, row offset)` |
+| `zarr` | one 1-D float32 array per `spec_type` under `time_series.zarr/` (storage chunks of `chunk_max_bytes`, shards of `shard_target_bytes`, Blosc bit-shuffle + zstd); a series is **one index row** spanning its full length, read as a single slice | `(array path, element start, –)` |
+
+Each backend chunks on its own terms: Parquet needs the logical `chunk_max_bytes` split to pack series
+into row groups, while Zarr chunks the storage itself, so its index carries one placement per series
+(split only past 2³⁰ values to keep `n_values` in int32). The Zarr writer buffers appends per
+`spec_type` and flushes at shard-aligned boundaries, so every shard object is written exactly once
+rather than read-modify-written per series.
+
+The Zarr backend needs the `zarr` extra (`pip install 'timenet[zarr]'`); the core never imports it. A
+[copy-on-write edit](#copy-on-write-edits) keeps the base version's backend unless overridden.
+
 ## Streaming and chunking
 
 `write()` dedupes series by `time_series_id` (each unique series' loader is called exactly once), sorts
-them by `(spec_type, channel, time_series_id)`, then streams: each series is split into chunks of at most
-`chunk_max_bytes`, chunks are buffered until `row_group_target_bytes` and flushed as one row group, and
-shards rotate at `shard_target_bytes`. A row group never spans shards, so the index's backend-neutral
-`(chunk_file, chunk_offset0, chunk_offset1)` locator is exact; for Parquet these fields mean shard path,
-row group, and row offset. A hard invariant caps a row group at 2³¹
-values (`list<float32>` uses 32-bit offsets); the byte-based flush keeps it well under.
+them by `(spec_type, channel, time_series_id)`, then streams through the values backend. With Parquet:
+each series is split into chunks of at most `chunk_max_bytes`, chunks are buffered until
+`row_group_target_bytes` and flushed as one row group, and shards rotate at `shard_target_bytes`. A row
+group never spans shards, so the index's `(chunk_file, chunk_offset0, chunk_offset1)` pointers are
+exact. A hard invariant caps a row group at 2³¹ values (`list<float32>` uses 32-bit offsets); the
+byte-based flush keeps it well under.
 
 ## Encodings
 
