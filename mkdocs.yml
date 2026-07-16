@@ -73,6 +73,7 @@ nav:
   - Connectors: connectors.md
   - Types: types.md
   - TimeFDataset: timef-dataset.md
+  - Manifest: manifest.md
   - TimeFWriter: timef-writer.md
   - TimeFReader: timef-reader.md
   - Engine: engine.md
