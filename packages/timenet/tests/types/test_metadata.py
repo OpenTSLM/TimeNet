@@ -3,6 +3,7 @@ import pickle
 
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
@@ -85,7 +86,7 @@ def test_schema_rejects_spec_referencing_unknown_data_source():
         unit_value=ureg.millivolt,
         data_source=DataSource(data_source_type="holter", name="Holter"),
     )
-    with pytest.raises(ValueError, match="not in data_sources"):
+    with pytest.raises(TimeFValidationError, match="not in data_sources"):
         DatasetSchema(time_series_specs=(spec,), data_sources=())
 
 
@@ -98,7 +99,7 @@ def test_schema_rejects_spec_referencing_mismatched_data_source():
         unit_value=ureg.millivolt,
         data_source=DataSource(data_source_type="holter", name="B"),
     )
-    with pytest.raises(ValueError, match="not in data_sources"):
+    with pytest.raises(TimeFValidationError, match="not in data_sources"):
         DatasetSchema(
             time_series_specs=(spec,),
             data_sources=(DataSource(data_source_type="holter", name="A"),),
@@ -120,7 +121,7 @@ def test_schema_accepts_spec_with_matching_data_source():
 
 
 def test_schema_rejects_conflicting_data_sources():
-    with pytest.raises(ValueError, match="conflicting entries"):
+    with pytest.raises(TimeFValidationError, match="conflicting entries"):
         DatasetSchema(
             data_sources=(
                 DataSource(data_source_type="holter", name="A"),

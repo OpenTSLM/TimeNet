@@ -7,12 +7,14 @@ Tasks are mutable so :meth:`~timenet.dataset.TimeFDataset.add_task` can populate
 construction.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import StrEnum, unique
 from typing import ClassVar
 import uuid
 
 
+@unique
 class TaskType(StrEnum):
     """Stable type tags for the built-in task classes; also the on-disk task partition names."""
 
@@ -104,4 +106,47 @@ class ReasoningTask(Task):
     answer: str
 
 
-TASKS: dict[TaskType, type[Task]] = {cls.task_type: cls for cls in Task.__subclasses__()}
+def _concrete_task_classes() -> list[type[Task]]:
+    """Collect every concrete task class (those declaring their own ``task_type``).
+
+    Walks the subclass tree rather than reading ``Task.__subclasses__()`` directly, so an intermediate
+    base that groups tasks without claiming a ``task_type`` is skipped instead of raising.
+
+    Returns:
+        The concrete task classes.
+    """
+    concrete: list[type[Task]] = []
+    stack = list(Task.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        if "task_type" in vars(cls):  # a concrete leaf assigns its own task_type
+            concrete.append(cls)
+    return concrete
+
+
+def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[TaskType, type[Task]]:
+    """Map each concrete task's ``task_type`` to its class.
+
+    Args:
+        classes: The classes to register. Defaults to :func:`_concrete_task_classes`; overridable so
+            the collision check below is unit-testable without registering throwaway subclasses of
+            ``Task`` itself, which would leak into every other caller of ``__subclasses__()``.
+
+    Returns:
+        Each class keyed by its ``task_type``.
+
+    Raises:
+        ValueError: If two classes declare the same ``task_type``
+    """
+    registry: dict[TaskType, type[Task]] = {}
+    for cls in classes if classes is not None else _concrete_task_classes():
+        if cls.task_type in registry:
+            raise ValueError(
+                f"task_type {cls.task_type!r} is claimed by both {registry[cls.task_type].__name__} and {cls.__name__}"
+            )
+        registry[cls.task_type] = cls
+    return registry
+
+
+TASKS: dict[TaskType, type[Task]] = _build_task_registry()

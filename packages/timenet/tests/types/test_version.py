@@ -1,6 +1,7 @@
 from hypothesis import given, strategies as st
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import Version
 
 
@@ -25,13 +26,13 @@ def test_frozen():
 
 @pytest.mark.parametrize("bad", [(-1, 0, 0), (0, -1, 0), (0, 0, -1)])
 def test_rejects_negative(bad):
-    with pytest.raises(ValueError):
+    with pytest.raises(TimeFValidationError):
         Version(*bad)
 
 
 @pytest.mark.parametrize("bad", ["1.2", "1.2.3.4", "1.x.0", "", "1.2.-1"])
 def test_parse_rejects_malformed(bad):
-    with pytest.raises(ValueError):
+    with pytest.raises(TimeFValidationError):
         Version.parse(bad)
 
 

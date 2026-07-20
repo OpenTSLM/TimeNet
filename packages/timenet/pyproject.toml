@@ -8,6 +8,14 @@ dependencies = [
     "pint>=0.25",
 ]
 
+[project.optional-dependencies]
+# PyYAML and jsonschema are only needed to author or read dataset cards. DatasetMetadata.from_yaml
+# imports them lazily and raises a clear "install timenet[curation]" message when this extra is absent.
+curation = [
+    "pyyaml>=6",
+    "jsonschema>=4.18",
+]
+
 [project.scripts]
 timenet = "timenet.cli:main"
 

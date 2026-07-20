@@ -4,9 +4,10 @@ Values are SPDX-style identifiers (mirroring GitHub's license keyword list) rath
 strings, so they round-trip unambiguously through the manifest.
 """
 
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
+@unique
 class License(StrEnum):
     """The legal license of the source data. Values are SPDX-style identifiers."""
 

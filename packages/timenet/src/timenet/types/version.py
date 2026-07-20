@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from timenet.errors import TimeFValidationError
+
 
 @dataclass(frozen=True, order=True)
 class Version:
@@ -19,11 +21,11 @@ class Version:
         """Reject non-integer or negative components.
 
         Raises:
-            ValueError: If any component is not a non-negative ``int``.
+            TimeFValidationError: If any component is not a non-negative ``int``.
         """
         for name, value in (("major", self.major), ("minor", self.minor), ("patch", self.patch)):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(f"Version.{name} must be a non-negative int, got {value!r}")
+                raise TimeFValidationError(f"Version.{name} must be a non-negative int, got {value!r}")
 
     @classmethod
     def parse(cls, text: str) -> "Version":
@@ -36,15 +38,15 @@ class Version:
             The parsed :class:`Version`.
 
         Raises:
-            ValueError: If ``text`` is not exactly three integer components.
+            TimeFValidationError: If ``text`` is not exactly three integer components.
         """
         parts = text.split(".")
         if len(parts) != 3:
-            raise ValueError(f"Version must be 'major.minor.patch', got {text!r}")
+            raise TimeFValidationError(f"Version must be 'major.minor.patch', got {text!r}")
         try:
             major, minor, patch = (int(part) for part in parts)
         except ValueError:
-            raise ValueError(f"Version components must be integers, got {text!r}") from None
+            raise TimeFValidationError(f"Version components must be integers, got {text!r}") from None
         return cls(major, minor, patch)
 
     def __str__(self) -> str:

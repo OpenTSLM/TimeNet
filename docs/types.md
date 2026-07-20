@@ -23,16 +23,42 @@ str(Version(1, 2, 3))    # "1.2.3"
 
 ## Units
 
-TimeNet uses [pint](https://pint.readthedocs.io) for all physical units. One process-wide registry,
-`ureg`, owns every definition and conversion, plus two custom units (`beat`, `bpm`) pint does not ship.
-Reference units through `ureg` (`ureg.hertz`, `ureg.millivolt`, `ureg.standard_gravity`,
-`ureg.dimensionless`), never a second registry, or comparisons and conversions fail.
+TimeNet uses [pint](https://pint.readthedocs.io) for all physical units. One registry, `ureg`, owns
+every definition and conversion, plus two custom units (`beat`, `bpm`) pint does not ship. Reference
+units through `ureg` (`ureg.hertz`, `ureg.millivolt`, `ureg.standard_gravity`, `ureg.dimensionless`),
+never a second registry, or comparisons and conversions fail.
 
 ```python
 from timenet.types import ureg
 
 (5.0 * ureg.millivolt).to(ureg.volt).magnitude   # 0.005
 ```
+
+`ureg` is **private to TimeNet**. Importing `timenet` does not call `pint.set_application_registry`, so
+your own registry is left alone. Everything TimeNet persists or pickles stores units by *name* and
+rebuilds them against `ureg`, so nothing in the format depends on process-global pint state: the
+manifest codec writes `str(unit)`, and `TimeSeriesSpec` converts every `pint.Unit` attribute (including
+ones a subclass adds) in `__getstate__`.
+
+That covers TimeNet's own types. It cannot cover a bare `pint.Unit` or `pint.Quantity` you pickle
+yourself, because those store only the unit name and resolve it against pint's *application* registry,
+which doesn't know `beat` or `bpm`:
+
+```python
+pickle.loads(pickle.dumps(ureg.bpm))   # UndefinedUnitError: 'bpm' is not defined
+```
+
+pint's application registry is the only hook for that, so it's opt-in rather than something a library
+should do to you on import:
+
+```python
+from timenet.types import use_as_application_registry
+
+use_as_application_registry()   # once, at application start
+```
+
+It is a global assignment, not a merge: the last call wins, and custom units from a previously
+installed registry stop resolving. Prefer it only when you genuinely pickle bare units or quantities.
 
 ---
 
@@ -87,13 +113,15 @@ Connectors that reuse a modality can subclass with field defaults:
 ```python
 from dataclasses import dataclass
 
+import pint
+
 @dataclass(frozen=True)
 class ECGLead(TimeSeriesSpec):
     spec_type: str = "ecg_lead"
     name: str = "ECG Lead"
-    unit_sampling_rate: object = ureg.hertz
-    unit_timestamp: object = ureg.second
-    unit_value: object = ureg.millivolt
+    unit_sampling_rate: pint.Unit = ureg.hertz
+    unit_timestamp: pint.Unit = ureg.second
+    unit_value: pint.Unit = ureg.millivolt
 ```
 
 ---
@@ -179,9 +207,11 @@ are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after co
 | `ReasoningTask` | `reasoning` | `question`, `rationale`, `answer` |
 
 Every task also carries `id` (auto uuid4), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
-`TaskType` is the enum of type tags; `TASKS` is **derived** from `Task.__subclasses__()`, so it can
-never drift. Unlike specs and annotations, task payloads are fixed in code and resolved on read against
-`TASKS`, not reconstructed from the manifest.
+`TaskType` is the enum of type tags; `TASKS` is **derived** at import by walking the `Task` subclass
+tree, so every concrete task in the module is registered by its `task_type` and two classes claiming the
+same tag are rejected rather than silently collapsed. Intermediate bases that group tasks without
+claiming a `task_type` are skipped. Unlike specs and annotations, task payloads are fixed in code and
+resolved on read against `TASKS`, not reconstructed from the manifest.
 
 ### Per-type payloads
 
@@ -310,3 +340,13 @@ errors also derive from `ValueError` so existing handlers keep working.
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
 | `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
+
+The value types above raise `TimeFValidationError` when a value that would be *stored in a dataset*
+violates an invariant: a negative `Version` component, a `unit_value` that isn't a frequency, an
+`IntervalAnnotation` that ends before it starts, a `DatasetSchema` whose specs and data sources
+disagree. Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.
+
+Plain `ValueError` is reserved for mistakes in *calling code* rather than in dataset content:
+`annotation_type_of()` handed something that isn't one of the three shapes, or two `Task` classes
+declaring the same `task_type` (a definition bug, raised at import). Those are never data problems, so
+tagging them as TimeF validation failures would make the distinction useless.

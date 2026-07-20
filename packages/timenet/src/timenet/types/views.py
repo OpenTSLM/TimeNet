@@ -1,8 +1,9 @@
 """The :class:`View` enum: which slice of a source a sample represents."""
 
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
+@unique
 class View(StrEnum):
     """Identifies which slice of the source a :class:`~timenet.dataset.Sample` represents."""
 

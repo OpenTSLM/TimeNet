@@ -11,6 +11,7 @@ from timenet.types import (
     Task,
     TaskType,
 )
+from timenet.types.tasks import _build_task_registry
 
 
 def test_task_types():
@@ -23,10 +24,10 @@ def test_task_types():
 
 
 def test_tasks_registry_is_derived_and_complete():
-    # Derived from Task.__subclasses__() — every subclass is registered by its task_type, no drift.
-    assert {cls.task_type: cls for cls in Task.__subclasses__()} == TASKS
-    assert TASKS[TaskType.CLASSIFICATION] is ClassificationTask
+    # Derived by walking the task hierarchy — every concrete task is registered by its task_type.
     assert set(TASKS) == set(TaskType)
+    assert all(cls.task_type is key for key, cls in TASKS.items())
+    assert TASKS[TaskType.CLASSIFICATION] is ClassificationTask
 
 
 def test_classification_payload():
@@ -67,3 +68,9 @@ def test_task_is_mutable_for_post_construction_linking():
 def test_base_task_has_no_task_type():
     with pytest.raises(AttributeError):
         _ = Task.task_type
+
+
+def test_registry_rejects_task_type_collision():
+    # Two classes claiming the same task_type would otherwise silently drop one from the registry.
+    with pytest.raises(ValueError, match="task_type"):
+        _build_task_registry([ClassificationTask, ClassificationTask])

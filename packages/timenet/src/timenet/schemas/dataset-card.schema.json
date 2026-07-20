@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json",
+  "title": "TimeNet Dataset Card",
+  "description": "Human-authored metadata for a TimeNet dataset: the card YAML that sits beside a connector and is the single source for the dataset's descriptive identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_id", "dataset_version", "name", "description", "license"],
+  "properties": {
+    "yaml_schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "The card's own field-schema version. Only 1 exists today."
+    },
+    "dataset_id": { "$ref": "#/$defs/datasetId" },
+    "dataset_version": { "$ref": "#/$defs/semver" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "license": { "$ref": "#/$defs/license" },
+    "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "source_url": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "datasetId": {
+      "type": "string",
+      "pattern": "^(?!\\.)[A-Za-z0-9._-]+(?:/(?!\\.)[A-Za-z0-9._-]+)?$",
+      "description": "A dataset id: a single segment, or an org/name pair with one slash; letters, digits, dot, underscore, hyphen; no segment may start with '.'."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "major.minor.patch with non-negative integer components."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX-style license identifier. Kept in sync with timenet.types.License by a drift test.",
+      "enum": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "GPL-3.0",
+        "LGPL-3.0",
+        "MPL-2.0",
+        "CC0-1.0",
+        "CC-BY-4.0",
+        "CC-BY-SA-4.0",
+        "CC-BY-NC-4.0",
+        "ODC-By-1.0",
+        "ODbL-1.0"
+      ]
+    },
+    "domain": {
+      "type": "string",
+      "description": "Kept in sync with timenet.types.Domain by a drift test.",
+      "enum": [
+        "health",
+        "cardiology",
+        "sleep",
+        "activity",
+        "economics",
+        "finance",
+        "general"
+      ]
+    }
+  }
+}

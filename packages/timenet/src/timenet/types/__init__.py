@@ -25,7 +25,7 @@ from timenet.types.tasks import (
     Task,
     TaskType,
 )
-from timenet.types.units import ureg
+from timenet.types.units import ureg, use_as_application_registry
 from timenet.types.version import Version
 from timenet.types.views import View
 
@@ -57,4 +57,5 @@ __all__ = [
     "View",
     "annotation_type_of",
     "ureg",
+    "use_as_application_registry",
 ]

@@ -10,11 +10,14 @@ and manifest.
 """
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import StrEnum, unique
 from typing import Any
 import uuid
 
+from timenet.errors import TimeFValidationError
 
+
+@unique
 class AnnotationType(StrEnum):
     """The three annotation shapes; the discriminator stored on disk and in the manifest."""
 
@@ -55,12 +58,12 @@ class StaticAnnotation(Annotation):
         """Reject a missing value.
 
         Raises:
-            ValueError: If ``value`` is ``None``. Redeclaring the field without a default does not
+            TimeFValidationError: If ``value`` is ``None``. Redeclaring the field without a default does not
                 remove the base's inherited ``None`` default at runtime, so the check is explicit.
         """
         super().__post_init__()
         if self.value is None:
-            raise ValueError("StaticAnnotation requires a value")
+            raise TimeFValidationError("StaticAnnotation requires a value")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,6 +72,18 @@ class PointAnnotation(Annotation):
 
     start_time_s: float
     time_series_ids: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """Reject an explicitly empty ``time_series_ids``.
+
+        Raises:
+            TimeFValidationError: If ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+        """
+        super().__post_init__()
+        if self.time_series_ids is not None and not self.time_series_ids:
+            raise TimeFValidationError(
+                "PointAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
+            )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -80,15 +95,20 @@ class IntervalAnnotation(Annotation):
     time_series_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        """Reject a non-positive interval.
+        """Reject a non-positive interval or an explicitly empty ``time_series_ids``.
 
         Raises:
-            ValueError: If ``end_time_s`` is not strictly greater than ``start_time_s``.
+            TimeFValidationError: If ``end_time_s`` is not strictly greater than ``start_time_s``, or
+                if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
         """
         super().__post_init__()
         if self.end_time_s <= self.start_time_s:
-            raise ValueError(
+            raise TimeFValidationError(
                 f"IntervalAnnotation end_time_s ({self.end_time_s}) must be > start_time_s ({self.start_time_s})"
+            )
+        if self.time_series_ids is not None and not self.time_series_ids:
+            raise TimeFValidationError(
+                "IntervalAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
             )
 
 

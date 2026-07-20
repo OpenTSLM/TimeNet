@@ -3,6 +3,7 @@ import pickle
 
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import (
     ANNOTATION_BASES,
     Annotation,
@@ -16,7 +17,7 @@ from timenet.types import (
 
 
 def test_static_requires_value():
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(TimeFValidationError, match="requires a value"):
         StaticAnnotation(key="age")  # type: ignore[call-arg]
 
 
@@ -34,10 +35,20 @@ def test_point_is_a_pure_marker_by_default():
 
 
 def test_interval_requires_end_after_start():
-    with pytest.raises(ValueError):
+    with pytest.raises(TimeFValidationError):
         IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=8.0)
     ann = IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
     assert ann.end_time_s == pytest.approx(12.0)
+
+
+def test_point_rejects_empty_time_series_ids():
+    with pytest.raises(TimeFValidationError, match="time_series_ids"):
+        PointAnnotation(key="stimulus", start_time_s=4.0, time_series_ids=())
+
+
+def test_interval_rejects_empty_time_series_ids():
+    with pytest.raises(TimeFValidationError, match="time_series_ids"):
+        IntervalAnnotation(key="artifact", start_time_s=1.0, end_time_s=2.0, time_series_ids=())
 
 
 def test_annotation_type_of():
