@@ -30,14 +30,15 @@ registry. `registry` accepts a `BaseRegistry`, a URL, a `file://` URI, or a loca
 
 ## Configuration
 
-All local state lives under `~/.cache/timenet/` by default, mirroring HuggingFace's `HF_HOME`
-hierarchy. Precedence for any value is **CLI flag / argument > environment variable > default**.
+All local state lives under `~/.cache/timenet/` by default. Setting the home relocates everything;
+the per-area variables override just their own path. Precedence for any value is
+**CLI flag / argument > environment variable > default**.
 
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets (like `HF_DATASETS_CACHE`). |
-| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources + Hub downloads (like `HF_HUB_CACHE`). |
+| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets. |
+| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources and downloads. |
 | `TIMENET_REGISTRY` | `<home>/registry` | The registry to use (path or URL). |
 
 Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be
@@ -52,6 +53,33 @@ added there.
 | `search(...)` | Filter datasets — mirrors [`registry.search`](registry.md#search). |
 | `download(dataset_id, version=None, *, force=False)` | Copy a version's files into local storage; returns the directory. Idempotent unless `force`. |
 | `load(dataset_id, version=None)` | `download` if needed, then read into a `TimeFDataset` with lazy per-series values. |
+| `load_torch(dataset_id, version=None)` | `load`, wrapped in a read-only `torch.utils.data.Dataset` (needs the `torch` extra). |
+
+## PyTorch
+
+`load_torch` returns a `TimeFTorchDataset` — a read-only, map-style `torch.utils.data.Dataset`. Each
+item is a dict with the sample's `series` as float32 tensors (one per channel), plus `sample_id`,
+`tasks`, and `annotations`.
+
+```python
+from timenet.client import TimeNet
+
+ds = TimeNet().load_torch("chengsenwang/tsqa")   # pip install 'timenet[torch]'
+item = ds[0]
+series, question = item["series"][0], item["tasks"][0].question
+```
+
+To feed a `DataLoader`, select what your model needs (the item's `tasks`/`annotations` are Python
+objects, not tensors, and series lengths vary between samples), either with a `transform` on the dataset
+or a `collate_fn` on the loader:
+
+```python
+from torch.utils.data import DataLoader
+
+loader = DataLoader(ds, batch_size=8, collate_fn=lambda b: [(x["series"][0], x["tasks"][0].answer) for x in b])
+```
+
+The torch module is imported lazily, so base users who never call `load_torch` don't need torch.
 
 ## CLI
 

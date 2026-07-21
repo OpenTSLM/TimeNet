@@ -19,6 +19,9 @@ curation = [
     "pyyaml>=6",
     "jsonschema>=4.18",
 ]
+torch = [
+    "torch>=2.2",
+]
 
 [project.scripts]
 timenet = "timenet.cli:main"
