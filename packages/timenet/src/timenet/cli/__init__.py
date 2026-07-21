@@ -1,6 +1,6 @@
 """Command-line interface for TimeNet."""
 
-from timenet.cli.app import main
+from timenet.cli.app import app, main
 
 
-__all__ = ["main"]
+__all__ = ["app", "main"]

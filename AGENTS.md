@@ -57,6 +57,10 @@ In final summaries, state which checks you ran and call out any you could not ru
   `BREAKING CHANGE:` footer.
 - Never use `git commit --no-verify`. If a hook fails, fix the underlying issue
   (run `make check` / `make lint-fix`) and commit again.
+- Raise TimeNet's own exceptions from `timenet.errors`, not raw `ValueError` / `Exception`:
+  `TimeFValidationError` for a violated TimeF invariant or bad caller input, `TimeFFormatError`
+  for a corrupt or unsupported on-disk artifact. `TimeFValidationError` subclasses `ValueError`,
+  so existing `except ValueError` handlers keep working.
 
 ## Docstrings
 - Write Google-style docstrings; ruff enforces them via `D` (pydocstyle) and `DOC`
