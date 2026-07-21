@@ -149,3 +149,30 @@ class AnnotationDescriptor:
     value_type: str | None = None
     unit: str | None = None
     description: str | None = None
+
+
+def value_type_of(value: Any) -> str | None:
+    """Return the manifest ``value_type`` tag for an annotation value.
+
+    Args:
+        value: The annotation's value.
+
+    Returns:
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker.
+
+    Raises:
+        TypeError: If ``value`` is a non-null value of an unsupported type.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool before int: bool is an int subclass
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list | tuple):
+        return "list"
+    raise TypeError(f"unsupported annotation value type: {type(value).__name__}")

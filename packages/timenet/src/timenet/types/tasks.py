@@ -13,6 +13,8 @@ from enum import StrEnum, unique
 from typing import ClassVar
 import uuid
 
+from timenet.errors import TimeFValidationError
+
 
 @unique
 class TaskType(StrEnum):
@@ -63,6 +65,25 @@ class LabelingTask(Task):
     label_schema: str | None = None
     time_series_ids: tuple[str, ...] | None = None
     windows_s: tuple[tuple[float, float], ...] | None = None
+    """Spans in the **source recording timeline**, the same frame as ``TimeSeries.t_start_s``.
+    ``None`` means the sample's full duration. That a window actually falls inside the target
+    sample's span is checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the
+    sample to check against."""
+
+    def __post_init__(self) -> None:
+        """Reject an explicitly empty or malformed ``time_series_ids`` / ``windows_s``.
+
+        Raises:
+            TimeFValidationError: If either field is ``()`` rather than ``None``, or a window's end is
+                not strictly greater than its start.
+        """
+        if self.time_series_ids is not None and not self.time_series_ids:
+            raise TimeFValidationError("LabelingTask time_series_ids must be None (all channels) or non-empty, got ()")
+        if self.windows_s is not None and not self.windows_s:
+            raise TimeFValidationError("LabelingTask windows_s must be None (full duration) or non-empty, got ()")
+        for start_s, end_s in self.windows_s or ():
+            if end_s <= start_s:
+                raise TimeFValidationError(f"LabelingTask window end ({end_s}) must be > start ({start_s})")
 
 
 @dataclass(kw_only=True)
