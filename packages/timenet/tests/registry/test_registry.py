@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import DatasetNotFoundError, TimeFFormatError, TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.registry import (
     BaseRegistry,
@@ -81,12 +81,30 @@ def test_get_manifest_latest(registry_root):
 
 def test_get_manifest_unknown_raises(registry_root):
     with pytest.raises(DatasetNotFoundError):
-        LocalRegistry(registry_root).get_manifest("does_not_exist")
+        LocalRegistry(registry_root).get_manifest("does/not-exist")
 
 
 def test_get_manifest_unknown_version_raises(registry_root):
     with pytest.raises(DatasetNotFoundError):
         LocalRegistry(registry_root).get_manifest("ecg", version="9.9.9")
+
+
+def test_get_manifest_rejects_traversal_id(registry_root):
+    # every registry path-join validates the id, so a ``..`` id can't escape the root
+    with pytest.raises(TimeFValidationError, match="dataset_id"):
+        LocalRegistry(registry_root).get_manifest("../evil")
+
+
+def test_get_manifest_rejects_mismatched_id(registry_root):
+    # a manifest whose stored id disagrees with its directory is a misplaced/corrupt artifact
+    registry = LocalRegistry(registry_root)
+    real_id = registry.list_datasets()[0].dataset_id
+    version = str(registry.get_manifest(real_id).metadata.dataset_version)
+    misplaced = registry_root / "wrong/place" / version
+    misplaced.mkdir(parents=True)
+    (misplaced / "manifest.json").write_text((registry_root / real_id / version / "manifest.json").read_text())
+    with pytest.raises(TimeFFormatError, match="inconsistent"):
+        registry.get_manifest("wrong/place")
 
 
 def test_latest_version_ignores_staging_dirs(registry_root):
