@@ -22,9 +22,15 @@ Manifest(
     schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
     checksums={},               # relpath -> "sha256:..." (default: empty)
+    id_encoding={},             # logical id -> "uuid16" (absent => stored as string)
+    derived_from=None,          # copy-on-write lineage, e.g. {"dataset_version": "1.0.0", "op": ...}
     timef_format_version=1,     # validated against the supported set {1}
 )
 ```
+
+`id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as `binary(16)`;
+an absent entry means that id is a UTF-8 string. `derived_from` is set only on a version produced by a
+[copy-on-write edit](timef-writer.md#copy-on-write-edits).
 
 Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_version` raises
 `InvalidManifestError`.

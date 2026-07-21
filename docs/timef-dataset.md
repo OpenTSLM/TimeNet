@@ -30,7 +30,7 @@ TimeSeries(
 | `sampling_rate_hz` | `float` | yes | Sampling rate in canonical Hz; positive and finite. |
 | `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning the 1-D `float32` values. |
 | `source_id` | `str \| None` | no | Identifier of the raw recording this series came from. |
-| `time_series_id` | `str` | no | Persistent handle (auto uuid4). The writer dedupes by it. |
+| `time_series_id` | `str` | no | Persistent handle (auto uuid7). The writer dedupes by it. |
 | `t_start_s` | `float` | no | Window start in the source timeline (default `0.0`). |
 | `t_end_s` | `float \| None` | no | Window end, or `None` for end of source. Must exceed `t_start_s`. |
 
@@ -48,7 +48,7 @@ via `TimeFDataset.add_sample`.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `sample_id` | `str` | Auto uuid4 (or explicit, for deterministic output). |
+| `sample_id` | `str` | Auto uuid7 (or explicit, for deterministic output). |
 | `time_series` | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel. |
 | `view` | `View` | Which slice of the source this sample represents. |
 | `subject_ids` | `tuple[str, ...]` | Subjects (empty for subject-less domains). |

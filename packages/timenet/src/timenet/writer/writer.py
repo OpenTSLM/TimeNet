@@ -35,15 +35,20 @@ from timenet.format.constants import (
     TASK_PART_TEMPLATE,
 )
 from timenet.format.schemas import (
-    ANNOTATIONS_SCHEMA,
-    INDEX_SCHEMA,
-    SAMPLES_SCHEMA,
-    SHARD_SCHEMA,
+    LOGICAL_IDS,
     TASK_COMMON_NAMES,
+    UUID16,
+    IdCodec,
+    IdTypes,
+    annotations_schema,
+    index_schema,
+    samples_schema,
+    shard_schema,
     task_schema,
 )
 from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 from timenet.types import Task, annotation_type_of
+from timenet.types.ids import is_canonical_uuid
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 
@@ -94,6 +99,7 @@ class TimeFWriter:
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int = DEFAULT_COMPRESSION_LEVEL,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+        derived_from: dict[str, str] | None = None,
     ) -> None:
         """Configure the writer.
 
@@ -106,6 +112,8 @@ class TimeFWriter:
             compression: Parquet codec.
             compression_level: Pinned level (applied for zstd) for reproducible output.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
+            derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
+                another (e.g. ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty.
@@ -114,6 +122,7 @@ class TimeFWriter:
             raise TimeFValidationError("dataset_id must be non-empty")
         self._root = Path(root)
         self._dataset = dataset
+        self._derived_from = derived_from
         self._shard_target_bytes = shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
@@ -187,6 +196,7 @@ class TimeFWriter:
         if self._dataset.schema is None:
             raise TimeFValidationError("call dataset.derive_schema() before writing")
         self._validate_shared_annotations()
+        self._resolve_id_types()
 
         unique_series, series_to_samples = self._dedupe_series()
         placements = self._write_shards(unique_series)
@@ -218,6 +228,38 @@ class TimeFWriter:
     def abort(self) -> None:
         """Delete the staging directory. Safe to call more than once."""
         shutil.rmtree(self._staging_dir, ignore_errors=True)
+
+    # ---- id storage ----------------------------------------------------------------------------
+
+    def _resolve_id_types(self) -> None:
+        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string.
+
+        Stores the resolved Arrow types, the set of ``uuid16`` logical ids, the manifest ``id_encoding``
+        map (only the uuid16 entries; an absent entry means string), and the shard schema.
+        """
+        values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
+        for sample in self._dataset.samples:
+            values["sample_id"].append(sample.sample_id)
+            values["subject_id"].extend(sample.subject_ids)
+            for ts in sample.time_series:
+                values["time_series_id"].append(ts.time_series_id)
+                if ts.source_id is not None:
+                    values["source_id"].append(ts.source_id)
+            for ann in sample.annotations:
+                values["annotation_id"].append(ann.id)
+        for task in self._dataset.tasks:
+            values["task_id"].append(task.id)
+
+        id_types: IdTypes = {}
+        for name in LOGICAL_IDS:
+            vals = values[name]
+            is_uuid16 = bool(vals) and all(is_canonical_uuid(v) for v in vals)
+            id_types[name] = UUID16 if is_uuid16 else pa.string()
+        self._id_types = id_types
+        self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
+        self._id_encoding = dict.fromkeys(self._uuid16, "uuid16")
+        self._codec = IdCodec.from_uuid16(self._uuid16)
+        self._shard_schema = shard_schema(id_types)
 
     # ---- shards --------------------------------------------------------------------------------
 
@@ -305,7 +347,7 @@ class TimeFWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         return pq.ParquetWriter(
             path,
-            SHARD_SCHEMA,
+            self._shard_schema,
             **encodings.parquet_kwargs(
                 dictionary_columns=encodings.SHARD_DICTIONARY,
                 column_encoding=encodings.SHARD_ENCODING,
@@ -368,22 +410,28 @@ class TimeFWriter:
     # ---- metadata tables -----------------------------------------------------------------------
 
     def _write_samples(self) -> None:
+        codec = self._codec
         rows = []
         for sample in sorted(self._dataset.samples, key=lambda s: s.sample_id):
             rows.append(
                 {
-                    "sample_id": sample.sample_id,
+                    "sample_id": codec.encode("sample_id", sample.sample_id),
                     "view": str(sample.view),
-                    "subject_ids": list(sample.subject_ids),
-                    "source_ids": _ordered_unique(ts.source_id for ts in sample.time_series if ts.source_id),
-                    "time_series": [_time_series_struct(ts) for ts in sample.time_series],
-                    "task_ids": list(sample.task_ids),
-                    "annotation_ids": [ann.id for ann in sample.annotations],
+                    "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
+                    "source_ids": codec.encode_list(
+                        "source_id", _ordered_unique(ts.source_id for ts in sample.time_series if ts.source_id)
+                    ),
+                    "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
+                    "task_ids": codec.encode_list("task_id", sample.task_ids),
+                    "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
                 }
             )
-        self._write_table(rows, SAMPLES_SCHEMA, SAMPLES_FILE, dictionary_columns=encodings.SAMPLES_DICTIONARY)
+        self._write_table(
+            rows, samples_schema(self._id_types), SAMPLES_FILE, dictionary_columns=encodings.SAMPLES_DICTIONARY
+        )
 
     def _write_annotations(self) -> None:
+        codec = self._codec
         by_id: dict[str, dict] = {}
         for sample in self._dataset.samples:
             for ann in sample.annotations:
@@ -391,20 +439,25 @@ class TimeFWriter:
                 row = by_id.setdefault(
                     ann.id,
                     {
-                        "id": ann.id,
+                        "id": codec.encode("annotation_id", ann.id),
                         "key": ann.key,
                         "annotation_type": str(annotation_type_of(ann)),
                         "value": None if ann.value is None else json.dumps(ann.value),
                         "start_time_s": getattr(ann, "start_time_s", None),
                         "end_time_s": getattr(ann, "end_time_s", None),
-                        "time_series_ids": list(series_ids) if series_ids is not None else None,
+                        "time_series_ids": (
+                            None if series_ids is None else codec.encode_list("time_series_id", series_ids)
+                        ),
                         "sample_ids": [],
                     },
                 )
-                row["sample_ids"].append(sample.sample_id)
+                row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
         rows = sorted(by_id.values(), key=lambda r: (r["annotation_type"], r["key"], r["id"]))
         self._write_table(
-            rows, ANNOTATIONS_SCHEMA, ANNOTATIONS_FILE, dictionary_columns=encodings.ANNOTATIONS_DICTIONARY
+            rows,
+            annotations_schema(self._id_types),
+            ANNOTATIONS_FILE,
+            dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
     def _write_tasks(self) -> None:
@@ -413,8 +466,8 @@ class TimeFWriter:
         for task in self._dataset.tasks:
             by_type.setdefault(str(task.task_type), []).append(task)
         for task_type_str, tasks in sorted(by_type.items()):
-            schema = task_schema(tasks[0].task_type)
-            rows = [_task_row(task, schema) for task in tasks]
+            schema = task_schema(tasks[0].task_type, self._id_types)
+            rows = [_task_row(task, schema, self._codec) for task in tasks]
             rel = TASK_PART_TEMPLATE.format(task_type=task_type_str)
             (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
             self._write_table(rows, schema, rel, dictionary_columns=encodings.task_dictionary(schema))
@@ -423,13 +476,14 @@ class TimeFWriter:
     def _write_index(
         self, placements: dict[tuple[str, int], _Placement], series_to_samples: dict[str, list[str]]
     ) -> None:
+        codec = self._codec
         rows = []
         for (time_series_id, chunk_idx), placement in placements.items():
             for sample_id in series_to_samples.get(time_series_id, ()):
                 rows.append(
                     {
-                        "sample_id": sample_id,
-                        "time_series_id": time_series_id,
+                        "sample_id": codec.encode("sample_id", sample_id),
+                        "time_series_id": codec.encode("time_series_id", time_series_id),
                         "spec_type": placement.spec_type,
                         "channel": placement.channel,
                         "chunk_idx": chunk_idx,
@@ -445,7 +499,7 @@ class TimeFWriter:
         self._index_rows = len(rows)
         self._write_table(
             rows,
-            INDEX_SCHEMA,
+            index_schema(self._id_types),
             INDEX_FILE,
             dictionary_columns=encodings.INDEX_DICTIONARY,
             column_encoding=encodings.INDEX_ENCODING,
@@ -469,6 +523,8 @@ class TimeFWriter:
                 time_series=tuple(self._shard_paths),
             ),
             checksums=checksums,
+            id_encoding=self._id_encoding,
+            derived_from=self._derived_from,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
@@ -603,7 +659,7 @@ class _ShardStream:
             self.shard_paths.append(rel)
             shard = self._writer._new_shard_writer(rel)
             self._shard = shard
-        shard.write_table(_shard_table(self._buffer))
+        shard.write_table(_shard_table(self._buffer, self._writer._shard_schema, self._writer._codec))
         shard_path = self.shard_paths[self._shard_idx]
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = _Placement(
@@ -646,10 +702,10 @@ def _series_identity(ts: TimeSeries) -> tuple:
     return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.t_end_s)
 
 
-def _shard_table(buffer: list[_Chunk]) -> pa.Table:
+def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.Table:
     return pa.Table.from_pydict(
         {
-            "time_series_id": [c.time_series_id for c in buffer],
+            "time_series_id": codec.encode_list("time_series_id", [c.time_series_id for c in buffer]),
             "spec_type": [c.spec_type for c in buffer],
             "channel": [c.channel for c in buffer],
             "chunk_idx": [c.chunk_idx for c in buffer],
@@ -658,7 +714,7 @@ def _shard_table(buffer: list[_Chunk]) -> pa.Table:
             "sampling_rate_hz": [c.sampling_rate_hz for c in buffer],
             "values": _values_column([c.values for c in buffer]),
         },
-        schema=SHARD_SCHEMA,
+        schema=schema,
     )
 
 
@@ -679,25 +735,30 @@ def _values_column(chunks: list[pa.Array]) -> pa.ListArray:
     return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(chunks))
 
 
-def _time_series_struct(ts: TimeSeries) -> dict:
+def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
     return {
         "spec_type": ts.spec.spec_type,
         "channel": ts.channel,
-        "source_id": ts.source_id,
-        "time_series_id": ts.time_series_id,
+        "source_id": codec.encode("source_id", ts.source_id),
+        "time_series_id": codec.encode("time_series_id", ts.time_series_id),
         "sampling_rate_hz": ts.sampling_rate_hz,
         "t_start_s": ts.t_start_s,
         "t_end_s": ts.t_end_s,
     }
 
 
-def _task_row(task: Task, schema: pa.Schema) -> dict:
-    row: dict = {"id": task.id, "sample_ids": list(task.sample_ids), "from_task_ids": list(task.from_task_ids)}
+def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
+    row: dict = {
+        "id": codec.encode("task_id", task.id),
+        "sample_ids": codec.encode_list("sample_id", task.sample_ids),
+        "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
+    }
     for name in schema.names:
         if name in TASK_COMMON_NAMES:
             continue
         value = getattr(task, name)
-        row[name] = list(value) if isinstance(value, tuple) else value
+        value = list(value) if isinstance(value, tuple) else value
+        row[name] = codec.encode_payload(name, value)
     return row
 
 

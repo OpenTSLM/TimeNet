@@ -61,6 +61,9 @@ consumer needs to interpret the parquet lives in the manifest.
   and conversion.
 - **Commits are atomic.** The writer stages a version into a temp directory and publishes it with a
   single atomic rename; `manifest.json` present means committed.
+- **Versions are immutable; edits are copy-on-write.** Removing a row writes a new version through the
+  same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)); stable never-reused ids keep
+  references valid, and content-defined chunking keeps the rewrite cheap on a deduplicating backend.
 
 ---
 
