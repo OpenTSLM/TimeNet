@@ -1,0 +1,233 @@
+import pytest
+
+from timenet.errors import DatasetNotFoundError
+from timenet.manifest import Manifest
+from timenet.registry import (
+    BaseRegistry,
+    LocalRegistry,
+    RemoteRegistry,
+    S3Registry,
+    WritableRegistry,
+    open_registry,
+    open_writable_registry,
+)
+from timenet.testing import make_dataset
+from timenet.types import Domain, License, QATask
+
+
+# ---- factory ----------------------------------------------------------------------------------
+
+
+def test_open_registry_local_path(registry_root):
+    registry = open_registry(registry_root)
+    assert isinstance(registry, LocalRegistry)
+    assert isinstance(registry, BaseRegistry)
+
+
+def test_open_registry_file_uri(registry_root):
+    registry = open_registry(f"file://{registry_root}")
+    assert isinstance(registry, LocalRegistry)
+
+
+def test_open_registry_http_is_remote():
+    assert isinstance(open_registry("https://registry.timenet.io"), RemoteRegistry)
+
+
+def test_open_registry_s3_is_s3():
+    assert isinstance(open_registry("s3://bucket/registry"), S3Registry)
+
+
+def test_open_registry_timenet_scheme_aliases_hosted_remote():
+    registry = open_registry("timenet://hello/world")
+    assert isinstance(registry, RemoteRegistry)
+    assert registry._base_url.startswith("https://registry.timenet.ai")
+
+
+def test_open_writable_registry_returns_writable(registry_root):
+    assert isinstance(open_writable_registry(registry_root), WritableRegistry)
+
+
+def test_open_registry_unknown_scheme_rejected():
+    # must not fall through to a LocalRegistry rooted at the literal "gs://bucket" string
+    with pytest.raises(ValueError, match="unsupported registry scheme"):
+        open_registry("gs://bucket/registry")
+
+
+def test_open_registry_file_uri_with_host_rejected():
+    with pytest.raises(ValueError, match="absolute"):
+        open_registry("file://home/timo/registry")
+
+
+def test_open_registry_expands_user(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    registry = open_registry("~/registry")
+    assert isinstance(registry, LocalRegistry)
+    assert registry._root == tmp_path / "registry"
+
+
+# ---- list / get / open ------------------------------------------------------------------------
+
+
+def test_list_datasets(registry_root):
+    ids = {m.dataset_id for m in LocalRegistry(registry_root).list_datasets()}
+    assert ids == {"hello_world", "ecg"}
+
+
+def test_get_manifest_latest(registry_root):
+    manifest = LocalRegistry(registry_root).get_manifest("ecg")
+    assert isinstance(manifest, Manifest)
+    assert manifest.metadata.dataset_version.major == 2
+
+
+def test_get_manifest_unknown_raises(registry_root):
+    with pytest.raises(DatasetNotFoundError):
+        LocalRegistry(registry_root).get_manifest("does_not_exist")
+
+
+def test_get_manifest_unknown_version_raises(registry_root):
+    with pytest.raises(DatasetNotFoundError):
+        LocalRegistry(registry_root).get_manifest("ecg", version="9.9.9")
+
+
+def test_latest_version_ignores_staging_dirs(registry_root):
+    # A crashed build can leave a `<version>.tmp-<uuid>` sibling (briefly holding a manifest.json).
+    stale = registry_root / "ecg" / "2.0.0.tmp-deadbeef"
+    stale.mkdir()
+    (stale / "manifest.json").write_text("{}")
+    manifest = LocalRegistry(registry_root).get_manifest("ecg")  # must not choke on the tmp dir
+    assert manifest.metadata.dataset_version.major == 2
+
+
+def test_open_file(registry_root):
+    registry = LocalRegistry(registry_root)
+    with registry.open_file("ecg", "2.0.0", "manifest.json") as handle:
+        assert b"ecg" in handle.read()
+
+
+def test_open_file_rejects_path_traversal(registry_root):
+    registry = LocalRegistry(registry_root)
+    with pytest.raises(ValueError, match="escapes"):
+        registry.open_file("ecg", "2.0.0", "../../../../etc/passwd")
+
+
+# ---- search -----------------------------------------------------------------------------------
+
+
+def test_search_no_filters_returns_all(registry_root):
+    assert len({m.dataset_id for m in LocalRegistry(registry_root).search()}) == 2
+
+
+def test_search_by_domain(registry_root):
+    results = LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY)
+    assert {m.dataset_id for m in results} == {"ecg"}
+
+
+def test_search_by_license(registry_root):
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(license=License.MIT)} == {"ecg"}
+
+
+def test_search_by_task_type_filter(registry_root):
+    # only hello_world has a QA task
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=QATask)} == {"hello_world"}
+
+
+def test_search_by_time_series_spec(registry_root):
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"ecg"}
+
+
+def test_search_by_tag(registry_root):
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(tag="clinical")} == {"ecg"}
+
+
+def test_search_by_dataset_id(registry_root):
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(dataset_id="hello_world")} == {"hello_world"}
+
+
+def test_search_by_query_substring(registry_root):
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(query="hello")} == {"hello_world"}
+
+
+def test_search_accepts_scalar_or_list(registry_root):
+    both = LocalRegistry(registry_root).search(domain=[Domain.CARDIOLOGY, Domain.GENERAL])
+    assert {m.dataset_id for m in both} == {"hello_world", "ecg"}
+
+
+def test_search_filters_are_anded(registry_root):
+    # cardiology AND MIT => ecg; cardiology AND CC-BY-4.0 => none
+    assert {
+        m.dataset_id for m in LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.MIT)
+    } == {"ecg"}
+    assert LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.CC_BY_4_0) == []
+
+
+def test_search_limit(registry_root):
+    assert len(LocalRegistry(registry_root).search(limit=1)) == 1
+
+
+def test_search_limit_zero_returns_empty(registry_root):
+    # the limit check must run before the append, else a zero limit still yields one row
+    assert LocalRegistry(registry_root).search(limit=0) == []
+
+
+def test_search_negative_limit_rejected(registry_root):
+    with pytest.raises(ValueError, match="non-negative"):
+        LocalRegistry(registry_root).search(limit=-1)
+
+
+# ---- store (write side) -----------------------------------------------------------------------
+
+
+def test_store_round_trip(tmp_path):
+    registry = LocalRegistry(tmp_path)
+    dataset = make_dataset()
+    version = registry.store(dataset)
+    assert version == str(dataset.metadata.dataset_version)
+    manifest = registry.get_manifest(dataset.metadata.dataset_id, version)
+    assert manifest.metadata.dataset_id == dataset.metadata.dataset_id
+
+
+def test_store_derives_schema_if_absent(tmp_path):
+    dataset = make_dataset()
+    assert dataset.schema is None
+    LocalRegistry(tmp_path).store(dataset)
+    assert dataset.schema is not None
+
+
+def test_exists_reflects_store(tmp_path):
+    registry = LocalRegistry(tmp_path)
+    dataset = make_dataset()
+    version = str(dataset.metadata.dataset_version)
+    assert not registry.exists(dataset.metadata.dataset_id, version)
+    registry.store(dataset)
+    assert registry.exists(dataset.metadata.dataset_id, version)
+
+
+def test_store_is_idempotent_without_force(tmp_path):
+    registry = LocalRegistry(tmp_path)
+    registry.store(make_dataset())
+    registry.store(make_dataset())  # committed version already exists; must skip, not raise
+
+
+def test_store_force_overwrites(tmp_path):
+    registry = LocalRegistry(tmp_path)
+    registry.store(make_dataset())
+    registry.store(make_dataset(), force=True)  # must not raise
+
+
+# ---- remote / s3 stubs ------------------------------------------------------------------------
+
+
+def test_remote_registry_is_deferred():
+    remote = RemoteRegistry("https://registry.timenet.io")
+    with pytest.raises(NotImplementedError):
+        remote.list_datasets()
+    with pytest.raises(NotImplementedError):
+        remote.store(make_dataset())
+
+
+def test_s3_registry_is_deferred():
+    s3 = S3Registry("s3://bucket/registry")
+    with pytest.raises(NotImplementedError):
+        s3.list_datasets()
+    with pytest.raises(NotImplementedError):
+        s3.store(make_dataset())
