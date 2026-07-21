@@ -16,6 +16,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .ty/
+.hypothesis/
 .coverage
 .coverage.*
 
