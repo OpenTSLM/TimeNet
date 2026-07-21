@@ -9,6 +9,7 @@ from pathlib import Path
 import typer
 
 from timenet.cli.runner import run_cli
+from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.engine import run_pipeline
 from timenet_connectors import HelloWorldConnector
@@ -25,7 +26,10 @@ def _root() -> None:
 
 
 @app.command()
-def build(dataset_id: str, out: str = typer.Option(..., "--out", help="Output registry directory.")) -> None:
+def build(
+    dataset_id: str,
+    out: str | None = typer.Option(None, "--out", help="Output registry directory (default: the local registry)."),
+) -> None:
     """Run a connector through the engine and write its dataset, printing the version directory.
 
     Raises:
@@ -33,7 +37,8 @@ def build(dataset_id: str, out: str = typer.Option(..., "--out", help="Output re
     """
     if dataset_id not in CONNECTORS:
         raise typer.BadParameter(f"unknown dataset id {dataset_id!r}; known: {sorted(CONNECTORS)}")
-    version_dir = run_pipeline(CONNECTORS[dataset_id](), Path(out))
+    root = Path(out) if out is not None else settings().registry_path
+    version_dir = run_pipeline(CONNECTORS[dataset_id](), root)
     typer.echo(str(version_dir))
 
 

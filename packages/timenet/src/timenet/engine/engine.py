@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 
+from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.format.constants import MANIFEST_FILE
@@ -29,7 +30,7 @@ def run_pipeline(
     Args:
         connector: The connector to curate.
         root: Output root; the dataset is written to ``<root>/<dataset_id>/<version>/``.
-        cache_dir: Directory for downloaded artifacts (defaults to ``<root>/.cache/<dataset_id>``).
+        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -44,7 +45,7 @@ def run_pipeline(
     if committed and not force:
         return version_dir
 
-    cache = cache_dir if cache_dir is not None else root / ".cache" / metadata.dataset_id
+    cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
     raw_refs = connector.download(cache)
