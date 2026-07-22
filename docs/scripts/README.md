@@ -24,11 +24,8 @@ Figures produced: `dataset-example`, `time-series-example`, `annotation-static`,
 
 ## Structural diagrams (mermaid, inline)
 
-The pipeline, sample-composition, and annotation/task diagrams are **mermaid**, embedded directly in
-the doc pages as ` ```mermaid ` code blocks. Zensical renders them client-side (the `superfences`
-mermaid fence is already enabled in `zensical.toml`), so they pick up the site fonts and adapt to the
-light and dark colour schemes automatically. There is nothing to pre-render.
-
-The diagram definitions live under `diagrams/` (`pipeline.mmd`, `sample.mmd`, `annotation-task.mmd`) as
-the source of truth; paste their contents into a ` ```mermaid ` block on the relevant page. They are
-kept plain (no hard-coded theme or colours) so Zensical's theming applies.
+The pipeline, sample-composition, and annotation/task diagrams are **mermaid**, written directly in the
+doc pages as ` ```mermaid ` code blocks (the `superfences` mermaid fence is enabled in `zensical.toml`).
+The block on the page is the source; there is nothing to pre-render and no separate `.mmd` files to keep
+in sync. Zensical renders them client-side, so they pick up the site fonts and adapt to the light and
+dark colour schemes automatically. Keep the blocks plain (no hard-coded theme or colours).
