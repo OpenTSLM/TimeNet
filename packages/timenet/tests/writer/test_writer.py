@@ -155,7 +155,7 @@ def test_manifest_written_last(tmp_path):
     dataset.derive_schema()
 
     def probe(event):
-        version_dir = tmp_path / "hello_world" / "1.0.0"
+        version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
         if event.stage != "commit":
             seen_before_manifest.append((version_dir / "manifest.json").exists())
 
