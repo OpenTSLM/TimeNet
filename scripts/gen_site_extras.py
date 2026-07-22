@@ -7,7 +7,7 @@ Runs after ``zensical build`` and works on the ``site/`` output plus the ``docs/
 2. Writes ``site/llms.txt`` (an llmstxt.org discovery index) and ``site/llms-full.txt`` (every
    page concatenated), both linking the raw ``.md`` URLs.
 3. Injects Open Graph / Twitter meta tags and a schema.org JSON-LD ``Article`` block (authored by
-   TimeNet / AI-X-Labs) into each HTML page.
+   TimeNet / OpenTSLM) into each HTML page.
 4. Adds a "Copy as Markdown" button that fetches the page's sibling ``.md`` mirror.
 
 Run it with the docs env::
@@ -265,7 +265,7 @@ def _source_url(index: dict, repo_url: str, qualified: str) -> str | None:
 
     Args:
         index: The Griffe package index from :func:`_load_griffe`.
-        repo_url: The repository URL (e.g. ``https://github.com/AI-X-Labs/TimeNet``).
+        repo_url: The repository URL (e.g. ``https://github.com/OpenTSLM/TimeNet``).
         qualified: The dotted symbol path (e.g. ``timenet.client.TimeNet.load``).
 
     Returns:
@@ -372,7 +372,7 @@ def _enhance_html(config: dict) -> None:
             "description": description,
             "url": page_url,
             "image": image,
-            "author": {"@type": "Organization", "name": "AI-X-Labs", "url": "https://github.com/AI-X-Labs"},
+            "author": {"@type": "Organization", "name": "OpenTSLM", "url": "https://github.com/OpenTSLM"},
             "publisher": {"@type": "Organization", "name": name},
         }
         script = soup.new_tag("script", type="application/ld+json")
