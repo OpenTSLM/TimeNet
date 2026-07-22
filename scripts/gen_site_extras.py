@@ -248,16 +248,13 @@ def _load_griffe() -> dict:
     """Load the API packages with Griffe for source-location resolution.
 
     Returns:
-        A mapping of top-level package name to its loaded Griffe module; empty on failure.
+        A mapping of top-level package name to its loaded Griffe module.
     """
     search = [
         str(REPO_ROOT / "packages" / "timenet" / "src"),
         str(REPO_ROOT / "packages" / "timenet-connectors" / "src"),
     ]
-    try:
-        return {root: griffe.load(root, search_paths=search) for root in _API_ROOTS}
-    except Exception:  # best-effort: source links must never break the build
-        return {}
+    return {root: griffe.load(root, search_paths=search) for root in _API_ROOTS}
 
 
 def _source_url(index: dict, repo_url: str, qualified: str) -> str | None:
@@ -286,7 +283,7 @@ def _source_url(index: dict, repo_url: str, qualified: str) -> str | None:
     try:
         rel = Path(filepath).resolve().relative_to(REPO_ROOT)
     except ValueError:
-        return None
+        return None  # symbol inherited from a dependency: its source lives outside the repo, so no link
     anchor = f"#L{line}" if line else ""
     return f"{repo_url}/blob/main/{rel.as_posix()}{anchor}"
 

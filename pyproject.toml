@@ -18,6 +18,7 @@ dev = [
 docs = [
     "zensical",
     "mkdocstrings-python",
+    "griffe",
     "beautifulsoup4",
     "markdownify",
 ]
