@@ -78,7 +78,7 @@ dataclass built directly.
 ```python
 from timenet.types import DataSource
 
-DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
+DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme")
 ```
 
 | Field | Type | Required | Description |
@@ -98,22 +98,22 @@ axes. One spec is shared across every channel of a modality; the per-channel ide
 ```python
 from timenet.types import TimeSeriesSpec, ureg
 
-ecg_lead = TimeSeriesSpec(
-    spec_type="ecg_lead",
-    name="ECG Lead",
+vibration = TimeSeriesSpec(
+    spec_type="vibration",
+    name="Vibration",
     unit_sampling_rate=ureg.hertz,
     unit_timestamp=ureg.second,
-    unit_value=ureg.millivolt,
+    unit_value=ureg.standard_gravity,
 )
 ```
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `spec_type` | `str` | yes | Dataset-unique modality tag (e.g. `"ecg_lead"`). |
+| `spec_type` | `str` | yes | Dataset-unique modality tag (e.g. `"vibration"`). |
 | `name` | `str` | yes | Human-readable modality label. |
 | `unit_sampling_rate` | `pint.Unit` | yes | Must be a frequency, else `ValueError`. |
 | `unit_timestamp` | `pint.Unit` | yes | Must be a time, else `ValueError`. |
-| `unit_value` | `pint.Unit` | yes | Any unit (mV, g, bpm, dimensionless, ...). |
+| `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
 
 Connectors that reuse a modality can subclass with field defaults:
@@ -124,12 +124,12 @@ from dataclasses import dataclass
 import pint
 
 @dataclass(frozen=True)
-class ECGLead(TimeSeriesSpec):
-    spec_type: str = "ecg_lead"
-    name: str = "ECG Lead"
+class Vibration(TimeSeriesSpec):
+    spec_type: str = "vibration"
+    name: str = "Vibration"
     unit_sampling_rate: pint.Unit = ureg.hertz
     unit_timestamp: pint.Unit = ureg.second
-    unit_value: pint.Unit = ureg.millivolt
+    unit_value: pint.Unit = ureg.standard_gravity
 ```
 
 ---
@@ -150,7 +150,7 @@ reuse) and they round-trip without runtime class synthesis.
 
 | Class | Extra fields | Scope |
 | --- | --- | --- |
-| `StaticAnnotation` | `value` (required) | Whole sample, time-independent (age, sex, device, ticker). |
+| `StaticAnnotation` | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
 | `PointAnnotation` | `start_time_s`, `time_series_ids` | One instant, on specific signals or the whole sample. |
 | `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
 
@@ -163,22 +163,22 @@ annotation to those channels (each id must match a `TimeSeries.time_series_id` o
 from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
 
 # sample scope
-StaticAnnotation(key="age", value=64, unit="years")
+StaticAnnotation(key="operating_hours", value=1200, unit="hours")
 
 # time range on the whole sample (trial-level)
 IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
 
-# signal + time range: leads V1 and V2, seconds 5 to 6
+# signal + time range: the vibration and current channels, seconds 5 to 6
 IntervalAnnotation(
-    key="st_elevation",
-    value="ST elevation",
+    key="fault",
+    value="bearing fault",
     start_time_s=5.0,
     end_time_s=6.0,
-    time_series_ids=("lead_v1", "lead_v2"),
+    time_series_ids=("vibration", "current"),
 )
 
 # one instant on a single channel
-PointAnnotation(key="r_peak", start_time_s=4.2, time_series_ids=("lead_v1",))
+PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
 ```
 
 A connector that emits the same key repeatedly can subclass with field defaults:
@@ -187,9 +187,9 @@ A connector that emits the same key repeatedly can subclass with field defaults:
 from dataclasses import dataclass
 
 @dataclass(frozen=True, kw_only=True)
-class Age(StaticAnnotation):
-    key: str = "age"
-    unit: str | None = "years"
+class OperatingHours(StaticAnnotation):
+    key: str = "operating_hours"
+    unit: str | None = "hours"
 ```
 
 `annotation_type_of(ann)` returns the `AnnotationType` (`STATIC` / `POINT` / `INTERVAL`);
@@ -226,24 +226,24 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
 - `ClassificationTask`: one discrete label for the whole sample; `label_schema` names the
   vocabulary the label is drawn from (`None` for free-form).
   ```python
-  dataset.add_task(sample, ClassificationTask(label="afib", label_schema="AAMI"))
+  dataset.add_task(sample, ClassificationTask(label="faulty", label_schema="condition"))
   ```
 - `LabelingTask`: a label localized to specific signals and/or time windows: `time_series_ids`
   picks the channels (`None` = all), `windows_s` the spans (`None` = full duration).
   ```python
   dataset.add_task(sample, LabelingTask(
-      label="walking",
-      time_series_ids=(accel_x.time_series_id, accel_y.time_series_id),
+      label="fault_episode",
+      time_series_ids=(vibration.time_series_id, current.time_series_id),
       windows_s=((120.0, 480.0),),
   ))
   ```
 - `CaptioningTask`: free-form text describing the sample (no question).
   ```python
-  dataset.add_task(sample, CaptioningTask(answer="A 10-second sinus rhythm with one PVC."))
+  dataset.add_task(sample, CaptioningTask(answer="A 10-second vibration trace with a bearing-fault signature after 5 s."))
   ```
 - `QATask`: a question and its single-label answer.
   ```python
-  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="ST elevation in V2."))
+  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="A bearing fault on the vibration channel."))
   ```
 - `ForecastingTask`: predict a target sample from context samples.
   ```python
@@ -253,8 +253,8 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
   evaluation target; the `rationale` (chain of thought) is the training signal and is optional.
   ```python
   dataset.add_task(sample, ReasoningTask(
-      question="Does this ECG show atrial fibrillation?",
-      rationale="R-R intervals are irregularly irregular and no P waves precede the QRS complexes.",
+      question="Does this trace show a bearing fault?",
+      rationale="The vibration amplitude rises after 5 s with a periodic impact once per shaft revolution.",
       answer="Yes.",
   ))
   ```
@@ -266,10 +266,10 @@ The derived task records the chain it was built from, which is how a handful of 
 into many higher-level training samples:
 
 ```python
-base = dataset.add_task(sample, ClassificationTask(label="afib"))
+base = dataset.add_task(sample, ClassificationTask(label="faulty"))
 dataset.add_task(sample, ReasoningTask(
-    question="Is this recording normal?",
-    rationale="The rhythm is classified atrial fibrillation, which is abnormal.",
+    question="Is this machine healthy?",
+    rationale="The trace is classified faulty: a bearing fault is present.",
     answer="No.",
     from_tasks=(base,),
 ))
@@ -279,14 +279,14 @@ dataset.add_task(sample, ReasoningTask(
 
 An annotation is context; a task is a learning target. The same annotation can play either role:
 
-- As task input, the annotation is fed to the model as grounding. An `IntervalAnnotation` marking ST
-  elevation in lead V1 over seconds 5 to 6 supplies the detail a `QATask` or `ReasoningTask` question
-  builds on.
+- As task input, the annotation is fed to the model as grounding. An `IntervalAnnotation` marking a
+  bearing fault on the vibration channel over seconds 5 to 6 supplies the detail a `QATask` or
+  `ReasoningTask` question builds on.
 - As the task itself, the annotation's content becomes what the model must produce: a question about
-  what happens in lead V1 over that window, answered from the same `st_elevation` annotation.
+  what happens on that channel over that window, answered from the same `fault` annotation.
 
 Because annotations carry signal and time-range scope, one recording yields many targets: a
-whole-sample classification, per-lead labelings, windowed QA, and reasoning that composes them via
+whole-sample classification, per-channel labelings, windowed QA, and reasoning that composes them via
 `from_tasks`.
 
 ---

@@ -1,0 +1,7 @@
+flowchart LR
+    D["download()<br/><i>I/O · fetch raw refs</i>"]
+    C["convert()<br/><i>CPU · parallel, sharded</i>"]
+    S["derive_schema()<br/><i>types from data</i>"]
+    W["store()<br/><i>TimeFWriter</i>"]
+    R[("registry<br/>parquet + manifest.json")]
+    D --> C --> S --> W --> R

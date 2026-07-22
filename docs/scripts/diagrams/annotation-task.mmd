@@ -1,0 +1,9 @@
+flowchart LR
+    A["an annotation"]
+    C["a task that uses it as <b>context</b><br/><i>the model reads it</i>"]
+    T["a task that uses it as <b>target</b><br/><i>the model must produce it</i>"]
+    A -->|as context| C
+    A -->|as target| T
+    B["a base task<br/><i>a simple label</i>"]
+    R["a follow-up task<br/><i>from_tasks=(base,)</i>"]
+    B -->|builds on| R
