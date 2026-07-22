@@ -95,12 +95,9 @@ def _module_summary(source: Path) -> str:
         source: The module ``.py`` file or a package ``__init__.py``.
 
     Returns:
-        The cleaned first docstring line, or ``""`` if unavailable.
+        The cleaned first docstring line, or ``""`` if the module has no docstring.
     """
-    try:
-        tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, SyntaxError):
-        return ""
+    tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
     return _clean_summary(ast.get_docstring(tree))
 
 
@@ -113,10 +110,7 @@ def _has_dunder_all(init_file: Path) -> bool:
     Returns:
         True if ``__all__`` is assigned, else False.
     """
-    try:
-        tree = ast.parse(init_file.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, SyntaxError):
-        return False
+    tree = ast.parse(init_file.read_text(encoding="utf-8", errors="replace"))
     for node in tree.body:
         if isinstance(node, ast.Assign):
             targets = node.targets
