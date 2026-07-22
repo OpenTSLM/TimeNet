@@ -1,6 +1,6 @@
 ---
 icon: lucide/database
-description: "Registry backends that serve manifests and parquet to the SDK."
+description: "Registry backends that serve compiled TimeF versions to the SDK."
 tags:
   - guide
   - registry
@@ -8,9 +8,10 @@ tags:
 
 # Registry
 
-A registry serves compiled manifests and parquet to the SDK. It never runs connector code. Lives in
-`timenet.registry`. There can be several registries: one public, private internal ones, or a local
-directory (the output of [curation](curation.md) is itself a valid local registry).
+A registry serves compiled TimeF versions to the SDK: manifests and Parquet control tables plus a
+Parquet or Zarr values plane. It never runs connector code. Lives in `timenet.registry`. There can be
+several registries: one public, private internal ones, or a local directory (the output of
+[curation](curation.md) is itself a valid local registry).
 
 ## Choosing a registry
 

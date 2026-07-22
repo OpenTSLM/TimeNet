@@ -1,6 +1,6 @@
 """The registry contract and its shared search implementation.
 
-A registry serves compiled manifests and parquet; it never runs connector code. Concrete backends
+A registry serves compiled TimeF versions; it never runs connector code. Concrete backends
 implement the three data-access methods; :meth:`BaseRegistry.search` is shared, filtering
 :meth:`list_datasets` output and consulting :meth:`get_manifest` for the type-filters.
 """

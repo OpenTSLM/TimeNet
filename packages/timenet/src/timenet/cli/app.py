@@ -143,7 +143,7 @@ def download(
     registry: str | None = _registry_option,
     storage: str | None = typer.Option(None, "--storage", help="Local storage dir (else $TIMENET_STORAGE)."),
 ) -> None:
-    """Fetch a dataset's parquet to local storage. Prints the directory to stdout."""
+    """Fetch a complete TimeF version to local storage. Prints its directory to stdout."""
     target = TimeNet(registry, storage_path=storage).download(dataset_id, version)
     ui.success(f"Downloaded '{dataset_id}' ({target.name})")
     typer.echo(str(target))

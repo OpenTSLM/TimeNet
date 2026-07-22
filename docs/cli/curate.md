@@ -8,8 +8,9 @@ tags:
 # `timenet-curate`
 
 The producer command-line tool. It drives a [connector](../connectors.md) through the
-[curation pipeline](../curation.md) and writes a dataset-layout directory (a `manifest.json` plus its
-parquet) ready for a [registry](../registry.md). It ships with `timenet-connectors`, separate from the
+[curation pipeline](../curation.md) and writes a TimeF version directory (a `manifest.json`, Parquet
+control tables, and a Parquet or Zarr values plane) ready for a [registry](../registry.md). It ships
+with `timenet-connectors`, separate from the
 consumer [`timenet`](timenet.md) tool, and needs the `timenet[curation]` extra that
 `timenet-connectors` already pulls in.
 

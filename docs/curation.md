@@ -8,9 +8,10 @@ tags:
 
 # Curate & publish
 
-Curation turns a [connector](connectors.md)'s raw source into a stored dataset: a `manifest.json` plus
-its parquet, written into a [registry](registry.md). It runs on your machine and publishes to a local
-registry today, with a hosted backend planned. The command that drives it is
+Curation turns a [connector](connectors.md)'s raw source into a stored TimeF version: a `manifest.json`,
+Parquet control tables, and a Parquet or Zarr values plane, written into a [registry](registry.md). It
+runs on your machine and publishes to a local registry today, with a hosted backend planned. The
+command that drives it is
 [`timenet-curate build`](cli/curate.md); this page covers what happens underneath.
 
 ## The pipeline

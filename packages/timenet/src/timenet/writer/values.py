@@ -139,8 +139,7 @@ class BaseValuesBackend(ABC):
 
         Args:
             unique_series: The deduped, sorted series to serialize.
-            read_and_validate: Loads and validates one series' float32 values (the writer's contract
-                check).
+            read_and_validate: Loads and validates one series against its spec's values contract.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(files_finalized)`` after each value file closes.
 

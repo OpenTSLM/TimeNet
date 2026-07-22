@@ -20,9 +20,10 @@ API.
 
 ![TimeNet architecture diagram](assets/architecture.svg)
 
-A [connector](connectors.md) turns a raw source into a manifest plus parquet and publishes it to
-a [registry](registry.md). The [client](client.md) reads the manifest from the registry and loads
-the data. The client never runs connector code.
+A [connector](connectors.md) turns a raw source into a TimeF version and publishes it to a
+[registry](registry.md). TimeF keeps its control plane in Parquet and stores series values in either
+Parquet or Zarr. The [client](client.md) reads the manifest from the registry and loads the data. The
+client never runs connector code.
 
 - [`BaseConnector`](connectors.md) is the only contract a new data source must satisfy.
 - [`TimeFDataset`](timef-dataset.md) is the in-memory model a connector populates during `convert()`.
