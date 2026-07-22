@@ -4,22 +4,17 @@
 /* ---- "Planned" admonition ---------------------------------------------
    zensical.toml declares the icon, which the theme injects as
    --md-admonition-icon--planned. It ships styling only for its own twelve
-   admonition types, so a custom one supplies its own colors. */
+   admonition types, so a custom one supplies its own colors. Only the static
+   `!!! planned` form is used; the collapsible `??? planned` rules are omitted. */
 
-.md-typeset .admonition.planned,
-.md-typeset details.planned {
+.md-typeset .admonition.planned {
   background-color: var(--md-default-fg-color--lightest);
 }
 
-.md-typeset .planned > .admonition-title::before,
-.md-typeset .planned > summary::before {
+.md-typeset .planned > .admonition-title::before {
   background-color: var(--md-default-fg-color--light);
   -webkit-mask-image: var(--md-admonition-icon--planned);
   mask-image: var(--md-admonition-icon--planned);
-}
-
-.md-typeset .planned > summary::after {
-  color: var(--md-default-fg-color--light);
 }
 
 .sr-only,
