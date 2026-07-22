@@ -186,7 +186,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         if not answers_path.exists():
             self._stream_download(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)
         answers = _load_template_answers(answers_path)
-        cot_root = self._ensure_archive(ECG_QA_COT_URL, cache_dir, sentinel="ecg_qa_cot_final.zip")
+        cot_root = self._ensure_archive(ECG_QA_COT_URL, cache_dir, sentinel="ecg-qa-cot-extracted")
 
         refs: list[EcgQaCotRef] = []
         for split, csv_name in self._COT_CSVS:
