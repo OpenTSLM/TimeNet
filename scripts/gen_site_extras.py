@@ -280,10 +280,10 @@ def _source_url(index: dict, repo_url: str, qualified: str) -> str | None:
         return None
     if filepath is None:
         return None
-    try:
-        rel = Path(filepath).resolve().relative_to(REPO_ROOT)
-    except ValueError:
+    resolved = Path(filepath).resolve()
+    if REPO_ROOT not in resolved.parents:
         return None  # symbol inherited from a dependency: its source lives outside the repo, so no link
+    rel = resolved.relative_to(REPO_ROOT)
     anchor = f"#L{line}" if line else ""
     return f"{repo_url}/blob/main/{rel.as_posix()}{anchor}"
 
