@@ -38,7 +38,7 @@ def _default_root() -> Path:
         ``$TIMENET_REGISTRY`` when it names a local directory, else ``<home>/registry``.
 
     Raises:
-        BadParameter: If ``$TIMENET_REGISTRY`` names a remote registry, which cannot be built into.
+        BadParameter: If ``$TIMENET_REGISTRY`` cannot be resolved to a local output directory.
     """
     cfg = settings()
     if cfg.registry is None:
@@ -46,7 +46,7 @@ def _default_root() -> Path:
     try:
         return local_registry_path(cfg.registry)
     except RegistryError as exc:
-        raise typer.BadParameter(f"$TIMENET_REGISTRY {cfg.registry!r} is remote; pass --out <dir>") from exc
+        raise typer.BadParameter(f"$TIMENET_REGISTRY: {exc}; pass --out <dir>") from exc
 
 
 @app.command()
