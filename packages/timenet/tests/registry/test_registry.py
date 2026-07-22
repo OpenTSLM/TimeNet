@@ -97,6 +97,12 @@ def test_local_registry_path_rejects_remote(uri):
         local_registry_path(uri)
 
 
+@pytest.mark.parametrize(("uri", "match"), [("file://host/reg", "three slashes"), ("file://", "absolute path")])
+def test_local_registry_path_rejects_malformed_file_uri(uri, match):
+    with pytest.raises(RegistryError, match=match):
+        local_registry_path(uri)
+
+
 # ---- list / get / open ------------------------------------------------------------------------
 
 

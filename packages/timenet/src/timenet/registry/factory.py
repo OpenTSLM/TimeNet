@@ -84,11 +84,19 @@ def local_registry_path(uri: str | Path) -> Path:
         The local directory the URI names, with ``~`` expanded.
 
     Raises:
-        RegistryError: If the URI names a remote backend, which curation cannot write to.
+        RegistryError: If the URI names a remote backend or carries an unsupported scheme, which
+            curation cannot write to.
     """
     text = str(uri)
     if text.startswith(_REMOTE_SCHEMES):
         raise RegistryError(f"registry {text!r} is remote; curation writes to a local directory")
     if text.startswith("file://"):
-        return Path(urlparse(text).path).expanduser()
+        parsed = urlparse(text)
+        if parsed.netloc:
+            raise RegistryError(f"file:// registry URI must be absolute (three slashes), got {text!r}")
+        if not parsed.path:
+            raise RegistryError("file:// registry URI must name an absolute path")
+        return Path(url2pathname(parsed.path)).expanduser()
+    if "://" in text:
+        raise RegistryError(f"unsupported registry scheme in {text!r}")
     return Path(text).expanduser()
