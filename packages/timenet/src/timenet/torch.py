@@ -20,10 +20,11 @@ from timenet.types import Task
 class TimeFTorchDataset(Dataset):
     """Exposes a dataset's samples as a map-style ``torch.utils.data.Dataset``.
 
-    ``__getitem__`` returns a dict with the sample's ``series`` as float32 tensors (one per channel),
-    its ``sample_id``, its resolved ``tasks``, and its ``annotations``. Pass ``transform`` to reshape
-    items into whatever a model expects. Series lengths may vary between samples, so a ``DataLoader``
-    that batches them needs a custom ``collate_fn`` (or ``batch_size=1``).
+    ``__getitem__`` returns a dict with the sample's ``series`` as dtype-preserving tensors shaped
+    ``(n_steps, *value_shape)``, its ``sample_id``, its resolved ``tasks``, and its ``annotations``.
+    Pass ``transform`` to reshape items into whatever a model expects. Series lengths or trailing
+    shapes may vary between samples, so a ``DataLoader`` that batches them needs a custom
+    ``collate_fn`` (or ``batch_size=1``).
     """
 
     def __init__(self, dataset: TimeFDataset, *, transform: Callable[[dict[str, Any]], Any] | None = None) -> None:

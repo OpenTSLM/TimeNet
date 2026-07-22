@@ -1,4 +1,4 @@
-"""Dataset registries: serve manifests and parquet, and search over metadata."""
+"""Dataset registries: serve compiled TimeF versions and search over metadata."""
 
 from timenet.registry.base import BaseRegistry
 from timenet.registry.factory import (

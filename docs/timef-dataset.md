@@ -15,7 +15,7 @@ objects. No I/O: persistence is the [`TimeFWriter`](timef-writer.md) concern. Li
 
 ## TimeSeries
 
-Reference to one channel of time-series data, with optional windowing and a lazy Arrow loader.
+Reference to one logical stream of time-series data, with optional windowing and a lazy Arrow loader.
 
 ```python
 from timenet.dataset import TimeSeries
@@ -24,7 +24,7 @@ TimeSeries(
     spec=vibration,           # a TimeSeriesSpec (the modality)
     channel="axial",          # the channel this series carries
     sampling_rate_hz=500.0,
-    loader=load_axial,        # Callable[[], pa.Array] returning float32 values
+    loader=load_axial,        # Callable[[], pa.Array] matching the spec's dtype and value_shape
     source_id="rec_001",      # optional
     t_start_s=0.0,
     t_end_s=None,             # None = to end of source
@@ -34,7 +34,7 @@ TimeSeries(
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `spec` | `TimeSeriesSpec` | yes | The modality (shared across channels). |
-| `channel` | `str` | yes | The single channel this series carries (e.g. `"axial"`). |
+| `channel` | `str` | yes | The logical stream name (e.g. `"axial"` or `"rgb_frames"`). |
 | `sampling_rate_hz` | `float` | yes | Sampling rate in canonical Hz; positive and finite. |
 | `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning scalar values or an Arrow fixed-shape tensor array. |
 | `source_id` | `str \| None` | no | Identifier of the raw recording this series came from. |
@@ -64,7 +64,7 @@ via `TimeFDataset.add_sample`.
 | Field | Type | Description |
 | --- | --- | --- |
 | `sample_id` | `str` | Auto uuid7 (or explicit, for deterministic output). |
-| `time_series` | `tuple[TimeSeries, ...]` | One `TimeSeries` per channel. |
+| `time_series` | `tuple[TimeSeries, ...]` | The sample's logical streams. |
 | `view` | `View` | Which slice of the source this sample represents. |
 | `subject_ids` | `tuple[str, ...]` | Subjects (empty for subject-less domains). |
 | `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |

@@ -1,11 +1,10 @@
 """Writer-side values backends: pluggable storage for the time-series values plane.
 
-The values plane (the float32 waveform of every series) is the one part of a TimeF version whose
-on-disk representation is swappable. Everything else — samples, annotations, tasks, and the
-time-series *index* that locates each chunk — is backend-agnostic. A :class:`ValuesBackend` takes the
-deduped, sorted series and writes their values however it likes, returning a generic
-:class:`ChunkPlacement` per chunk plus the list of value files to record in the manifest. The core
-writer stays ignorant of shards, row groups, or arrays.
+The values plane is the one part of a TimeF version whose on-disk representation is swappable.
+Everything else — samples, annotations, tasks, and the time-series *index* that locates each chunk —
+is backend-agnostic. A :class:`ValuesBackend` takes the deduped, sorted series and writes their values
+however it likes, returning a generic :class:`ChunkPlacement` per chunk plus the list of value files to
+record in the manifest. The core writer stays ignorant of shards, row groups, or arrays.
 
 The default :class:`ParquetValuesBackend` streams ``list<float32>`` chunks into rotating Parquet shards
 (BYTE_STREAM_SPLIT + zstd).
@@ -148,8 +147,7 @@ class ValuesBackend(Protocol):
 
         Args:
             unique_series: The deduped, sorted series to serialize.
-            read_and_validate: Loads and validates one series' float32 values (the writer's contract
-                check).
+            read_and_validate: Loads and validates one series against its spec's values contract.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(files_finalized)`` after each value file closes.
 

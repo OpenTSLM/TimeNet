@@ -20,7 +20,8 @@ with TimeFReader(version_dir) as reader:
     values = dataset.samples[0].time_series[0].to_arrow()
 ```
 
-Use it as a context manager: `close()` (called by `__exit__`) closes the cached shard file handles.
+Use it as a context manager: `close()` (called by `__exit__`) releases the selected values backend's
+open handles and decoded-chunk caches.
 
 ## What is eager vs lazy
 
@@ -40,11 +41,12 @@ field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
 
 ## Value reads
 
-A series' loader resolves its index rows (sorted by `chunk_idx`). For Parquet, `chunk_file`,
-`chunk_offset0`, and `chunk_offset1` identify the shard, row group, and row offset. Chunks become one
-Arrow array. Scalars use a primitive Arrow array; N-D values use `pa.FixedShapeTensorArray`, whose
-length is the number of timesteps. `to_numpy()` is the explicit framework conversion. Range-aware
-read-back loaders select only the requested temporal chunks before constructing Arrow. Handles and
+A series' loader resolves its index rows (sorted by `chunk_idx`) and dispatches through the manifest's
+`values_backend`. For Parquet, `chunk_file`, `chunk_offset0`, and `chunk_offset1` identify the shard,
+row group, and row offset. For Zarr, they identify the array path and temporal start offset. Scalars
+use a primitive Arrow array; N-D values use `pa.FixedShapeTensorArray`, whose length is the number of
+timesteps. `to_numpy()` is the explicit framework conversion and preserves the spec's dtype and
+trailing shape. Range-aware reads select only the requested temporal chunks. Parquet handles and Zarr
 decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 ## API
@@ -53,21 +55,24 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 | --- | --- |
 | `read()` | Materialize the full `TimeFDataset`. |
 | `iter_samples()` | Yield each `Sample` lazily. |
-| `metadata` / `schema` / `tasks` | The reconstructed metadata, schema, and tasks. |
+| `verify()` | Hash every manifest-listed artifact and reject missing or mismatched content. |
+| `metadata` / `schema` / `tasks` / `values_backend` | Reconstructed metadata, schema, tasks, and selected values backend. |
 
 ## Errors
 
 `__init__` raises `FileNotFoundError` if `root`, its `manifest.json`, or any file the manifest lists is
-missing, and `InvalidManifestError` (a `TimeFFormatError`) for a malformed or unsupported-version
-manifest. Every id cross-reference (annotation, `from_task`, spec type, index lookup) raises a located
-`ValueError` naming the offending id.
+missing. A malformed or unsupported manifest, unreadable table, or disagreement between stored data
+and its manifest raises `TimeFFormatError` (with `InvalidManifestError` for manifest parsing itself).
+Lazy value-read failures retain their series context. `verify()` raises `TimeFFormatError` when a
+checksummed artifact is missing or its content does not match the manifest.
 
 ## Round-trip guarantee
 
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every sample's
 `sample_id`, `view`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
-`source_id`, `time_series_id`, window, and exact `float32` values; and each task's payload and resolved
-`from_tasks`. `TimeSeries` object identity is not preserved. `time_series_id` is the durable handle.
+`source_id`, `time_series_id`, window, and exact dtype/shape-preserving values; and each task's payload
+and resolved `from_tasks`. `TimeSeries` object identity is not preserved. `time_series_id` is the
+durable handle.
 
 ---
 

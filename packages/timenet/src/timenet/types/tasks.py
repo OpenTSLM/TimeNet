@@ -129,7 +129,7 @@ class ForecastingTask(Task):
 class ReasoningTask(Task):
     """A question answered by reasoning to a final answer. Often composed via ``from_tasks``.
 
-    Unlike :class:`QATask` (single-label answer), a reasoning task carries the chain of thought in
+    Unlike :class:`QATask` (question plus text answer), a reasoning task carries the chain of thought in
     ``rationale``. The ``answer`` is the evaluation target; the ``rationale`` is the reasoning trace to
     train / fine-tune on (``None`` when the source has no stored rationale).
     """

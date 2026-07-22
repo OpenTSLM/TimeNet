@@ -48,7 +48,7 @@ class TimeFDataset:
         """Create a sample, register it, and return it.
 
         Args:
-            time_series: One :class:`TimeSeries` per channel the sample uses.
+            time_series: The logical :class:`TimeSeries` streams the sample uses.
             view: Which slice of the source this sample represents.
             subject_ids: Subjects this sample belongs to (empty for subject-less domains).
             sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic

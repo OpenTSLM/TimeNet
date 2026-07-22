@@ -1,4 +1,4 @@
-"""The :class:`TimeSeries` reference type: one channel of values with a lazy Arrow loader."""
+"""The :class:`TimeSeries` reference type: one logical stream with a lazy Arrow loader."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -13,17 +13,17 @@ from timenet.types import TimeSeriesSpec, new_id
 
 @dataclass(frozen=True, eq=False, kw_only=True)
 class TimeSeries:
-    """Reference to one channel of time-series data, with optional windowing and a lazy loader.
+    """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
     Identity-based equality (``eq=False``): the writer dedupes by ``time_series_id``, not by value, so
     reusing one instance across samples (or giving two instances the same explicit id) shares one chunk
     on disk. Consumers read values through :meth:`to_arrow` / :meth:`to_numpy`; ``loader`` is plumbing
     supplied by the connector (raw source) at curation or by :class:`~timenet.reader.TimeFReader`
-    (shard parquet) on read-back.
+    (the manifest-selected values backend) on read-back.
     """
 
     spec: TimeSeriesSpec
-    """Measurement-modality contract: type tag, name, and axis units."""
+    """Measurement-modality contract: type tag, units, dtype, and per-timestep shape."""
     channel: str
     """Name of this channel within the modality; must be non-empty."""
     sampling_rate_hz: float
@@ -59,7 +59,7 @@ class TimeSeries:
         """Read the series' values as an Arrow array.
 
         Returns:
-            The series' 1-D Arrow array of values, produced by ``loader``.
+            A primitive array for scalar values or a fixed-shape tensor array for N-D values.
         """
         return self.loader()
 

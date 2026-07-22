@@ -16,9 +16,10 @@ the [reader](timef-reader.md) reads it first. Lives in `timenet.manifest`.
 Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors, the manifest's
 `schema` block is a direct serialization of it. There are no separate "entry" types to keep in sync.
 
-The on-disk shape is pinned by `manifest.schema.json` (JSON Schema draft 2020-12), the formal
-contract for external consumers. It ships in the `timenet` package (`timenet.schemas.MANIFEST_SCHEMA`);
-a test validates `to_dict()` output against it. Registries will serve it alongside their datasets.
+The on-disk shape is pinned by the packaged `manifest.schema.json` (JSON Schema draft 2020-12), the
+formal contract for external consumers. It is published as
+[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and available in
+Python as `timenet.schemas.MANIFEST_SCHEMA`; a test validates `to_dict()` output against it.
 
 ---
 
@@ -44,7 +45,7 @@ Manifest(
 `id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as `binary(16)`;
 an absent entry means that id is a UTF-8 string. `values_backend` names the
 [values backend](timef-writer.md#values-backends) that wrote `files.time_series`; the reader dispatches
-on it, and a manifest without the key reads as `"parquet"`. `derived_from` is set only on a version
+on it, and a format-v2 manifest without the key reads as `"parquet"`. `derived_from` is set only on a version
 produced by a [copy-on-write edit](timef-writer.md#copy-on-write-edits).
 
 The backend-neutral values locator schema introduced in format v2 applies to both scalar and

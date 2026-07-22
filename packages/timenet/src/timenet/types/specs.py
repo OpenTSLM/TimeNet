@@ -1,6 +1,6 @@
 """Modality and data-source descriptors.
 
-A :class:`TimeSeriesSpec` describes one measurement *modality* (its type tag, display name, and units)
+A :class:`TimeSeriesSpec` describes one measurement *modality* (its tag, units, dtype, and value shape)
 and a :class:`DataSource` the origin that produced it. Both are flat frozen dataclasses: connectors
 build them directly (or subclass with field defaults for reuse), and :class:`~timenet.reader.TimeFReader`
 reconstructs the identical instances from the manifest, so they round-trip and pickle without any
@@ -37,7 +37,7 @@ class DataSource:
 
 @dataclass(frozen=True)
 class TimeSeriesSpec:
-    """The contract for a measurement modality: type tag, name, and the units of its axes."""
+    """The contract for a measurement modality: identity, units, dtype, and per-timestep shape."""
 
     spec_type: str
     """Type tag identifying the modality; used to filter datasets by spec type."""

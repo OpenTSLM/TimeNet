@@ -1,9 +1,9 @@
-"""Reader-side values backends: resolve a series' index rows into its concatenated float32 values.
+"""Reader-side values backends: resolve a series' index rows into its canonical Arrow values.
 
 The inverse of :mod:`timenet.writer.values`. A :class:`ValuesReader` takes the index rows for one series
-(sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns the series' 1-D float32
-Arrow array. The :class:`TimeFReader` picks the backend from the manifest's ``values_backend`` tag and
-never imports a specific storage library itself.
+(sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns a primitive or
+fixed-shape tensor Arrow array matching the spec. :class:`TimeFReader` picks the backend from the
+manifest's ``values_backend`` tag and never imports a specific storage library itself.
 """
 
 from collections import OrderedDict
@@ -32,7 +32,7 @@ class ValuesReader(Protocol):
                 ``chunk_offset0``, and ``chunk_offset1``.
 
         Returns:
-            The series' 1-D float32 values.
+            The series values in the spec's canonical Arrow representation.
         """
         ...
 
@@ -82,7 +82,7 @@ class ParquetValuesReader:
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
-            The series' 1-D float32 values.
+            The series' scalar float32 values.
         """
         del spec  # Parquet is scalar float32-only in this format version.
         chunks = [

@@ -91,9 +91,9 @@ DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acm
 
 ## TimeSeriesSpec
 
-The contract for a measurement **modality**: its type tag, display name, and the units of its three
-axes. One spec is shared across every channel of a modality; the per-channel identifier lives on
-[`TimeSeries.channel`](timef-dataset.md), not here.
+The contract for a measurement **modality**: its type tag, display name, axis units, scalar dtype, and
+per-timestep shape. One spec is shared across every logical stream of a modality; the stream identifier
+lives on [`TimeSeries.channel`](timef-dataset.md), not here.
 
 ```python
 from timenet.types import TimeSeriesSpec, ureg
@@ -115,6 +115,14 @@ vibration = TimeSeriesSpec(
 | `unit_timestamp` | `pint.Unit` | yes | Must be a time, else `ValueError`. |
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
+| `dtype` | `str` | no | Canonical NumPy scalar dtype; defaults to `"float32"`. |
+| `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time; `()` means scalar. |
+| `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
+
+The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
+`dtype="uint8"`, `value_shape=(height, width, 3)`, and
+`dimension_names=("height", "width", "color")`. Parquet values currently require the scalar
+`float32` defaults; select the Zarr values backend for other dtypes or multidimensional values.
 
 Connectors that reuse a modality can subclass with field defaults:
 
@@ -228,8 +236,9 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
   ```python
   dataset.add_task(sample, ClassificationTask(label="faulty", label_schema="condition"))
   ```
-- `LabelingTask`: a label localized to specific signals and/or time windows: `time_series_ids`
-  picks the channels (`None` = all), `windows_s` the spans (`None` = full duration).
+- `LabelingTask`: predict a label for supplied signals and/or time windows: `time_series_ids` picks
+  the streams (`None` = all), `windows_s` the spans (`None` = full duration). The region is part of
+  the task input contract; finding an unknown region is not represented by this task type.
   ```python
   dataset.add_task(sample, LabelingTask(
       label="fault_episode",
@@ -241,7 +250,7 @@ resolved on read against `TASKS`, not reconstructed from the manifest.
   ```python
   dataset.add_task(sample, CaptioningTask(answer="A 10-second vibration trace with a bearing-fault signature after 5 s."))
   ```
-- `QATask`: a question and its single-label answer.
+- `QATask`: a question and its text answer; the answer need not be a categorical label.
   ```python
   dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", answer="A bearing fault on the vibration channel."))
   ```
@@ -277,13 +286,19 @@ dataset.add_task(sample, ReasoningTask(
 
 ### Annotations vs tasks
 
-An annotation is context; a task is a learning target. The same annotation can play either role:
+An annotation is sample-level information; a task is a learning target. A connector can use the same
+source annotation in either role:
 
 - As task input, the annotation is fed to the model as grounding. An `IntervalAnnotation` marking a
   bearing fault on the vibration channel over seconds 5 to 6 supplies the detail a `QATask` or
   `ReasoningTask` question builds on.
-- As the task itself, the annotation's content becomes what the model must produce: a question about
-  what happens on that channel over that window, answered from the same `fault` annotation.
+- To derive a task target, the connector copies the relevant information into the task payload: for
+  example, a question about what happens on the vibration channel over that window can be answered
+  from the source `fault` annotation.
+
+TimeF does not currently mark each attached annotation as input or target for an individual task.
+Training adapters must therefore avoid passing a target-derived annotation back to the model as
+context, which would leak the answer.
 
 Because annotations carry signal and time-range scope, one recording yields many targets: a
 whole-sample classification, per-channel labelings, windowed QA, and reasoning that composes them via

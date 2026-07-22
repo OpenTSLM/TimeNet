@@ -15,7 +15,7 @@ class Sample:
     """
 
     time_series: tuple[TimeSeries, ...]
-    """One :class:`TimeSeries` per channel the sample uses."""
+    """The logical :class:`TimeSeries` streams the sample uses."""
     view: View
     """Which slice of the source this sample represents."""
     sample_id: str = field(default_factory=new_id)
