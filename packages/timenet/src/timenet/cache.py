@@ -72,7 +72,9 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
         include_registry: Also remove the local registry.
 
     Returns:
-        A ``(bytes_freed, removed_dirs)`` pair.
+        A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone by the time
+        this returns: a tree that cannot be fully removed raises an ``OSError`` rather than letting the
+        caller report space that was never freed.
     """
     config = settings()
     targets = [config.storage_dir, config.cache_dir]
@@ -94,21 +96,27 @@ def _delete_and_measure(path: Path) -> int:
     Sizing then :func:`shutil.rmtree` would walk every file twice; here the single file pass both
     measures and unlinks, leaving :func:`shutil.rmtree` only the empty directory skeleton to remove.
 
+    An unreadable directory or a failed removal raises an ``OSError``.
+
     Args:
         path: The directory to delete.
 
     Returns:
         The total size in bytes of the files removed.
     """
+
+    def fail(error: OSError) -> None:
+        raise error  # os.walk otherwise skips a directory it cannot read, silently leaving it behind
+
     freed = 0
-    for parent, _dirs, files in os.walk(path, topdown=False):  # os.walk: Path.walk is 3.12+
+    for parent, _dirs, files in os.walk(path, topdown=False, onerror=fail):  # os.walk: Path.walk is 3.12+
         parent_dir = Path(parent)
         for name in files:
             entry = parent_dir / name
-            if entry.is_file():
-                freed += entry.stat().st_size
-            entry.unlink()
-    shutil.rmtree(path, ignore_errors=True)
+            # lstat: a symlink counts as itself, not as its (possibly huge, possibly external) target.
+            freed += entry.lstat().st_size
+            entry.unlink(missing_ok=True)  # a concurrent build may have removed it between walk and unlink
+    shutil.rmtree(path)
     return freed
 
 
@@ -135,4 +143,4 @@ def _scan(root: Path, location: str) -> list[CachedDataset]:
 
 def _dir_size(path: Path) -> int:
     """Return the total size in bytes of all files under a directory."""
-    return sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
+    return sum(entry.lstat().st_size for entry in path.rglob("*") if not entry.is_dir())

@@ -61,7 +61,9 @@ def run_pipeline(
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
     store_dataset(dataset, root, progress_cb=progress_cb)
-    if clean_cache and cache.is_dir():
+    # Only clean a cache we created ourselves; a caller-supplied cache_dir is user-owned, never ours to
+    # delete.
+    if clean_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version_dir
 

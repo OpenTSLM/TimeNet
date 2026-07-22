@@ -68,3 +68,17 @@ def test_clear_all_removes_registry_too(_home):
     _write(_home / "registry")
     clear_cache(include_registry=True)
     assert not (_home / "registry").exists()
+
+
+def test_clear_sizes_a_symlink_as_the_link_not_its_target(_home, tmp_path):
+    target = tmp_path / "big.bin"
+    target.write_bytes(b"x" * 10_000)
+    cache = _home / "cache"
+    cache.mkdir(parents=True)
+    (cache / "link.bin").symlink_to(target)
+
+    freed, _ = clear_cache(include_registry=False)
+
+    assert freed < 10_000  # counted the link itself, never followed it to the 10 KB target
+    assert target.exists()  # the external target is left untouched
+    assert not cache.exists()
