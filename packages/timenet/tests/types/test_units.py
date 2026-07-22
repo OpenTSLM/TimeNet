@@ -37,9 +37,9 @@ def test_import_does_not_touch_the_application_registry():
 
 def test_use_as_application_registry_is_opt_in_and_works():
     # The escape hatch for bare pint.Unit / Quantity pickling, which no per-type __getstate__ covers.
-    import pickle
+    import pickle  # noqa: PLC0415
 
-    from timenet.types import use_as_application_registry
+    from timenet.types import use_as_application_registry  # noqa: PLC0415
 
     previous = pint.get_application_registry().get()
     try:

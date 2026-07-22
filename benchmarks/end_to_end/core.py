@@ -187,7 +187,7 @@ def capabilities() -> dict[str, bool]:
     Returns:
         Flags for selectable Zarr storage and rich dtype/N-D specs.
     """
-    from timenet.types import TimeSeriesSpec
+    from timenet.types import TimeSeriesSpec  # noqa: PLC0415
 
     try:
         values_backends = importlib.import_module("timenet.values_backends")

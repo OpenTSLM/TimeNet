@@ -130,18 +130,18 @@ class DatasetMetadata:
             InvalidCardError: If the curation extra is missing, or the card is unreadable, is not a
                 mapping, fails schema validation, or has an invalid field value.
         """
-        from timenet.errors import InvalidCardError
+        from timenet.errors import InvalidCardError  # noqa: PLC0415
 
         card_path = Path(path)
         try:
-            import jsonschema
-            import yaml
+            import jsonschema  # noqa: PLC0415
+            import yaml  # noqa: PLC0415
         except ModuleNotFoundError as exc:
             raise InvalidCardError(
                 "reading a dataset card needs PyYAML and jsonschema; install the 'timenet[curation]' extra"
             ) from exc
 
-        from timenet.schemas import DATASET_CARD_SCHEMA
+        from timenet.schemas import DATASET_CARD_SCHEMA  # noqa: PLC0415
 
         try:
             raw = yaml.safe_load(card_path.read_text(encoding="utf-8"))

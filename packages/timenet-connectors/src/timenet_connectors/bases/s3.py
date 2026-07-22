@@ -29,9 +29,9 @@ def _s3_client() -> Any:
         ImportError: If ``boto3`` (the ``physionet`` extra) is not installed.
     """
     try:
-        import boto3
-        from botocore import UNSIGNED
-        from botocore.config import Config
+        import boto3  # noqa: PLC0415
+        from botocore import UNSIGNED  # noqa: PLC0415
+        from botocore.config import Config  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError(
             "downloading from S3 needs the physionet extra: pip install 'timenet-connectors[physionet]'"

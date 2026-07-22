@@ -68,7 +68,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             ImportError: If ``requests`` (pulled by the ``physionet`` extra) is not installed.
         """
         try:
-            import requests
+            import requests  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - exercised via the wfdb-missing path
             raise ImportError(
                 "downloading from PhysioNet needs the physionet extra: pip install 'timenet-connectors[physionet]'"
@@ -90,7 +90,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             ImportError: If ``wfdb`` (the ``physionet`` extra) is not installed.
         """
         try:
-            import wfdb
+            import wfdb  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
                 "reading PhysioNet records needs the physionet extra: pip install 'timenet-connectors[physionet]'"

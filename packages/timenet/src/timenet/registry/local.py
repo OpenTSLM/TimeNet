@@ -72,7 +72,7 @@ class LocalRegistry(WritableRegistry):
             TimeFFormatError: If the stored manifest's own dataset id disagrees with the directory it
                 was loaded from (a misplaced or corrupt artifact).
         """
-        resolved = self._latest_version(dataset_id) if version in (None, "", "latest") else version
+        resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
         if resolved is None:
             known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
             raise DatasetNotFoundError(

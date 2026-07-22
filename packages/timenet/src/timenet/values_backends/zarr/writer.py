@@ -75,7 +75,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         self._cname = config.compression if config.compression in _BLOSC_CNAMES else "zstd"
         self._clevel = config.compression_level
 
-    def write_series(
+    def write_series(  # noqa: PLR0914
         self,
         unique_series: list[TimeSeries],
         *,
@@ -98,8 +98,8 @@ class ZarrValuesBackend(BaseValuesBackend):
             ImportError: If the ``zarr`` extra is not installed.
         """
         try:
-            import zarr
-            from zarr.codecs import BloscCname, BloscCodec, BloscShuffle
+            import zarr  # noqa: PLC0415
+            from zarr.codecs import BloscCname, BloscCodec, BloscShuffle  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             raise ImportError("the zarr values backend needs the zarr extra: pip install 'timenet[zarr]'") from exc
 

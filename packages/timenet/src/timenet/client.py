@@ -104,7 +104,7 @@ class TimeNet:
         dataset_id, version = _resolve_ref(dataset_id, version)
         return self._registry.get_manifest(dataset_id, version)
 
-    def search(
+    def search(  # noqa: PLR0913
         self,
         *,
         query: _OrList[str] = None,
@@ -210,7 +210,7 @@ class TimeNet:
         Returns:
             A :class:`~timenet.torch.TimeFTorchDataset` over the loaded dataset.
         """
-        from timenet.torch import TimeFTorchDataset
+        from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
         return TimeFTorchDataset(self.load(dataset_id, version))
 

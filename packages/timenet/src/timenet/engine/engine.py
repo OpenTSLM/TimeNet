@@ -11,7 +11,7 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
-def run_pipeline(
+def run_pipeline(  # noqa: PLR0913
     connector: BaseConnector,
     root: Path,
     *,

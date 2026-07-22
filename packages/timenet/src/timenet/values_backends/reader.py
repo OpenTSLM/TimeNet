@@ -61,11 +61,11 @@ def make_values_reader(name: str) -> BaseValuesReader:
         TimeFValidationError: If ``name`` is not a known backend.
     """
     if name == ValuesBackend.PARQUET:
-        from timenet.values_backends.parquet.reader import ParquetValuesReader
+        from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
 
         return ParquetValuesReader()
     if name == ValuesBackend.ZARR:
-        from timenet.values_backends.zarr.reader import ZarrValuesReader
+        from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
 
         return ZarrValuesReader()
     raise TimeFValidationError(

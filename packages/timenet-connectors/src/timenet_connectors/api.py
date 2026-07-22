@@ -35,10 +35,10 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     Raises:
         TimeFValidationError: If ``version`` is set and does not match the connector's declared version.
     """
-    from timenet.engine import run_pipeline
-    from timenet.errors import TimeFValidationError
-    from timenet.registry import default_registry_path
-    from timenet_connectors.discovery import resolve
+    from timenet.engine import run_pipeline  # noqa: PLC0415
+    from timenet.errors import TimeFValidationError  # noqa: PLC0415
+    from timenet.registry import default_registry_path  # noqa: PLC0415
+    from timenet_connectors.discovery import resolve  # noqa: PLC0415
 
     connector = resolve(dataset_id)()
     if version is not None:
@@ -65,7 +65,7 @@ def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
     Returns:
         The loaded dataset.
     """
-    from timenet.client import TimeNet
+    from timenet.client import TimeNet  # noqa: PLC0415
 
     build(dataset_id, version=version)
     return TimeNet().load(dataset_id, version)

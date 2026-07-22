@@ -57,6 +57,7 @@ select = [
     "S",      # flake8-bandit — security issues
     "D",      # pydocstyle — docstring presence and formatting
     "DOC",    # pydoclint — args/returns match signatures
+    "PL",     # Pylint — error/warning/convention rules (opinionated metrics dropped in `ignore`)
 ]
 ignore = [
     "E501",  # Line too long — handled by the formatter
@@ -70,7 +71,9 @@ ignore = [
 # Pytest uses bare asserts by design; token-like literals in tests are fixtures.
 # Don't require docstrings for test modules and functions. Pickle round-trips are intentional
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG"]
+# Tests legitimately import private helpers to exercise them, assert self-equality, compare to "",
+# call context-manager dunders directly, and compare against literal fixture values.
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 
