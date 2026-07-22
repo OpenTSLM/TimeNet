@@ -36,7 +36,7 @@ Manifest(
     checksums={},               # relpath -> "sha256:..." (default: empty)
     id_encoding={},             # logical id -> "uuid16" (absent => stored as string)
     derived_from=None,          # copy-on-write lineage, e.g. {"dataset_version": "1.0.0", "op": ...}
-    timef_format_version=1,     # validated against the supported set {1}
+    timef_format_version=2,     # validated against the supported set {2}
 )
 ```
 

@@ -36,15 +36,15 @@ _BYTES_PER_FLOAT32 = 4
 class ChunkPlacement:
     """Where one chunk of a series landed, plus the metadata the index needs.
 
-    The locator identifies a row within a Parquet shard row group.
+    The backend-neutral locator identifies a chunk within a values file.
     """
 
-    shard_path: str
-    """Parquet shard (relative to the staging directory) holding this chunk."""
-    row_group: int
-    """Row group within the shard."""
-    row_offset: int
-    """Row within the row group."""
+    chunk_file: str
+    """Values file (relative to the staging directory) holding this chunk."""
+    chunk_offset0: int
+    """First backend-defined coordinate (the Parquet row group)."""
+    chunk_offset1: int
+    """Second backend-defined coordinate (the Parquet row offset)."""
     spec_type: str
     """Spec type of the source series."""
     channel: str
@@ -294,9 +294,9 @@ class _ShardStream:
         shard_path = self.shard_paths[self._shard_idx]
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(
-                shard_path=shard_path,
-                row_group=self._row_group,
-                row_offset=offset,
+                chunk_file=shard_path,
+                chunk_offset0=self._row_group,
+                chunk_offset1=offset,
                 spec_type=chunk.spec_type,
                 channel=chunk.channel,
                 t_start_s=chunk.t_start_s,

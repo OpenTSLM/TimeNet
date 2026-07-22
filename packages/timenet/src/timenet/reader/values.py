@@ -27,7 +27,8 @@ class ValuesReader(Protocol):
 
         Args:
             root: The version directory.
-            rows: The series' index rows, sorted by ``chunk_idx``.
+            rows: The series' index rows, sorted by ``chunk_idx``; each holds ``chunk_file``,
+                ``chunk_offset0``, and ``chunk_offset1``.
 
         Returns:
             The series' 1-D float32 values.
@@ -75,7 +76,8 @@ class ParquetValuesReader:
             The series' 1-D float32 values.
         """
         chunks = [
-            self._row_group_values(root, row["shard_path"], row["row_group"])[row["row_offset"]].values for row in rows
+            self._row_group_values(root, row["chunk_file"], row["chunk_offset0"])[row["chunk_offset1"]].values
+            for row in rows
         ]
         return pa.concat_arrays([chunk.cast(pa.float32()) for chunk in chunks])
 
