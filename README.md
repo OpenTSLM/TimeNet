@@ -25,7 +25,7 @@ Requires Python 3.11 or newer (tested on 3.11–3.13).
 Clone the repo and install locally:
 
 ```bash
-git clone https://github.com/AI-X-Labs/TimeNet.git
+git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
 uv sync --all-groups --all-extras   # dev/docs deps + optional extras (cli, torch, huggingface)
 make install-hooks                  # set up pre-commit hooks

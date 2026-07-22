@@ -43,7 +43,7 @@ extras you opt into.
 To work on TimeNet or author connectors, clone the repo and sync with uv:
 
 ```bash
-git clone https://github.com/AI-X-Labs/TimeNet.git
+git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
 uv sync --all-groups --all-extras
 ```
