@@ -94,3 +94,11 @@ markers = [
 
 [tool.ty.environment]
 python-version = "3.11"
+
+[[tool.ty.overrides]]
+# The example imports scikit-learn, which is intentionally not a project dependency (install it
+# yourself to run the example). Don't fail type-checking on that unresolved import.
+include = ["examples/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
