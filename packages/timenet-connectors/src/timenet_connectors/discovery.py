@@ -60,6 +60,12 @@ def available() -> list[str]:
     """
     ids: set[str] = set()
     for info in pkgutil.walk_packages(_datasets.__path__, _DATASETS + "."):
+        # Skip each connector's co-located ``tests`` package (test modules + fixtures): they live beside
+        # the connector but aren't connector modules, and importing a test module would pull test-only
+        # deps (pytest) into this producer path. Match the ``tests`` dir, not a ``test_``-prefixed name,
+        # so a connector like ``timenet/test-mean`` is still discovered.
+        if "tests" in info.name.split("."):
+            continue
         # A connector package re-exports CONNECTOR from its ``connector`` submodule, so both the
         # package and that submodule surface it; a set dedupes them. Org packages expose none.
         connector = getattr(importlib.import_module(info.name), "CONNECTOR", None)
