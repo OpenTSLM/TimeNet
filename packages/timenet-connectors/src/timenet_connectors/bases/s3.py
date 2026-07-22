@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from timenet.errors import TimeFValidationError
+
 
 def _s3_client() -> Any:
     """Build an S3 client: signed from environment credentials, else anonymous.
@@ -47,11 +49,11 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
         dest: The local destination path.
 
     Raises:
-        ValueError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
+        TimeFValidationError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
     if parsed.scheme != "s3" or not bucket or not key:
-        raise ValueError(f"not an s3://bucket/key URL: {s3_url!r}")
+        raise TimeFValidationError(f"not an s3://bucket/key URL: {s3_url!r}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     _s3_client().download_file(bucket, key, str(dest))
