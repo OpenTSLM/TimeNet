@@ -48,7 +48,7 @@ def _ecg_dataset() -> TimeFDataset:
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ecg-sample-0")
     sample.add_annotation(StaticAnnotation(key="age", value=70, unit="years", id="ecg-age-0"))
-    dataset.add_task(sample, ClassificationTask(label="afib", id="ecg-task-0"))
+    dataset.add_task(sample, ClassificationTask(target="afib", id="ecg-task-0"))
     return dataset
 
 

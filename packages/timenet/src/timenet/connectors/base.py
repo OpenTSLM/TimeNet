@@ -22,8 +22,9 @@ class BaseConnector(ABC, Generic[TRaw]):
 
     A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
     card beside it (read by :meth:`metadata`); set :attr:`CARD` to point elsewhere. Subclasses
-    implement the two abstract stages, kept distinct: ``download`` is I/O-only and ``convert`` is
-    CPU-only. Connectors take no constructor arguments.
+    implement ``convert`` (CPU-only) and, for networked sources, ``download`` (I/O-only); a synthetic
+    connector that generates everything in ``convert`` can skip ``download``, which defaults to
+    returning no references. Connectors take no constructor arguments.
     """
 
     CARD: ClassVar[str | Path | None] = None
@@ -52,18 +53,20 @@ class BaseConnector(ABC, Generic[TRaw]):
         """
         return DatasetMetadata.from_yaml(self._card_path())
 
-    @abstractmethod
-    def download(self, cache_dir: Path) -> list[TRaw]:
+    def download(self, cache_dir: Path) -> list[TRaw]:  # noqa: ARG002 (default no-op: synthetic connectors)
         """Fetch or discover raw source files and return lightweight references to them.
 
-        I/O only: no parsing, no array work. Must be idempotent for a given ``cache_dir``.
+        I/O only: no parsing, no array work. Must be idempotent for a given ``cache_dir``. Defaults to
+        returning no references, so a synthetic connector that builds everything in :meth:`convert`
+        need not override it.
 
         Args:
             cache_dir: Directory to write downloaded files into (created by the engine).
 
         Returns:
-            Raw references passed directly to :meth:`convert`.
+            Raw references passed directly to :meth:`convert` (empty by default).
         """
+        return []
 
     @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:

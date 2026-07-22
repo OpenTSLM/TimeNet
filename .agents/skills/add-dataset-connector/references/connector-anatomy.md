@@ -14,10 +14,11 @@ this branch. Anchor files:
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
 `convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
-- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
-  CPU only, no network. Attach values as lazy loaders, never materialized arrays.
+- `download(self, cache_dir: Path) -> list[TRaw]` (concrete, default `return []`): fetch/discover raw
+  source files, return lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`. A
+  synthetic connector that builds everything in `convert` can skip it (e.g. `timenet/test_mean`).
+- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (**abstract**, the only one): parse refs into a
+  `TimeFDataset`. CPU only, no network.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
@@ -87,14 +88,16 @@ import `wfdb`/`requests` behind the `physionet` extra):
 
 Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
 
-- `TimeSeries(spec=..., channel=..., sampling_rate_hz=..., loader=..., time_series_id=..., t_start_s=..., t_end_s=..., source_id=...)`.
-  `loader` is a `Callable[[], pa.Array]` returning a **float32** Arrow array. `time_series_id` is the
-  dedupe key: reuse the same id (and the same `TimeSeries`) to share one series across samples.
+- `TimeSeries.from_values(values, *, spec, channel, sampling_rate_hz, source_id=None, time_series_id=None, t_start_s=0.0, t_end_s=None)`
+  is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
+  derives `t_end_s` from the length. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
+  constructor only for genuinely lazy sources (files, remote shards). `time_series_id` is the dedupe key:
+  reuse the same id (and the same `TimeSeries`) to share one series across samples.
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_sampling_rate=ureg.hertz, unit_timestamp=ureg.second, unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
-- `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, view=View.FULL, sample_id=...)`.
-  Use `View.WINDOW` for a windowed view.
+- `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. `view` defaults to
+  `View.FULL`; pass `view=View.WINDOW` for a windowed view.
 - `sample.add_annotation(StaticAnnotation(key=..., value=..., id=...))`. Annotation shapes:
   `StaticAnnotation` (whole-sample), `PointAnnotation`, `IntervalAnnotation`.
 - `dataset.add_task(sample, <Task>(...))`. Compose derived tasks with `from_tasks=(...)`.
@@ -105,27 +108,26 @@ The task **class** is the type tag (used by `search(task=...)`); the instance ca
 
 | Task | Payload (besides `id`, set automatically) |
 | --- | --- |
-| `ClassificationTask` | `label`, optional `label_schema` |
-| `LabelingTask` | `label`, optional `label_schema`, `time_series_ids`, `windows_s` |
-| `CaptioningTask` | `answer` |
-| `QATask` | `question`, `answer` |
+| `ClassificationTask` | `target`, optional `target_schema` |
+| `LabelingTask` | `target`, optional `target_schema`, `time_series_ids`, `windows_s` |
+| `CaptioningTask` | `target` |
+| `QATask` | `question`, `target` |
 | `ForecastingTask` | `context_sample_ids`, `target_sample_id` |
-| `ReasoningTask` | `question`, `answer`, optional `rationale` (the chain of thought) |
+| `ReasoningTask` | `question`, `target`, optional `rationale` (the chain of thought) |
+
+The five non-forecasting tasks share a scalar `target` (the label, answer, or caption) via a `TargetTask`
+base. Forecasting is the exception: its target is the future series, referenced by `target_sample_id`.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
 `connector.py`:
 
 ```python
-from collections.abc import Callable
 import json
 from typing import Any
 
-import numpy as np
-import pyarrow as pa
-
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import QATask, StaticAnnotation, TimeSeriesSpec, View, ureg
+from timenet.types import QATask, StaticAnnotation, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 _SPEC = TimeSeriesSpec(
@@ -135,11 +137,6 @@ _SPEC = TimeSeriesSpec(
     unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
 )
-
-def _loader(values: list[float]) -> Callable[[], pa.Array]:
-    def load() -> pa.Array:
-        return pa.array(np.asarray(values, dtype=np.float32))
-    return load
 
 class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset."""
@@ -152,22 +149,20 @@ class TSQAConnector(BaseHuggingFaceConnector):
             series = json.loads(row["Series"])
             channels = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
-                TimeSeries(
+                TimeSeries.from_values(
+                    values,
                     spec=_SPEC,
                     channel=f"c{channel}",
                     sampling_rate_hz=1.0,
-                    loader=_loader(values),
                     time_series_id=f"row-{index}-c{channel}",
-                    t_start_s=0.0,
-                    t_end_s=float(len(values)),
                 )
                 for channel, values in enumerate(channels)
             )
-            sample = dataset.add_sample(time_series=time_series, view=View.FULL, sample_id=f"row-{index}")
+            sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
             sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(sample, QATask(question=row["Question"], answer=row["Answer"], id=f"qa-{index}"))
+            dataset.add_task(sample, QATask(question=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 CONNECTOR = TSQAConnector
@@ -188,7 +183,7 @@ Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen
 `download` calls `_ensure_archive` / `_stream_download` and returns refs; `convert` shares the 12-lead
 ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
 `StaticAnnotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
-`ReasoningTask(question=..., rationale=<CoT>, answer=<label>)`. `_leads_for` reads the WFDB header for
+`ReasoningTask(question=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
 `fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
 pattern, including sharing a series across many samples.
 

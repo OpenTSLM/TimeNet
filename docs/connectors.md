@@ -29,13 +29,13 @@ class MyConnector(BaseConnector[MyRawRef]):
     def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
 ```
 
-Two abstract stages, kept distinct so the engine can drive
-`download -> convert -> derive_schema -> store`:
+`convert` is the one abstract stage; `download` is concrete with a default `return []`, so a synthetic
+connector implements `convert` alone. The engine drives `download -> convert -> derive_schema -> store`:
 
 | Method | Nature | Contract |
 | --- | --- | --- |
-| `download(cache_dir)` | I/O only | Fetch/discover raw files, return lightweight references. Idempotent; no parsing. |
-| `convert(raw_refs)` | CPU only | Parse references into a `TimeFDataset` with lazy Arrow loaders. No network. |
+| `download(cache_dir)` | I/O only, optional (default no-op) | Fetch/discover raw files, return lightweight references. Idempotent; no parsing. |
+| `convert(raw_refs)` | CPU only, required | Parse references into a `TimeFDataset`. No network. |
 
 `metadata()` and `store()` are concrete methods you inherit, not stages you implement:
 

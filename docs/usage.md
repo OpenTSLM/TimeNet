@@ -18,7 +18,7 @@ Every dataset loads the same way, then hands off to your framework of choice. Tw
 - `TimeNet().download("org/name")` returns the local version directory of parquet files. Use it for
   Spark and other engines that read parquet directly.
 
-Recipe status:
+Example status:
 
 - [x] pandas: load a sample's series into a `DataFrame`
 - [x] polars: `pl.from_arrow` over `to_arrow()`
@@ -26,7 +26,7 @@ Recipe status:
 - [ ] Spark: planned
 
 Each series carries its own `channel`, `sampling_rate_hz`, and `t_start_s`, and reads its values
-lazily through `to_arrow()` / `to_numpy()`. The framework recipes below all start from one loaded
+lazily through `to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded
 sample.
 
 === "pandas"
@@ -61,9 +61,9 @@ sample.
 === "Spark"
 
     !!! planned "Planned"
-        No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
+        No Spark example yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
         directory of parquet files, which `spark.read.parquet` can point at directly, but the
-        documented recipe lands later.
+        documented example lands later.
 
 === "PyTorch"
 
@@ -80,6 +80,46 @@ sample.
     loader = DataLoader(
         ds,
         batch_size=8,
-        collate_fn=lambda batch: [(x["series"][0], x["tasks"][0].answer) for x in batch],
+        collate_fn=lambda batch: [(x["series"][0], x["tasks"][0].target) for x in batch],
     )
     ```
+
+## Example: train a classifier end-to-end
+
+One script, the whole loop: curate a dataset, load it, train a model. The `timenet/test-mean` demo is
+deliberately simple. Each sample is one noisy signal, labeled `above_zero` or `below_zero` by whether
+its mean is positive, so a classifier only has to recover that sign.
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+
+from timenet.client import TimeNet
+import timenet_connectors
+
+# Curate the connector's dataset into the local registry (the producer side), then load it back.
+timenet_connectors.build("timenet/test-mean")
+dataset = TimeNet().load("timenet/test-mean")
+
+# Pair each sample's values with its target. Materialization is deferred by default (Arrow); ask for
+# output="numpy" since scikit-learn needs it.
+x, y = dataset.to_features_and_targets(output="numpy")
+
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, stratify=y, random_state=0)
+model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
+print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
+```
+
+`to_features_and_targets` defers materialization: `output="arrow"` (the default) hands back a
+`FixedSizeListArray` and a string array with no NumPy copy; the example asks for `output="numpy"` because
+scikit-learn needs it. It also takes `features="series"` to return one variable-length sequence per
+sample (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix. `task` is inferred
+here because `test-mean` has a single task type; pass `task=...` when a dataset carries several.
+
+The full runnable version is
+[`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
+
+!!! tip "scikit-learn is optional"
+    It backs this example only and isn't a TimeNet dependency: `pip install scikit-learn`, then
+    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow; the
+    model on top is your choice.

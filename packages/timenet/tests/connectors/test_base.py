@@ -10,12 +10,20 @@ from timenet.testing import make_dataset
 
 def test_base_connector_is_abstract():
     assert issubclass(BaseConnector, ABC)
-    assert BaseConnector.__abstractmethods__ == frozenset({"download", "convert"})
+    assert BaseConnector.__abstractmethods__ == frozenset({"convert"})
 
 
 def test_base_connector_cannot_instantiate():
     with pytest.raises(TypeError):
         BaseConnector()
+
+
+def test_download_defaults_to_no_op():
+    class SyntheticConnector(BaseConnector[str]):
+        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+            return make_dataset()
+
+    assert SyntheticConnector().download(Path("cache")) == []
 
 
 def test_concrete_connector_implements_contract(tmp_path):

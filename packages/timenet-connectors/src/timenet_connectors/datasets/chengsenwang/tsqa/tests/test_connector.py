@@ -45,7 +45,7 @@ def test_qa_tasks_match_fixture():
     qa = [t for t in dataset.tasks if isinstance(t, QATask)]
     assert len(qa) == len(rows)
     assert {t.question for t in qa} == {r["Question"] for r in rows}
-    assert {t.answer for t in qa} == {r["Answer"] for r in rows}
+    assert {t.target for t in qa} == {r["Answer"] for r in rows}
 
 
 def test_series_values_parsed_from_fixture():
