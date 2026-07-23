@@ -135,9 +135,9 @@ def make_dataset() -> TimeFDataset:
             key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
         )
     )
-    classification = dataset.add_task(sample0, ClassificationTask(label="normal", id="task-cls-0"))
+    classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
     dataset.add_task(
-        sample0, QATask(question="What rhythm?", answer="Normal.", id="task-qa-0"), from_tasks=(classification,)
+        sample0, QATask(question="What rhythm?", target="Normal.", id="task-qa-0"), from_tasks=(classification,)
     )
 
     sample1 = dataset.add_sample(
@@ -153,7 +153,7 @@ def make_dataset() -> TimeFDataset:
     dataset.add_task(
         sample2,
         LabelingTask(
-            label="onset", time_series_ids=(window.time_series_id,), windows_s=((0.0, 0.25),), id="task-lbl-2"
+            target="onset", time_series_ids=(window.time_series_id,), windows_s=((0.0, 0.25),), id="task-lbl-2"
         ),
     )
     return dataset

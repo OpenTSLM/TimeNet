@@ -57,7 +57,7 @@ def test_samples_property_is_read_only_copy(make_series):
 def test_add_task_links_sample_and_task(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    task = ds.add_task(sample, ClassificationTask(label="afib"))
+    task = ds.add_task(sample, ClassificationTask(target="afib"))
     assert task.sample_ids == (sample.sample_id,)
     assert sample.task_ids == (task.id,)
     assert ds.tasks == (task,)
@@ -67,29 +67,29 @@ def test_add_task_multiple_samples(make_series):
     ds = _dataset()
     s1 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
     s2 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    task = ds.add_task((s1, s2), ClassificationTask(label="x"))
+    task = ds.add_task((s1, s2), ClassificationTask(target="x"))
     assert set(task.sample_ids) == {s1.sample_id, s2.sample_id}
 
 
 def test_add_task_rejects_empty_samples():
     with pytest.raises(ValueError):
-        _dataset().add_task((), ClassificationTask(label="x"))
+        _dataset().add_task((), ClassificationTask(target="x"))
 
 
 def test_labeling_task_id_resolution(make_series):
     ds = _dataset()
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
-    ds.add_task(sample, LabelingTask(label="beat", time_series_ids=(ts.time_series_id,)))
+    ds.add_task(sample, LabelingTask(target="beat", time_series_ids=(ts.time_series_id,)))
     with pytest.raises(ValueError, match="unknown"):
-        ds.add_task(sample, LabelingTask(label="beat", time_series_ids=("nope",)))
+        ds.add_task(sample, LabelingTask(target="beat", time_series_ids=("nope",)))
 
 
 def test_from_tasks_via_kwarg(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    base = ds.add_task(sample, ClassificationTask(label="a"))
-    derived = ds.add_task(sample, ReasoningTask(question="q", answer="a"), from_tasks=(base,))
+    base = ds.add_task(sample, ClassificationTask(target="a"))
+    derived = ds.add_task(sample, ReasoningTask(question="q", target="a"), from_tasks=(base,))
     assert derived.from_tasks == (base,)
     assert derived.from_task_ids == (base.id,)
 
@@ -98,8 +98,8 @@ def test_from_tasks_on_constructor_not_clobbered(make_series):
     # A task built with from_tasks= must not lose it when add_task is called without the kwarg.
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    base = ds.add_task(sample, ClassificationTask(label="a"))
-    qa = QATask(question="q", answer="a", from_tasks=(base,))
+    base = ds.add_task(sample, ClassificationTask(target="a"))
+    qa = QATask(question="q", target="a", from_tasks=(base,))
     ds.add_task(sample, qa)
     assert qa.from_tasks == (base,)
 
@@ -110,7 +110,7 @@ def test_derive_schema(make_series):
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
     sample.add_annotation(StaticAnnotation(key="age", value=64, unit="years"))
     sample.add_annotation(IntervalAnnotation(key="artifact", start_time_s=0.0, end_time_s=1.0))
-    ds.add_task(sample, ClassificationTask(label="afib"))
+    ds.add_task(sample, ClassificationTask(target="afib"))
 
     schema = ds.derive_schema()
     assert schema.time_series_specs == (ts.spec,)
@@ -165,7 +165,7 @@ def test_no_loader_calls_during_build():
     )
     ts = TimeSeries(spec=spec, channel="c", sampling_rate_hz=1.0, loader=loader)
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
-    ds.add_task(sample, ClassificationTask(label="a"))
+    ds.add_task(sample, ClassificationTask(target="a"))
     ds.derive_schema()
     assert calls["n"] == 0  # building/deriving never reads values
 
@@ -180,12 +180,12 @@ def test_add_sample_rejects_duplicate_time_series_ids(make_series):
 
 def test_labeling_rejects_inverted_window():
     with pytest.raises(TimeFValidationError, match="must be >"):
-        LabelingTask(label="walking", windows_s=((5.0, 1.0),))
+        LabelingTask(target="walking", windows_s=((5.0, 1.0),))
 
 
 def test_labeling_rejects_empty_windows():
     with pytest.raises(TimeFValidationError, match="windows_s"):
-        LabelingTask(label="walking", windows_s=())
+        LabelingTask(target="walking", windows_s=())
 
 
 def test_add_task_rejects_window_outside_sample_span(make_series):
@@ -193,11 +193,11 @@ def test_add_task_rejects_window_outside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, LabelingTask(label="walking", windows_s=((5.0, 20.0),)))
+        dataset.add_task(sample, LabelingTask(target="walking", windows_s=((5.0, 20.0),)))
 
 
 def test_add_task_accepts_window_inside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
-    task = dataset.add_task(sample, LabelingTask(label="walking", windows_s=((2.0, 8.0),)))
+    task = dataset.add_task(sample, LabelingTask(target="walking", windows_s=((2.0, 8.0),)))
     assert task.windows_s == ((2.0, 8.0),)
