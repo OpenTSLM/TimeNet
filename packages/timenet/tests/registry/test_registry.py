@@ -70,11 +70,11 @@ def test_open_registry_expands_user(monkeypatch, tmp_path):
 
 def test_list_datasets(registry_root):
     ids = {m.dataset_id for m in LocalRegistry(registry_root).list_datasets()}
-    assert ids == {"hello_world", "ecg"}
+    assert ids == {"timenet/hello-world", "demo/ecg"}
 
 
 def test_get_manifest_latest(registry_root):
-    manifest = LocalRegistry(registry_root).get_manifest("ecg")
+    manifest = LocalRegistry(registry_root).get_manifest("demo/ecg")
     assert isinstance(manifest, Manifest)
     assert manifest.metadata.dataset_version.major == 2
 
@@ -86,7 +86,7 @@ def test_get_manifest_unknown_raises(registry_root):
 
 def test_get_manifest_unknown_version_raises(registry_root):
     with pytest.raises(DatasetNotFoundError):
-        LocalRegistry(registry_root).get_manifest("ecg", version="9.9.9")
+        LocalRegistry(registry_root).get_manifest("demo/ecg", version="9.9.9")
 
 
 def test_get_manifest_rejects_traversal_id(registry_root):
@@ -109,23 +109,23 @@ def test_get_manifest_rejects_mismatched_id(registry_root):
 
 def test_latest_version_ignores_staging_dirs(registry_root):
     # A crashed build can leave a `<version>.tmp-<uuid>` sibling (briefly holding a manifest.json).
-    stale = registry_root / "ecg" / "2.0.0.tmp-deadbeef"
+    stale = registry_root / "demo/ecg" / "2.0.0.tmp-deadbeef"
     stale.mkdir()
     (stale / "manifest.json").write_text("{}")
-    manifest = LocalRegistry(registry_root).get_manifest("ecg")  # must not choke on the tmp dir
+    manifest = LocalRegistry(registry_root).get_manifest("demo/ecg")  # must not choke on the tmp dir
     assert manifest.metadata.dataset_version.major == 2
 
 
 def test_open_file(registry_root):
     registry = LocalRegistry(registry_root)
-    with registry.open_file("ecg", "2.0.0", "manifest.json") as handle:
-        assert b"ecg" in handle.read()
+    with registry.open_file("demo/ecg", "2.0.0", "manifest.json") as handle:
+        assert b"demo/ecg" in handle.read()
 
 
 def test_open_file_rejects_path_traversal(registry_root):
     registry = LocalRegistry(registry_root)
     with pytest.raises(ValueError, match="escapes"):
-        registry.open_file("ecg", "2.0.0", "../../../../etc/passwd")
+        registry.open_file("demo/ecg", "2.0.0", "../../../../etc/passwd")
 
 
 # ---- search -----------------------------------------------------------------------------------
@@ -137,44 +137,46 @@ def test_search_no_filters_returns_all(registry_root):
 
 def test_search_by_domain(registry_root):
     results = LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY)
-    assert {m.dataset_id for m in results} == {"ecg"}
+    assert {m.dataset_id for m in results} == {"demo/ecg"}
 
 
 def test_search_by_license(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(license=License.MIT)} == {"ecg"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(license=License.MIT)} == {"demo/ecg"}
 
 
 def test_search_by_task_type_filter(registry_root):
     # only hello_world has a QA task
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=QATask)} == {"hello_world"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=QATask)} == {"timenet/hello-world"}
 
 
 def test_search_by_time_series_spec(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"ecg"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"demo/ecg"}
 
 
 def test_search_by_tag(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(tag="clinical")} == {"ecg"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(tag="clinical")} == {"demo/ecg"}
 
 
 def test_search_by_dataset_id(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(dataset_id="hello_world")} == {"hello_world"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(dataset_id="timenet/hello-world")} == {
+        "timenet/hello-world"
+    }
 
 
 def test_search_by_query_substring(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(query="hello")} == {"hello_world"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(query="hello")} == {"timenet/hello-world"}
 
 
 def test_search_accepts_scalar_or_list(registry_root):
     both = LocalRegistry(registry_root).search(domain=[Domain.CARDIOLOGY, Domain.GENERAL])
-    assert {m.dataset_id for m in both} == {"hello_world", "ecg"}
+    assert {m.dataset_id for m in both} == {"timenet/hello-world", "demo/ecg"}
 
 
 def test_search_filters_are_anded(registry_root):
     # cardiology AND MIT => ecg; cardiology AND CC-BY-4.0 => none
     assert {
         m.dataset_id for m in LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.MIT)
-    } == {"ecg"}
+    } == {"demo/ecg"}
     assert LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.CC_BY_4_0) == []
 
 

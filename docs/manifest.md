@@ -16,7 +16,7 @@ Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors
 from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 
 Manifest(
-    dataset_id="ecg_dataset",
+    dataset_id="physionet/ecg",
     metadata=metadata,          # DatasetMetadata
     files=files,                # ManifestFiles (required)
     schema=schema,              # DatasetSchema (default: empty)

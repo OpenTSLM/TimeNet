@@ -51,11 +51,11 @@ def _write(root, dataset):
         writer.write()
 
 
-def test_list_datasets_finds_flat_and_namespaced(tmp_path):
-    _write(tmp_path, make_dataset())  # flat id: hello_world
+def test_list_datasets_finds_multiple_namespaced(tmp_path):
+    _write(tmp_path, make_dataset())  # namespaced id: timenet/hello-world
     _write(tmp_path, _namespaced_dataset())  # namespaced id: ChengsenWang/TSQA
     ids = {m.dataset_id for m in LocalRegistry(tmp_path).list_datasets()}
-    assert ids == {"hello_world", "ChengsenWang/TSQA"}
+    assert ids == {"timenet/hello-world", "ChengsenWang/TSQA"}
 
 
 def test_get_manifest_and_open_file_namespaced(tmp_path):

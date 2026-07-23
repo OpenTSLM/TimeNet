@@ -13,14 +13,14 @@ def _metadata(dataset_id: str) -> DatasetMetadata:
     )
 
 
-@pytest.mark.parametrize("dataset_id", ["hello_world", "ChengsenWang/TSQA", "a.b-c", "org/name-1"])
-def test_accepts_flat_and_namespaced_ids(dataset_id):
+@pytest.mark.parametrize("dataset_id", ["ChengsenWang/TSQA", "org/name-1", "a.b-c/x_y", "timenet/hello-world"])
+def test_accepts_namespaced_ids(dataset_id):
     assert _metadata(dataset_id).dataset_id == dataset_id
 
 
 @pytest.mark.parametrize(
     "dataset_id",
-    ["", "/leading", "trailing/", "a/b/c", "has space", "bad$char", "a//b"],
+    ["", "hello_world", "a.b-c", "/leading", "trailing/", "a/b/c", "has space", "bad$char", "a//b"],
 )
 def test_rejects_bad_ids(dataset_id):
     with pytest.raises(ValueError):

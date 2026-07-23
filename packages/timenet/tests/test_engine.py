@@ -56,7 +56,7 @@ def test_store_writes_a_readable_layout(tmp_path):
     dataset = connector.convert(connector.download(tmp_path))
     version_dir = store_dataset(dataset, tmp_path)
     assert (version_dir / "manifest.json").exists()
-    assert version_dir == tmp_path / "hello_world" / "1.0.0"
+    assert version_dir == tmp_path / "timenet/hello-world" / "1.0.0"
 
 
 def test_store_derives_schema_if_needed(tmp_path):
@@ -71,7 +71,7 @@ def test_run_pipeline_end_to_end(tmp_path):
     version_dir = run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.counts.samples == 3
-    assert manifest.dataset_id == "hello_world"
+    assert manifest.dataset_id == "timenet/hello-world"
 
 
 class _CountingConnector(_DemoConnector):

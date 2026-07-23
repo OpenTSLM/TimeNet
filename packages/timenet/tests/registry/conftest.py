@@ -21,7 +21,7 @@ from timenet.writer import TimeFWriter
 def _ecg_dataset() -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="ecg",
+            dataset_id="demo/ecg",
             dataset_version=Version(2, 0, 0),
             name="ECG Dataset",
             description="A clinical ECG dataset.",
@@ -54,7 +54,7 @@ def _ecg_dataset() -> TimeFDataset:
 
 @pytest.fixture
 def registry_root(tmp_path) -> Path:
-    """A local registry directory holding two datasets: hello_world and ecg."""
+    """A local registry directory holding two datasets: timenet/hello-world and demo/ecg."""
     for dataset in (make_dataset(), _ecg_dataset()):
         dataset.derive_schema()
         with TimeFWriter(tmp_path, dataset) as writer:
