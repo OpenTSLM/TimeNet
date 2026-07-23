@@ -1,6 +1,9 @@
 # AGENTS.md
 
-TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format.
+TimeNet is infrastructure for a shared time-series format called TimeF. It has two sides: a consumer
+SDK and CLI (`timenet`) to find, download, and load datasets, and a connectors package
+(`timenet-connectors`) that converts external sources into TimeF. Datasets are addressed by an
+`org/name` id.
 
 ## Scope
 Instructions for contributors and coding agents working in this repository.
@@ -9,6 +12,14 @@ Instructions for contributors and coding agents working in this repository.
 - `README.md` is human-facing: installation, setup, and a tour of the make targets.
 - `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and repo conventions.
 - Keep agent operating instructions here. Don't move them into the README.
+
+## Documentation
+`docs/` is the documentation site (built with Zensical). Start with `docs/index.md` and
+`docs/architecture.md` for the big picture, then read the per-component pages for detail. The docs track
+the code under `packages/`; trust the code where the two ever disagree.
+
+Task-specific workflows live as agent skills under `.agents/skills/` (finding and loading datasets,
+adding a dataset connector). They load on demand, so they stay out of this file.
 
 ## Workspace Layout
 This is a `uv` workspace. Code lives in two packages under `packages/`:
