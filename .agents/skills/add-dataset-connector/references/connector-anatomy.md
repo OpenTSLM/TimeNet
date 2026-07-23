@@ -46,7 +46,7 @@ The org folder needs its own `__init__.py` (a namespace package that exposes no 
 ## The dataset card (`dataset.yaml`)
 
 ```yaml
-# yaml-language-server: $schema=https://ai-x-labs.github.io/TimeNet/schemas/dataset-card-v1.schema.json
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa
 dataset_version: 1.0.0
