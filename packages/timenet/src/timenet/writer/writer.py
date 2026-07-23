@@ -516,9 +516,9 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=SAMPLES_FILE,
-                annotations=ANNOTATIONS_FILE,
-                time_series_index=INDEX_FILE,
+                samples=(SAMPLES_FILE,),
+                annotations=(ANNOTATIONS_FILE,),
+                time_series_index=(INDEX_FILE,),
                 tasks=tuple(self._task_files),
                 time_series=tuple(self._shard_paths),
             ),

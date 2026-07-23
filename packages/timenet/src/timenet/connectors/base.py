@@ -8,13 +8,16 @@ knowledge of the registry, engine, or any other connector. The engine drives it
 from abc import ABC, abstractmethod
 import inspect
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Generic, TypeVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
 
 
-class BaseConnector[TRaw](ABC):
+TRaw = TypeVar("TRaw")
+
+
+class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
     A connector declares its descriptive identity in a dataset card YAML beside its module (read by

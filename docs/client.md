@@ -37,9 +37,9 @@ the per-area variables override just their own path. Precedence for any value is
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_STORAGE` | `<home>/storage` | Downloaded/loaded datasets. |
-| `TIMENET_CACHE` | `<home>/cache` | Curation raw sources and downloads. |
-| `TIMENET_REGISTRY` | `<home>/registry` | The registry to use (path or URL). |
+| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL); `timenet-curate build` writes curated datasets here. |
+| `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download`/`load` fetch from the registry to read. |
+| `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during curation (removed after a successful build). |
 
 Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be
 added there.
@@ -54,6 +54,21 @@ added there.
 | `download(dataset_id, version=None, *, force=False)` | Copy a version's files into local storage; returns the directory. Idempotent unless `force`. |
 | `load(dataset_id, version=None)` | `download` if needed, then read into a `TimeFDataset` with lazy per-series values. |
 | `load_torch(dataset_id, version=None)` | `load`, wrapped in a read-only `torch.utils.data.Dataset` (needs the `torch` extra). |
+
+## Versions
+
+Pin a version by suffixing the id with `@<version>`; with no suffix (or `@latest`) you get the latest
+committed version. This works everywhere an id is accepted, in both the SDK and the CLI:
+
+```python
+client.get("chengsenwang/tsqa@1.0.0")   # pinned
+client.load("chengsenwang/tsqa")         # latest (default)
+client.load("chengsenwang/tsqa@latest")  # latest, explicit
+```
+
+`get` / `download` / `load` / `load_torch` also accept an explicit `version=` argument. Passing both a
+`@version` ref and `version=` is an error, and pinning a version that isn't committed raises
+`DatasetNotFoundError`. `list` and `search` always report the latest version.
 
 ## PyTorch
 
@@ -83,14 +98,19 @@ The torch module is imported lazily, so base users who never call `load_torch` d
 
 ## CLI
 
-The `timenet` console script mirrors the SDK (built with [Typer](https://typer.tiangolo.com)):
+The `timenet` console script mirrors the SDK (built with [Typer](https://typer.tiangolo.com)). It ships
+in the `cli` extra: `pip install 'timenet[cli]'`. Running `timenet` without it prints a one-line install
+hint.
 
 ```bash
 export TIMENET_REGISTRY=https://registry.timenet.io
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
-timenet info hello_world
-timenet download hello_world --storage ~/.timenet/storage
+timenet info chengsenwang/tsqa@1.0.0     # pin a version; omit @ for latest
+timenet download chengsenwang/tsqa
+
+timenet cache info            # datasets on disk (location, id, version, size) + total
+timenet cache clear           # remove downloads + raw cache (prompts; --all also clears curated, -y skips)
 ```
 
 Registry selection precedence: `--registry` > `$TIMENET_REGISTRY` > default. `search` flags map

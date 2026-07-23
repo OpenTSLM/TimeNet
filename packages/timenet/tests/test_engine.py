@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 
+from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import run_pipeline, store_dataset
@@ -96,3 +97,17 @@ def test_run_pipeline_force_rebuilds(tmp_path):
     version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
     assert connector.downloads == 2
     assert (version_dir / "manifest.json").exists()
+
+
+def test_clean_cache_keeps_caller_supplied_dir(tmp_path):
+    cache = tmp_path / "mine"
+    run_pipeline(_DemoConnector(), tmp_path / "root", cache_dir=cache, clean_cache=True)
+    assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even with clean_cache
+
+
+def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
+    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    run_pipeline(_DemoConnector(), tmp_path / "root", clean_cache=True)  # cache_dir=None -> we own it
+    assert not (settings().cache_dir / make_dataset().metadata.dataset_id).exists()

@@ -95,3 +95,35 @@ before the writer runs.
 
 `metadata`, `samples` (tuple, read-only), `tasks` (tuple, read-only), and `schema`
 (`DatasetSchema | None`, `None` until `derive_schema()` runs or the reader populates it).
+
+### `describe(*, rows=5, file=None) -> None`
+
+Prints a plain-text summary, like pandas' `describe`/`info`: identity, counts, per-spec columns (name,
+units, and the value dtype sampled from one series), and a preview of the first `rows` samples. The
+preview reads only span metadata, so it never loads series values. Works before `derive_schema()` (all
+figures are computed from the samples), needs no CLI or `rich` dependency, and writes to `file`
+(default `sys.stdout`).
+
+```python
+TimeNet().load("chengsenwang/tsqa").describe()
+```
+
+```text
+chengsenwang/tsqa @ 1.0.0
+  name     TSQA
+  license  Apache-2.0
+
+counts
+  samples      48000
+  series       tsqa_series=48000
+  annotations  48000
+  tasks        question_and_answer=48000
+
+specs
+  spec         name         value          rate   dtype
+  tsqa_series  TSQA Series  dimensionless  hertz  float
+
+samples (first 5 of 48000)
+  sample_id  view  channels  length  tasks  annotations
+  row-0      full  1         64      1      1
+```

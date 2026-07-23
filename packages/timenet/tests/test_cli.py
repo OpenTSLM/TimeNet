@@ -1,19 +1,20 @@
 import importlib
 import re
+import subprocess
 import sys
 
 import pytest
 from typer.testing import CliRunner
 
-from timenet.cli import app
+from timenet.cli.app import app
 from timenet.errors import DatasetNotFoundError
 from timenet.testing import make_dataset
 from timenet.writer import TimeFWriter
 
 
 runner = CliRunner()
-# The package re-exports the Typer object as ``timenet.cli.app``, shadowing the submodule; fetch the
-# actual module so we can patch its module-global ``app`` when testing main()'s error handling.
+# Import the app submodule directly so we can patch its module-global ``app`` when testing main()'s
+# error handling.
 _cli_module = importlib.import_module("timenet.cli.app")
 
 
@@ -24,6 +25,55 @@ def registry_root(tmp_path):
     with TimeFWriter(tmp_path / "reg", dataset) as writer:
         writer.write()
     return tmp_path / "reg"
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:
+        writer.write()
+    return tmp_path / "home"
+
+
+def test_cache_info_lists_datasets(home):
+    result = runner.invoke(app, ["cache", "info"])
+    assert result.exit_code == 0
+    assert "hello_world" in result.stdout
+    assert "registry" in result.stdout
+
+
+def test_cache_info_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "empty"))
+    result = runner.invoke(app, ["cache", "info"])
+    assert result.exit_code == 0
+    assert "No cached datasets" in result.stdout
+
+
+def test_cache_info_shows_raw_size_without_path(home):
+    cache_dir = home / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "blob").write_bytes(b"x" * 10)
+    result = runner.invoke(app, ["cache", "info"])
+    assert result.exit_code == 0
+    assert "Raw download cache:" in result.stdout
+    assert str(cache_dir) not in result.stdout  # size only, no noisy absolute path
+
+
+def test_cache_clear_needs_confirmation(home):
+    result = runner.invoke(app, ["cache", "clear"], input="n\n")
+    assert result.exit_code != 0  # aborted
+    assert (home / "registry").exists()
+
+
+def test_cache_clear_all_removes_everything(home):
+    result = runner.invoke(app, ["cache", "clear", "--all", "--yes"])
+    assert result.exit_code == 0
+    assert "Freed" in result.stdout
+    assert not (home / "registry").exists()
 
 
 def test_list(registry_root):
@@ -79,3 +129,14 @@ def test_main_reports_expected_errors_without_traceback(monkeypatch, capsys):
         _cli_module.main()
     assert exit_info.value.code == 1
     assert "no such dataset" in capsys.readouterr().err
+
+
+def test_importing_cli_package_stays_lazy():
+    # The console entry point must load in a base install without the cli extra, so importing the
+    # package must not pull in Typer/Rich (they live behind the lazily-loaded app module).
+    code = (
+        "import sys, timenet.cli; "
+        "loaded = [m for m in sys.modules if m in ('typer', 'rich') or m.startswith(('typer.', 'rich.'))]; "
+        "assert not loaded, loaded"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

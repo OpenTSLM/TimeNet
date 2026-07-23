@@ -86,3 +86,20 @@ jobs:
     - name: Fail if pytest failed
       if: steps.pytest.outcome == 'failure'
       run: exit 1
+
+  test-min:
+    # Guard the minimum supported Python (see requires-python). The `check` job runs on the dev
+    # interpreter (3.13); this runs the suite on the 3.11 floor, catching any 3.12+ syntax/API or a
+    # dependency that can't resolve there.
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: true
+    - name: Install dependencies on the minimum Python
+      run: uv sync --all-groups --all-extras --python 3.11
+    - name: Test with pytest (Python 3.11)
+      run: uv run --python 3.11 pytest
