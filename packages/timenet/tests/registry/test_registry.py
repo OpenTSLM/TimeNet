@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from timenet.errors import DatasetNotFoundError, TimeFFormatError, TimeFValidationError
+from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.registry import (
     BaseRegistry,
@@ -8,6 +10,7 @@ from timenet.registry import (
     RemoteRegistry,
     S3Registry,
     WritableRegistry,
+    local_registry_path,
     open_registry,
     open_writable_registry,
 )
@@ -63,6 +66,41 @@ def test_open_registry_expands_user(monkeypatch, tmp_path):
     registry = open_registry("~/registry")
     assert isinstance(registry, LocalRegistry)
     assert registry._root == tmp_path / "registry"
+
+
+def test_local_registry_expands_user(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert LocalRegistry(Path("~/reg"))._root == tmp_path / "reg"
+
+
+# ---- local_registry_path ----------------------------------------------------------------------
+
+
+def test_local_registry_path_plain_path(tmp_path):
+    assert local_registry_path(tmp_path) == tmp_path
+
+
+def test_local_registry_path_file_uri(tmp_path):
+    assert local_registry_path(f"file://{tmp_path}") == tmp_path
+
+
+def test_local_registry_path_expands_user(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert local_registry_path("~/reg") == tmp_path / "reg"
+
+
+@pytest.mark.parametrize(
+    "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
+)
+def test_local_registry_path_rejects_remote(uri):
+    with pytest.raises(RegistryError, match="remote"):
+        local_registry_path(uri)
+
+
+@pytest.mark.parametrize(("uri", "match"), [("file://host/reg", "three slashes"), ("file://", "absolute path")])
+def test_local_registry_path_rejects_malformed_file_uri(uri, match):
+    with pytest.raises(RegistryError, match=match):
+        local_registry_path(uri)
 
 
 # ---- list / get / open ------------------------------------------------------------------------

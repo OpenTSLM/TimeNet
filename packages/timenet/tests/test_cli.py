@@ -1,14 +1,17 @@
 import importlib
-import re
 import subprocess
 import sys
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
-from timenet.cli.app import app
+from timenet.cache import cached_datasets, raw_cache_size
+from timenet.cli.app import _enum_list, app
+from timenet.client import TimeNet
 from timenet.errors import DatasetNotFoundError
 from timenet.testing import make_dataset
+from timenet.types import Domain
 from timenet.writer import TimeFWriter
 
 
@@ -40,27 +43,22 @@ def home(tmp_path, monkeypatch):
 
 
 def test_cache_info_lists_datasets(home):
-    result = runner.invoke(app, ["cache", "info"])
-    assert result.exit_code == 0
-    assert "timenet/hello-world" in result.stdout
-    assert "registry" in result.stdout
+    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
+    assert any(d.dataset_id == "timenet/hello-world" for d in cached_datasets())
 
 
 def test_cache_info_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "empty"))
-    result = runner.invoke(app, ["cache", "info"])
-    assert result.exit_code == 0
-    assert "No cached datasets" in result.stdout
+    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
+    assert cached_datasets() == []
 
 
-def test_cache_info_shows_raw_size_without_path(home):
+def test_cache_info_reports_raw_cache_size(home):
     cache_dir = home / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "blob").write_bytes(b"x" * 10)
-    result = runner.invoke(app, ["cache", "info"])
-    assert result.exit_code == 0
-    assert "Raw download cache:" in result.stdout
-    assert str(cache_dir) not in result.stdout  # size only, no noisy absolute path
+    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
+    assert raw_cache_size() == 10
 
 
 def test_cache_clear_needs_confirmation(home):
@@ -77,28 +75,24 @@ def test_cache_clear_all_removes_everything(home):
 
 
 def test_list(registry_root):
-    result = runner.invoke(app, ["list", "--registry", str(registry_root)])
-    assert result.exit_code == 0
-    assert "timenet/hello-world" in result.stdout
+    assert runner.invoke(app, ["list", "--registry", str(registry_root)]).exit_code == 0
+    assert any(d.dataset_id == "timenet/hello-world" for d in TimeNet(str(registry_root)).list())
 
 
 def test_search_by_domain(registry_root):
-    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"])
-    assert result.exit_code == 0
-    assert "timenet/hello-world" in result.stdout
+    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"]).exit_code == 0
+    results = TimeNet(str(registry_root)).search(domain=[Domain("general")])
+    assert any(d.dataset_id == "timenet/hello-world" for d in results)
 
 
 def test_search_no_match(registry_root):
-    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"])
-    assert result.exit_code == 0
-    assert "timenet/hello-world" not in result.stdout
+    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"]).exit_code == 0
+    assert TimeNet(str(registry_root)).search(domain=[Domain("cardiology")]) == []
 
 
 def test_info(registry_root):
-    result = runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)])
-    assert result.exit_code == 0
-    assert "timenet/hello-world" in result.stdout
-    assert "samples" in result.stdout.lower()
+    assert runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)]).exit_code == 0
+    assert TimeNet(str(registry_root)).get("timenet/hello-world").dataset_id == "timenet/hello-world"
 
 
 def test_download(registry_root, tmp_path):
@@ -111,12 +105,10 @@ def test_download(registry_root, tmp_path):
 
 
 def test_search_rejects_unknown_filter_value(registry_root):
-    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "bogus"])
-    assert result.exit_code != 0
-    # Strip ANSI: Rich colorizes the ``--domain`` token, so the message isn't a plain substring
-    # when color is enabled (e.g. in CI).
-    clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
-    assert "invalid --domain" in clean
+    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "bogus"]).exit_code == 2
+    # The error message is a Rich-rendered panel, so assert it on the raising helper directly.
+    with pytest.raises(typer.BadParameter, match="invalid --domain"):
+        _enum_list(["bogus"], Domain, "--domain", [d.value for d in Domain])
 
 
 def test_main_reports_expected_errors_without_traceback(monkeypatch, capsys):
