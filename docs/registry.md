@@ -79,8 +79,10 @@ version = registry.store(dataset)   # schema derived if needed, atomic commit
 
 Every backend is a `WritableRegistry`, so that call can't tell a directory the engine may write to from
 a remote stub. `local_registry_path(uri)` can: it returns the directory a `file://` URI or plain path
-names, and raises `RegistryError` for a remote scheme. That is how
-[`timenet-curate build`](cli/curate.md) resolves its output when `--out` is absent.
+names, and raises `RegistryError` for a remote scheme. `default_registry_path()` builds on it to resolve
+the default local registry, honoring `$TIMENET_REGISTRY` when it is local and falling back to
+`<home>/registry` otherwise. That is how [`timenet-curate build`](cli/curate.md) resolves its output when
+`--out` is absent (and the `timenet_connectors.build` / `load` helpers use it too).
 
 ## `search`
 
