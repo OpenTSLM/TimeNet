@@ -21,10 +21,10 @@ Reference to one channel of time-series data, with optional windowing and a lazy
 from timenet.dataset import TimeSeries
 
 TimeSeries(
-    spec=ecg_lead,            # a TimeSeriesSpec (the modality)
-    channel="II",             # the channel this series carries
+    spec=vibration,           # a TimeSeriesSpec (the modality)
+    channel="axial",          # the channel this series carries
     sampling_rate_hz=500.0,
-    loader=load_lead_ii,      # Callable[[], pa.Array] returning float32 values
+    loader=load_axial,        # Callable[[], pa.Array] returning float32 values
     source_id="rec_001",      # optional
     t_start_s=0.0,
     t_end_s=None,             # None = to end of source
@@ -34,7 +34,7 @@ TimeSeries(
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `spec` | `TimeSeriesSpec` | yes | The modality (shared across channels). |
-| `channel` | `str` | yes | The single channel this series carries (e.g. `"II"`). |
+| `channel` | `str` | yes | The single channel this series carries (e.g. `"axial"`). |
 | `sampling_rate_hz` | `float` | yes | Sampling rate in canonical Hz; positive and finite. |
 | `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning the 1-D `float32` values. |
 | `source_id` | `str \| None` | no | Identifier of the raw recording this series came from. |
@@ -76,7 +76,7 @@ from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
 sample = dataset.add_sample(time_series=(...), view=View.FULL, subject_ids=("p1",))
-dataset.add_task(sample, ClassificationTask(label="afib"))
+dataset.add_task(sample, ClassificationTask(label="faulty"))
 dataset.derive_schema()
 ```
 
