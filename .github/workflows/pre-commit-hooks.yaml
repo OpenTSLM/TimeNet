@@ -7,6 +7,11 @@ permissions:
   contents: read
   pull-requests: write
 
+# Cancel a superseded run so two runs can't race to rewrite the sticky comment.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -36,74 +41,93 @@ jobs:
         uv run pre-commit run \
           --from-ref origin/${{ github.base_ref }} \
           --to-ref ${{ github.sha }} \
-          --show-diff-on-failure 2>&1 | tee /tmp/precommit-output.txt
-    - name: Report pre-commit failure
-      if: steps.precommit.outcome == 'failure'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        {
-          echo "## ⚠️ Pre-commit hooks failed"
-          echo ""
-          echo "Run locally to reproduce:"
-          echo '```bash'
-          echo "uv run pre-commit run --from-ref origin/${{ github.base_ref }} --to-ref HEAD"
-          echo '```'
-          echo ""
-          echo "<details><summary>CI output</summary>"
-          echo ""
-          echo '```'
-          head -c 60000 /tmp/precommit-output.txt
-          echo '```'
-          echo ""
-          echo "</details>"
-        } | tee /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
-        gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/report.md
-    - name: Fail if pre-commit failed
-      if: steps.precommit.outcome == 'failure'
-      run: exit 1
-    - name: Test with pytest
+          --show-diff-on-failure 2>&1 | tee /tmp/precommit.txt
+    - name: Restore the working tree
+      # Undo pre-commit's in-place fixes so pytest sees the PR's source. Never `git clean` (venv).
+      run: git checkout -- .
+    - name: Test with pytest (Python 3.13)
       id: pytest
       continue-on-error: true
       run: |
         set -o pipefail
-        uv run pytest 2>&1 | tee /tmp/pytest-output.txt
-    - name: Report pytest failure
-      if: steps.pytest.outcome == 'failure'
+        uv run pytest 2>&1 | tee /tmp/pytest.txt
+    - name: Test with pytest (Python 3.11)
+      # Guard the minimum supported Python; the steps above run on 3.13.
+      id: pytestmin
+      continue-on-error: true
+      run: |
+        set -o pipefail
+        { uv sync --all-groups --all-extras --no-extra torch-gpu --python 3.11 \
+          && uv run --python 3.11 pytest; } 2>&1 | tee /tmp/pytest-min.txt
+    - name: Report
+      if: ${{ !cancelled() }}
+      # A transient comment-API error must never turn a passing check red; the verdict comes
+      # from the final step below.
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+        PRECOMMIT: ${{ steps.precommit.outcome }}
+        PYTEST: ${{ steps.pytest.outcome }}
+        PYTEST_MIN: ${{ steps.pytestmin.outcome }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
-        {
-          echo "## ⚠️ Pytest failed"
-          echo ""
-          echo "<details><summary>Test output</summary>"
-          echo ""
-          echo '```'
-          head -c 60000 /tmp/pytest-output.txt
-          echo '```'
-          echo ""
-          echo "</details>"
-        } | tee /tmp/pytest-report.md >> "$GITHUB_STEP_SUMMARY"
-        gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/pytest-report.md
-    - name: Fail if pytest failed
-      if: steps.pytest.outcome == 'failure'
-      run: exit 1
+        set -euo pipefail
+        readonly LIMIT=15000  # per-section cap; well under GitHub's 65536-char comment limit
 
-  test-min:
-    # Guard the minimum supported Python (see requires-python). The `check` job runs on the dev
-    # interpreter (3.13); this runs the suite on the 3.11 floor, catching any 3.12+ syntax/API or a
-    # dependency that can't resolve there.
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v5
-    - name: Set up uv
-      uses: astral-sh/setup-uv@v8.2.0
-      with:
-        enable-cache: true
-        prune-cache: false
-        cache-suffix: py311
-    - name: Install dependencies on the minimum Python
-      run: uv sync --all-groups --all-extras --no-extra torch-gpu --python 3.11
-    - name: Test with pytest (Python 3.11)
-      run: uv run --python 3.11 pytest
+        status() {
+          case "$1" in
+            success) echo '✅ Passed' ;;
+            failure) echo '❌ Failed' ;;
+            *)       echo '⏭️ Did not run' ;;
+          esac
+        }
+
+        section() {  # $1 title, $2 logfile
+          [ -s "$2" ] || return 0
+          printf '\n<details><summary>%s</summary>\n\n```\n' "$1"
+          # iconv drops a multibyte char that head split (invalid UTF-8 would 422 the comment);
+          # it exits 1 on a partial tail but still writes the good bytes, so ignore its status.
+          head -c "$LIMIT" "$2" | iconv -f UTF-8 -t UTF-8 -c || true
+          if [ "$(wc -c < "$2")" -gt "$LIMIT" ]; then printf '\n[...] truncated, see the job log\n'; fi
+          printf '```\n\n</details>\n'
+        }
+
+        if [ "$PRECOMMIT" = success ] && [ "$PYTEST" = success ] && [ "$PYTEST_MIN" = success ]; then
+          failed=false
+        else
+          failed=true
+        fi
+
+        {
+          echo "<!-- timenet-ci-report -->"
+          if [ "$failed" = true ]; then echo "## ⚠️ CI checks failed"; else echo "## ✅ CI checks passed"; fi
+          echo
+          echo "| Check | Status |"
+          echo "| --- | --- |"
+          echo "| Pre-commit hooks | $(status "$PRECOMMIT") |"
+          echo "| Tests (Python 3.13) | $(status "$PYTEST") |"
+          echo "| Tests (Python 3.11) | $(status "$PYTEST_MIN") |"
+          if [ "$failed" = true ]; then
+            printf '\nReproduce locally:\n\n```bash\nmake lint-fix   # auto-fix\nmake check      # ruff + ty\nmake test       # pytest\n```\n'
+            section "Pre-commit output" /tmp/precommit.txt
+            section "Pytest output (Python 3.13)" /tmp/pytest.txt
+            section "Pytest output (Python 3.11)" /tmp/pytest-min.txt
+          fi
+          echo
+          echo "<sub>Updated for \`${HEAD_SHA:0:7}\` · [run #${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})</sub>"
+        } | tee /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+
+        # Upsert one sticky comment, found by its marker (not "last comment by this token").
+        # No `| head`: under pipefail, head closing the pipe early would SIGPIPE gh.
+        ids="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+          --jq '.[] | select(.body | startswith("<!-- timenet-ci-report -->")) | .id')"
+        id="${ids%%$'\n'*}"
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@/tmp/report.md --silent
+        elif [ "$failed" = true ]; then
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F body=@/tmp/report.md --silent
+        fi
+    - name: Fail if any check failed
+      if: steps.precommit.outcome == 'failure' || steps.pytest.outcome == 'failure' || steps.pytestmin.outcome == 'failure'
+      run: exit 1
