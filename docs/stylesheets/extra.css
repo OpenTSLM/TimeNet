@@ -1,5 +1,21 @@
-/* TimeNet docs: "Copy page" split-button dropdown + datasets catalog.
+/* TimeNet docs: "Copy page" split-button dropdown + datasets catalog + the `planned` admonition.
    All colors use --md-* tokens so light (default) and dark (slate) track automatically. */
+
+/* ---- "Planned" admonition ---------------------------------------------
+   zensical.toml declares the icon, which the theme injects as
+   --md-admonition-icon--planned. It ships styling only for its own twelve
+   admonition types, so a custom one supplies its own colors. Only the static
+   `!!! planned` form is used; the collapsible `??? planned` rules are omitted. */
+
+.md-typeset .admonition.planned {
+  background-color: var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .planned > .admonition-title::before {
+  background-color: var(--md-default-fg-color--light);
+  -webkit-mask-image: var(--md-admonition-icon--planned);
+  mask-image: var(--md-admonition-icon--planned);
+}
 
 .sr-only,
 .ds-visually-hidden {

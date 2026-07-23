@@ -1,94 +1,99 @@
 # TimeNet
 
-TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format.
+[![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
+[![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
 
-Documentation: <https://ai-x-labs.github.io/TimeNet/>
+TimeNet is a Python library and CLI for registering, fetching, and exploring time-series datasets
+in a shared format called TimeF. Every dataset gets one on-disk shape and one way to load it, so a
+consumer reads ECGs, accelerometer traces, and market series through the same API.
 
-## Terminology
+TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation metrics
+are out of scope. It stops at handing you the data.
 
-| Term | What it is |
-| --- | --- |
-| **Dataset Card** | The human-authored `dataset.yaml` in a connector's folder (license, domains, tags, description); validated against a JSON Schema when loaded. |
-| **Dataset Connector** | The Python recipe that fetches a raw source and converts it into a `TimeFDataset`. |
-| **Dataset Curation** | The process of running a connector through the engine to produce a dataset. |
-| **TimeF Version** | The semantic version of one serialized `TimeFDataset` in a registry. |
-| **Dataset Manifest** | The compiled `manifest.json` (card metadata + derived schema + counts + file pointers); the single source of truth the SDK reads. |
+Full documentation: <https://docs.timenet.ai/>
 
-See [docs/architecture.md](docs/architecture.md) for how these fit together.
+## How it fits together
 
-## Installation
+![TimeNet architecture diagram](docs/assets/architecture.svg)
 
-Requires Python 3.11 or newer (tested on 3.11–3.13).
+A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
+client reads the manifest from the registry and loads the data. The client never runs connector
+code, so everything a consumer needs to interpret the parquet lives in the manifest.
 
-### From source
+- `BaseConnector` is the only contract a new data source must satisfy.
+- `TimeFDataset` is the in-memory model a connector populates during `convert()`.
+- `TimeFWriter` serializes a populated `TimeFDataset` to disk.
+- `TimeFReader` reads a TimeF version directory back into a `TimeFDataset`.
 
-Clone the repo and install locally:
+## Components
+
+The project is a [uv](https://docs.astral.sh/uv/) workspace with two packages under `packages/`,
+plus the registry they read from and write to.
+
+| Part | What it is | Ships |
+| --- | --- | --- |
+| `timenet` | the SDK and CLI | the TimeF format, reader/writer, registry client, engine, `BaseConnector` |
+| `timenet-connectors` | the producer package | connector recipes, dataset cards, and the `timenet-curate` CLI |
+| registry | a served location | compiled manifests plus parquet; can be public, a private internal one, or a local directory |
+
+See the [architecture guide](https://docs.timenet.ai/architecture.html) for the full map, and the
+[concepts page](https://docs.timenet.ai/concepts.html) for the terminology.
+
+## Install
+
+Requires Python 3.11 or newer (tested on 3.11 to 3.13).
+
+```bash
+uv add timenet            # core: TimeF format, reader/writer, registry client
+uv add 'timenet[cli]'     # add the timenet console command
+uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset)
+```
+
+Once installed, the CLI is available as `timenet`. See [Get started](https://docs.timenet.ai/get-started.html)
+to load your first dataset.
+
+## Development
+
+Clone the repo and set up the environment with uv:
 
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-uv sync --all-groups --all-extras   # dev/docs deps + optional extras (cli, torch, huggingface)
-make install-hooks                  # set up pre-commit hooks
+make sync           # uv sync --all-groups --all-extras
+make install-hooks  # set up pre-commit hooks (run once after cloning)
 ```
 
-Once installed, the CLI is available:
-
-```bash
-uv run timenet
-```
-
-## Development
-
-This project uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, [ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and [Zensical](https://zensical.org/) for docs.
-
-### Setup
-
-Install uv if you don't have it, then sync the environment:
-
-```bash
-# install uv (skips if already present)
-command -v uv > /dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
-
-make sync           # uv sync --all-groups (runtime + dev + docs)
-make install-hooks  # install pre-commit hooks (run once after cloning)
-```
-
-Dependencies are split in `pyproject.toml`:
-
-- runtime — `timenet` needs numpy, pyarrow, pint, pydantic-settings, typer; `timenet-connectors` adds
-  its own. Optional extras: `timenet[torch]`, `timenet-connectors[huggingface]`.
-- `dev` — ruff, ty, pytest, pre-commit, hypothesis (installed by default)
-- `docs` — zensical
+This project uses uv for environment and dependency management, [ruff](https://docs.astral.sh/ruff/)
+for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and
+[Zensical](https://zensical.org/) for docs.
 
 ### Make targets
 
 ```bash
-make sync           # install all deps (uv sync --all-groups)
+make sync           # install all deps (uv sync --all-groups --all-extras)
 make test           # run pytest
 make check          # format + lint + typecheck (ruff format, ruff check, ty check)
 make lint-fix       # auto-fix lint issues with ruff
+make build          # build both packages with uv
 make docs           # build the docs into site/
 make docs-serve     # serve the docs locally at http://127.0.0.1:8000
 make install-hooks  # install pre-commit hooks (run once after cloning)
 make clean          # remove .venv, caches, and built site/
 ```
 
-### Pre-commit hooks
+### Verification
 
-Every commit runs ruff (lint + format), ty type checking, `uv lock`, and basic file hygiene (trailing whitespace, end-of-file, TOML/JSON validation). After cloning:
+Run these before opening a PR, and make them pass:
 
-```bash
-make install-hooks
-```
+- `make check` for `ruff format`, `ruff check`, and `ty check`
+- `make lint-fix` to auto-fix lint findings
+- `make test` for the pytest suite
 
-Don't bypass the hooks with `--no-verify`. If a hook fails, fix the underlying issue (run `make check` / `make lint-fix`) and commit again.
+Every commit runs the same ruff, ty, `uv lock`, and file-hygiene checks through pre-commit. Don't
+bypass hooks with `--no-verify`; if one fails, run `make check` / `make lint-fix` and commit again.
 
 ### Docs
 
-```bash
-make docs-serve   # live preview at http://127.0.0.1:8000
-make docs         # build static site into site/
-```
-
-Published at <https://ai-x-labs.github.io/TimeNet/>, deployed from `main` by
-`.github/workflows/docs.yml` (enable Pages in the repo settings with source "GitHub Actions").
+`make docs-serve` gives a live preview at http://127.0.0.1:8000; `make docs` builds the static site
+into `site/`. Published at <https://docs.timenet.ai/>, deployed from `main` by
+`.github/workflows/docs.yml`.
