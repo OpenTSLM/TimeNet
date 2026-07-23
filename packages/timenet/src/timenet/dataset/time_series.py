@@ -1,6 +1,6 @@
 """The :class:`TimeSeries` reference type: one channel of values with a lazy Arrow loader."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 import math
 
@@ -53,6 +53,50 @@ class TimeSeries:
             raise ValueError(f"TimeSeries.t_start_s must be >= 0, got {self.t_start_s}")
         if self.t_end_s is not None and self.t_end_s <= self.t_start_s:
             raise ValueError(f"TimeSeries.t_end_s ({self.t_end_s}) must be > t_start_s ({self.t_start_s})")
+
+    @classmethod
+    def from_values(
+        cls,
+        values: np.ndarray | Sequence[float],
+        *,
+        spec: TimeSeriesSpec,
+        channel: str,
+        sampling_rate_hz: float,
+        source_id: str | None = None,
+        time_series_id: str | None = None,
+        t_start_s: float = 0.0,
+        t_end_s: float | None = None,
+    ) -> "TimeSeries":
+        """Build a series from already-materialized values, wrapping them in a float32 loader.
+
+        The convenience path for connectors that hold an in-memory array: it caches ``values`` as a
+        float32 Arrow array behind the loader and derives ``t_end_s`` from the length when omitted. Use
+        the ``loader=`` constructor directly for genuinely lazy sources (files, remote shards).
+
+        Args:
+            values: The channel's values (cast to float32).
+            spec: The series' measurement-modality spec.
+            channel: The channel name.
+            sampling_rate_hz: Sampling rate in hertz.
+            source_id: Optional id of the raw source recording.
+            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            t_start_s: Start of the window in seconds.
+            t_end_s: End of the window in seconds, or ``None`` to derive it from the length.
+
+        Returns:
+            The constructed :class:`TimeSeries`.
+        """
+        array = pa.array(np.asarray(values, dtype=np.float32))
+        return cls(
+            spec=spec,
+            channel=channel,
+            sampling_rate_hz=sampling_rate_hz,
+            loader=lambda: array,
+            source_id=source_id,
+            time_series_id=time_series_id or new_id(),
+            t_start_s=t_start_s,
+            t_end_s=t_end_s if t_end_s is not None else t_start_s + len(array) / sampling_rate_hz,
+        )
 
     def to_arrow(self) -> pa.Array:
         """Read the series' values as an Arrow array.

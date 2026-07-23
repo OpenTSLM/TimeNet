@@ -1,3 +1,4 @@
+import numpy as np
 import pyarrow as pa
 import pytest
 
@@ -201,3 +202,110 @@ def test_add_task_accepts_window_inside_sample_span(make_series):
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
     task = dataset.add_task(sample, LabelingTask(target="walking", windows_s=((2.0, 8.0),)))
     assert task.windows_s == ((2.0, 8.0),)
+
+
+def test_add_sample_defaults_to_full_view(make_series):
+    sample = _dataset().add_sample(time_series=(make_series(),))
+    assert sample.view is View.FULL
+
+
+def test_tasks_of_filters_by_type(make_series):
+    ds = _dataset()
+    s = ds.add_sample(time_series=(make_series(),))
+    classification = ds.add_task(s, ClassificationTask(target="a"))
+    qa = ds.add_task(s, QATask(question="q", target="b"))
+    assert ds.tasks_of(ClassificationTask) == (classification,)
+    assert ds.tasks_of(QATask) == (qa,)
+
+
+def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
+    ds = _dataset()
+    s1 = ds.add_sample(time_series=(make_series(),))
+    s2 = ds.add_sample(time_series=(make_series(),))
+    classification = ds.add_task(s1, ClassificationTask(target="a"))
+    qa = ds.add_task(s1, QATask(question="q", target="b"))
+    ds.add_task(s2, ClassificationTask(target="c"))
+    assert ds.tasks_for(s1) == (classification, qa)
+    assert ds.tasks_for(s1, ClassificationTask) == (classification,)
+    assert ds.tasks_for(s2, QATask) == ()
+
+
+def _matrix(x):
+    return x.flatten().to_numpy(zero_copy_only=False).reshape(len(x), -1)
+
+
+def test_to_features_and_targets_returns_arrow_matrix_and_targets(make_series):
+    ds = _dataset()
+    for label in ["a", "b"]:
+        s = ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+        ds.add_task(s, ClassificationTask(target=label))
+    x, y = ds.to_features_and_targets(task=ClassificationTask)
+    assert isinstance(x, pa.Array) and pa.types.is_fixed_size_list(x.type)
+    assert isinstance(y, pa.Array)
+    assert _matrix(x).tolist() == [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]
+    assert y.to_pylist() == ["a", "b"]
+
+
+def test_to_features_and_targets_numpy_output(make_series):
+    ds = _dataset()
+    for label in ["a", "b"]:
+        s = ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+        ds.add_task(s, ClassificationTask(target=label))
+    x, y = ds.to_features_and_targets(task=ClassificationTask, output="numpy")
+    assert isinstance(x, np.ndarray) and x.shape == (2, 3) and x.dtype == np.float32
+    assert isinstance(y, np.ndarray) and y.tolist() == ["a", "b"]
+
+
+def _ragged_dataset(make_series):
+    ds = _dataset()
+    ds.add_task(ds.add_sample(time_series=(make_series(values=(1.0, 2.0)),)), ClassificationTask(target="a"))
+    ds.add_task(ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),)), ClassificationTask(target="b"))
+    return ds
+
+
+def test_to_features_and_targets_timestep_rejects_unequal_lengths(make_series):
+    with pytest.raises(ValueError, match="equal-length samples"):
+        _ragged_dataset(make_series).to_features_and_targets(task=ClassificationTask)  # features="timestep"
+
+
+def test_to_features_and_targets_series_arrow_supports_ragged(make_series):
+    x, y = _ragged_dataset(make_series).to_features_and_targets(task=ClassificationTask, features="series")
+    assert pa.types.is_list(x.type)
+    assert x.to_pylist() == [[1.0, 2.0], [1.0, 2.0, 3.0]]
+    assert y.to_pylist() == ["a", "b"]
+
+
+def test_to_features_and_targets_series_numpy_object_array(make_series):
+    x, y = _ragged_dataset(make_series).to_features_and_targets(
+        task=ClassificationTask, output="numpy", features="series"
+    )
+    assert x.shape == (2,) and x.dtype == object
+    assert x[0].tolist() == [1.0, 2.0]
+    assert x[1].tolist() == [1.0, 2.0, 3.0]
+    assert y.tolist() == ["a", "b"]
+
+
+def test_to_features_and_targets_no_matching_task_raises(make_series):
+    ds = _dataset()
+    ds.add_sample(time_series=(make_series(),))
+    with pytest.raises(ValueError, match="no sample carries"):
+        ds.to_features_and_targets(task=ClassificationTask)
+
+
+def test_to_features_and_targets_infers_sole_task_type(make_series):
+    ds = _dataset()
+    for label in ["a", "b"]:
+        s = ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+        ds.add_task(s, ClassificationTask(target=label))
+    x, y = ds.to_features_and_targets()  # task inferred: only ClassificationTask present
+    assert len(x) == 2
+    assert y.to_pylist() == ["a", "b"]
+
+
+def test_to_features_and_targets_ambiguous_task_type_raises(make_series):
+    ds = _dataset()
+    s = ds.add_sample(time_series=(make_series(),))
+    ds.add_task(s, ClassificationTask(target="a"))
+    ds.add_task(s, QATask(question="q", target="b"))
+    with pytest.raises(ValueError, match="pass task="):
+        ds.to_features_and_targets()

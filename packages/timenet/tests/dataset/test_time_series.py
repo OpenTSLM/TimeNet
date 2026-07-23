@@ -94,3 +94,26 @@ def test_validation_rejects(overrides):
 def test_window_ok():
     ts = _series(t_start_s=0.0, t_end_s=10.0)
     assert ts.t_end_s == pytest.approx(10.0)
+
+
+def test_from_values_casts_to_float32_and_derives_t_end():
+    ts = TimeSeries.from_values([1.0, 2.0, 3.0, 4.0], spec=_spec(), channel="II", sampling_rate_hz=2.0)
+    values = ts.to_numpy()
+    assert values.dtype == np.float32
+    assert values.tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert ts.t_end_s == pytest.approx(2.0)  # t_start_s(0) + 4 / 2.0 Hz
+
+
+def test_from_values_respects_explicit_window():
+    ts = TimeSeries.from_values(
+        np.array([1.0, 2.0]), spec=_spec(), channel="II", sampling_rate_hz=4.0, t_start_s=1.0, t_end_s=9.0
+    )
+    assert (ts.t_start_s, ts.t_end_s) == (1.0, 9.0)
+
+
+def test_from_values_generates_unique_id_unless_given():
+    a = TimeSeries.from_values([1.0], spec=_spec(), channel="II", sampling_rate_hz=1.0)
+    b = TimeSeries.from_values([1.0], spec=_spec(), channel="II", sampling_rate_hz=1.0)
+    assert a.time_series_id != b.time_series_id
+    fixed = TimeSeries.from_values([1.0], spec=_spec(), channel="II", sampling_rate_hz=1.0, time_series_id="x")
+    assert fixed.time_series_id == "x"

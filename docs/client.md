@@ -106,7 +106,7 @@ or a `collate_fn` on the loader:
 ```python
 from torch.utils.data import DataLoader
 
-loader = DataLoader(ds, batch_size=8, collate_fn=lambda b: [(x["series"][0], x["tasks"][0].answer) for x in b])
+loader = DataLoader(ds, batch_size=8, collate_fn=lambda b: [(x["series"][0], x["tasks"][0].target) for x in b])
 ```
 
 The torch module is imported lazily, so base users who never call `load_torch` don't need torch.

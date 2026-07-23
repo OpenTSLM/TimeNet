@@ -2,7 +2,10 @@
 
 from collections.abc import Iterable
 import sys
-from typing import TextIO, TypeVar
+from typing import Literal, TextIO, TypeVar, cast, overload
+
+import numpy as np
+import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.sample import Sample
@@ -13,6 +16,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     LabelingTask,
+    TargetTask,
     Task,
     View,
     annotation_type_of,
@@ -21,6 +25,7 @@ from timenet.types import (
 
 
 T = TypeVar("T")
+TTask = TypeVar("TTask", bound=Task)
 
 
 class TimeFDataset:
@@ -41,7 +46,7 @@ class TimeFDataset:
         self,
         *,
         time_series: tuple[TimeSeries, ...],
-        view: View,
+        view: View = View.FULL,
         subject_ids: tuple[str, ...] = (),
         sample_id: str | None = None,
     ) -> Sample:
@@ -49,7 +54,7 @@ class TimeFDataset:
 
         Args:
             time_series: One :class:`TimeSeries` per channel the sample uses.
-            view: Which slice of the source this sample represents.
+            view: Which slice of the source this sample represents (defaults to the full recording).
             subject_ids: Subjects this sample belongs to (empty for subject-less domains).
             sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic
                 output, e.g. when generating golden fixtures.
@@ -148,7 +153,8 @@ class TimeFDataset:
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
                 value_type=value_type_of(annotation.value),
-                unit=annotation.unit,
+                # __post_init__ normalizes unit to a plain string (or None), so this is always str | None.
+                unit=cast("str | None", annotation.unit),
                 description=annotation.description,
             )
             for sample in self._samples
@@ -255,6 +261,149 @@ class TimeFDataset:
     def schema(self) -> DatasetSchema | None:
         """The derived schema, or ``None`` until :meth:`derive_schema` is called."""
         return self._schema
+
+    def tasks_of(self, task_type: type[TTask]) -> tuple[TTask, ...]:
+        """Return every task of a given type, in insertion order.
+
+        Args:
+            task_type: The task subclass to keep (e.g. :class:`~timenet.types.ClassificationTask`).
+
+        Returns:
+            The matching tasks.
+        """
+        return tuple(task for task in self._tasks if isinstance(task, task_type))
+
+    @overload
+    def tasks_for(self, sample: Sample) -> tuple[Task, ...]: ...
+    @overload
+    def tasks_for(self, sample: Sample, task_type: type[TTask]) -> tuple[TTask, ...]: ...
+    def tasks_for(self, sample: Sample, task_type: type[Task] = Task) -> tuple[Task, ...]:
+        """Return the tasks attached to a sample, optionally filtered by type.
+
+        The inverse of the stored direction: tasks reference their samples, so this resolves a
+        sample's ``task_ids`` back to the task objects.
+
+        Args:
+            sample: The sample whose tasks to resolve.
+            task_type: Keep only tasks of this subclass (defaults to every task on the sample).
+
+        Returns:
+            The sample's tasks of ``task_type``, in the sample's task order.
+        """
+        by_id = {task.id: task for task in self._tasks}
+        return tuple(task for task_id in sample.task_ids if isinstance(task := by_id.get(task_id), task_type))
+
+    @overload
+    def to_features_and_targets(
+        self,
+        *,
+        task: type[TargetTask] | None = ...,
+        output: Literal["arrow"] = ...,
+        features: Literal["timestep", "series"] = ...,
+    ) -> tuple[pa.Array, pa.Array]: ...
+    @overload
+    def to_features_and_targets(
+        self,
+        *,
+        task: type[TargetTask] | None = ...,
+        output: Literal["numpy"],
+        features: Literal["timestep", "series"] = ...,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
+    def to_features_and_targets(
+        self,
+        *,
+        task: type[TargetTask] | None = None,
+        output: Literal["arrow", "numpy"] = "arrow",
+        features: Literal["timestep", "series"] = "timestep",
+    ) -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]:
+        """Build an ``(X, y)`` training pair, deferring materialization by default.
+
+        Keeps every sample with exactly one task of ``task`` and pairs its sole channel's values with
+        that task's ``target``. ``features`` chooses the shape of ``X``:
+
+        - ``"timestep"`` (default): one feature per point, a rectangular matrix. Needs equal-length
+          samples. Arrow ``FixedSizeListArray[T]``; NumPy ``(n, T)`` ``float32``.
+        - ``"series"``: one sequence feature per sample, so variable-length series are fine. Arrow
+          ``ListArray``; NumPy ``(n,)`` object array of 1-D arrays.
+
+        ``output="arrow"`` (the default) builds those straight from the series loaders with no NumPy copy
+        in between; ``output="numpy"`` materializes them. ``y`` is always the targets (an Arrow string
+        array or a 1-D NumPy array).
+
+        Args:
+            task: The target-bearing task type to read labels from (e.g.
+                :class:`~timenet.types.ClassificationTask`). Omit it to infer the type when the dataset
+                has exactly one target-bearing task type; ``ForecastingTask`` has no target.
+            output: ``"arrow"`` to keep the deferred Arrow arrays, or ``"numpy"`` to materialize them.
+            features: ``"timestep"`` for a rectangular per-point matrix, or ``"series"`` for one
+                variable-length sequence per sample.
+
+        Returns:
+            ``(X, y)`` as two Arrow arrays (``output="arrow"``) or two NumPy arrays (``output="numpy"``).
+
+        Raises:
+            ValueError: If ``output``/``features`` is invalid; if ``task`` is omitted and the dataset has
+                zero or several target-bearing task types; if no sample carries exactly one such task; if
+                a matched sample is not single-channel; or ``features="timestep"`` is asked of samples
+                that are not all the same length.
+        """
+        if output not in ("arrow", "numpy"):
+            raise ValueError(f"output must be 'arrow' or 'numpy', got {output!r}")
+        if features not in ("timestep", "series"):
+            raise ValueError(f"features must be 'timestep' or 'series', got {features!r}")
+        resolved = task if task is not None else self._infer_target_task()
+        matched_by_sample: dict[str, list[TargetTask]] = {}
+        for candidate in self.tasks_of(resolved):
+            for sample_id in candidate.sample_ids:
+                matched_by_sample.setdefault(sample_id, []).append(candidate)
+        rows: list[pa.Array] = []
+        targets: list[str] = []
+        for sample in self._samples:
+            matched = matched_by_sample.get(sample.sample_id)
+            if matched is None or len(matched) != 1:
+                continue
+            rows.append(sample.to_arrow())  # Arrow straight from the loader, no NumPy copy
+            targets.append(matched[0].target)
+        if not rows:
+            raise ValueError(f"no sample carries exactly one {resolved.__name__} task")
+        # Build only the representation asked for: no Arrow list array on the NumPy path, and no
+        # concat of every point on the series+NumPy path.
+        y = pa.array(targets)
+        if features == "series":  # one variable-length sequence per sample
+            if output == "numpy":
+                x_obj = np.empty(len(rows), dtype=object)
+                x_obj[:] = [row.to_numpy(zero_copy_only=False) for row in rows]
+                return x_obj, y.to_numpy(zero_copy_only=False)
+            offsets = [0]
+            for row in rows:
+                offsets.append(offsets[-1] + len(row))
+            return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(rows)), y
+        # features == "timestep": a rectangular matrix, so every sample must share one length
+        length = len(rows[0])
+        if any(len(row) != length for row in rows):
+            raise ValueError(
+                f"features='timestep' needs equal-length samples (got {sorted({len(r) for r in rows})}); "
+                "use features='series'"
+            )
+        values = pa.concat_arrays(rows)
+        if output == "numpy":
+            return values.to_numpy(zero_copy_only=False).reshape(len(rows), length), y.to_numpy(zero_copy_only=False)
+        return pa.FixedSizeListArray.from_arrays(values, length), y
+
+    def _infer_target_task(self) -> type[TargetTask]:
+        """Infer the dataset's sole target-bearing task type, for :meth:`to_features_and_targets`.
+
+        Returns:
+            The single task class carrying a ``target``.
+
+        Raises:
+            ValueError: If the dataset has zero or several target-bearing task types (pass ``task=``).
+        """
+        kinds = {type(task) for task in self.tasks_of(TargetTask)}
+        if len(kinds) == 1:
+            return kinds.pop()
+        names = ", ".join(sorted(kind.__name__ for kind in kinds)) or "(none)"
+        raise ValueError(f"pass task= to to_features_and_targets; dataset has target task types: {names}")
 
     def describe(self, *, rows: int = 5, file: TextIO | None = None) -> None:
         """Print a plain-text summary: identity, counts, specs/columns, and a sample preview.

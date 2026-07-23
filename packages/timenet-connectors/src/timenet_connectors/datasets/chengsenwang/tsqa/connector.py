@@ -5,21 +5,11 @@ Source: ``ChengsenWang/TSQA`` — each row has ``Task, Size, Question, Answer, L
 sample carrying the series plus a :class:`~timenet.types.QATask`.
 """
 
-from collections.abc import Callable
 import json
 from typing import Any
 
-import numpy as np
-import pyarrow as pa
-
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import (
-    QATask,
-    StaticAnnotation,
-    TimeSeriesSpec,
-    View,
-    ureg,
-)
+from timenet.types import QATask, StaticAnnotation, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 
@@ -30,22 +20,6 @@ _SPEC = TimeSeriesSpec(
     unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
 )
-
-
-def _loader(values: list[float]) -> Callable[[], pa.Array]:
-    """Build a loader returning the parsed values as a float32 Arrow array.
-
-    Args:
-        values: The parsed series values.
-
-    Returns:
-        A no-argument loader returning the values as a float32 Arrow array.
-    """
-
-    def load() -> pa.Array:
-        return pa.array(np.asarray(values, dtype=np.float32))
-
-    return load
 
 
 class TSQAConnector(BaseHuggingFaceConnector):
@@ -67,18 +41,16 @@ class TSQAConnector(BaseHuggingFaceConnector):
             series = json.loads(row["Series"])
             channels = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
-                TimeSeries(
+                TimeSeries.from_values(
+                    values,
                     spec=_SPEC,
                     channel=f"c{channel}",
                     sampling_rate_hz=1.0,
-                    loader=_loader(values),
                     time_series_id=f"row-{index}-c{channel}",
-                    t_start_s=0.0,
-                    t_end_s=float(len(values)),
                 )
                 for channel, values in enumerate(channels)
             )
-            sample = dataset.add_sample(time_series=time_series, view=View.FULL, sample_id=f"row-{index}")
+            sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
             sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
