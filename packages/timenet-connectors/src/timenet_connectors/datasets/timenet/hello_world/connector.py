@@ -78,13 +78,7 @@ def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Calla
 
 
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
-    """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset.
-
-    Its descriptive identity lives in ``hello_world.yaml`` beside this module, not in code, so the card
-    is the single source of truth for it.
-    """
-
-    CARD = Path(__file__).with_name("hello_world.yaml")
+    """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
     def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002 (synthetic: no cache needed)
         """Return deterministic recording descriptions (no network, ``cache_dir`` unused).

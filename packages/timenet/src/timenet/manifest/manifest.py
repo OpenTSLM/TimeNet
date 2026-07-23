@@ -19,12 +19,9 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     DataSource,
-    Domain,
-    License,
     Task,
     TaskType,
     TimeSeriesSpec,
-    Version,
     ureg,
 )
 
@@ -215,17 +212,7 @@ def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
 
 def _metadata_from_dict(data: dict[str, Any]) -> DatasetMetadata:
     try:
-        return DatasetMetadata(
-            dataset_id=data["dataset_id"],
-            dataset_version=Version.parse(data["dataset_version"]),
-            name=data["name"],
-            description=data["description"],
-            license=License(data["license"]),
-            domains=tuple(Domain(domain) for domain in _str_tuple(data.get("domains", ()), "domains")),
-            tags=_str_tuple(data.get("tags", ()), "tags"),
-            source_url=data.get("source_url"),
-            yaml_schema_version=data.get("yaml_schema_version", 1),
-        )
+        return DatasetMetadata.from_dict(data)
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise InvalidManifestError(f"invalid manifest 'metadata' block: {exc}") from exc
 

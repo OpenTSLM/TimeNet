@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-x-labs.github.io/TimeNet/schemas/manifest-v1.schema.json",
+  "title": "TimeNet Dataset Manifest",
+  "description": "The compiled manifest.json: the single source a consumer reads to interpret a dataset version. Describes the serialized shape produced by Manifest.to_dict().",
+  "type": "object",
+  "required": ["timef_format_version", "dataset_id", "metadata", "files"],
+  "properties": {
+    "timef_format_version": { "type": "integer", "const": 1 },
+    "dataset_id": { "$ref": "#/$defs/datasetId" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "schema": { "$ref": "#/$defs/schema" },
+    "counts": { "$ref": "#/$defs/counts" },
+    "files": { "$ref": "#/$defs/files" },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Map of version-relative path to a 'sha256:...' digest."
+    }
+  },
+  "$defs": {
+    "datasetId": {
+      "type": "string",
+      "pattern": "^(?!\\.)[A-Za-z0-9._-]+/(?!\\.)[A-Za-z0-9._-]+$",
+      "description": "HuggingFace-style org/name: exactly one slash, and no segment may start with '.'."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "major.minor.patch with non-negative integer components."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX-style license identifier. Kept in sync with timenet.types.License by a drift test.",
+      "enum": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "GPL-3.0",
+        "LGPL-3.0",
+        "MPL-2.0",
+        "CC0-1.0",
+        "CC-BY-4.0",
+        "CC-BY-SA-4.0",
+        "CC-BY-NC-4.0",
+        "ODC-By-1.0",
+        "ODbL-1.0"
+      ]
+    },
+    "domain": {
+      "type": "string",
+      "description": "Kept in sync with timenet.types.Domain by a drift test.",
+      "enum": [
+        "health",
+        "cardiology",
+        "sleep",
+        "activity",
+        "economics",
+        "finance",
+        "general"
+      ]
+    },
+    "annotationType": {
+      "type": "string",
+      "description": "Kept in sync with timenet.types.AnnotationType by a drift test.",
+      "enum": ["static", "point", "interval"]
+    },
+    "valueType": {
+      "type": "string",
+      "description": "The manifest value_type tag for an annotation value. Kept in sync with timenet.types.value_type_of by a drift test.",
+      "enum": ["bool", "int", "float", "str", "list"]
+    },
+    "taskType": {
+      "type": "string",
+      "description": "Kept in sync with timenet.types.TaskType by a drift test.",
+      "enum": [
+        "classification",
+        "labeling",
+        "captioning",
+        "question_and_answer",
+        "forecasting",
+        "reasoning"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Descriptive identity. Unmodeled keys are tolerated (the codec drops them), so this block is not strict.",
+      "required": ["dataset_id", "dataset_version", "name", "description", "license"],
+      "properties": {
+        "dataset_id": { "$ref": "#/$defs/datasetId" },
+        "dataset_version": { "$ref": "#/$defs/semver" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "license": { "$ref": "#/$defs/license" },
+        "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "source_url": { "type": ["string", "null"] },
+        "yaml_schema_version": { "type": "integer" }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "description": "A faithful serialization of DatasetSchema (flat descriptors), derived from the data.",
+      "properties": {
+        "time_series_specs": { "type": "array", "items": { "$ref": "#/$defs/timeSeriesSpec" } },
+        "data_sources": { "type": "array", "items": { "$ref": "#/$defs/dataSource" } },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
+        "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+      }
+    },
+    "timeSeriesSpec": {
+      "type": "object",
+      "required": ["spec_type", "name", "unit_sampling_rate", "unit_timestamp", "unit_value"],
+      "properties": {
+        "spec_type": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "unit_sampling_rate": { "type": "string", "minLength": 1, "description": "A pint unit name (dimensionality is checked in Python, not here)." },
+        "unit_timestamp": { "type": "string", "minLength": 1 },
+        "unit_value": { "type": "string", "minLength": 1 },
+        "data_source": { "type": ["string", "null"], "description": "The data_source_type tag of an entry in data_sources, or null." }
+      }
+    },
+    "dataSource": {
+      "type": "object",
+      "required": ["data_source_type", "name"],
+      "properties": {
+        "data_source_type": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "provider": { "type": ["string", "null"] }
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "required": ["key", "annotation_type"],
+      "properties": {
+        "key": { "type": "string" },
+        "annotation_type": { "$ref": "#/$defs/annotationType" },
+        "value_type": { "anyOf": [{ "$ref": "#/$defs/valueType" }, { "type": "null" }] },
+        "unit": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["task_type"],
+      "properties": { "task_type": { "$ref": "#/$defs/taskType" } }
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "samples": { "type": "integer" },
+        "annotations": { "type": "integer" },
+        "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "time_series_chunks": { "type": "integer" },
+        "time_series_index_rows": { "type": "integer" },
+        "time_series_specs": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    },
+    "files": {
+      "type": "object",
+      "description": "Version-relative file parts. Each artifact is a list, never a bare string.",
+      "required": ["samples", "annotations", "time_series_index"],
+      "properties": {
+        "samples": { "type": "array", "items": { "type": "string" } },
+        "annotations": { "type": "array", "items": { "type": "string" } },
+        "time_series_index": { "type": "array", "items": { "type": "string" } },
+        "tasks": { "type": "array", "items": { "type": "string" } },
+        "time_series": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

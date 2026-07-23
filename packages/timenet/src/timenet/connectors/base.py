@@ -20,22 +20,22 @@ TRaw = TypeVar("TRaw")
 class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
-    A connector declares its descriptive identity in a dataset card YAML beside its module (read by
-    :meth:`metadata`); set :attr:`CARD` to point elsewhere. Subclasses implement the two abstract
-    stages, kept distinct: ``download`` is I/O-only and ``convert`` is CPU-only. Connectors take no
-    constructor arguments.
+    A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
+    card beside it (read by :meth:`metadata`); set :attr:`CARD` to point elsewhere. Subclasses
+    implement the two abstract stages, kept distinct: ``download`` is I/O-only and ``convert`` is
+    CPU-only. Connectors take no constructor arguments.
     """
 
     CARD: ClassVar[str | Path | None] = None
-    """Explicit path to the dataset card YAML. When ``None``, the card is read from ``dataset.yaml`` in
-    the connector's own folder (:meth:`_card_path`)."""
+    """Optional explicit path to the dataset card YAML. When ``None`` (the default), the card is read
+    from ``dataset.yaml`` in the connector's own folder."""
 
     @classmethod
     def _card_path(cls) -> Path:
-        """Resolve the dataset card path.
+        """Resolve the dataset card path by convention.
 
         Returns:
-            :attr:`CARD` if set, otherwise ``dataset.yaml`` beside the connector's module.
+            :attr:`CARD` if set, otherwise ``dataset.yaml`` in the directory of the connector's module.
         """
         if cls.CARD is not None:
             return Path(cls.CARD)
@@ -44,8 +44,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     def metadata(self) -> DatasetMetadata:
         """Return the dataset's descriptive identity, loaded and validated from its card YAML.
 
-        The card is the single source of truth for identity; the connector never restates it in code.
-        Its ``dataset_id`` must match the id the connector is registered/curated under.
+        Reads the card by convention (``dataset.yaml`` beside the connector, unless :attr:`CARD`
+        overrides it). Its ``dataset_id`` must match the id the connector is registered/curated under.
 
         Returns:
             The dataset's :class:`~timenet.types.DatasetMetadata`.

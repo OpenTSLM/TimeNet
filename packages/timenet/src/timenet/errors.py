@@ -26,13 +26,13 @@ class TimeFEditError(TimeFValidationError):
     """An edit would leave a dataset referentially inconsistent (e.g. a dangling reference)."""
 
 
+class InvalidCardError(TimeNetError, ValueError):
+    """A dataset card YAML is malformed or fails schema validation (raised while curating)."""
+
+
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
 
 
 class InvalidManifestError(TimeFFormatError, ValueError):
     """A ``manifest.json`` is missing required blocks/fields or cannot be parsed."""
-
-
-class InvalidCardError(TimeNetError, ValueError):
-    """A dataset card YAML is malformed or fails schema validation (raised while curating)."""

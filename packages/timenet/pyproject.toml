@@ -12,12 +12,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# PyYAML and jsonschema are only needed to author or read dataset cards. DatasetMetadata.from_yaml
-# imports them lazily and raises a clear "install timenet[curation]" message when this extra is absent.
-curation = [
-    "pyyaml>=6",
-    "jsonschema>=4.18",
-]
 # The console CLI (`timenet`) needs Typer + Rich; the SDK and TimeF format do not. `timenet.cli:main`
 # degrades with a clear "install timenet[cli]" message when this extra is absent.
 cli = [
@@ -27,8 +21,15 @@ cli = [
 torch = [
     "torch>=2.2",
 ]
+# Curating a dataset loads and validates its human-authored card YAML against the packaged JSON Schema.
+# The lean consumer core (reading manifests) needs neither dep; `DatasetMetadata.from_yaml` imports them
+# lazily and raises a clear "install timenet[curation]" message when this extra is absent.
+curation = [
+    "pyyaml>=6",
+    "jsonschema>=4.18",
+]
 all = [
-    "timenet[cli,curation,torch]",
+    "timenet[cli,torch,curation]",
 ]
 
 [project.scripts]
