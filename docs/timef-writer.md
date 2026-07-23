@@ -65,7 +65,7 @@ Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay
 
 - `values.list.element` -> **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
 - monotonic ints (`chunk_idx`, `row_group`, `row_offset`) -> DELTA_BINARY_PACKED.
-- bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `label`, `shard_path`)
+- bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `target`, `shard_path`)
   -> dictionary + RLE.
 - id columns -> plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
   UUID (see below), otherwise as a UTF-8 string.

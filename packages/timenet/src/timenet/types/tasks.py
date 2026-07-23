@@ -51,25 +51,34 @@ class Task:
 
 
 @dataclass(kw_only=True)
-class ClassificationTask(Task):
-    """One discrete label applied to the whole sample."""
+class TargetTask(Task):
+    """Base for tasks that carry a single supervised ``target``.
 
-    task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
-    label: str
-    """The discrete class label for the sample."""
-    label_schema: str | None = None
-    """Name of the label vocabulary the label belongs to."""
+    Every task type except :class:`ForecastingTask` derives from this, so generic training code can read
+    ``task.target`` without knowing the concrete type (see
+    :meth:`~timenet.dataset.TimeFDataset.to_features_and_targets`). Not instantiated directly.
+    """
+
+    target: str
+    """The supervised target: the class label, region label, answer, or caption for the sample."""
 
 
 @dataclass(kw_only=True)
-class LabelingTask(Task):
+class ClassificationTask(TargetTask):
+    """One discrete label applied to the whole sample (the ``target``)."""
+
+    task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
+    target_schema: str | None = None
+    """Name of the label vocabulary the target belongs to."""
+
+
+@dataclass(kw_only=True)
+class LabelingTask(TargetTask):
     """Time-localized labels within a sample, optionally targeting specific series and windows."""
 
     task_type: ClassVar[TaskType] = TaskType.LABELING
-    label: str
-    """The label applied to the targeted region."""
-    label_schema: str | None = None
-    """Name of the label vocabulary the label belongs to."""
+    target_schema: str | None = None
+    """Name of the label vocabulary the target belongs to."""
     time_series_ids: tuple[str, ...] | None = None
     """Series the label targets, or None for all series in the sample."""
     windows_s: tuple[tuple[float, float], ...] | None = None
@@ -95,28 +104,24 @@ class LabelingTask(Task):
 
 
 @dataclass(kw_only=True)
-class CaptioningTask(Task):
-    """Free-form text describing the sample."""
+class CaptioningTask(TargetTask):
+    """Free-form text describing the sample (the ``target`` is the caption)."""
 
     task_type: ClassVar[TaskType] = TaskType.CAPTIONING
-    answer: str
-    """Free-form text describing the sample."""
 
 
 @dataclass(kw_only=True)
-class QATask(Task):
-    """A question and answer pair."""
+class QATask(TargetTask):
+    """A question and its answer (the ``target``)."""
 
     task_type: ClassVar[TaskType] = TaskType.QUESTION_AND_ANSWER
     question: str
     """The question posed about the sample."""
-    answer: str
-    """The answer to the question."""
 
 
 @dataclass(kw_only=True)
 class ForecastingTask(Task):
-    """Predict future values of a series, conditioned on context samples."""
+    """Predict future values of a series, conditioned on context samples (no scalar ``target``)."""
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
     context_sample_ids: tuple[str, ...]
@@ -126,11 +131,11 @@ class ForecastingTask(Task):
 
 
 @dataclass(kw_only=True)
-class ReasoningTask(Task):
+class ReasoningTask(TargetTask):
     """A question answered by reasoning to a final answer. Often composed via ``from_tasks``.
 
-    Unlike :class:`QATask` (single-label answer), a reasoning task carries the chain of thought in
-    ``rationale``. The ``answer`` is the evaluation target; the ``rationale`` is the reasoning trace to
+    Unlike :class:`QATask` (question plus text answer), a reasoning task carries the chain of thought in
+    ``rationale``. The ``target`` is the evaluation answer; the ``rationale`` is the reasoning trace to
     train / fine-tune on (``None`` when the source has no stored rationale).
     """
 
@@ -139,15 +144,12 @@ class ReasoningTask(Task):
     """The question to be answered by reasoning."""
     rationale: str | None = None
     """The reasoning trace to train on, or None when the source stores none."""
-    answer: str
-    """The final answer used as the evaluation target."""
 
 
 def _concrete_task_classes() -> list[type[Task]]:
-    """Collect every concrete task class (those declaring their own ``task_type``).
+    """Collect every concrete task class (those declaring a ``task_type``) across the hierarchy.
 
-    Walks the subclass tree rather than reading ``Task.__subclasses__()`` directly, so an intermediate
-    base that groups tasks without claiming a ``task_type`` is skipped instead of raising.
+    Walks the subclass tree so intermediate bases like :class:`TargetTask` are skipped.
 
     Returns:
         The concrete task classes.

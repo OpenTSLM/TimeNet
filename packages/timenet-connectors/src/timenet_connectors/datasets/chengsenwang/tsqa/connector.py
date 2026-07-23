@@ -82,7 +82,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(sample, QATask(question=row["Question"], answer=row["Answer"], id=f"qa-{index}"))
+            dataset.add_task(sample, QATask(question=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 

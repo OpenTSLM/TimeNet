@@ -17,13 +17,13 @@ There are six concrete task types.
 
 ## ClassificationTask
 
-One discrete label applied to the whole sample. No free text out. `label_schema` names the vocabulary
+One discrete label applied to the whole sample. No free text out. `target_schema` names the vocabulary
 the label belongs to.
 
 ```python
 from timenet.types import ClassificationTask
 
-ClassificationTask(label="faulty", label_schema="condition")
+ClassificationTask(target="faulty", target_schema="condition")
 ```
 
 <figure markdown="span">
@@ -40,7 +40,7 @@ series over the full duration.
 ```python
 from timenet.types import LabelingTask
 
-LabelingTask(label="fault_episode", time_series_ids=("vibration",), windows_s=((5.0, 8.0),))
+LabelingTask(target="fault_episode", time_series_ids=("vibration",), windows_s=((5.0, 8.0),))
 ```
 
 <figure markdown="span">
@@ -49,12 +49,12 @@ LabelingTask(label="fault_episode", time_series_ids=("vibration",), windows_s=((
 
 ## CaptioningTask
 
-A free-text description of the recording: prompt in, a paragraph out. The `answer` is the caption.
+A free-text description of the recording: prompt in, a paragraph out. The `target` is the caption.
 
 ```python
 from timenet.types import CaptioningTask
 
-CaptioningTask(answer="A 10-second vibration trace with rising amplitude and a periodic impact after 5 s.")
+CaptioningTask(target="A 10-second vibration trace with rising amplitude and a periodic impact after 5 s.")
 ```
 
 <figure markdown="span">
@@ -68,7 +68,7 @@ A question and answer pair: a single-label answer to a question about the sample
 ```python
 from timenet.types import QATask
 
-QATask(question="Is the machine healthy?", answer="No, a bearing fault is present")
+QATask(question="Is the machine healthy?", target="No, a bearing fault is present")
 ```
 
 <figure markdown="span">
@@ -93,13 +93,13 @@ ForecastingTask(context_sample_ids=("2024-01-01",), target_sample_id="2024-01-02
 ## ReasoningTask
 
 A question answered by reasoning to a final answer. Unlike `QATask`, it carries the chain of thought in
-`rationale`; the `answer` is the evaluation target. Reasoning tasks are usually **composed** from a base
+`rationale`; the `target` is the evaluation target. Reasoning tasks are usually **composed** from a base
 task via `from_tasks`, so a handful of base labels multiply into many higher-level training samples.
 
 ```python
 from timenet.types import ClassificationTask, ReasoningTask
 
-base = ClassificationTask(label="faulty", label_schema="condition")
+base = ClassificationTask(target="faulty", target_schema="condition")
 
 ReasoningTask(
     question="Does this trace show a bearing fault? Walk through your reasoning.",
@@ -108,7 +108,7 @@ ReasoningTask(
         "revolution. That periodicity matches the bearing's ball-pass frequency rather than imbalance, "
         "which would track shaft speed."
     ),
-    answer="Yes, an outer-race bearing fault",
+    target="Yes, an outer-race bearing fault",
     from_tasks=(base,),
 )
 ```
