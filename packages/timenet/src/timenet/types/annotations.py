@@ -31,10 +31,15 @@ class Annotation:
     """Base for all annotations. Not instantiated directly; use one of the three shapes below."""
 
     key: str
+    """Name identifying the annotation."""
     value: Any = None
+    """The annotation's payload value."""
     unit: str | None = None
+    """Optional physical unit of ``value``."""
     description: str | None = None
+    """Optional human-readable description of the annotation."""
     id: str = field(default_factory=new_id)
+    """Unique identifier, a UUIDv7 string by default."""
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list.
@@ -53,6 +58,7 @@ class StaticAnnotation(Annotation):
     """Sample-scoped, time-independent context. Carries a required ``value`` and no time fields."""
 
     value: Any = None
+    """Required payload value; must not be ``None``."""
 
     def __post_init__(self) -> None:
         """Reject a missing value.
@@ -71,7 +77,9 @@ class PointAnnotation(Annotation):
     """Anchored to a single instant in the original recording timeline."""
 
     start_time_s: float
+    """Instant on the original recording timeline, in seconds."""
     time_series_ids: tuple[str, ...] | None = None
+    """Series this annotation targets; ``None`` covers the whole sample."""
 
     def __post_init__(self) -> None:
         """Reject an explicitly empty ``time_series_ids``.
@@ -91,8 +99,11 @@ class IntervalAnnotation(Annotation):
     """Anchored to a bounded interval in the original recording timeline."""
 
     start_time_s: float
+    """Interval start on the recording timeline, in seconds."""
     end_time_s: float
+    """Interval end in seconds; must exceed ``start_time_s``."""
     time_series_ids: tuple[str, ...] | None = None
+    """Series this annotation targets; ``None`` covers the whole sample."""
 
     def __post_init__(self) -> None:
         """Reject a non-positive interval or an explicitly empty ``time_series_ids``.
@@ -145,10 +156,15 @@ class AnnotationDescriptor:
     """Type-level projection of an annotation key, stored in the schema and manifest."""
 
     key: str
+    """Name of the annotation this descriptor projects."""
     annotation_type: AnnotationType
+    """Which of the three annotation shapes this key uses."""
     value_type: str | None = None
+    """Manifest value-type tag (bool, int, float, str, or list)."""
     unit: str | None = None
+    """Optional physical unit of the value."""
     description: str | None = None
+    """Optional human-readable description of the annotation."""
 
 
 def value_type_of(value: Any) -> str | None:

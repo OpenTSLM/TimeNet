@@ -37,14 +37,23 @@ class Manifest:
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
 
     dataset_id: str
+    """Denormalized copy of ``metadata.dataset_id``, readable without parsing metadata."""
     metadata: DatasetMetadata
+    """Descriptive identity of the dataset (name, version, license, domains, tags)."""
     files: ManifestFiles
+    """Relative paths to every data artifact, grouped by kind."""
     schema: DatasetSchema = field(default_factory=DatasetSchema)
+    """Structural schema: time-series specs, data sources, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
+    """Row and entity counts recorded for quick inspection."""
     checksums: dict[str, str] = field(default_factory=dict)
+    """Per-file checksums keyed by relative path, each ``sha256:`` prefixed."""
     id_encoding: dict[str, str] = field(default_factory=dict)
+    """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
     derived_from: dict[str, str] | None = None
+    """Copy-on-write lineage (base version + operation), or ``None`` for a freshly built version."""
     timef_format_version: int = 1
+    """TimeF manifest format version; must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
         """Validate the format version and the denormalized ``dataset_id``.

@@ -62,13 +62,21 @@ class _Chunk:
     """One sub-chunk of a series buffered for the current row group."""
 
     time_series_id: str
+    """Id of the series this chunk belongs to."""
     spec_type: str
+    """Spec type of the source series."""
     channel: str
+    """Channel name of the source series."""
     chunk_idx: int
+    """Zero-based index of this chunk within the series."""
     t_start_s: float
+    """Start time of the chunk in seconds."""
     n_values: int
+    """Number of values in this chunk."""
     sampling_rate_hz: float
+    """Sampling rate of the series in Hz."""
     values: pa.Array
+    """The chunk's float32 values."""
 
 
 @dataclass
@@ -76,13 +84,21 @@ class _Placement:
     """Where a chunk landed on disk, plus the metadata needed to build the index."""
 
     shard_path: str
+    """Path of the shard file, relative to the staging directory."""
     row_group: int
+    """Index of the row group within the shard."""
     row_offset: int
+    """Row offset of the chunk within its row group."""
     spec_type: str
+    """Spec type of the source series."""
     channel: str
+    """Channel name of the source series."""
     t_start_s: float
+    """Start time of the chunk in seconds."""
     n_values: int
+    """Number of values in the chunk."""
     sampling_rate_hz: float
+    """Sampling rate of the series in Hz."""
 
 
 class TimeFWriter:

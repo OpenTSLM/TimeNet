@@ -1,8 +1,16 @@
+---
+icon: lucide/database
+description: "Registry backends that serve manifests and parquet to the SDK."
+tags:
+  - guide
+  - registry
+---
+
 # Registry
 
 A registry serves compiled manifests and parquet to the SDK. It never runs connector code. Lives in
 `timenet.registry`. There can be several registries: one public, private internal ones, or a local
-directory (the output of [curation](engine.md) is itself a valid local registry).
+directory (the output of [curation](curation.md) is itself a valid local registry).
 
 ## Choosing a registry
 
@@ -24,25 +32,36 @@ registry = open_registry("timenet://")                # the hosted TimeNet regis
 | `http(s)://` | `RemoteRegistry` (deferred) |
 | `timenet://` | `RemoteRegistry`, an alias for the hosted `https://registry.timenet.ai` |
 
+An unrecognized scheme (`gs://`, `az://`, ...) raises `ValueError` instead of silently becoming a local
+path, and `~` is expanded in a local path or `file://` URI.
+
+!!! warning "Only local registries today"
+    `LocalRegistry` is the only working backend. The `s3://`, `http(s)://`, and `timenet://`
+    backends are stubs that raise `NotImplementedError` until they land.
+
 ## `BaseRegistry`
 
-The read contract every backend implements (three data-access methods) plus a shared `search`:
+The contract every backend implements (three data-access methods) plus a shared `search`:
 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
-| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version. |
+| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for binary reading. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` is a placeholder for the
-versioned REST contract (`GET /v1/datasets`, `/v1/datasets/{id}/{version}/manifest`, ...) and `S3Registry`
-for the same layout under an S3 prefix; both currently raise `NotImplementedError`.
+versioned REST contract (`GET /v1/datasets`, `/v1/datasets/{id}/{version}/manifest`, ...) and
+`S3Registry` for the same layout under an S3 prefix; both currently raise `NotImplementedError`.
+
+Dataset ids are an `org/name` pair (`chengsenwang/tsqa`), which nests one level deep on disk
+(`<root>/chengsenwang/tsqa/<version>/`). `list_datasets` discovers them depth-agnostically. Prefer
+lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
 ## Writing to a registry
 
-A `WritableRegistry` adds one write primitive to the read contract, so [curation](engine.md) can publish
-into any backend, not just a local directory:
+A `WritableRegistry` adds one write primitive to the read contract, so [curation](curation.md) can
+publish into any backend, not just a local directory:
 
 | Method | Description |
 | --- | --- |
@@ -61,10 +80,6 @@ registry = open_writable_registry("~/.timenet/local")
 version = registry.store(dataset)   # schema derived if needed, atomic commit
 ```
 
-Dataset ids are an `org/name` pair (`chengsenwang/tsqa`), which nests one level deep on disk
-(`<root>/chengsenwang/tsqa/<version>/`). `list_datasets` discovers them depth-agnostically. Prefer
-lowercase ids to avoid casing clashes on case-insensitive filesystems.
-
 ## `search`
 
 ```python
@@ -75,7 +90,8 @@ registry.search(
 ```
 
 Every filter takes a scalar or a list; `None` filters are ignored and non-`None` filters are ANDed. The
-consumer CLI mirrors this one-to-one (`timenet search`).
+consumer CLI mirrors this one-to-one (`timenet search`). `limit` caps the result count (default 100);
+`limit=0` returns nothing and a negative `limit` raises `ValueError`.
 
 | Filter | Matches |
 | --- | --- |
@@ -87,5 +103,9 @@ consumer CLI mirrors this one-to-one (`timenet search`).
 | `dataset_id` | dataset id is any of these |
 | `tag` | dataset declares all of these tags |
 
-The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest —
-no `precomputed_schema` is needed because the manifest always carries the derived schema.
+The type-filters (`task`, `time_series_spec`) resolve each dataset's schema from its committed manifest.
+No `precomputed_schema` is needed because the manifest always carries the derived schema.
+
+---
+
+See the [API reference for `timenet.registry`](api/registry.md) for the full symbol listing.
