@@ -14,10 +14,11 @@ this branch. Anchor files:
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
 `convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
-- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
-  CPU only, no network.
+- `download(self, cache_dir: Path) -> list[TRaw]` (concrete, default `return []`): fetch/discover raw
+  source files, return lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`. A
+  synthetic connector that builds everything in `convert` can skip it (e.g. `timenet/test_mean`).
+- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (**abstract**, the only one): parse refs into a
+  `TimeFDataset`. CPU only, no network.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
