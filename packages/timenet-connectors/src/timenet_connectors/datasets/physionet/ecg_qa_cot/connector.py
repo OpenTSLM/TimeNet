@@ -3,7 +3,7 @@
 Each sample is one PTB-XL recording (12 leads at 500 Hz, in millivolts) paired with a clinical
 question, a short ground-truth answer, and a chain-of-thought rationale. The rationale is the reasoning
 training target and the short answer is the evaluation label, so each sample carries a
-:class:`~timenet.types.ReasoningTask` whose ``answer`` is the label and whose ``rationale`` is the CoT.
+:class:`~timenet.types.ReasoningTask` whose ``target`` is the label and whose ``rationale`` is the CoT.
 
 Sources: signals from PhysioNet PTB-XL; the per-template answer options from the ``Jwoo5/ecg-qa``
 GitHub repo; the precomputed CoT rows (question / answer / rationale / template) from the OpenTSLM
@@ -23,7 +23,6 @@ from timenet.types import (
     ReasoningTask,
     StaticAnnotation,
     TimeSeriesSpec,
-    View,
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
@@ -212,7 +211,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
             if leads is None:
                 leads = self._leads_for(ref)
                 leads_by_ecg[ref.ecg_id] = leads
-            sample = dataset.add_sample(time_series=leads, view=View.FULL, sample_id=f"ecgqa-{ref.split}-{ref.index}")
+            sample = dataset.add_sample(time_series=leads, sample_id=f"ecgqa-{ref.split}-{ref.index}")
             sample.add_annotation(StaticAnnotation(key="split", value=ref.split, id=f"split-{ref.index}"))
             sample.add_annotation(
                 StaticAnnotation(key="question_type", value=ref.question_type, id=f"qtype-{ref.index}")
