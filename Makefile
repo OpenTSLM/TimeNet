@@ -1,7 +1,7 @@
 .PHONY: sync test check install-hooks lint-fix build docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
-	uv sync --all-groups --all-extras
+	uv sync --all-groups --all-extras --no-extra torch-cpu
 
 test:
 	uv run pytest

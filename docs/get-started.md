@@ -19,7 +19,7 @@ extras you opt into.
     ```bash
     uv add timenet            # core: TimeF format, reader/writer, registry client
     uv add 'timenet[cli]'     # add the timenet console command
-    uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset)
+    uv add 'timenet[torch-gpu]'   # add load_torch (PyTorch Dataset); or timenet[torch-cpu] for CPU-only
     ```
 
 === "pip"
@@ -27,7 +27,7 @@ extras you opt into.
     ```bash
     pip install timenet
     pip install 'timenet[cli]'
-    pip install 'timenet[torch]'
+    pip install 'timenet[torch-gpu]'
     ```
 
 === "Global CLI"
@@ -45,7 +45,7 @@ To work on TimeNet or author connectors, clone the repo and sync with uv:
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-uv sync --all-groups --all-extras
+uv sync --all-groups --all-extras --no-extra torch-cpu
 ```
 
 ## Load a dataset
