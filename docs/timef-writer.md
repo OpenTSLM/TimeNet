@@ -55,8 +55,9 @@ Targets are measured in uncompressed value bytes; on disk (zstd) files are small
 `write()` dedupes series by `time_series_id` (each unique series' loader is called exactly once), sorts
 them by `(spec_type, channel, time_series_id)`, then streams: each series is split into chunks of at most
 `chunk_max_bytes`, chunks are buffered until `row_group_target_bytes` and flushed as one row group, and
-shards rotate at `shard_target_bytes`. A row group never spans shards, so the index's
-`(shard_path, row_group, row_offset)` pointers are exact. A hard invariant caps a row group at 2³¹
+shards rotate at `shard_target_bytes`. A row group never spans shards, so the index's backend-neutral
+`(chunk_file, chunk_major_idx, chunk_minor_idx)` locator is exact; for Parquet these fields mean shard
+path, row group, and row offset. A hard invariant caps a row group at 2³¹
 values (`list<float32>` uses 32-bit offsets); the byte-based flush keeps it well under.
 
 ## Encodings
@@ -64,8 +65,8 @@ values (`list<float32>` uses 32-bit offsets); the byte-based flush keeps it well
 Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay stable:
 
 - `values.list.element` -> **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
-- monotonic ints (`chunk_idx`, `row_group`, `row_offset`) -> DELTA_BINARY_PACKED.
-- bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `target`, `shard_path`)
+- monotonic ints (`chunk_idx`, `chunk_major_idx`, `chunk_minor_idx`) -> DELTA_BINARY_PACKED.
+- bounded categoricals (`spec_type`, `channel`, `view`, `key`, `annotation_type`, `target`, `chunk_file`)
   -> dictionary + RLE.
 - id columns -> plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
   UUID (see below), otherwise as a UTF-8 string.

@@ -35,7 +35,8 @@ class ParquetValuesReader(BaseValuesReader):
             The series' 1-D float32 values.
         """
         chunks = [
-            self._row_group_values(root, row["shard_path"], row["row_group"])[row["row_offset"]].values for row in rows
+            self._row_group_values(root, row["chunk_file"], row["chunk_major_idx"])[row["chunk_minor_idx"]].values
+            for row in rows
         ]
         return pa.concat_arrays([chunk.cast(pa.float32()) for chunk in chunks])
 

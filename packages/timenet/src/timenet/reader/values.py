@@ -25,7 +25,8 @@ class BaseValuesReader(ABC):
 
         Args:
             root: The version directory.
-            rows: The series' index rows, sorted by ``chunk_idx``.
+            rows: The series' index rows, sorted by ``chunk_idx``; each holds ``chunk_file``,
+                ``chunk_major_idx``, and ``chunk_minor_idx``.
 
         Returns:
             The series' 1-D float32 values.

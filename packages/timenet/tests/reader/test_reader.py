@@ -177,11 +177,12 @@ def test_missing_manifest_raises(tmp_path):
         TimeFReader(tmp_path / "empty")
 
 
-def test_unsupported_format_version_raises(tmp_path):
+@pytest.mark.parametrize("format_version", [2, 99])
+def test_unsupported_format_version_raises(tmp_path, format_version):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"
     data = json.loads(manifest_path.read_text())
-    data["timef_format_version"] = 99
+    data["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(data))
     with pytest.raises(TimeFFormatError):
         TimeFReader(version_dir)
@@ -191,7 +192,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
         key = next(iter(reader._index))
-        del reader._index[key][0]["shard_path"]
+        del reader._index[key][0]["chunk_file"]
         with pytest.raises(ValueError, match=f"failed to read series {key[1]!r} for sample {key[0]!r}"):
             reader._load_values(*key)
 

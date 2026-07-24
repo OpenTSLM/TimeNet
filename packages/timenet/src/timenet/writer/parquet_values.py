@@ -1,7 +1,8 @@
 """The default values backend: streams ``list<float32>`` chunks into rotating Parquet shards.
 
-Shards use BYTE_STREAM_SPLIT + zstd. Each chunk is located by its ``(shard_path, row_group, row_offset)``
-placement, recorded in the backend-neutral time-series index.
+Shards use BYTE_STREAM_SPLIT + zstd. Each chunk's placement is recorded in the backend-neutral
+time-series index as a ``chunk_file`` plus a :class:`~timenet.writer.values.ChunkDataIndex` — for
+Parquet, the shard path, the row group (``major_idx``), and the row offset (``minor_idx``).
 """
 
 from collections.abc import Callable
@@ -17,7 +18,13 @@ from timenet.format.constants import SHARD_TEMPLATE
 from timenet.format.schemas import IdCodec, shard_schema
 from timenet.values_backends import ValuesBackend
 from timenet.writer import encodings
-from timenet.writer.values import BaseValuesBackend, ChunkPlacement, ParquetValuesConfig, ValuesWriteResult
+from timenet.writer.values import (
+    BaseValuesBackend,
+    ChunkDataIndex,
+    ChunkPlacement,
+    ParquetValuesConfig,
+    ValuesWriteResult,
+)
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
@@ -185,9 +192,8 @@ class _ShardStream:
         shard_path = self.shard_paths[self._shard_idx]
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(
-                shard_path=shard_path,
-                row_group=self._row_group,
-                row_offset=offset,
+                chunk_file=shard_path,
+                data_index=ChunkDataIndex(major_idx=self._row_group, minor_idx=offset),
                 spec_type=chunk.spec_type,
                 channel=chunk.channel,
                 t_start_s=chunk.t_start_s,

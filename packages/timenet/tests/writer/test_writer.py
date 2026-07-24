@@ -117,9 +117,9 @@ def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
     row = index[0]
-    shard = pq.ParquetFile(version_dir / row["shard_path"])
-    table = shard.read_row_group(row["row_group"])
-    chunk = table.column("values")[row["row_offset"]]
+    shard = pq.ParquetFile(version_dir / row["chunk_file"])
+    table = shard.read_row_group(row["chunk_major_idx"])
+    chunk = table.column("values")[row["chunk_minor_idx"]]
     assert len(chunk) == row["n_values"]
 
 
