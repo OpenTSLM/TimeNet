@@ -30,6 +30,12 @@ timenet-curate = "timenet_connectors.curate.cli:main"
 # and never reaches published metadata; Requires-Dist comes from the floor above.
 timenet = { workspace = true }
 
+[tool.uv.build-backend]
+# Connector tests live beside their connector (datasets/<org>/<name>/tests/, incl. binary fixtures).
+# Keep them out of the built distributions.
+source-exclude = ["**/tests"]
+wheel-exclude = ["**/tests"]
+
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]
 build-backend = "uv_build"
