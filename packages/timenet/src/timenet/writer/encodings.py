@@ -31,7 +31,7 @@ SAMPLES_DICTIONARY = [
 
 ANNOTATIONS_DICTIONARY = ["key", "annotation_type"]
 
-_TASK_CATEGORICAL = ("label", "label_schema")
+_TASK_CATEGORICAL = ("target", "target_schema")
 
 
 def task_dictionary(schema: pa.Schema) -> list[str]:

@@ -230,7 +230,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
             dataset.add_task(
                 sample,
                 ReasoningTask(
-                    question=ref.question, rationale=ref.rationale, answer=ref.answer, id=f"reason-{ref.index}"
+                    question=ref.question, rationale=ref.rationale, target=ref.answer, id=f"reason-{ref.index}"
                 ),
             )
         return dataset

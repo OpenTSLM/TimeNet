@@ -47,6 +47,11 @@ reusing one instance (or giving two instances the same explicit id) collapses to
 Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`; `loader` is plumbing
 supplied by the connector at curation and by [`TimeFReader`](timef-reader.md) on read-back.
 
+When a connector already holds the values in memory, use the classmethod
+`TimeSeries.from_values(values, *, spec, channel, sampling_rate_hz, source_id=None, time_series_id=None,
+t_start_s=0.0, t_end_s=None)`: it wraps them in a `float32` loader and derives `t_end_s` from the length.
+Reach for the `loader=` constructor above only for genuinely lazy sources (files, remote shards).
+
 ---
 
 ## Sample
@@ -67,6 +72,10 @@ via `TimeFDataset.add_sample`.
 `time_series_ids` resolve to series on the sample, and that a trial-level `IntervalAnnotation` is only
 added when the sample's series share a common `(t_start_s, t_end_s)` span.
 
+`to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common
+single-channel sample, raising `ValueError` for a multi-channel sample (index `time_series` yourself
+then).
+
 ---
 
 ## TimeFDataset
@@ -75,19 +84,20 @@ added when the sample's series share a common `(t_start_s, t_end_s)` span.
 from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
-sample = dataset.add_sample(time_series=(...), view=View.FULL, subject_ids=("p1",))
-dataset.add_task(sample, ClassificationTask(label="faulty"))
+sample = dataset.add_sample(time_series=(...), subject_ids=("p1",))   # view defaults to View.FULL
+dataset.add_task(sample, ClassificationTask(target="faulty"))
 dataset.derive_schema()
 ```
 
 ### `add_sample()`
 
 ```python
-add_sample(*, time_series, view, subject_ids=(), sample_id=None) -> Sample
+add_sample(*, time_series, view=View.FULL, subject_ids=(), sample_id=None) -> Sample
 ```
 
-Creates a sample, registers it, returns it. Raises `ValueError` if `time_series` is empty. Pass
-`sample_id` for deterministic output (e.g. golden fixtures).
+Creates a sample, registers it, returns it. `view` defaults to `View.FULL`; pass `view=View.WINDOW` for
+a windowed sample. Raises `ValueError` if `time_series` is empty. Pass `sample_id` for deterministic
+output (e.g. golden fixtures).
 
 ### `add_task()`
 
@@ -115,6 +125,31 @@ before the writer runs.
 
 `metadata`, `samples` (tuple, read-only), `tasks` (tuple, read-only), and `schema`
 (`DatasetSchema | None`, `None` until `derive_schema()` runs or the reader populates it).
+
+### `tasks_of()` / `tasks_for()`
+
+```python
+tasks_of(task_type) -> tuple[Task, ...]
+tasks_for(sample, task_type=Task) -> tuple[Task, ...]
+```
+
+`tasks_of` returns every task of a type across the dataset; `tasks_for` resolves one sample's `task_ids`
+back to task objects, optionally filtered by type.
+
+### `to_features_and_targets()`
+
+```python
+to_features_and_targets(*, task=None, output="arrow", features="timestep")
+    -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]
+```
+
+Builds an `(X, y)` training pair, **deferring materialization by default**. `features` picks the shape of
+`X`: `"timestep"` (default) gives one feature per point — a rectangular `FixedSizeListArray[T]` / `(n, T)`
+matrix that needs equal-length samples; `"series"` gives one sequence per sample — a `ListArray` / `(n,)`
+object array that also handles variable-length series. `output="arrow"` (default) builds these straight
+from the loaders with no NumPy copy; `output="numpy"` materializes them. `task` is inferred when the
+dataset has exactly one target-bearing type (pass it explicitly otherwise; `ForecastingTask` has no
+scalar target).
 
 ### `describe()`
 

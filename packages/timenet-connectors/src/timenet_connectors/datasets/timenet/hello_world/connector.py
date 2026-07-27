@@ -139,10 +139,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
             )
         )
-        classification = dataset.add_task(sample0, ClassificationTask(label="normal", id="task-cls-0"))
+        classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
         dataset.add_task(
             sample0,
-            QATask(question="What rhythm?", answer="Normal.", id="task-qa-0"),
+            QATask(question="What rhythm?", target="Normal.", id="task-qa-0"),
             from_tasks=(classification,),
         )
 
@@ -182,7 +182,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset.add_task(
             sample2,
             LabelingTask(
-                label="onset",
+                target="onset",
                 time_series_ids=(window.time_series_id,),
                 # windows_s is in the source recording timeline, so it sits inside the window's span.
                 windows_s=((0.5, 0.75),),

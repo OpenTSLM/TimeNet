@@ -74,10 +74,10 @@ def test_reasoning_task_answer_is_label_and_rationale_is_cot():
     rows = _rows()
     tasks = [t for t in dataset.tasks if isinstance(t, ReasoningTask)]
     assert len(tasks) == len(rows)
-    assert {t.answer for t in tasks} == {row["answer"] for row in rows}
+    assert {t.target for t in tasks} == {row["answer"] for row in rows}
     assert {t.rationale for t in tasks} == {row["rationale"] for row in rows}
     # answer is the short eval label, never the (much longer) chain-of-thought
-    assert all(task.answer != task.rationale for task in tasks)
+    assert all(task.target != task.rationale for task in tasks)
 
 
 def test_expected_annotations_present():
