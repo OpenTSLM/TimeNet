@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import Literal, TextIO, TypeVar, overload
 
 import numpy as np
 import pyarrow as pa
@@ -161,8 +161,8 @@ class TimeFDataset:
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
                 value_type=value_type_of(annotation.value),
-                # __post_init__ normalizes unit to a plain string (or None), so this is always str | None.
-                unit=cast("str | None", annotation.unit),
+                # __post_init__ normalizes unit to a plain string (or None).
+                unit=annotation.unit,
                 description=annotation.description,
             )
             for sample in self._samples
@@ -297,9 +297,25 @@ class TimeFDataset:
 
         Returns:
             The sample's tasks of ``task_type``, in the sample's task order.
+
+        Raises:
+            TimeFValidationError: If ``sample`` is not registered in this dataset, or if one of its
+                ``task_ids`` does not resolve to a registered task that links back to the sample.
         """
+        registered_ids = {registered.sample_id for registered in self._samples}
+        if sample.sample_id not in registered_ids:
+            raise TimeFValidationError(f"sample {sample.sample_id!r} is not registered in this dataset")
         by_id = {task.id: task for task in self._tasks}
-        return tuple(task for task_id in sample.task_ids if isinstance(task := by_id.get(task_id), task_type))
+        resolved: list[Task] = []
+        for task_id in sample.task_ids:
+            task = by_id.get(task_id)
+            if task is None or sample.sample_id not in task.sample_ids:
+                raise TimeFValidationError(
+                    f"sample {sample.sample_id!r} links task {task_id!r}, but the task is missing or does "
+                    f"not link back to the sample"
+                )
+            resolved.append(task)
+        return tuple(task for task in resolved if isinstance(task, task_type))
 
     @overload
     def to_features_and_targets(
@@ -326,8 +342,8 @@ class TimeFDataset:
     ) -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]:
         """Build an ``(X, y)`` training pair, deferring materialization by default.
 
-        Keeps every sample with exactly one task of ``task`` and pairs its sole channel's values with
-        that task's ``target``. ``features`` chooses the shape of ``X``:
+        Requires every sample to carry exactly one task of ``task`` and pairs its sole channel's values
+        with that task's ``target``. ``features`` chooses the shape of ``X``:
 
         - ``"timestep"`` (default): one feature per point, a rectangular matrix. Needs equal-length
           samples. Arrow ``FixedSizeListArray[T]``; NumPy ``(n, T)`` ``float32``.
@@ -351,9 +367,10 @@ class TimeFDataset:
 
         Raises:
             ValueError: If ``output``/``features`` is invalid; if ``task`` is omitted and the dataset has
-                zero or several target-bearing task types; if no sample carries exactly one such task; if
-                a matched sample is not single-channel; or ``features="timestep"`` is asked of samples
-                that are not all the same length.
+                zero or several target-bearing task types; if a sample is not single-channel; or
+                ``features="timestep"`` is asked of samples that are not all the same length.
+            TimeFValidationError: If the dataset has no samples, or any sample does not carry exactly one
+                task of ``task``.
         """
         if output not in ("arrow", "numpy"):
             raise ValueError(f"output must be 'arrow' or 'numpy', got {output!r}")
@@ -367,13 +384,16 @@ class TimeFDataset:
         rows: list[pa.Array] = []
         targets: list[str] = []
         for sample in self._samples:
-            matched = matched_by_sample.get(sample.sample_id)
-            if matched is None or len(matched) != 1:
-                continue
+            matched = matched_by_sample.get(sample.sample_id) or []
+            if len(matched) != 1:
+                raise TimeFValidationError(
+                    f"sample {sample.sample_id!r} carries {len(matched)} {resolved.__name__} tasks; "
+                    f"to_features_and_targets needs exactly one per sample"
+                )
             rows.append(sample.to_arrow())  # Arrow straight from the loader, no NumPy copy
             targets.append(matched[0].target)
         if not rows:
-            raise ValueError(f"no sample carries exactly one {resolved.__name__} task")
+            raise TimeFValidationError(f"dataset has no samples to build {resolved.__name__} features from")
         # Build only the representation asked for: no Arrow list array on the NumPy path, and no
         # concat of every point on the series+NumPy path.
         y = pa.array(targets)

@@ -1,3 +1,4 @@
+import numpy as np
 import pyarrow as pa
 import pytest
 
@@ -229,6 +230,23 @@ def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
     assert ds.tasks_for(s2, QATask) == ()
 
 
+def test_tasks_for_unregistered_sample_raises(make_series):
+    ds = _dataset()
+    stranger = _dataset().add_sample(time_series=(make_series(),))
+    with pytest.raises(TimeFValidationError, match="not registered"):
+        ds.tasks_for(stranger)
+
+
+def test_tasks_for_non_reciprocal_link_raises(make_series):
+    ds = _dataset()
+    s1 = ds.add_sample(time_series=(make_series(),))
+    s2 = ds.add_sample(time_series=(make_series(),))
+    task = ds.add_task(s1, ClassificationTask(target="a"))
+    s2.task_ids = (*s2.task_ids, task.id)  # s2 claims the task, but the task does not link back
+    with pytest.raises(TimeFValidationError, match="does not link back"):
+        ds.tasks_for(s2)
+
+
 def _matrix(x):
     return x.flatten().to_numpy(zero_copy_only=False).reshape(len(x), -1)
 
@@ -287,7 +305,25 @@ def test_to_features_and_targets_series_numpy_object_array(make_series):
 def test_to_features_and_targets_no_matching_task_raises(make_series):
     ds = _dataset()
     ds.add_sample(time_series=(make_series(),))
-    with pytest.raises(ValueError, match="no sample carries"):
+    with pytest.raises(TimeFValidationError, match="needs exactly one per sample"):
+        ds.to_features_and_targets(task=ClassificationTask)
+
+
+def test_to_features_and_targets_unlabeled_sample_raises(make_series):
+    ds = _dataset()
+    labeled = ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    ds.add_task(labeled, ClassificationTask(target="a"))
+    ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))  # no task on this one
+    with pytest.raises(TimeFValidationError, match="needs exactly one per sample"):
+        ds.to_features_and_targets(task=ClassificationTask)
+
+
+def test_to_features_and_targets_multiple_matching_tasks_raises(make_series):
+    ds = _dataset()
+    s = ds.add_sample(time_series=(make_series(),))
+    ds.add_task(s, ClassificationTask(target="a"))
+    ds.add_task(s, ClassificationTask(target="b"))
+    with pytest.raises(TimeFValidationError, match="needs exactly one per sample"):
         ds.to_features_and_targets(task=ClassificationTask)
 
 
