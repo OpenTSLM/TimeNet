@@ -5,10 +5,10 @@ whether its mean is above or below zero. The script runs the whole loop top to b
 dataset from its connector into the local registry, load it back through the SDK, turn the samples into
 an ``(X, y)`` training pair, and train a scikit-learn classifier.
 
-scikit-learn is not a TimeNet dependency; install it yourself, then run from the repo root::
+scikit-learn is not a TimeNet dependency. Run it with uv, which pulls scikit-learn in for this one
+command without adding it to your environment. From the repo root::
 
-    pip install scikit-learn
-    python examples/test_mean_classifier.py
+    uv run --with scikit-learn examples/test_mean_classifier.py
 """
 
 from sklearn.linear_model import LogisticRegression
