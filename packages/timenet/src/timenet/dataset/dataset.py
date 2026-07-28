@@ -15,8 +15,7 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
-    LabelingTask,
-    TargetTask,
+    Span,
     Task,
     View,
     annotation_type_of,
@@ -100,13 +99,21 @@ class TimeFDataset:
         samples: Sample | Iterable[Sample],
         task: Task,
         *,
+        scope: Span | None = None,
         from_tasks: tuple[Task, ...] = (),
     ) -> Task:
         """Register a task and link it to its samples.
 
+        Every span the task carries — its ``scope`` and, for a
+        :class:`~timenet.types.TemporalLocalizationTask`, its target regions — is checked against the
+        samples here, where the samples are available to check against. So are the sample and annotation
+        ids the task references.
+
         Args:
             samples: The sample, or samples, the task is attached to.
             task: The task instance (payload already set by the caller).
+            scope: The input region the task is about, stamped onto ``task.scope``. A convenience for
+                passing the window at registration time; equivalent to constructing the task with it.
             from_tasks: Source tasks this task derives from. Overrides the task's own ``from_tasks``
                 only when non-empty, so a task constructed with ``from_tasks=`` is not clobbered.
 
@@ -114,25 +121,29 @@ class TimeFDataset:
             The registered task (same instance, with ``sample_ids`` populated).
 
         Raises:
-            TimeFValidationError: If ``samples`` is empty, if a ``LabelingTask``'s ``time_series_ids``
-                does not resolve to a series on every target sample, or if one of its ``windows_s``
-                falls outside a target sample's span.
+            TimeFValidationError: If ``samples`` is empty; if ``scope`` is passed and the task already
+                carries one; if the task sets both ``target`` and ``target_annotation_ids`` or, when its
+                answer is not a produced series, neither; if a span's ``time_series_ids`` does not resolve
+                to a series on every target sample or the span falls outside a sample's covered span; or
+                if a referenced sample or annotation is not registered in this dataset.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
             raise TimeFValidationError("add_task requires at least one sample")
+        if scope is not None:
+            if task.scope is not None:
+                raise TimeFValidationError(
+                    f"add_task got scope= for a {type(task).__name__} that already has scope={task.scope!r}; "
+                    f"pass it once, either on the task or here"
+                )
+            task.scope = scope
 
-        if isinstance(task, LabelingTask):
-            for sample in targets:
-                if task.time_series_ids is not None:
-                    series_ids = {ts.time_series_id for ts in sample.time_series}
-                    for series_id in task.time_series_ids:
-                        if series_id not in series_ids:
-                            raise TimeFValidationError(
-                                f"LabelingTask references unknown time_series_id {series_id!r} "
-                                f"on sample {sample.sample_id!r}"
-                            )
-                self._check_windows_within_sample(task, sample)
+        self._check_task_answer(task)
+        self._check_sample_refs(task)
+        for sample in targets:
+            for span in task.spans():
+                self._check_span_within_sample(type(task).__name__, span, sample)
+        self._check_annotation_refs(task, targets)
 
         if from_tasks:
             task.from_tasks = tuple(from_tasks)
@@ -222,37 +233,104 @@ class TimeFDataset:
         return dataset
 
     @staticmethod
-    def _check_windows_within_sample(task: LabelingTask, sample: Sample) -> None:
-        """Reject a labeling window that falls outside the sample's span.
+    def _check_task_answer(task: Task) -> None:
+        """Reject a task whose answer is both inline and by reference, or missing entirely.
 
-        ``windows_s`` is in the source recording timeline, the same frame as ``TimeSeries.t_start_s``,
-        so a window is checked against the union of the targeted series' spans. A series with an open
+        Args:
+            task: The task being registered.
+
+        Raises:
+            TimeFValidationError: If ``target`` and ``target_annotation_ids`` are both set, or both are
+                unset on a task whose answer is not a produced series.
+        """
+        name = type(task).__name__
+        if task.target is not None and task.target_annotation_ids:
+            raise TimeFValidationError(
+                f"{name} sets both target={task.target!r} and target_annotation_ids "
+                f"{list(task.target_annotation_ids)}; the answer is either inline or by reference, not both"
+            )
+        if not type(task).answer_is_sample and task.target is None and not task.target_annotation_ids:
+            raise TimeFValidationError(
+                f"{name} needs an answer: pass target=, or target_annotation_ids= to point at stored annotations"
+            )
+
+    @staticmethod
+    def _check_span_within_sample(task_name: str, span: Span, sample: Sample) -> None:
+        """Reject a span whose series do not resolve on the sample, or that falls outside its span.
+
+        A span's times are in the source recording timeline, the same frame as ``TimeSeries.t_start_s``,
+        so it is checked against the union of the targeted series' spans. A series with an open
         ``t_end_s`` imposes no upper bound.
 
         Args:
-            task: The labeling task whose ``windows_s`` to check.
+            task_name: The task class name, for the error message.
+            span: The span to check.
             sample: The sample the task is being attached to.
 
         Raises:
-            TimeFValidationError: If a window lies outside the covered span.
+            TimeFValidationError: If a series id is unknown on the sample, or the span lies outside the
+                covered span.
         """
-        if task.windows_s is None:
-            return
+        series_ids = {ts.time_series_id for ts in sample.time_series}
+        for series_id in span.time_series_ids or ():
+            if series_id not in series_ids:
+                raise TimeFValidationError(
+                    f"{task_name} span references unknown time_series_id {series_id!r} on sample {sample.sample_id!r}"
+                )
         covered = [
-            ts for ts in sample.time_series if task.time_series_ids is None or ts.time_series_id in task.time_series_ids
+            ts for ts in sample.time_series if span.time_series_ids is None or ts.time_series_id in span.time_series_ids
         ]
         if not covered:
             return
-        span_start = min(ts.t_start_s for ts in covered)
+        start = min(ts.t_start_s for ts in covered)
         ends = [ts.t_end_s for ts in covered]
-        span_end = None if any(end is None for end in ends) else max(end for end in ends if end is not None)
-        for start_s, end_s in task.windows_s:
-            if start_s < span_start or (span_end is not None and end_s > span_end):
-                raise TimeFValidationError(
-                    f"LabelingTask window ({start_s}, {end_s}) falls outside sample "
-                    f"{sample.sample_id!r} span ({span_start}, {span_end}); windows_s is in the "
-                    f"source recording timeline"
-                )
+        end = None if any(e is None for e in ends) else max(e for e in ends if e is not None)
+        # A point span (end_s is None) is bounded by its own instant; `or` would misread an end_s of 0.0.
+        span_end = span.start_s if span.end_s is None else span.end_s
+        if span.start_s < start or (end is not None and span_end > end):
+            raise TimeFValidationError(
+                f"{task_name} span ({span.start_s}, {span.end_s}) falls outside sample "
+                f"{sample.sample_id!r} span ({start}, {end}); span times are in the source recording timeline"
+            )
+
+    @staticmethod
+    def _check_annotation_refs(task: Task, samples: tuple[Sample, ...]) -> None:
+        """Reject an input or target annotation id that none of the task's samples carries.
+
+        Args:
+            task: The task being registered.
+            samples: The samples the task is attached to.
+
+        Raises:
+            TimeFValidationError: If a referenced annotation id is not attached to any target sample.
+        """
+        known = {annotation.id for sample in samples for annotation in sample.annotations}
+        for field_name in ("input_annotation_ids", "target_annotation_ids"):
+            for annotation_id in getattr(task, field_name):
+                if annotation_id not in known:
+                    raise TimeFValidationError(
+                        f"{type(task).__name__} {field_name} references annotation {annotation_id!r}, "
+                        f"which is not attached to any of samples {[s.sample_id for s in samples]}"
+                    )
+
+    def _check_sample_refs(self, task: Task) -> None:
+        """Reject a payload sample id that is not registered in this dataset.
+
+        Args:
+            task: The task being registered.
+
+        Raises:
+            TimeFValidationError: If a payload reference names an unknown sample.
+        """
+        known = {sample.sample_id for sample in self._samples}
+        for field_name in type(task).refs.sample_id_fields:
+            value = getattr(task, field_name)
+            sample_ids = (value,) if isinstance(value, str) else value or ()
+            for sample_id in sample_ids:
+                if sample_id not in known:
+                    raise TimeFValidationError(
+                        f"{type(task).__name__} {field_name} references unknown sample {sample_id!r}"
+                    )
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
@@ -330,7 +408,7 @@ class TimeFDataset:
     def to_features_and_targets(
         self,
         *,
-        task: type[TargetTask] | None = ...,
+        task: type[Task] | None = ...,
         output: Literal["arrow"] = ...,
         features: Literal["timestep", "series"] = ...,
     ) -> tuple[pa.Array, pa.Array]: ...
@@ -338,14 +416,14 @@ class TimeFDataset:
     def to_features_and_targets(
         self,
         *,
-        task: type[TargetTask] | None = ...,
+        task: type[Task] | None = ...,
         output: Literal["numpy"],
         features: Literal["timestep", "series"] = ...,
     ) -> tuple[np.ndarray, np.ndarray]: ...
     def to_features_and_targets(
         self,
         *,
-        task: type[TargetTask] | None = None,
+        task: type[Task] | None = None,
         output: Literal["arrow", "numpy"] = "arrow",
         features: Literal["timestep", "series"] = "timestep",
     ) -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]:
@@ -364,9 +442,9 @@ class TimeFDataset:
         array or a 1-D NumPy array).
 
         Args:
-            task: The target-bearing task type to read labels from (e.g.
+            task: The task type to read targets from (e.g.
                 :class:`~timenet.types.ClassificationTask`). Omit it to infer the type when the dataset
-                has exactly one target-bearing task type; ``ForecastingTask`` has no target.
+                has exactly one task type carrying an inline target.
             output: ``"arrow"`` to keep the deferred Arrow arrays, or ``"numpy"`` to materialize them.
             features: ``"timestep"`` for a rectangular per-point matrix, or ``"series"`` for one
                 variable-length sequence per sample.
@@ -376,36 +454,26 @@ class TimeFDataset:
 
         Raises:
             ValueError: If ``output``/``features`` is invalid; if ``task`` is omitted and the dataset has
-                zero or several target-bearing task types; if a sample is not single-channel; or
-                ``features="timestep"`` is asked of samples that are not all the same length.
-            TimeFValidationError: If the dataset has no samples, or any sample does not carry exactly one
-                task of ``task``.
+                zero or several task types with inline targets; if a matched task carries no inline target
+                (its answer is a produced series, or stored as ``target_annotation_ids``); if a matched
+                sample is not single-channel; or ``features="timestep"`` is asked of samples that are not
+                all the same length; or if the dataset has no samples or any sample does not carry exactly
+                one task of ``task``.
         """
         if output not in {"arrow", "numpy"}:
             raise ValueError(f"output must be 'arrow' or 'numpy', got {output!r}")
         if features not in {"timestep", "series"}:
             raise ValueError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
-        matched_by_sample: dict[str, list[TargetTask]] = {}
-        for candidate in self.tasks_of(resolved):
-            for sample_id in candidate.sample_ids:
-                matched_by_sample.setdefault(sample_id, []).append(candidate)
-        rows: list[pa.Array] = []
-        targets: list[str] = []
-        for sample in self._samples:
-            matched = matched_by_sample.get(sample.sample_id) or []
-            if len(matched) != 1:
-                raise TimeFValidationError(
-                    f"sample {sample.sample_id!r} carries {len(matched)} {resolved.__name__} tasks; "
-                    f"to_features_and_targets needs exactly one per sample"
-                )
-            rows.append(sample.to_arrow())  # Arrow straight from the loader, no NumPy copy
-            targets.append(matched[0].target)
-        if not rows:
-            raise TimeFValidationError(f"dataset has no samples to build {resolved.__name__} features from")
+        rows, targets = self._rows_and_targets(resolved)
         # Build only the representation asked for: no Arrow list array on the NumPy path, and no
         # concat of every point on the series+NumPy path.
-        y = pa.array(targets)
+        try:
+            y = pa.array(targets)
+        except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
+            raise ValueError(
+                f"{resolved.__name__} targets cannot be represented as a scalar Arrow target array"
+            ) from exc
         if features == "series":  # one variable-length sequence per sample
             if output == "numpy":
                 x_obj = np.empty(len(rows), dtype=object)
@@ -427,16 +495,56 @@ class TimeFDataset:
             return values.to_numpy(zero_copy_only=False).reshape(len(rows), length), y.to_numpy(zero_copy_only=False)
         return pa.FixedSizeListArray.from_arrays(values, length), y
 
-    def _infer_target_task(self) -> type[TargetTask]:
-        """Infer the dataset's sole target-bearing task type, for :meth:`to_features_and_targets`.
+    def _rows_and_targets(self, resolved: type[Task]) -> tuple[list[pa.Array], list[object]]:
+        """Pair each matched sample's values with its task's target, for :meth:`to_features_and_targets`.
+
+        Args:
+            resolved: The task type to read targets from.
 
         Returns:
-            The single task class carrying a ``target``.
+            The per-sample Arrow value arrays and their targets, in sample order.
 
         Raises:
-            ValueError: If the dataset has zero or several target-bearing task types (pass ``task=``).
+            ValueError: If a matched task carries no inline target.
+            TimeFValidationError: If the dataset has no samples, or any sample does not carry exactly one
+                task of ``resolved``.
         """
-        kinds = {type(task) for task in self.tasks_of(TargetTask)}
+        if not resolved.target_is_scalar:
+            raise ValueError(f"{resolved.__name__} does not carry scalar targets supported by to_features_and_targets")
+        matched_by_sample: dict[str, list[Task]] = {}
+        for candidate in self.tasks_of(resolved):
+            for sample_id in candidate.sample_ids:
+                matched_by_sample.setdefault(sample_id, []).append(candidate)
+        rows: list[pa.Array] = []
+        targets: list[object] = []
+        for sample in self._samples:
+            matched = matched_by_sample.get(sample.sample_id) or []
+            if len(matched) != 1:
+                raise TimeFValidationError(
+                    f"sample {sample.sample_id!r} carries {len(matched)} {resolved.__name__} tasks; "
+                    "to_features_and_targets needs exactly one per sample"
+                )
+            if matched[0].target is None:
+                raise ValueError(
+                    f"{resolved.__name__} {matched[0].id!r} has no inline target to use as y; its answer is "
+                    f"a produced series or stored as target_annotation_ids"
+                )
+            rows.append(sample.to_arrow())  # Arrow straight from the loader, no NumPy copy
+            targets.append(matched[0].target)
+        if not rows:
+            raise TimeFValidationError(f"dataset has no samples to build {resolved.__name__} features from")
+        return rows, targets
+
+    def _infer_target_task(self) -> type[Task]:
+        """Infer the dataset's sole task type carrying an inline target, for :meth:`to_features_and_targets`.
+
+        Returns:
+            The single task class whose instances carry a ``target``.
+
+        Raises:
+            ValueError: If the dataset has zero or several such task types (pass ``task=``).
+        """
+        kinds = {type(task) for task in self._tasks if task.target is not None and type(task).target_is_scalar}
         if len(kinds) == 1:
             return kinds.pop()
         names = ", ".join(sorted(kind.__name__ for kind in kinds)) or "(none)"

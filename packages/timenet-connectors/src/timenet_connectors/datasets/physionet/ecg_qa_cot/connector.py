@@ -3,7 +3,8 @@
 Each sample is one PTB-XL recording (12 leads at 500 Hz, in millivolts) paired with a clinical
 question, a short ground-truth answer, and a chain-of-thought rationale. The rationale is the reasoning
 training target and the short answer is the evaluation label, so each sample carries a
-:class:`~timenet.types.ReasoningTask` whose ``target`` is the label and whose ``rationale`` is the CoT.
+:class:`~timenet.types.AnswerTask` whose ``prompt`` is the question, whose ``target`` is the label, and
+whose ``rationale`` is the CoT.
 
 Sources: signals from PhysioNet PTB-XL; the per-template answer options from the ``Jwoo5/ecg-qa``
 GitHub repo; the precomputed CoT rows (question / answer / rationale / template) from the OpenTSLM
@@ -19,8 +20,8 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    AnswerTask,
     DataSource,
-    ReasoningTask,
     StaticAnnotation,
     TimeSeriesSpec,
     ureg,
@@ -228,9 +229,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
                 )
             dataset.add_task(
                 sample,
-                ReasoningTask(
-                    question=ref.question, rationale=ref.rationale, target=ref.answer, id=f"reason-{ref.index}"
-                ),
+                AnswerTask(prompt=ref.question, rationale=ref.rationale, target=ref.answer, id=f"reason-{ref.index}"),
             )
         return dataset
 

@@ -1,60 +1,115 @@
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import (
-    TASKS,
-    CaptioningTask,
+    AnswerTask,
     ClassificationTask,
     ForecastingTask,
-    LabelingTask,
-    QATask,
-    ReasoningTask,
-    TargetTask,
+    LocalizationMode,
+    ScalarPredictionTask,
+    Span,
     Task,
     TaskType,
+    TemporalLocalizationTask,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
+    ureg,
 )
 from timenet.types.tasks import _build_task_registry
 
 
 def test_task_types():
     assert ClassificationTask.task_type is TaskType.CLASSIFICATION
-    assert LabelingTask.task_type is TaskType.LABELING
-    assert CaptioningTask.task_type is TaskType.CAPTIONING
-    assert QATask.task_type is TaskType.QUESTION_AND_ANSWER
+    assert AnswerTask.task_type is TaskType.ANSWER
+    assert ScalarPredictionTask.task_type is TaskType.SCALAR_PREDICTION
+    assert TemporalLocalizationTask.task_type is TaskType.TEMPORAL_LOCALIZATION
     assert ForecastingTask.task_type is TaskType.FORECASTING
-    assert ReasoningTask.task_type is TaskType.REASONING
+    assert TSEditingTask.task_type is TaskType.TS_EDITING
+    assert TSGenerationTask.task_type is TaskType.TS_GENERATION
+    assert TSCorrespondenceTask.task_type is TaskType.TS_CORRESPONDENCE
 
 
-def test_tasks_registry_is_derived_and_complete():
-    # Derived by walking the task hierarchy — every concrete task is registered by its task_type, no
-    # drift, and the intermediate TargetTask base is skipped.
-    assert set(TASKS) == set(TaskType)
-    assert all(cls.task_type is key for key, cls in TASKS.items())
-    assert TASKS[TaskType.CLASSIFICATION] is ClassificationTask
-    assert TargetTask not in TASKS.values()
+def test_series_output_tasks_answer_with_a_sample():
+    for cls in (ForecastingTask, TSEditingTask, TSGenerationTask):
+        assert cls.answer_is_sample
+    for cls in (ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask):
+        assert not cls.answer_is_sample
 
 
-def test_target_bearing_tasks_share_target_base():
-    for cls in (ClassificationTask, LabelingTask, CaptioningTask, QATask, ReasoningTask):
-        assert issubclass(cls, TargetTask)
-    assert not issubclass(ForecastingTask, TargetTask)  # forecasting has no scalar target
+def test_classification_labels_the_whole_sample_or_a_scope():
+    whole = ClassificationTask(target="afib", target_schema="rhythm")
+    assert whole.scope is None
+    scoped = ClassificationTask(target="N2", scope=Span(start_s=30.0, end_s=60.0))
+    assert scoped.scope is not None and not scoped.scope.is_point
 
 
-def test_classification_payload():
-    t = ClassificationTask(target="afib")
-    assert t.target == "afib"
-    assert t.target_schema is None
+def test_answer_task_is_a_caption_without_a_prompt_and_reasoning_with_a_rationale():
+    caption = AnswerTask(target="A 10 s trace with rising amplitude.")
+    assert caption.prompt is None and caption.rationale is None
+    reasoned = AnswerTask(prompt="Bearing fault?", target="Yes.", rationale="The impact repeats.")
+    assert reasoned.rationale == "The impact repeats."
 
 
-def test_labeling_payload():
-    t = LabelingTask(target="walking", time_series_ids=("s1", "s2"), windows_s=((0.0, 5.0),))
-    assert t.time_series_ids == ("s1", "s2")
-    assert t.windows_s == ((0.0, 5.0),)
+def test_scalar_prediction_keeps_the_number_typed_and_normalizes_its_unit():
+    task = ScalarPredictionTask(target=62.0, unit=ureg.bpm, target_name="mean_heart_rate")
+    assert task.target == pytest.approx(62.0)
+    assert task.unit == "bpm"  # a pint unit is stored as its canonical name
 
 
-def test_qa_and_forecasting_payloads():
-    assert QATask(question="q?", target="a").question == "q?"
-    f = ForecastingTask(context_sample_ids=("c1",), target_sample_id="t1")
-    assert f.target_sample_id == "t1"
+def test_scalar_prediction_rejects_an_unknown_unit():
+    with pytest.raises(ValueError, match="unknown unit"):
+        ScalarPredictionTask(target=1.0, unit="not_a_unit")
+
+
+def test_localization_target_holds_points_and_intervals():
+    task = TemporalLocalizationTask(
+        prompt="Locate all R-peaks.",
+        target=(Span(start_s=1.2, time_series_ids=("II",)), Span(start_s=2.0, end_s=2.5)),
+    )
+    assert task.mode is LocalizationMode.SPARSE  # sparse by default: unmarked time is unlabeled
+    assert task.target is not None
+    assert [span.is_point for span in task.target] == [True, False]
+
+
+def test_localization_mode_is_coerced_so_a_read_back_task_compares_equal():
+    # The reader passes the raw string read from the partition, so the enum is restored on construction.
+    task = TemporalLocalizationTask(target=(Span(start_s=0.0),), mode="exhaustive")  # ty: ignore[invalid-argument-type]
+    assert task.mode is LocalizationMode.EXHAUSTIVE
+
+
+def test_localization_rejects_an_explicitly_empty_target():
+    with pytest.raises(TimeFValidationError, match="non-empty"):
+        TemporalLocalizationTask(prompt="Locate all R-peaks.", target=())
+
+
+def test_series_output_payloads():
+    assert ForecastingTask(context_sample_ids=("c1",), target_sample_id="t1").target_sample_id == "t1"
+    edit = TSEditingTask(prompt="Denoise it.", source_sample_id="s1", target_sample_id="t1")
+    assert edit.source_sample_id == "s1"
+    assert TSGenerationTask(prompt="10 s of sinus rhythm.", target_sample_id="t1").target is None
+
+
+def test_correspondence_answer_must_come_from_the_candidate_pool():
+    task = TSCorrespondenceTask(
+        prompt="Which trace is most similar?", candidate_sample_ids=("s1", "s2"), target=("s2",)
+    )
+    assert task.target == ("s2",)
+    with pytest.raises(TimeFValidationError, match="must be one of the candidates"):
+        TSCorrespondenceTask(candidate_sample_ids=("s1",), target=("s9",))
+
+
+def test_correspondence_allows_an_unconstrained_pool():
+    assert TSCorrespondenceTask(target=("s9",)).candidate_sample_ids == ()
+
+
+def test_spans_collects_scope_and_span_valued_payload():
+    scope = Span(start_s=0.0, end_s=1.0)
+    assert ClassificationTask(target="a", scope=scope).spans() == (scope,)
+    assert ClassificationTask(target="a").spans() == ()
+    target = (Span(start_s=1.0), Span(start_s=2.0))
+    localization = TemporalLocalizationTask(target=target, scope=scope)
+    assert localization.spans() == (scope, *target)
 
 
 def test_auto_id_unique():
@@ -63,7 +118,7 @@ def test_auto_id_unique():
 
 def test_from_task_ids_property():
     base = ClassificationTask(target="a")
-    derived = ReasoningTask(question="q", target="a", from_tasks=(base,))
+    derived = AnswerTask(prompt="q", target="a", from_tasks=(base,))
     assert derived.from_task_ids == (base.id,)
 
 

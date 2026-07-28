@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-import inspect
 from typing import Any, cast
 
 import numpy as np
@@ -12,20 +11,17 @@ import pyarrow as pa
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.types import (
-    CaptioningTask,
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DataSource,
     Domain,
     ForecastingTask,
     IntervalAnnotation,
-    LabelingTask,
     License,
     PointAnnotation,
-    QATask,
-    ReasoningTask,
+    Span,
     StaticAnnotation,
-    Task,
     TimeSeriesSpec,
     Version,
     View,
@@ -119,32 +115,6 @@ def _scalar_series(
     )
 
 
-def _target_task(
-    task_class: type[Task],
-    *,
-    target: str,
-    target_schema: str | None = None,
-    **kwargs: Any,
-) -> Task:
-    """Construct a task across the pre/post target-rename APIs.
-
-    Returns:
-        A task carrying the requested supervised target.
-    """
-    parameters = inspect.signature(task_class).parameters
-    if "target" in parameters:
-        kwargs["target"] = target
-        if target_schema is not None and "target_schema" in parameters:
-            kwargs["target_schema"] = target_schema
-    elif "label" in parameters:
-        kwargs["label"] = target
-        if target_schema is not None:
-            kwargs["label_schema"] = target_schema
-    else:
-        kwargs["answer"] = target
-    return cast("Any", task_class)(**kwargs)
-
-
 def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     """Attach every currently supported task payload to representative scenarios."""
     vibration = samples["vibration"]
@@ -158,8 +128,7 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
 
     dataset.add_task(
         vibration,
-        _target_task(
-            ClassificationTask,
+        ClassificationTask(
             target="outer-race-fault",
             target_schema="condition",
             id="task-vibration-class",
@@ -167,8 +136,7 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     )
     dataset.add_task(
         ecg,
-        _target_task(
-            ClassificationTask,
+        ClassificationTask(
             target="atrial-fibrillation",
             target_schema="rhythm",
             id="task-ecg-class",
@@ -176,36 +144,32 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     )
     dataset.add_task(
         sleep,
-        _target_task(
-            LabelingTask,
+        ClassificationTask(
             target="N2",
             target_schema="sleep-stage",
-            windows_s=((30.0, 60.0),),
+            scope=Span(start_s=30.0, end_s=60.0),
             id="task-sleep-label",
         ),
     )
     dataset.add_task(
         accelerometer,
-        _target_task(
-            CaptioningTask,
+        AnswerTask(
             target="A trace with rising amplitude and a periodic impact after five seconds.",
             id="task-accelerometer-caption",
         ),
     )
     dataset.add_task(
         finance,
-        _target_task(
-            QATask,
-            question="Summarize the session.",
+        AnswerTask(
+            prompt="Summarize the session.",
             target="Choppy open, midday rally, positive close.",
             id="task-finance-qa",
         ),
     )
     dataset.add_task(
         workout,
-        _target_task(
-            ReasoningTask,
-            question="Assess this workout.",
+        AnswerTask(
+            prompt="Assess this workout.",
             target="Aerobic base session",
             rationale="Heart-rate drift appears late while pace remains stable.",
             id="task-workout-reasoning",
@@ -221,9 +185,8 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     )
     dataset.add_task(
         automotive,
-        _target_task(
-            ReasoningTask,
-            question="Estimate remaining useful life.",
+        AnswerTask(
+            prompt="Estimate remaining useful life.",
             target="74 cycles",
             rationale="Vibration rises while torque efficiency falls.",
             id="task-automotive-reasoning",
@@ -249,9 +212,8 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
         sample.add_annotation(StaticAnnotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
             sample,
-            _target_task(
-                ReasoningTask,
-                question=f"Is rhythm abnormal in view {index}?",
+            AnswerTask(
+                prompt=f"Is rhythm abnormal in view {index}?",
                 target="atrial-fibrillation",
                 rationale="The synthetic rhythm has repeatable irregular intervals.",
                 id=f"task-ecg-reasoning-{index:03d}",
@@ -278,9 +240,8 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
         sample.add_annotation(StaticAnnotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             sample,
-            _target_task(
-                QATask,
-                question=f"What pattern appears in series {index}?",
+            AnswerTask(
+                prompt=f"What pattern appears in series {index}?",
                 target="A deterministic trend with periodic variation.",
                 id=f"task-tsqa-{index:04d}",
             ),
@@ -303,8 +264,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
         sample.add_annotation(StaticAnnotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             sample,
-            _target_task(
-                ClassificationTask,
+            ClassificationTask(
                 target="above-zero" if offset > 0 else "below-zero",
                 target_schema="mean-sign",
                 id=f"task-mean-{index:04d}",

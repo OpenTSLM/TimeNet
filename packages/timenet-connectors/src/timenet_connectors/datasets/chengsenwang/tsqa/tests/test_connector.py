@@ -6,7 +6,7 @@ import pytest
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.types import QATask
+from timenet.types import AnswerTask
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
@@ -42,9 +42,9 @@ def test_convert_builds_one_sample_per_row():
 def test_qa_tasks_match_fixture():
     dataset = _convert()
     rows = _fixture_rows()
-    qa = [t for t in dataset.tasks if isinstance(t, QATask)]
+    qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
-    assert {t.question for t in qa} == {r["Question"] for r in rows}
+    assert {t.prompt for t in qa} == {r["Question"] for r in rows}
     assert {t.target for t in qa} == {r["Answer"] for r in rows}
 
 

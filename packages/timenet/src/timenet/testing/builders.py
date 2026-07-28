@@ -7,16 +7,19 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DataSource,
     Domain,
     IntervalAnnotation,
-    LabelingTask,
     License,
+    LocalizationMode,
     PointAnnotation,
-    QATask,
+    ScalarPredictionTask,
+    Span,
     StaticAnnotation,
+    TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
     View,
@@ -102,8 +105,10 @@ def make_dataset() -> TimeFDataset:
 
     Two modalities over a shared data source; a series shared across two samples; a long series (to
     exercise chunk splitting); a windowed sample; all three annotation shapes including one shared
-    across samples; and a classification -> QA task chain plus a labeling task. All ids are fixed, so
-    two calls produce equal datasets, making this the canonical writer/reader round-trip fixture.
+    across samples; and a classification -> answer task chain (the answer carrying a rationale and an
+    input annotation) plus a scoped classification, a scalar prediction, and a temporal localization
+    whose target is a point and an interval. All ids are fixed, so two calls produce equal datasets,
+    making this the canonical writer/reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.
@@ -138,7 +143,31 @@ def make_dataset() -> TimeFDataset:
     )
     classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
     dataset.add_task(
-        sample0, QATask(question="What rhythm?", target="Normal.", id="task-qa-0"), from_tasks=(classification,)
+        sample0,
+        AnswerTask(
+            prompt="What rhythm?",
+            target="Normal.",
+            rationale="Regular intervals with one peak per cycle.",
+            input_annotation_ids=("cohort-shared",),
+            id="task-answer-0",
+        ),
+        from_tasks=(classification,),
+    )
+    dataset.add_task(
+        sample0,
+        ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+    )
+    dataset.add_task(
+        sample0,
+        TemporalLocalizationTask(
+            prompt="Locate the stimulus and the artifact.",
+            mode=LocalizationMode.SPARSE,
+            target=(
+                Span.point(0.5),
+                Span.interval(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+            ),
+            id="task-localize-0",
+        ),
     )
 
     sample1 = dataset.add_sample(
@@ -153,9 +182,8 @@ def make_dataset() -> TimeFDataset:
     sample2 = dataset.add_sample(time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2")
     dataset.add_task(
         sample2,
-        LabelingTask(
-            target="onset", time_series_ids=(window.time_series_id,), windows_s=((0.0, 0.25),), id="task-lbl-2"
-        ),
+        ClassificationTask(target="onset", id="task-cls-2"),
+        scope=Span.interval(0.0, 0.25, time_series_ids=(window.time_series_id,)),
     )
     return dataset
 

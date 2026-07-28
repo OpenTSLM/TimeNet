@@ -23,6 +23,8 @@ There is no per-object fix for that; pint's application registry is the only hoo
 
 import pint
 
+from timenet.errors import TimeFValidationError
+
 
 ureg = pint.UnitRegistry()
 
@@ -30,6 +32,37 @@ ureg = pint.UnitRegistry()
 # so heart-rate units stay distinct from plain frequencies.
 ureg.define("beat = [beat]")
 ureg.define("bpm = beat / minute")
+
+
+def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
+    """Validate a unit against the shared registry, rejecting an unrecognized unit string.
+
+    A :class:`pint.Unit` is stored as its canonical name; a unit string is kept as written but validated
+    (an unknown one raises); ``None`` passes through. The result is always a string (or ``None``), so
+    serialization is unchanged. Shared by every type that carries a unit (annotation values and scalar
+    task targets) so they accept and store units identically.
+
+    Args:
+        unit: A :class:`pint.Unit`, a unit string (e.g. ``"years"``), or ``None``.
+
+    Returns:
+        The unit as a string, or ``None``.
+
+    Raises:
+        TimeFValidationError: If ``unit`` is a string the shared registry does not recognize.
+    """
+    if unit is None:
+        return None
+    if isinstance(unit, pint.Unit):
+        return str(unit)
+    try:
+        ureg.Unit(unit)
+    except pint.UndefinedUnitError as exc:
+        raise TimeFValidationError(
+            f"unknown unit {unit!r}; pass a pint unit (e.g. ureg.millivolt) or a unit string pint "
+            f"recognizes, or omit unit="
+        ) from exc
+    return unit
 
 
 def use_as_application_registry() -> None:

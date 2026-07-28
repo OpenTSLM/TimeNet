@@ -7,7 +7,7 @@ import wfdb
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.types import ReasoningTask
+from timenet.types import AnswerTask
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import (
     EcgQaCotConnector,
@@ -72,7 +72,7 @@ def test_series_values_match_fixture_record():
 def test_reasoning_task_answer_is_label_and_rationale_is_cot():
     dataset = _convert()
     rows = _rows()
-    tasks = [t for t in dataset.tasks if isinstance(t, ReasoningTask)]
+    tasks = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(tasks) == len(rows)
     assert {t.target for t in tasks} == {row["answer"] for row in rows}
     assert {t.rationale for t in tasks} == {row["rationale"] for row in rows}

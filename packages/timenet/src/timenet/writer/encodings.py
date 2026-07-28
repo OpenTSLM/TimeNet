@@ -31,19 +31,22 @@ SAMPLES_DICTIONARY = [
 
 ANNOTATIONS_DICTIONARY = ["key", "annotation_type"]
 
-_TASK_CATEGORICAL = ("target", "target_schema")
+_TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
 
 
 def task_dictionary(schema: pa.Schema) -> list[str]:
     """Return the categorical columns to dictionary-encode for a task partition.
 
+    Only string columns qualify: ``target`` is a float for a scalar prediction and a list of span structs
+    for a localization, and dictionary-encoding either buys nothing (or fails outright for the nested one).
+
     Args:
         schema: The task partition's Arrow schema.
 
     Returns:
-        The subset of categorical task columns present in the schema.
+        The subset of categorical task columns present in the schema as strings.
     """
-    return [name for name in _TASK_CATEGORICAL if name in schema.names]
+    return [name for name in _TASK_CATEGORICAL if name in schema.names and pa.types.is_string(schema.field(name).type)]
 
 
 def parquet_kwargs(

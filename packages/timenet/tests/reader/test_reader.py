@@ -10,12 +10,15 @@ from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
+    AnswerTask,
     ClassificationTask,
     IntervalAnnotation,
+    LocalizationMode,
     PointAnnotation,
-    QATask,
-    ReasoningTask,
+    ScalarPredictionTask,
+    Span,
     StaticAnnotation,
+    TemporalLocalizationTask,
     View,
 )
 from timenet.writer import TimeFWriter
@@ -98,35 +101,51 @@ def test_task_chain_round_trips(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
         tasks = {t.id: t for t in reader.tasks}
-    qa = tasks["task-qa-0"]
-    assert isinstance(qa, QATask)
-    assert qa.from_tasks and qa.from_tasks[0].id == "task-cls-0"
+    answer = tasks["task-answer-0"]
+    assert isinstance(answer, AnswerTask)
+    assert answer.from_tasks and answer.from_tasks[0].id == "task-cls-0"
 
 
-def test_reasoning_task_rationale_round_trips(tmp_path):
+def test_shared_task_frame_round_trips(tmp_path):
+    # prompt / rationale / input_annotation_ids live on the base, so they round-trip for every type.
     dataset = make_dataset()
     sample = dataset.samples[0]
-    dataset.add_task(
-        sample,
-        ReasoningTask(
-            question="Is the rhythm normal?",
-            rationale="Regular R-R intervals with a P wave before each QRS.",
-            target="Yes.",
-            id="task-reason-0",
-        ),
-    )
-    dataset.add_task(sample, ReasoningTask(question="Any ectopy?", target="No.", id="task-reason-1"))  # rationale=None
+    dataset.add_task(sample, AnswerTask(prompt="Any ectopy?", target="No.", id="task-answer-1"))  # rationale=None
     version_dir = _write(tmp_path, dataset=dataset)
     with TimeFReader(version_dir) as reader:
         tasks = {t.id: t for t in reader.tasks}
-    with_rationale = tasks["task-reason-0"]
-    assert isinstance(with_rationale, ReasoningTask)
-    assert with_rationale.question == "Is the rhythm normal?"
-    assert with_rationale.rationale == "Regular R-R intervals with a P wave before each QRS."
-    assert with_rationale.target == "Yes."
-    without_rationale = tasks["task-reason-1"]
-    assert isinstance(without_rationale, ReasoningTask)
+    with_rationale = tasks["task-answer-0"]
+    assert isinstance(with_rationale, AnswerTask)
+    assert with_rationale.prompt == "What rhythm?"
+    assert with_rationale.rationale == "Regular intervals with one peak per cycle."
+    assert with_rationale.input_annotation_ids == ("cohort-shared",)
+    assert with_rationale.target == "Normal."
+    without_rationale = tasks["task-answer-1"]
     assert without_rationale.rationale is None  # optional field round-trips as None
+    assert without_rationale.input_annotation_ids == ()
+
+
+def test_scope_and_localization_spans_round_trip(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        tasks = {t.id: t for t in reader.tasks}
+    assert tasks["task-cls-2"].scope == Span(start_s=0.0, end_s=0.25, time_series_ids=("ts-window-2",))
+    localization = tasks["task-localize-0"]
+    assert isinstance(localization, TemporalLocalizationTask)
+    assert localization.target == (
+        Span(start_s=0.5),  # a point: end_s stays None rather than becoming 0.0
+        Span(start_s=0.0, end_s=0.25, time_series_ids=("ts-shared",)),
+    )
+    assert localization.mode is LocalizationMode.SPARSE
+
+
+def test_scalar_target_round_trips_as_a_number(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        task = {t.id: t for t in reader.tasks}["task-scalar-0"]
+    assert isinstance(task, ScalarPredictionTask)
+    assert task.target == pytest.approx(62.0)
+    assert task.unit == "bpm" and task.target_name == "mean_rate"
 
 
 def test_iter_samples_matches_read(tmp_path):

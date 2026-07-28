@@ -6,13 +6,13 @@ from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
     DataSource,
     Domain,
     License,
-    QATask,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -36,7 +36,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int", unit="years"),
             AnnotationDescriptor(key="artifact", annotation_type=AnnotationType.INTERVAL),
         ),
-        tasks=(ClassificationTask, QATask),
+        tasks=(ClassificationTask, AnswerTask),
     )
     metadata = DatasetMetadata(
         dataset_id="demo/ecg",
@@ -104,7 +104,7 @@ def test_to_dict_shape():
     assert d["schema"]["time_series_specs"][0]["unit_value"] == "millivolt"
     # spec references its data source by type tag, not by embedding it
     assert d["schema"]["time_series_specs"][0]["data_source"] == "holter_x"
-    assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "question_and_answer"}]
+    assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "answer"}]
     assert d["counts"]["tasks"] == {"classification": 2}
 
 
@@ -118,7 +118,7 @@ def test_from_dict_resolves_data_source_reference():
 
 def test_from_dict_resolves_tasks_to_real_classes():
     schema = Manifest.from_dict(_manifest().to_dict()).schema
-    assert schema.tasks == (ClassificationTask, QATask)
+    assert schema.tasks == (ClassificationTask, AnswerTask)
 
 
 def test_units_roundtrip_as_pint():

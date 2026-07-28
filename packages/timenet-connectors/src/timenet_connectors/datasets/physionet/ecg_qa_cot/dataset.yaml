@@ -3,7 +3,7 @@
 # The connector loads it via DatasetMetadata.from_yaml(); the curator compiles it plus the schema
 # derived from the data into manifest.json.
 #
-# Training convention: each sample carries a ReasoningTask whose `answer` is the short evaluation
+# Training convention: each sample carries an AnswerTask whose `target` is the short evaluation
 # label and whose `rationale` is the chain-of-thought target to fine-tune on. The multiple-choice
 # candidates are stored as the `answer_options` annotation. Signals are archival raw (12 leads,
 # 500 Hz, millivolt); reproduce OpenTSLM's training preprocessing (downsample to 100 Hz, per-lead

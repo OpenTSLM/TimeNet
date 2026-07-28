@@ -7,14 +7,16 @@ from timenet.errors import TimeFValidationError
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    ForecastingTask,
     IntervalAnnotation,
-    LabelingTask,
     License,
-    QATask,
-    ReasoningTask,
+    ScalarPredictionTask,
+    Span,
     StaticAnnotation,
+    TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
     View,
@@ -77,20 +79,22 @@ def test_add_task_rejects_empty_samples():
         _dataset().add_task((), ClassificationTask(target="x"))
 
 
-def test_labeling_task_id_resolution(make_series):
+def test_scope_series_id_resolution(make_series):
     ds = _dataset()
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
-    ds.add_task(sample, LabelingTask(target="beat", time_series_ids=(ts.time_series_id,)))
-    with pytest.raises(ValueError, match="unknown"):
-        ds.add_task(sample, LabelingTask(target="beat", time_series_ids=("nope",)))
+    ds.add_task(
+        sample, ClassificationTask(target="beat", scope=Span(start_s=0.0, time_series_ids=(ts.time_series_id,)))
+    )
+    with pytest.raises(ValueError, match="unknown time_series_id"):
+        ds.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=0.0, time_series_ids=("nope",))))
 
 
 def test_from_tasks_via_kwarg(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
     base = ds.add_task(sample, ClassificationTask(target="a"))
-    derived = ds.add_task(sample, ReasoningTask(question="q", target="a"), from_tasks=(base,))
+    derived = ds.add_task(sample, AnswerTask(prompt="q", target="a"), from_tasks=(base,))
     assert derived.from_tasks == (base,)
     assert derived.from_task_ids == (base.id,)
 
@@ -100,7 +104,7 @@ def test_from_tasks_on_constructor_not_clobbered(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
     base = ds.add_task(sample, ClassificationTask(target="a"))
-    qa = QATask(question="q", target="a", from_tasks=(base,))
+    qa = AnswerTask(prompt="q", target="a", from_tasks=(base,))
     ds.add_task(sample, qa)
     assert qa.from_tasks == (base,)
 
@@ -202,29 +206,85 @@ def test_add_sample_rejects_duplicate_time_series_ids(make_series):
         _dataset().add_sample(time_series=(ts, ts), view=View.FULL)
 
 
-def test_labeling_rejects_inverted_window():
-    with pytest.raises(TimeFValidationError, match="must be >"):
-        LabelingTask(target="walking", windows_s=((5.0, 1.0),))
-
-
-def test_labeling_rejects_empty_windows():
-    with pytest.raises(TimeFValidationError, match="windows_s"):
-        LabelingTask(target="walking", windows_s=())
-
-
-def test_add_task_rejects_window_outside_sample_span(make_series):
-    # windows_s is in the source recording timeline, so a window past the series' t_end_s is invalid.
+def test_add_task_rejects_scope_outside_sample_span(make_series):
+    # Span times are in the source recording timeline, so a window past the series' t_end_s is invalid.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, LabelingTask(target="walking", windows_s=((5.0, 20.0),)))
+        dataset.add_task(sample, ClassificationTask(target="walking", scope=Span(start_s=5.0, end_s=20.0)))
 
 
-def test_add_task_accepts_window_inside_sample_span(make_series):
+def test_add_task_accepts_scope_inside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
-    task = dataset.add_task(sample, LabelingTask(target="walking", windows_s=((2.0, 8.0),)))
-    assert task.windows_s == ((2.0, 8.0),)
+    scope = Span(start_s=2.0, end_s=8.0)
+    task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=scope)
+    assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
+
+
+def test_add_task_rejects_a_second_scope(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
+    task = ClassificationTask(target="walking", scope=Span(start_s=1.0, end_s=2.0))
+    with pytest.raises(TimeFValidationError, match="pass it once"):
+        dataset.add_task(sample, task, scope=Span(start_s=3.0, end_s=4.0))
+
+
+def test_add_task_checks_every_span_a_task_carries(make_series):
+    # Localization target spans are bounds-checked the same way a scope is.
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
+    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+        dataset.add_task(
+            sample,
+            TemporalLocalizationTask(prompt="Locate the onsets.", target=(Span(start_s=2.0), Span(start_s=42.0))),
+        )
+
+
+def test_add_task_requires_an_answer(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    with pytest.raises(TimeFValidationError, match="needs an answer"):
+        dataset.add_task(sample, ClassificationTask())
+
+
+def test_add_task_rejects_an_answer_given_twice(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    annotation = StaticAnnotation(key="stage", value="N2")
+    sample.add_annotation(annotation)
+    with pytest.raises(TimeFValidationError, match="not both"):
+        dataset.add_task(sample, ClassificationTask(target="N2", target_annotation_ids=(annotation.id,)))
+
+
+def test_add_task_accepts_an_answer_stored_by_reference(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    annotation = IntervalAnnotation(key="stage", value="N2", start_time_s=0.0, end_time_s=30.0)
+    sample.add_annotation(annotation)
+    task = dataset.add_task(
+        sample, TemporalLocalizationTask(prompt="Segment it.", target_annotation_ids=(annotation.id,))
+    )
+    assert task.target is None and task.target_annotation_ids == (annotation.id,)
+
+
+def test_add_task_rejects_an_annotation_ref_the_samples_do_not_carry(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    with pytest.raises(TimeFValidationError, match="not attached to any"):
+        dataset.add_task(sample, ClassificationTask(target="a", input_annotation_ids=("nope",)))
+
+
+def test_add_task_accepts_a_series_answer_without_a_target(make_series):
+    # A forecast's answer is the produced sample, so the target/target_annotation_ids rule does not apply.
+    dataset = _dataset()
+    context = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    target = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
+    task = dataset.add_task(
+        context,
+        ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id),
+    )
+    assert task.target is None
 
 
 def test_add_sample_defaults_to_full_view(make_series):
@@ -236,9 +296,9 @@ def test_tasks_of_filters_by_type(make_series):
     ds = _dataset()
     s = ds.add_sample(time_series=(make_series(),))
     classification = ds.add_task(s, ClassificationTask(target="a"))
-    qa = ds.add_task(s, QATask(question="q", target="b"))
+    qa = ds.add_task(s, AnswerTask(prompt="q", target="b"))
     assert ds.tasks_of(ClassificationTask) == (classification,)
-    assert ds.tasks_of(QATask) == (qa,)
+    assert ds.tasks_of(AnswerTask) == (qa,)
 
 
 def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
@@ -246,11 +306,11 @@ def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
     s1 = ds.add_sample(time_series=(make_series(),))
     s2 = ds.add_sample(time_series=(make_series(),))
     classification = ds.add_task(s1, ClassificationTask(target="a"))
-    qa = ds.add_task(s1, QATask(question="q", target="b"))
+    qa = ds.add_task(s1, AnswerTask(prompt="q", target="b"))
     ds.add_task(s2, ClassificationTask(target="c"))
     assert ds.tasks_for(s1) == (classification, qa)
     assert ds.tasks_for(s1, ClassificationTask) == (classification,)
-    assert ds.tasks_for(s2, QATask) == ()
+    assert ds.tasks_for(s2, AnswerTask) == ()
 
 
 def test_tasks_for_unregistered_sample_raises(make_series):
@@ -364,6 +424,34 @@ def test_to_features_and_targets_ambiguous_task_type_raises(make_series):
     ds = _dataset()
     s = ds.add_sample(time_series=(make_series(),))
     ds.add_task(s, ClassificationTask(target="a"))
-    ds.add_task(s, QATask(question="q", target="b"))
+    ds.add_task(s, AnswerTask(prompt="q", target="b"))
     with pytest.raises(ValueError, match="pass task="):
         ds.to_features_and_targets()
+
+
+def test_to_features_and_targets_keeps_a_scalar_target_numeric(make_series):
+    ds = _dataset()
+    for value in [1.5, 2.5]:
+        s = ds.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+        ds.add_task(s, ScalarPredictionTask(target=value, unit="bpm", target_name="rate"))
+    _, y = ds.to_features_and_targets(task=ScalarPredictionTask)
+    assert pa.types.is_floating(y.type)  # a regression target keeps its type instead of stringifying
+    assert y.to_pylist() == pytest.approx([1.5, 2.5])
+
+
+def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_series):
+    ds = _dataset()
+    s = ds.add_sample(time_series=(make_series(),))
+    annotation = StaticAnnotation(key="stage", value="N2")
+    s.add_annotation(annotation)
+    ds.add_task(s, ClassificationTask(target_annotation_ids=(annotation.id,)))
+    with pytest.raises(ValueError, match="no inline target"):
+        ds.to_features_and_targets(task=ClassificationTask)
+
+
+def test_add_task_bounds_checks_a_point_span(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
+    dataset.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=9.5)))  # inside
+    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+        dataset.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=10.5)))
