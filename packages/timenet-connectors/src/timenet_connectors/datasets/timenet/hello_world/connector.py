@@ -58,8 +58,23 @@ class HelloWorldRecording:
     n_values: int
 
 
+def _wave_values(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> np.ndarray:
+    """Compute a closed-form wave as an array (no RNG, no I/O).
+
+    Args:
+        fn: The wave function applied to the angular time base (e.g. ``np.sin``).
+        n: Number of samples.
+        phase: Phase offset in radians.
+
+    Returns:
+        The wave values as a float32 ``np.ndarray``.
+    """
+    t = np.arange(n, dtype=np.float64) / _SAMPLING_RATE_HZ
+    return fn(2.0 * np.pi * t + phase).astype(np.float32)
+
+
 def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Callable[[], pa.Array]:
-    """Build a deterministic loader for a closed-form wave (no RNG, no I/O).
+    """Build a deterministic lazy loader for a closed-form wave (used for the chunk-split long series).
 
     Args:
         fn: The wave function applied to the angular time base (e.g. ``np.sin``).
@@ -69,12 +84,7 @@ def _wave(fn: Callable[[np.ndarray], np.ndarray], n: int, phase: float) -> Calla
     Returns:
         A no-argument loader returning the wave as a float32 Arrow array.
     """
-
-    def load() -> pa.Array:
-        t = np.arange(n, dtype=np.float64) / _SAMPLING_RATE_HZ
-        return pa.array(fn(2.0 * np.pi * t + phase).astype(np.float32))
-
-    return load
+    return lambda: pa.array(_wave_values(fn, n, phase))
 
 
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
@@ -104,33 +114,27 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         short, long = raw_refs[0], raw_refs[1]
 
         # A series shared across two samples (dedupe-by-id path).
-        shared = TimeSeries(
+        shared = TimeSeries.from_values(
+            _wave_values(np.sin, short.n_values, phase=0.0),
             spec=_SINE,
             channel="a",
             sampling_rate_hz=_SAMPLING_RATE_HZ,
-            loader=_wave(np.sin, short.n_values, phase=0.0),
             source_id="rec-0",
             time_series_id="ts-shared",
-            t_start_s=0.0,
-            t_end_s=short.n_values / _SAMPLING_RATE_HZ,
         )
         # An annotation shared across two samples (dedupe-by-id path).
         cohort = StaticAnnotation(key="cohort", value="A", id="cohort-shared")
 
         # Sample 0: full recording, two modalities, all annotation shapes, a task chain.
-        cosine = TimeSeries(
+        cosine = TimeSeries.from_values(
+            _wave_values(np.cos, short.n_values, phase=0.0),
             spec=_COSINE,
             channel="b",
             sampling_rate_hz=_SAMPLING_RATE_HZ,
-            loader=_wave(np.cos, short.n_values, phase=0.0),
             source_id="rec-0",
             time_series_id="ts-cos-0",
-            t_start_s=0.0,
-            t_end_s=short.n_values / _SAMPLING_RATE_HZ,
         )
-        sample0 = dataset.add_sample(
-            time_series=(shared, cosine), view=View.FULL, subject_ids=("subj-0",), sample_id="sample-0"
-        )
+        sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
         sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
         sample0.add_annotation(cohort)
         sample0.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0"))
@@ -157,24 +161,21 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             t_start_s=0.0,
             t_end_s=long.n_values / _SAMPLING_RATE_HZ,
         )
-        sample1 = dataset.add_sample(
-            time_series=(shared, long_series), view=View.FULL, subject_ids=("subj-1",), sample_id="sample-1"
-        )
+        sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
         sample1.add_annotation(cohort)  # same instance/id => shared
 
         # Sample 2: a windowed slice with a labeling task. It covers the *second* half of rec-0, so it
         # is a genuine offset window rather than a byte-identical prefix of `ts-shared`. The phase
         # offset continues the same wave, so the values match rec-0 over [t_start_s, t_end_s).
         window_start = short.n_values // 2
-        window = TimeSeries(
+        window = TimeSeries.from_values(
+            _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
             spec=_SINE,
             channel="a",
             sampling_rate_hz=_SAMPLING_RATE_HZ,
-            loader=_wave(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
             source_id="rec-0",
             time_series_id="ts-window-2",
             t_start_s=window_start / _SAMPLING_RATE_HZ,
-            t_end_s=short.n_values / _SAMPLING_RATE_HZ,
         )
         sample2 = dataset.add_sample(
             time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2"

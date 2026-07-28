@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass, field
 
+import numpy as np
+import pyarrow as pa
+
 from timenet.dataset.time_series import TimeSeries
 from timenet.types import Annotation, IntervalAnnotation, PointAnnotation, View, new_id
 
@@ -15,9 +18,9 @@ class Sample:
     """
 
     time_series: tuple[TimeSeries, ...]
-    """One :class:`TimeSeries` per channel the sample uses."""
-    view: View
-    """Which slice of the source this sample represents."""
+    """The logical :class:`TimeSeries` streams the sample uses."""
+    view: View = View.FULL
+    """Which slice of the source this sample represents (defaults to the full recording)."""
     sample_id: str = field(default_factory=new_id)
     """Unique id for the sample (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()
@@ -60,3 +63,27 @@ class Sample:
                     )
         self.annotations = (*self.annotations, annotation)
         return annotation
+
+    def to_arrow(self) -> pa.Array:
+        """Read the sole channel's values as an Arrow array, for the common single-channel sample.
+
+        Returns:
+            The single :class:`TimeSeries`' values as a 1-D Arrow array.
+
+        Raises:
+            ValueError: If the sample has more than one channel; read ``time_series[i]`` explicitly then.
+        """
+        if len(self.time_series) != 1:
+            raise ValueError(
+                f"Sample.to_arrow() needs a single-channel sample, but this one has "
+                f"{len(self.time_series)} series; read sample.time_series[i].to_arrow() instead"
+            )
+        return self.time_series[0].to_arrow()
+
+    def to_numpy(self) -> np.ndarray:
+        """Read the sole channel's values as a NumPy array (materializes :meth:`to_arrow`).
+
+        Returns:
+            The single :class:`TimeSeries`' values as a 1-D ``np.ndarray``.
+        """
+        return self.to_arrow().to_numpy(zero_copy_only=False)
