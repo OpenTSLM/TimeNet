@@ -7,7 +7,9 @@ from typer.testing import CliRunner
 from timenet.client import TimeNet
 from timenet.config import settings
 from timenet.engine import run_pipeline
+from timenet.errors import TimeFValidationError
 from timenet.testing import assert_datasets_equal
+from timenet_connectors import build, load
 from timenet_connectors.curate.cli import _default_root, app as curate_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
@@ -39,6 +41,17 @@ def test_curate_build_then_load_round_trips(tmp_path):
 def test_curate_build_unknown_id_fails(tmp_path):
     result = runner.invoke(curate_app, ["build", "acme/not_a_dataset", "--out", str(tmp_path / "registry")])
     assert result.exit_code != 0
+
+
+def test_build_rejects_version_mismatch():
+    # The guard fires before the pipeline runs, so no registry is written.
+    with pytest.raises(TimeFValidationError, match="builds version"):
+        build("timenet/hello-world", version="9.9.9")
+
+
+def test_load_rejects_version_mismatch():
+    with pytest.raises(TimeFValidationError, match="builds version"):
+        load("timenet/hello-world", "9.9.9")
 
 
 # ---- where a bare `build` writes -----------------------------------------------------------------

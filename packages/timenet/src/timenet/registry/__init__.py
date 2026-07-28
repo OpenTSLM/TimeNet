@@ -3,6 +3,7 @@
 from timenet.registry.base import BaseRegistry
 from timenet.registry.factory import (
     TIMENET_REGISTRY_URL,
+    default_registry_path,
     local_registry_path,
     open_registry,
     open_writable_registry,
@@ -20,6 +21,7 @@ __all__ = [
     "RemoteRegistry",
     "S3Registry",
     "WritableRegistry",
+    "default_registry_path",
     "local_registry_path",
     "open_registry",
     "open_writable_registry",
