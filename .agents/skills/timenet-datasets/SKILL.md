@@ -37,7 +37,8 @@ The CLI needs the `cli` extra (`timenet[cli]`); `make sync` already installs it.
 
 - `-q`/`--query` free-text over name/description/tags
 - `--domain` (must be a valid `Domain`)
-- `--task` (`classification`, `labeling`, `captioning`, `question_and_answer`, `forecasting`, `reasoning`)
+- `--task` (`classification`, `answer`, `scalar_prediction`, `temporal_localization`, `forecasting`,
+  `ts_editing`, `ts_generation`, `ts_correspondence`)
 - `--license` (must be a valid `License`)
 - `--spec` a `time_series_spec` type
 - `--id` restrict to specific dataset ids
@@ -55,7 +56,7 @@ from timenet.client import TimeNet
 tn = TimeNet()                       # registry: arg > $TIMENET_REGISTRY > local default
 tn.list()                            # list[DatasetMetadata]
 tn.get("chengsenwang/tsqa")          # Manifest (add a version or use id@version)
-tn.search(domain=..., task=QATask, tag="ecg", limit=50)   # filters are scalar-or-list, ANDed
+tn.search(domain=..., task=AnswerTask, tag="ecg", limit=50)   # filters are scalar-or-list, ANDed
 path = tn.download("chengsenwang/tsqa")                   # -> local <storage>/<id>/<version>/ dir
 dataset = tn.load("chengsenwang/tsqa")                    # download-if-needed, then read into memory
 ```
@@ -66,23 +67,23 @@ dataset = tn.load("chengsenwang/tsqa")                    # download-if-needed, 
   text summary; iterate `dataset.samples` and `dataset.tasks`; get values with
   `sample.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
 - `load_torch(...)` returns a read-only PyTorch `Dataset`; needs the `torch` extra (`timenet[torch]`).
-- `search` task filter takes the task **class** (e.g. `from timenet.types import QATask`), not a string.
+- `search` task filter takes the task **class** (e.g. `from timenet.types import AnswerTask`), not a string.
 
 ## End-to-end recipe
 
 ```python
 from timenet.client import TimeNet
-from timenet.types import QATask
+from timenet.types import AnswerTask
 
 tn = TimeNet()
-hits = tn.search(task=QATask, limit=10)          # find candidates
+hits = tn.search(task=AnswerTask, limit=10)          # find candidates
 tn.get(hits[0].dataset_id)                        # inspect the manifest
 ds = tn.load(hits[0].dataset_id)                  # load into memory
 ds.describe()                                     # identity, counts, per-spec columns, sample preview
 first = ds.samples[0].time_series[0].to_numpy()   # pull raw values lazily
 ```
 
-CLI equivalent: `uv run timenet search --task question_and_answer` then `timenet info <id>` then
+CLI equivalent: `uv run timenet search --task answer` then `timenet info <id>` then
 `timenet download <id>`. See `examples/load_tsqa.py` for a runnable version.
 
 ## Configuration

@@ -47,8 +47,11 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
 
 ### 4. Determine the task and sketch an example row
-- Choose one built-in `Task`: `ClassificationTask`, `LabelingTask`, `CaptioningTask`, `QATask`,
-  `ForecastingTask`, or `ReasoningTask`. Match it to what the dataset actually supervises.
+- Choose one built-in `Task` by the *kind of answer* the dataset supervises: `ClassificationTask` (a
+  category, whole-sample or over a `scope`), `AnswerTask` (free text; a caption without a `prompt`),
+  `ScalarPredictionTask` (a number with a unit), `TemporalLocalizationTask` (regions to find),
+  `ForecastingTask`, `TSEditingTask`, `TSGenerationTask`, or `TSCorrespondenceTask`. Any of them can carry
+  a `rationale`, so a chain-of-thought dataset is not a separate type.
 - Sketch one `Sample`: its `TimeSeries` channel(s) with their `spec`, `sampling_rate_hz`, and window;
   the annotations you'll attach; and the task payload. Concrete values, not placeholders.
 

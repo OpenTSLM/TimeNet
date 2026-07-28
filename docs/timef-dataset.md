@@ -115,13 +115,20 @@ datasets and devices.
 ### `add_task()`
 
 ```python
-add_task(samples, task, *, from_tasks=()) -> Task
+add_task(samples, task, *, scope=None, from_tasks=()) -> Task
 ```
 
 Registers a task and links it to its samples: populates `task.sample_ids` and appends `task.id` to each
-sample's `task_ids`. `from_tasks` overrides the task's own value only when non-empty, so a task built
-with `from_tasks=` is never clobbered. Raises `ValueError` on empty `samples` or a `LabelingTask` whose
-`time_series_ids` do not resolve to every target sample.
+sample's `task_ids`. `scope`, when passed, is stamped onto `task.scope` (equivalent to constructing the
+task with it, and rejected if the task already has one). `from_tasks` overrides the task's own value only
+when non-empty, so a task built with `from_tasks=` is never clobbered.
+
+This is where a task is checked against the samples it is attached to, since this is the first point that
+has both. Raises `ValueError` on empty `samples`; on a task that sets both `target` and
+`target_annotation_ids`, or neither unless its answer is a produced series; on a
+[`Span`](types.md#span) — the `scope` or a localization target — whose `time_series_ids` do not resolve on
+every target sample or that falls outside a sample's covered span; and on an `input_annotation_ids` /
+`target_annotation_ids` entry that no target sample carries.
 
 ### `derive_schema()`
 
@@ -189,7 +196,7 @@ counts
   samples      48000
   series       tsqa_series=48000
   annotations  48000
-  tasks        question_and_answer=48000
+  tasks        answer=48000
 
 specs
   spec         name         value          rate   dtype
