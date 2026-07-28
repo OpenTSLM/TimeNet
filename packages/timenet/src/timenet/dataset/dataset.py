@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 import sys
-from typing import Literal, TextIO, TypeVar, overload
+from typing import Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -161,8 +161,8 @@ class TimeFDataset:
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
                 value_type=value_type_of(annotation.value),
-                # __post_init__ normalizes unit to a plain string (or None).
-                unit=annotation.unit,
+                # __post_init__ normalizes unit to a plain string (or None), so this is always str | None.
+                unit=cast("str | None", annotation.unit),
                 description=annotation.description,
             )
             for sample in self._samples
