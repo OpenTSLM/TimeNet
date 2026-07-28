@@ -87,7 +87,7 @@ lines-after-imports = 2
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--strict-markers"]
-testpaths = ["packages"]
+testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
 ]
