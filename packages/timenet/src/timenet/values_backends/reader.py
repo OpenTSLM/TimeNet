@@ -1,6 +1,6 @@
 """Reader-side values backend seam: the abstract contract plus its factory.
 
-The inverse of :mod:`timenet.writer.values`. A :class:`BaseValuesReader` takes the index rows for one
+The inverse of :mod:`timenet.values_backends.writer`. A :class:`BaseValuesReader` takes the index rows for one
 series (sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns a primitive or
 fixed-shape tensor Arrow array matching the spec. :class:`TimeFReader` picks the backend from the
 manifest's ``values_backend`` tag and never imports a specific storage library itself. Concrete readers

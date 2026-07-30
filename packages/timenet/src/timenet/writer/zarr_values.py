@@ -28,7 +28,7 @@ import pyarrow as pa
 
 from timenet.dataset import TimeSeries
 from timenet.values_backends import ValuesBackend
-from timenet.writer.values import (
+from timenet.values_backends.writer import (
     BaseValuesBackend,
     ChunkDataIndex,
     ChunkPlacement,

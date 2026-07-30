@@ -1,7 +1,7 @@
 """The default values backend: streams ``list<float32>`` chunks into rotating Parquet shards.
 
 Shards use BYTE_STREAM_SPLIT + zstd. Each chunk's placement is recorded in the backend-neutral
-time-series index as a ``chunk_file`` plus a :class:`~timenet.writer.values.ChunkDataIndex` — for
+time-series index as a ``chunk_file`` plus a :class:`~timenet.values_backends.writer.ChunkDataIndex` — for
 Parquet, the shard path, the row group (``major_idx``), and the row offset (``minor_idx``).
 """
 
@@ -17,14 +17,14 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE
 from timenet.format.schemas import IdCodec, shard_schema
 from timenet.values_backends import ValuesBackend
-from timenet.writer import encodings
-from timenet.writer.values import (
+from timenet.values_backends.writer import (
     BaseValuesBackend,
     ChunkDataIndex,
     ChunkPlacement,
     ParquetValuesConfig,
     ValuesWriteResult,
 )
+from timenet.writer import encodings
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31

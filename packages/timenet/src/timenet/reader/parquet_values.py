@@ -10,8 +10,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.reader.values import BaseValuesReader
 from timenet.types import TimeSeriesSpec
+from timenet.values_backends.reader import BaseValuesReader
 
 
 _ROW_GROUP_CACHE_SIZE = 16  # decoded row-group value columns kept, so a shared row group decodes once

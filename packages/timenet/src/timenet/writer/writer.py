@@ -47,9 +47,14 @@ from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 from timenet.types import Task, annotation_type_of
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
+from timenet.values_backends.writer import (
+    ChunkPlacement,
+    ParquetValuesConfig,
+    ZarrValuesConfig,
+    make_values_backend,
+)
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.values import ChunkPlacement, ParquetValuesConfig, ZarrValuesConfig, make_values_backend
 
 
 class TimeFWriter:
