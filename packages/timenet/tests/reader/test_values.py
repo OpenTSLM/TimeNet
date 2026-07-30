@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from timenet.reader.parquet_values import ParquetValuesReader
 from timenet.testing import make_dataset
+from timenet.values_backends.parquet.reader import ParquetValuesReader
 
 
 class _Shard:

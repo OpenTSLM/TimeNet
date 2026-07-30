@@ -4,7 +4,7 @@ The inverse of :mod:`timenet.values_backends.writer`. A :class:`BaseValuesReader
 series (sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns a primitive or
 fixed-shape tensor Arrow array matching the spec. :class:`TimeFReader` picks the backend from the
 manifest's ``values_backend`` tag and never imports a specific storage library itself. Concrete readers
-live in their own modules — :mod:`timenet.reader.parquet_values` (the default) and
+live in their own modules — :mod:`timenet.values_backends.parquet.reader` (the default) and
 :mod:`timenet.reader.zarr_values`.
 """
 
@@ -61,7 +61,7 @@ def make_values_reader(name: str) -> BaseValuesReader:
         TimeFValidationError: If ``name`` is not a known backend.
     """
     if name == ValuesBackend.PARQUET:
-        from timenet.reader.parquet_values import ParquetValuesReader
+        from timenet.values_backends.parquet.reader import ParquetValuesReader
 
         return ParquetValuesReader()
     if name == ValuesBackend.ZARR:
