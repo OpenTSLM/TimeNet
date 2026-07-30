@@ -7,20 +7,21 @@ the deduped, sorted series and writes their values however it likes, returning a
 :class:`ChunkPlacement` per chunk plus the list of value files to record in the manifest. The core
 writer stays ignorant of shards, row groups, or arrays.
 
-Concrete backends live in their own modules — :mod:`timenet.values_backends.parquet.writer` (the default) and
-:mod:`timenet.writer.zarr_values` — and are constructed via :func:`make_values_backend`.
+Concrete backends live in their own modules — :mod:`timenet.values_backends.parquet.writer` (the
+default) and :mod:`timenet.values_backends.zarr.writer` — and are constructed via
+:func:`make_values_backend`.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import ClassVar, assert_never
 
 import pyarrow as pa
 
 from timenet.dataset import TimeSeries
 from timenet.values_backends.parquet.config import ParquetValuesConfig
+from timenet.values_backends.zarr.config import ZarrValuesConfig
 
 
 @dataclass(frozen=True)
@@ -73,22 +74,6 @@ class ValuesWriteResult:
     """``(time_series_id, chunk_idx)`` -> its on-disk placement."""
     files: list[str] = field(default_factory=list)
     """Value files produced, relative to the staging directory, for ``manifest.files.time_series``."""
-
-
-@dataclass(frozen=True)
-class ZarrValuesConfig:
-    """Typed construction options for the Zarr values backend."""
-
-    staging_dir: Path
-    """Version staging directory; the Zarr store is written beneath it."""
-    shard_target_bytes: int
-    """Target size of one Zarr shard."""
-    chunk_max_bytes: int
-    """Target size of one Zarr storage chunk."""
-    compression: str
-    """Blosc inner compression codec."""
-    compression_level: int
-    """Blosc compression level."""
 
 
 ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig
@@ -144,7 +129,7 @@ def make_values_backend(config: ValuesBackendConfig) -> BaseValuesBackend:
 
         return ParquetValuesBackend(config)
     if isinstance(config, ZarrValuesConfig):
-        from timenet.writer.zarr_values import ZarrValuesBackend
+        from timenet.values_backends.zarr.writer import ZarrValuesBackend
 
         return ZarrValuesBackend(config)
     assert_never(config)
