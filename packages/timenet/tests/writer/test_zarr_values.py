@@ -9,12 +9,13 @@ import zarr
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader, zarr_values as zarr_reader_module
-from timenet.reader.zarr_values import ZarrValuesReader
+from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, View, ureg
+from timenet.values_backends.zarr import reader as zarr_reader_module
+from timenet.values_backends.zarr.reader import ZarrValuesReader
+from timenet.values_backends.zarr.writer import _array_name
 from timenet.writer import TimeFWriter
-from timenet.writer.zarr_values import _array_name
 
 
 def _write(tmp_path, **kwargs) -> Path:

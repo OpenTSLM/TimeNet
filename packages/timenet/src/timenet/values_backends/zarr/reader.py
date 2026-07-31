@@ -1,6 +1,6 @@
 """Zarr values backend (reader side): resolve index rows to values via per-``spec_type`` Zarr arrays.
 
-The inverse of :class:`timenet.writer.zarr_values.ZarrValuesBackend`. Each index row locates a run of
+The inverse of :class:`timenet.values_backends.zarr.writer.ZarrValuesBackend`. Each index row locates a run of
 values by ``(chunk_file = array path, chunk_major_idx = element start)``. A series is normally one row, so
 a read is one contiguous range; multi-row series coalesce contiguous rows into as few ranges as
 possible. Ranges are served from an LRU of decoded storage chunks — neighboring series share storage

@@ -33,8 +33,8 @@ from timenet.values_backends.writer import (
     ChunkDataIndex,
     ChunkPlacement,
     ValuesWriteResult,
-    ZarrValuesConfig,
 )
+from timenet.values_backends.zarr.config import ZarrValuesConfig
 
 
 _STORE_DIR = "time_series.zarr"
