@@ -378,6 +378,7 @@ class TimeFWriter:
                 {
                     "sample_id": codec.encode("sample_id", sample.sample_id),
                     "view": str(sample.view),
+                    "t0_unix_ns": sample.t0_unix_ns,
                     "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
                     "source_ids": codec.encode_list(
                         "source_id", _ordered_unique(ts.source_id for ts in sample.time_series if ts.source_id)

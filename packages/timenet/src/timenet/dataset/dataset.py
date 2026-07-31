@@ -49,6 +49,7 @@ class TimeFDataset:
         view: View = View.FULL,
         subject_ids: tuple[str, ...] = (),
         sample_id: str | None = None,
+        t0_unix_ns: int | None = None,
     ) -> Sample:
         """Create a sample, register it, and return it.
 
@@ -58,6 +59,8 @@ class TimeFDataset:
             subject_ids: Subjects this sample belongs to (empty for subject-less domains).
             sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic
                 output, e.g. when generating golden fixtures.
+            t0_unix_ns: Wall-clock anchor for the sample's relative timeline (Unix time, UTC, integer
+                nanoseconds), or ``None`` when no wall-clock reference exists.
 
         Returns:
             The newly created :class:`Sample`.
@@ -75,13 +78,19 @@ class TimeFDataset:
             duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
             raise TimeFValidationError(f"add_sample requires distinct time_series_ids, got duplicates {duplicates}")
         if sample_id is None:
-            sample = Sample(time_series=tuple(time_series), view=view, subject_ids=tuple(subject_ids))
+            sample = Sample(
+                time_series=tuple(time_series),
+                view=view,
+                subject_ids=tuple(subject_ids),
+                t0_unix_ns=t0_unix_ns,
+            )
         else:
             sample = Sample(
                 sample_id=sample_id,
                 time_series=tuple(time_series),
                 view=view,
                 subject_ids=tuple(subject_ids),
+                t0_unix_ns=t0_unix_ns,
             )
         self._samples.append(sample)
         return sample

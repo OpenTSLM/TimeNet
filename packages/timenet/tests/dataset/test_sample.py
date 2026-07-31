@@ -68,3 +68,32 @@ def test_to_numpy_rejects_multi_channel(make_series):
     sample = Sample(time_series=(make_series(channel="I"), make_series(channel="II")))
     with pytest.raises(ValueError, match="single-channel"):
         sample.to_numpy()
+
+
+def test_t0_unix_ns_defaults_to_none(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    assert sample.t0_unix_ns is None
+
+
+def test_t0_unix_ns_accepts_int64(make_series):
+    anchor = 1_700_000_000_000_000_001
+    sample = Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=anchor)
+    assert sample.t0_unix_ns == anchor
+
+
+def test_t0_unix_ns_rejects_out_of_int64_range(make_series):
+    with pytest.raises(ValueError, match="int64"):
+        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=2**63)
+    with pytest.raises(ValueError, match="int64"):
+        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=-(2**63) - 1)
+
+
+@pytest.mark.parametrize("anchor", [True, 1.5, "1700000000000000000"])
+def test_t0_unix_ns_rejects_non_integer(anchor, make_series):
+    with pytest.raises(ValueError, match="integer or None"):
+        Sample(time_series=(make_series(),), t0_unix_ns=anchor)
+
+
+def test_has_absolute_time(make_series):
+    assert not Sample(time_series=(make_series(),)).has_absolute_time
+    assert Sample(time_series=(make_series(),), t0_unix_ns=0).has_absolute_time
