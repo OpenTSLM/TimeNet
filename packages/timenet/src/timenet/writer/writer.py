@@ -1,8 +1,8 @@
 """``TimeFWriter``: serialize a :class:`~timenet.dataset.TimeFDataset` to the TimeF layout on disk.
 
-The writer streams shards (one row group per ``row_group_target_bytes`` of values, splitting series at
-``chunk_max_bytes`` and rotating shards at ``shard_target_bytes``) so peak memory stays near one row
-group. Everything is staged in a temporary directory and published with a single atomic rename;
+The writer keeps the Parquet control plane fixed and delegates series values to a selected Parquet or
+Zarr backend. Backend buffers are bounded by the configured chunk, row-group, and shard targets.
+Everything is staged in a temporary directory and published with a single atomic rename;
 ``manifest.json`` present in the version directory marks a committed version.
 """
 
@@ -77,7 +77,7 @@ class TimeFWriter:
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
-            compression: Parquet codec.
+            compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned level (applied for zstd) for reproducible output.
             values_backend: Storage backend for the values plane.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
@@ -319,11 +319,11 @@ class TimeFWriter:
             ts: The series to read.
 
         Returns:
-            The validated float32 values array.
+            The validated values in the spec's canonical Arrow representation.
 
         Raises:
-            TimeFValidationError: If the array is not a non-empty, finite float32 array, or its length
-                disagrees with a set window.
+            TimeFValidationError: If the array is empty, disagrees with the spec's dtype/shape, has
+                non-finite inexact values, or its length disagrees with a set window.
         """
         values = ts.to_arrow()
         expected_type = pa.from_numpy_dtype(np.dtype(ts.spec.dtype))

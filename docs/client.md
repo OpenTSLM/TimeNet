@@ -88,8 +88,8 @@ client.load("chengsenwang/tsqa@latest")  # latest, explicit
 ## PyTorch
 
 `load_torch` returns a `TimeFTorchDataset`, a read-only, map-style `torch.utils.data.Dataset`. Each
-item is a dict with the sample's `series` as float32 tensors (one per channel), plus `sample_id`,
-`tasks`, and `annotations`.
+item is a dict with the sample's `series` as dtype-preserving tensors with shape
+`(n_steps, *value_shape)`, plus `sample_id`, `tasks`, and `annotations`.
 
 ```python
 from timenet.client import TimeNet

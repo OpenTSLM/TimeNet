@@ -118,8 +118,9 @@ Intrinsic per-sample/annotation/task checks happen at insertion (see [TimeFDatas
 The writer adds two checks, raising `TimeFValidationError`:
 
 - Cross-sample (before any I/O): annotations sharing an `id` across samples must be field-equal.
-- Per-series (as each loader runs): values are a non-empty, finite `float32` array; when `t_end_s`
-  is set, `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)`.
+- Per-series (as each loader runs): values are non-empty, match the spec's `dtype` and `value_shape`,
+  and are finite when their dtype supports non-finite values. When `t_end_s` is set,
+  `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)`.
 
 ## Commit protocol
 
@@ -130,9 +131,10 @@ the staging directory, so a partial dataset is never visible.
 
 ## Manifest
 
-The writer assembles the [manifest](manifest.md) from `dataset.schema`, write-time counts, the file
-list, a per-file sha256 checksum for every parquet artifact, and the `id_encoding` map. A copy-on-write
-edit also records a `derived_from` lineage block.
+The writer assembles the [manifest](manifest.md) from `dataset.schema`, write-time counts, the complete
+file list, a per-file SHA-256 checksum for every staged artifact (including Zarr metadata and chunks),
+the values-backend tag, and the `id_encoding` map. A copy-on-write edit also records a `derived_from`
+lineage block.
 
 ## Copy-on-write edits
 

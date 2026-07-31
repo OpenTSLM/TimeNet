@@ -50,7 +50,7 @@ class TimeFReader:
         Raises:
             FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
                 missing.
-            TimeFFormatError: If a listed parquet file is unreadable or disagrees with the manifest
+            TimeFFormatError: If a listed control-plane file is unreadable or disagrees with the manifest
                 (an unknown task partition, a column the schema does not declare, a dangling
                 reference). Corrupt bytes on disk are a format failure, not a caller error, so they
                 do not surface as the raw ``ValueError`` / ``KeyError`` the parsing happens to raise.
@@ -67,7 +67,7 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        # The loaders parse on-disk parquet against the manifest's schema. Anything they raise means
+        # The eager loaders parse on-disk control tables against the manifest's schema. Anything they raise means
         # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
         # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
         try:
@@ -312,7 +312,7 @@ class TimeFReader:
             time_series_id: The series id to read.
 
         Returns:
-            The series' 1-D float32 values.
+            The series values in the spec's canonical Arrow representation.
 
         Raises:
             ValueError: If the series has no index entry or a chunk cannot be read.
@@ -349,7 +349,7 @@ class _SeriesLoader:
         """Read the series' values.
 
         Returns:
-            The series' 1-D float32 Arrow array.
+            The series values in the spec's canonical Arrow representation.
         """
         return self.reader._load_values(self.sample_id, self.time_series_id)
 

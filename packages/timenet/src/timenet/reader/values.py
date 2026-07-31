@@ -1,10 +1,11 @@
 """Reader-side values backend seam: the abstract contract plus its factory.
 
 The inverse of :mod:`timenet.writer.values`. A :class:`BaseValuesReader` takes the index rows for one
-series (sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns the series' 1-D
-float32 Arrow array. The :class:`TimeFReader` picks the backend from the manifest's ``values_backend``
-tag and never imports a specific storage library itself. Concrete readers live in their own modules —
-:mod:`timenet.reader.parquet_values` (the default) and :mod:`timenet.reader.zarr_values`.
+series (sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns a primitive or
+fixed-shape tensor Arrow array matching the spec. :class:`TimeFReader` picks the backend from the
+manifest's ``values_backend`` tag and never imports a specific storage library itself. Concrete readers
+live in their own modules — :mod:`timenet.reader.parquet_values` (the default) and
+:mod:`timenet.reader.zarr_values`.
 """
 
 from abc import ABC, abstractmethod
@@ -31,7 +32,7 @@ class BaseValuesReader(ABC):
             spec: The series' spec, for backends whose decoding depends on shape/dtype.
 
         Returns:
-            The series' values in their canonical Arrow representation.
+            The series values in the spec's canonical Arrow representation.
         """
 
     @abstractmethod
