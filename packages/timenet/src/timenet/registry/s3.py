@@ -56,6 +56,7 @@ class S3Registry(WritableRegistry):
         dataset: TimeFDataset,
         *,
         force: bool = False,
+        values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Not yet implemented.

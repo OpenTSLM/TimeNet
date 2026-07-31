@@ -172,6 +172,7 @@ def edit_version(
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
 
         base = reader.read()
+        writer_kwargs.setdefault("values_backend", reader.values_backend)  # an edit keeps the base's backend
         edited = remove_samples(base, remove_sample_ids, cascade=cascade)
         edited = TimeFDataset.from_parts(
             metadata=replace(edited.metadata, dataset_version=dataset_version),

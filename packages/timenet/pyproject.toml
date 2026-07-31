@@ -30,8 +30,14 @@ curation = [
     "pyyaml>=6",
     "jsonschema>=4.18",
 ]
+# The Zarr values backend (an alternative to the default Parquet shard store). The core reader/writer
+# never import zarr; `timenet.writer.zarr_values` imports it lazily and raises a clear
+# "install timenet[zarr]" message when the extra is absent.
+zarr = [
+    "zarr>=3",
+]
 all = [
-    "timenet[cli,torch,curation]",
+    "timenet[cli,torch,curation,zarr]",
 ]
 
 [project.scripts]

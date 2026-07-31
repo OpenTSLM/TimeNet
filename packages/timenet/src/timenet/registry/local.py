@@ -124,6 +124,7 @@ class LocalRegistry(WritableRegistry):
         dataset: TimeFDataset,
         *,
         force: bool = False,
+        values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and write it into this registry's directory tree.
@@ -135,6 +136,7 @@ class LocalRegistry(WritableRegistry):
         Args:
             dataset: The populated dataset to store.
             force: Overwrite an already-committed version instead of skipping it.
+            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
 
         Returns:
@@ -151,7 +153,7 @@ class LocalRegistry(WritableRegistry):
             return version
         if force and final_dir.exists():
             shutil.rmtree(final_dir)
-        with TimeFWriter(self._root, dataset, progress_cb=progress_cb) as writer:
+        with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
             writer.write()
         return version
 
