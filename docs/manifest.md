@@ -16,7 +16,7 @@ the [reader](timef-reader.md) reads it first. Lives in `timenet.manifest`.
 Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors, the manifest's
 `schema` block is a direct serialization of it. There are no separate "entry" types to keep in sync.
 
-The on-disk shape is pinned by `manifest-v1.schema.json` (JSON Schema draft 2020-12), the formal
+The on-disk shape is pinned by `manifest.schema.json` (JSON Schema draft 2020-12), the formal
 contract for external consumers. It ships in the `timenet` package (`timenet.schemas.MANIFEST_SCHEMA`);
 a test validates `to_dict()` output against it. Registries will serve it alongside their datasets.
 
@@ -46,6 +46,10 @@ an absent entry means that id is a UTF-8 string. `values_backend` names the
 [values backend](timef-writer.md#values-backends) that wrote `files.time_series`; the reader dispatches
 on it, and a manifest without the key reads as `"parquet"`. `derived_from` is set only on a version
 produced by a [copy-on-write edit](timef-writer.md#copy-on-write-edits).
+
+The backend-neutral values locator schema introduced in format v2 applies to both scalar and
+multidimensional datasets. Multidimensional specs also require v2 so older readers reject their
+incompatible values layout explicitly rather than attempting to interpret it as scalar data.
 
 Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_version` raises
 `InvalidManifestError`.

@@ -20,6 +20,7 @@ needs it.
 
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 import pyarrow as pa
@@ -40,6 +41,20 @@ _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
 # One placement normally spans a whole series; split only to keep n_values inside int32 (the index
 # column type). 2^30 values = 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
+
+
+def _array_name(spec_type: str) -> str:
+    """Encode a logical spec type as one filesystem-safe Zarr path segment.
+
+    Percent-encodes every character outside the URL-unreserved set, so path separators never leak into
+    the path and distinct spec types map to distinct single segments (the encoding is reversible, hence
+    injective). ``.`` and ``..`` are the only unreserved-yet-unsafe segments; :class:`TimeSeriesSpec`
+    rejects them.
+
+    Returns:
+        The percent-encoded physical array name.
+    """
+    return quote(spec_type, safe="")
 
 
 class ZarrValuesBackend(BaseValuesBackend):
@@ -103,6 +118,7 @@ class ZarrValuesBackend(BaseValuesBackend):
                 else arrow_values.to_numpy(zero_copy_only=False)
             )
             spec_type = ts.spec.spec_type
+            array_name = _array_name(spec_type)
             if spec_type != active:
                 if active is not None:
                     appenders[active].finish()
@@ -115,7 +131,7 @@ class ZarrValuesBackend(BaseValuesBackend):
                     trailing = ts.spec.value_shape
                     appenders[spec_type] = _ArrayAppender(
                         group.create_array(
-                            name=spec_type,
+                            name=array_name,
                             shape=(0, *trailing),
                             dtype=ts.spec.dtype,
                             chunks=(chunk_len, *trailing),
@@ -128,7 +144,7 @@ class ZarrValuesBackend(BaseValuesBackend):
             appender = appenders[spec_type]
             base = appender.logical_len
             appender.append(values)
-            rel = f"{_STORE_DIR}/{spec_type}"
+            rel = f"{_STORE_DIR}/{array_name}"
             for chunk_idx, start in enumerate(range(0, len(values), _MAX_PLACEMENT_VALUES)):
                 n = min(_MAX_PLACEMENT_VALUES, len(values) - start)
                 placements[ts.time_series_id, chunk_idx] = ChunkPlacement(

@@ -187,6 +187,13 @@ def test_unknown_values_backend_rejected_when_parsing():
         _manifest(values_backend="feather")
 
 
+def test_unknown_values_backend_rejected():
+    data = _manifest().to_dict()
+    data["values_backend"] = "hdf5"
+    with pytest.raises(InvalidManifestError, match="values_backend"):
+        Manifest.from_dict(data)
+
+
 def test_unmodeled_metadata_keys_dropped():
     d = _manifest().to_dict()
     d["metadata"]["concepts"] = ["snomed:80891009"]  # not a modeled field
