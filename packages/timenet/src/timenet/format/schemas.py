@@ -162,9 +162,11 @@ def index_schema(id_types: IdTypes) -> pa.Schema:
             ("spec_type", pa.string()),
             ("channel", pa.string()),
             ("chunk_idx", pa.int32()),
-            ("shard_path", pa.string()),
-            ("row_group", pa.int32()),
-            ("row_offset", pa.int32()),
+            # Backend-neutral chunk locator (a ChunkDataIndex flattened). For Parquet, these are the
+            # shard path, row group, and row offset; other backends assign their own coordinate meanings.
+            ("chunk_file", pa.string()),
+            ("chunk_major_idx", pa.int64()),
+            ("chunk_minor_idx", pa.int64()),
             ("t_start_s", pa.float64()),
             ("t_end_s", pa.float64()),
             ("n_values", pa.int32()),

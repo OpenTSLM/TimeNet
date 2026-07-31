@@ -40,8 +40,9 @@ field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
 
 ## Value reads
 
-A series' loader resolves its index rows (sorted by `chunk_idx`), reads each chunk with
-`ParquetFile.read_row_group(rg, columns=["values"])[row_offset]`, and concatenates them into one
+A series' loader resolves its index rows (sorted by `chunk_idx`), interprets `chunk_file`,
+`chunk_major_idx`, and `chunk_minor_idx` as the Parquet shard, row group, and row offset, reads each
+chunk, and concatenates them into one
 `float32` Arrow array. Shard handles are cached for the reader's lifetime and closed on `close()`.
 
 ## API

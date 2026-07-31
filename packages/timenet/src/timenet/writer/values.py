@@ -23,19 +23,36 @@ from timenet.dataset import TimeSeries
 from timenet.format.schemas import IdCodec, IdTypes
 
 
-@dataclass
-class ChunkPlacement:
-    """Where one chunk of a series landed, plus the metadata the index needs.
+@dataclass(frozen=True)
+class ChunkDataIndex:
+    """A backend-defined address locating one chunk's values inside its ``chunk_file``.
 
-    The locator identifies a row within a Parquet shard row group.
+    Backends need a different number of coordinates, so ``minor_idx`` is optional:
+
+    - Parquet (two-level): ``major_idx`` is the row-group index within the shard, and ``minor_idx`` is
+      the chunk's row within that row group (its element in the ``values`` ``list<float32>`` column).
+    - Zarr (one-level): ``major_idx`` is the chunk's element-start index in the per-``spec_type`` array,
+      and ``minor_idx`` is ``None`` — the chunk is the contiguous range
+      ``[major_idx, major_idx + n_values)``.
+
+    Persisted flat in the time-series index as the two integer columns ``chunk_major_idx`` and
+    ``chunk_minor_idx``.
     """
 
-    shard_path: str
-    """Parquet shard (relative to the staging directory) holding this chunk."""
-    row_group: int
-    """Row group within the shard."""
-    row_offset: int
-    """Row within the row group."""
+    major_idx: int
+    """Coarse coordinate: which block/region of ``chunk_file`` holds the chunk."""
+    minor_idx: int | None
+    """Fine coordinate: the chunk's position within that block, or ``None`` for a one-level backend."""
+
+
+@dataclass
+class ChunkPlacement:
+    """Where one chunk of a series landed, plus the metadata the index needs."""
+
+    chunk_file: str
+    """Values file (relative to the staging directory) holding this chunk."""
+    data_index: ChunkDataIndex
+    """Backend-defined coordinates locating the chunk inside ``chunk_file``."""
     spec_type: str
     """Spec type of the source series."""
     channel: str

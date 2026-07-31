@@ -20,7 +20,7 @@ class _Shard:
 def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda root, rel_path: _Shard(1.0 if root == Path("a") else 2.0))
-    rows = [{"shard_path": "time_series/shard-00000.parquet", "row_group": 0, "row_offset": 0}]
+    rows = [{"chunk_file": "time_series/shard-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
 
     assert reader.load(Path("a"), rows).to_pylist() == [1.0]
     assert reader.load(Path("b"), rows).to_pylist() == [2.0]
