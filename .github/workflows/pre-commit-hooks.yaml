@@ -19,6 +19,8 @@ jobs:
       uses: astral-sh/setup-uv@v8.2.0
       with:
         enable-cache: true
+        prune-cache: false
+        cache-suffix: py313
     - name: Cache pre-commit environments
       uses: actions/cache@v5
       with:
@@ -99,6 +101,8 @@ jobs:
       uses: astral-sh/setup-uv@v8.2.0
       with:
         enable-cache: true
+        prune-cache: false
+        cache-suffix: py311
     - name: Install dependencies on the minimum Python
       run: uv sync --all-groups --all-extras --no-extra torch-gpu --python 3.11
     - name: Test with pytest (Python 3.11)
