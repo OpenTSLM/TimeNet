@@ -187,6 +187,15 @@ def test_unsupported_format_version_raises(tmp_path):
         TimeFReader(version_dir)
 
 
+def test_corrupt_index_locator_has_series_context(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        key = next(iter(reader._index))
+        del reader._index[key][0]["shard_path"]
+        with pytest.raises(ValueError, match=f"failed to read series {key[1]!r} for sample {key[0]!r}"):
+            reader._load_values(*key)
+
+
 def test_missing_listed_file_raises(tmp_path):
     version_dir = _write(tmp_path)
     (version_dir / "samples.parquet").unlink()

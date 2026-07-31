@@ -19,7 +19,7 @@ from timenet.types import (
 )
 
 
-def _manifest() -> Manifest:
+def _manifest(*, values_backend: str = "parquet") -> Manifest:
     holter = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
@@ -66,6 +66,7 @@ def _manifest() -> Manifest:
             tasks=("tasks/task=classification/part-0.parquet",),
             time_series=("time_series/shard-00000.parquet",),
         ),
+        values_backend=values_backend,
     )
 
 
@@ -163,6 +164,27 @@ def test_optional_schema_and_counts_default_empty():
     m = Manifest.from_dict(d)
     assert m.schema == DatasetSchema()
     assert m.counts == ManifestCounts()
+
+
+def test_values_backend_defaults_to_parquet():
+    assert _manifest().values_backend == "parquet"
+    assert _manifest().to_dict()["values_backend"] == "parquet"
+
+
+def test_values_backend_absent_reads_as_parquet():
+    d = _manifest().to_dict()
+    del d["values_backend"]  # a pre-backend manifest
+    assert Manifest.from_dict(d).values_backend == "parquet"
+
+
+def test_values_backend_round_trips():
+    m = _manifest(values_backend="parquet")
+    assert Manifest.from_json(m.to_json()).values_backend == "parquet"
+
+
+def test_unknown_values_backend_rejected_when_parsing():
+    with pytest.raises(InvalidManifestError, match="values_backend"):
+        _manifest(values_backend="feather")
 
 
 def test_unmodeled_metadata_keys_dropped():
