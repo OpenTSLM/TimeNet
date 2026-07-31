@@ -1,15 +1,17 @@
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import zarr
 
+from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Version
+from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, View, ureg
 from timenet.writer import TimeFWriter
 
 
@@ -82,3 +84,117 @@ def test_unknown_backend_rejected(tmp_path):
     dataset.derive_schema()
     with pytest.raises(ValueError, match="values_backend"), TimeFWriter(tmp_path, dataset, values_backend="hdf5") as w:
         w.write()
+
+
+def test_nd_uint8_round_trip_and_range_read(tmp_path):
+    frames = np.arange(7 * 4 * 5 * 3, dtype=np.uint8).reshape(7, 4, 5, 3)
+    spec = TimeSeriesSpec(
+        spec_type="camera",
+        name="RGB camera",
+        unit_sampling_rate=ureg.hertz,
+        unit_timestamp=ureg.second,
+        unit_value=ureg.dimensionless,
+        dtype="uint8",
+        value_shape=(4, 5, 3),
+        dimension_names=("height", "width", "color"),
+    )
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="bench/camera",
+            dataset_version=Version(1, 0, 0),
+            name="Camera",
+            description="N-D fixture",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(
+        time_series=(
+            TimeSeries(
+                spec=spec,
+                channel="rgb",
+                sampling_rate_hz=30.0,
+                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
+                time_series_id="camera-1",
+            ),
+        ),
+        view=View.FULL,
+        sample_id="sample-camera",
+    )
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
+        writer.write()
+    version_dir = tmp_path / "bench/camera/1.0.0"
+    with TimeFReader(version_dir) as reader:
+        restored = next(iter(reader.iter_samples())).time_series[0]
+        assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
+        np.testing.assert_array_equal(restored.to_numpy(), frames)
+        np.testing.assert_array_equal(restored.read_steps(2, 5).to_numpy_ndarray(), frames[2:5])
+
+
+def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
+    # Covers ZarrValuesReader.load_range's `start >= bounded_stop` branch, which builds a
+    # (0, *value_shape) array: an empty range must yield a correctly typed zero-length Arrow array for
+    # both scalar and N-D specs (pa.FixedShapeTensorArray.from_numpy_ndarray rejects a 0-length ndarray).
+    frames = np.arange(6 * 2 * 3, dtype=np.uint8).reshape(6, 2, 3)
+    nd_spec = TimeSeriesSpec(
+        spec_type="camera",
+        name="cam",
+        unit_sampling_rate=ureg.hertz,
+        unit_timestamp=ureg.second,
+        unit_value=ureg.dimensionless,
+        dtype="uint8",
+        value_shape=(2, 3),
+        dimension_names=("h", "w"),
+    )
+    scalar_spec = TimeSeriesSpec(
+        spec_type="sine",
+        name="sine",
+        unit_sampling_rate=ureg.hertz,
+        unit_timestamp=ureg.second,
+        unit_value=ureg.millivolt,
+    )
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="bench/empty",
+            dataset_version=Version(1, 0, 0),
+            name="Empty range",
+            description="empty-range fixture",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(
+        time_series=(
+            TimeSeries(
+                spec=nd_spec,
+                channel="rgb",
+                sampling_rate_hz=10.0,
+                time_series_id="cam-1",
+                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=nd_spec.dimension_names),
+            ),
+            TimeSeries(
+                spec=scalar_spec,
+                channel="i",
+                sampling_rate_hz=10.0,
+                time_series_id="sig-1",
+                loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
+            ),
+        ),
+        view=View.FULL,
+        sample_id="sample-0",
+    )
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
+        writer.write()
+    with TimeFReader(tmp_path / "bench/empty/1.0.0") as reader:
+        series = {ts.spec.spec_type: ts for ts in next(iter(reader.iter_samples())).time_series}
+
+    nd_empty = series["camera"].read_steps(2, 2)  # valid but empty half-open range
+    assert isinstance(nd_empty, pa.FixedShapeTensorArray)
+    assert len(nd_empty) == 0
+    assert nd_empty.to_numpy_ndarray().shape == (0, 2, 3)
+
+    scalar_empty = series["sine"].read_steps(6, 6)  # start == total
+    assert len(scalar_empty) == 0
+    assert scalar_empty.type == pa.float32()

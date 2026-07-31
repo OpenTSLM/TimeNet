@@ -54,15 +54,15 @@ Targets are measured in uncompressed value bytes; on disk (zstd) files are small
 
 ## Values backends
 
-Only the **values plane** (each series' float32 waveform) is backend-specific; samples, annotations,
+Only the **values plane** (each series' temporal values) is backend-specific; samples, annotations,
 tasks, and the time-series index are always Parquet. The manifest records the choice in
 `values_backend`, and the index locates every chunk with a backend-agnostic
 `(chunk_file, chunk_major_idx, chunk_minor_idx)` locator:
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows; a series is split into `chunk_max_bytes` chunks packed into row groups | `(shard path, row group, row offset)` |
-| `zarr` | one 1-D float32 array per `spec_type` under `time_series.zarr/` (storage chunks of `chunk_max_bytes`, shards of `shard_target_bytes`, Blosc bit-shuffle + zstd); a series is **one index row** spanning its full length, read as a single slice | `(array path, element start, –)` |
+| `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows; currently scalar float32 only | `(shard path, row group, row offset)` |
+| `zarr` | one array per `spec_type` under `time_series.zarr/`, shaped `(total_steps, *value_shape)` with the spec dtype; a series is **one index row** spanning its time axis | `(array path, step start, –)` |
 
 Each backend chunks on its own terms: Parquet needs the logical `chunk_max_bytes` split to pack series
 into row groups, while Zarr chunks the storage itself, so its index carries one placement per series
@@ -71,7 +71,10 @@ into row groups, while Zarr chunks the storage itself, so its index carries one 
 rather than read-modify-written per series.
 
 The Zarr backend needs the `zarr` extra (`pip install 'timenet[zarr]'`); the core never imports it. A
-[copy-on-write edit](#copy-on-write-edits) keeps the base version's backend unless overridden.
+Zarr series can hold embeddings, pose tensors, spectrogram frames, or image sequences. Recordings may
+have different durations, but every series sharing a `spec_type` must have the same dtype and trailing
+shape. Parquet deliberately rejects N-D or non-float32 specs until a portable mixed-dtype layout is
+defined. A [copy-on-write edit](#copy-on-write-edits) keeps the base version's backend unless overridden.
 
 ## Streaming and chunking
 
