@@ -105,17 +105,25 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
-| Task | Payload (besides `id`, set automatically) |
-| --- | --- |
-| `ClassificationTask` | `target`, optional `target_schema` |
-| `LabelingTask` | `target`, optional `target_schema`, `time_series_ids`, `windows_s` |
-| `CaptioningTask` | `target` |
-| `QATask` | `question`, `target` |
-| `ForecastingTask` | `context_sample_ids`, `target_sample_id` |
-| `ReasoningTask` | `question`, `target`, optional `rationale` (the chain of thought) |
+Every task shares one frame on the `Task` base — `sample_ids`, `prompt`, `scope` (a `Span` narrowing the
+input), `input_annotation_ids`, `target` / `target_annotation_ids`, `rationale`, `from_tasks` — so the
+type only says what *kind* of answer it is.
 
-The five non-forecasting tasks share a scalar `target` (the label, answer, or caption) via a `TargetTask`
-base. Forecasting is the exception: its target is the future series, referenced by `target_sample_id`.
+| Task | Answer | Extra payload |
+| --- | --- | --- |
+| `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
+| `AnswerTask` | `target: str` (free text; a caption when there is no `prompt`) | — |
+| `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
+| `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |
+| `ForecastingTask` | the produced series | `context_sample_ids`, `target_sample_id` |
+| `TSEditingTask` | the produced series | `source_sample_id`, `target_sample_id` |
+| `TSGenerationTask` | the produced series | `target_sample_id` |
+| `TSCorrespondenceTask` | `target: tuple[str, ...]` (sample ids) | `candidate_sample_ids` |
+
+The three series-output tasks set `answer_is_sample` and locate their answer by sample id instead of
+filling `target`. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
+points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
+the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
@@ -126,7 +134,7 @@ import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import QATask, StaticAnnotation, TimeSeriesSpec, ureg
+from timenet.types import AnswerTask, StaticAnnotation, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 _SPEC = TimeSeriesSpec(
@@ -161,7 +169,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(sample, QATask(question=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+            dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 CONNECTOR = TSQAConnector
@@ -182,7 +190,7 @@ Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen
 `download` calls `_ensure_archive` / `_stream_download` and returns refs; `convert` shares the 12-lead
 ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
 `StaticAnnotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
-`ReasoningTask(question=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
+`AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
 `fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
 pattern, including sharing a series across many samples.
 

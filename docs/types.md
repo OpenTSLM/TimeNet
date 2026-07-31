@@ -212,67 +212,107 @@ write time.
 ## Tasks
 
 A task is one labeled training target referencing one or more samples. The class is the type tag
-(usable as a search filter, e.g. `search(task=ReasoningTask)`); the instance carries the payload. Tasks
+(usable as a search filter, e.g. `search(task=AnswerTask)`); the instance carries the payload. Tasks
 are mutable so [`add_task`](timef-dataset.md) can populate `sample_ids` after construction.
 
-| Class | `task_type` | Payload |
-| --- | --- | --- |
-| `ClassificationTask` | `classification` | `target`, `target_schema` |
-| `LabelingTask` | `labeling` | `target`, `target_schema`, `time_series_ids`, `windows_s` |
-| `CaptioningTask` | `captioning` | `target` |
-| `QATask` | `question_and_answer` | `question`, `target` |
-| `ForecastingTask` | `forecasting` | `context_sample_ids`, `target_sample_id` |
-| `ReasoningTask` | `reasoning` | `question`, `rationale`, `target` |
+Every task is `inputs -> one typed answer`, and the shared frame lives on the `Task` base:
 
-Every task also carries `id` (auto uuid7), `sample_ids`, `from_tasks`, and a `from_task_ids` property.
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `str` | Auto uuid7. |
+| `sample_ids` | `tuple[str, ...]` | The samples the task is about; populated by `add_task`. |
+| `prompt` | `str \| None` | What the model is asked; `None` for an unprompted task. |
+| `scope` | `Span \| None` | The input region; `None` means the whole sample. |
+| `input_annotation_ids` | `tuple[str, ...]` | Annotations given to the model as context. |
+| `target` | typed per subclass | The answer, inline. |
+| `target_annotation_ids` | `tuple[str, ...]` | The answer by reference to stored annotations. |
+| `rationale` | `str \| None` | Chain of thought to train on. Any task may carry one. |
+| `from_tasks` | `tuple[Task, ...]` | Source tasks this one derives from (plus a `from_task_ids` property). |
+
+A subclass therefore adds only what makes its answer a different *kind* of thing:
+
+| Class | `task_type` | Answer | Extra payload |
+| --- | --- | --- | --- |
+| `ClassificationTask` | `classification` | `target: str` (a label) | `target_schema` |
+| `AnswerTask` | `answer` | `target: str` (free text) | — |
+| `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
+| `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[Span, ...]` | `mode` |
+| `ForecastingTask` | `forecasting` | a produced series | `context_sample_ids`, `target_sample_id` |
+| `TSEditingTask` | `ts_editing` | a produced series | `source_sample_id`, `target_sample_id` |
+| `TSGenerationTask` | `ts_generation` | a produced series | `target_sample_id` |
+| `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (sample ids) | `candidate_sample_ids` |
+
 `TaskType` is the enum of type tags; `TASKS` is **derived** at import by walking the `Task` subclass
 tree, so every concrete task in the module is registered by its `task_type` and two classes claiming the
-same tag are rejected rather than silently collapsed. Intermediate bases like `TargetTask` that group
-tasks without claiming a `task_type` are skipped. Unlike specs and annotations, task payloads are fixed
-in code and resolved on read against `TASKS`, not reconstructed from the manifest.
+same tag are rejected rather than silently collapsed. Unlike specs and annotations, task payloads are
+fixed in code and resolved on read against `TASKS`, not reconstructed from the manifest.
 
-The five label-style tasks share a scalar `target` (a class label, region label, answer, or caption)
-through a `TargetTask` base, so generic training code reads `task.target` regardless of type. Forecasting
-is the exception: its target is a *series*, not a scalar, so it carries no `target` and instead points at
-the sample holding the ground-truth future values via `target_sample_id`.
+The first four types carry a scalar-ish `target`, so generic training code reads `task.target` regardless
+of type. The three series-output types are the exception: their answer is a *series*, so they set
+`answer_is_sample` and point at the sample holding it instead of filling `target`.
+
+### Span
+
+`Span` is the geometry primitive shared by a task's `scope` and a localization target: a point
+(`end_s=None`) or a half-open interval `[start_s, end_s)`, optionally scoped to `time_series_ids`
+(`None` = every series). Times are in the **source recording timeline**, the same frame as
+`TimeSeries.t_start_s`. `Span.is_point` distinguishes the two shapes; `add_task` checks every span a task
+carries against the samples it is attached to.
+
+```python
+Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",))
+Span(start_s=1.2)  # a point on every series
+```
 
 ### Per-type payloads
 
-- `ClassificationTask`: one discrete label for the whole sample; `target_schema` names the
-  vocabulary the target is drawn from (`None` for free-form).
+- `ClassificationTask`: one categorical label, for the whole sample or for `scope`; `target_schema` names
+  the vocabulary the target is drawn from (`None` for free-form).
   ```python
   dataset.add_task(sample, ClassificationTask(target="faulty", target_schema="condition"))
+  dataset.add_task(
+      sample,
+      ClassificationTask(target="fault_episode", target_schema="condition"),
+      scope=Span(start_s=120.0, end_s=480.0, time_series_ids=(vibration.time_series_id,)),
+  )
   ```
-- `LabelingTask`: predict a label for supplied signals and/or time windows: `time_series_ids` picks
-  the streams (`None` = all), `windows_s` the spans (`None` = full duration). The region is part of
-  the task input contract; finding an unknown region is not represented by this task type.
+- `AnswerTask`: free text. Without a `prompt` it is a caption; with one it is a question answered, and a
+  `rationale` adds the reasoning trace to supervise.
   ```python
-  dataset.add_task(sample, LabelingTask(
-      target="fault_episode",
-      time_series_ids=(vibration.time_series_id, current.time_series_id),
-      windows_s=((120.0, 480.0),),
+  dataset.add_task(sample, AnswerTask(target="A 10-second vibration trace with a bearing-fault signature after 5 s."))
+  dataset.add_task(sample, AnswerTask(prompt="What happens between 12s and 18s?", target="A bearing fault on the vibration channel."))
+  ```
+- `ScalarPredictionTask`: a numeric target that keeps its type. `unit` is validated against the shared
+  pint registry (a `pint.Unit` is stored as its name); `target_name` names the quantity.
+  ```python
+  dataset.add_task(sample, ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_heart_rate"))
+  ```
+- `TemporalLocalizationTask`: find the regions matching the prompt. `mode` is `SPARSE` (unmarked time is
+  unlabeled) or `EXHAUSTIVE` (the spans must tile the region of interest; a gap is an error).
+  ```python
+  dataset.add_task(sample, TemporalLocalizationTask(
+      prompt="Locate all R-peaks in lead II.",
+      target=(Span(start_s=1.20, time_series_ids=("II",)), Span(start_s=2.05, time_series_ids=("II",))),
   ))
   ```
-- `CaptioningTask`: free-form text describing the sample (no question).
-  ```python
-  dataset.add_task(sample, CaptioningTask(target="A 10-second vibration trace with a bearing-fault signature after 5 s."))
-  ```
-- `QATask`: a question and its text answer; the answer need not be a categorical label.
-  ```python
-  dataset.add_task(sample, QATask(question="What happens between 12s and 18s?", target="A bearing fault on the vibration channel."))
-  ```
-- `ForecastingTask`: predict a sample's future values from context samples. Its target is that future
-  series, referenced by `target_sample_id` (not a scalar `target`).
+- `ForecastingTask`: predict a sample's future values from context samples. Its answer is that future
+  series, referenced by `target_sample_id`.
   ```python
   dataset.add_task(future, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
   ```
-- `ReasoningTask`: a question, the reasoning trace, then the answer. The `target` is the
-  evaluation target; the `rationale` (chain of thought) is the training signal and is optional.
+- `TSEditingTask` / `TSGenerationTask`: produce a series, from a source sample plus an instruction, or
+  from the specification alone.
   ```python
-  dataset.add_task(sample, ReasoningTask(
-      question="Does this trace show a bearing fault?",
-      rationale="The vibration amplitude rises after 5 s with a periodic impact once per shaft revolution.",
-      target="Yes.",
+  dataset.add_task(source, TSEditingTask(prompt="Remove the baseline wander.", source_sample_id="ecg-raw", target_sample_id="ecg-clean"))
+  dataset.add_task(spec_sample, TSGenerationTask(prompt="10 s of 150 bpm sinus tachycardia at 500 Hz.", target_sample_id="ecg-synth-0001"))
+  ```
+- `TSCorrespondenceTask`: which candidate sample corresponds to the query. The answer must come from
+  `candidate_sample_ids` when that pool is set.
+  ```python
+  dataset.add_task(query, TSCorrespondenceTask(
+      prompt="Which recording is most similar to this one?",
+      candidate_sample_ids=("rec-a", "rec-b"),
+      target=("rec-b",),
   ))
   ```
 
@@ -284,8 +324,8 @@ into many higher-level training samples:
 
 ```python
 base = dataset.add_task(sample, ClassificationTask(target="faulty"))
-dataset.add_task(sample, ReasoningTask(
-    question="Is this machine healthy?",
+dataset.add_task(sample, AnswerTask(
+    prompt="Is this machine healthy?",
     rationale="The trace is classified faulty: a bearing fault is present.",
     target="No.",
     from_tasks=(base,),
@@ -297,20 +337,21 @@ dataset.add_task(sample, ReasoningTask(
 An annotation is sample-level information; a task is a learning target. A connector can use the same
 source annotation in either role:
 
-- As task input, the annotation is fed to the model as grounding. An `IntervalAnnotation` marking a
-  bearing fault on the vibration channel over seconds 5 to 6 supplies the detail a `QATask` or
-  `ReasoningTask` question builds on.
-- To derive a task target, the connector copies the relevant information into the task payload: for
-  example, a question about what happens on the vibration channel over that window can be answered
-  from the source `fault` annotation.
+- As task **input**, the annotation is fed to the model as grounding: list it in `input_annotation_ids`.
+  An `IntervalAnnotation` marking a bearing fault on the vibration channel over seconds 5 to 6 supplies
+  the detail an `AnswerTask` prompt builds on.
+- As the task **target**, either copy the information into the task payload, or point at the stored
+  annotations with `target_annotation_ids` and leave `target` unset. The by-reference form avoids
+  duplicating, say, a night of sleep-stage intervals into a task row.
 
-TimeF does not currently mark each attached annotation as input or target for an individual task.
-Training adapters must therefore avoid passing a target-derived annotation back to the model as
-context, which would leak the answer.
+A task gives its answer inline **or** by reference, never both; `add_task` rejects a task that sets both,
+and one that sets neither unless its answer is a produced series. Because the two roles are separate
+fields, a training adapter can tell context from answer instead of guessing, and will not leak a
+target-derived annotation back to the model.
 
 Because annotations carry signal and time-range scope, one recording yields many targets: a
-whole-sample classification, per-channel labelings, windowed QA, and reasoning that composes them via
-`from_tasks`.
+whole-sample classification, scoped labels per channel, windowed questions, and follow-up tasks that
+compose them via `from_tasks`.
 
 ---
 

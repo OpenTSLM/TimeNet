@@ -80,10 +80,11 @@ Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](clien
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
   a fully deterministic dataset, so it doubles as the round-trip fixture: two modalities over a shared
   data source, a series shared across samples, a windowed sample, a chunk-split-sized series, all three
-  annotation shapes (one shared), and a `ClassificationTask -> QATask` chain plus a `LabelingTask`. Its
+  annotation shapes (one shared), and a `ClassificationTask -> AnswerTask` chain plus a scalar
+  prediction, a temporal localization, and a scoped classification. Its
   dataset card, `dataset.yaml`, sits beside it in `datasets/timenet/hello_world/`.
 - `chengsenwang/tsqa` is a time-series QA dataset: each row's series becomes a `TimeSeries` and its
-  question/answer a `QATask`. Needs the `huggingface` extra
+  question/answer an `AnswerTask`. Needs the `huggingface` extra
   (`pip install 'timenet-connectors[huggingface]'`) since it downloads from the Hub.
 
 ```bash

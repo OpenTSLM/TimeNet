@@ -19,8 +19,10 @@ seeded, so re-running produces byte-stable output. Set `FIG_PNG_DIR=/some/dir` t
 there for eyeballing; the committed artifacts are SVG only.
 
 Figures produced: `dataset-example`, `time-series-example`, `annotation-static`, `annotation-point`,
-`annotation-interval`, `cross-sensor`, and `task-classification`, `task-labeling`, `task-captioning`,
-`task-qa`, `task-reasoning`, `task-forecasting`.
+`annotation-interval`, `cross-sensor`, and `task-classification`, `task-classification-scoped`,
+`task-answer`, `task-answer-caption`, `task-answer-rationale`, `task-scalar-prediction`,
+`task-localization-sparse`, `task-localization-exhaustive`, `task-forecasting`, `task-editing`,
+`task-generation`, `task-correspondence`.
 
 ## Structural diagrams (mermaid, inline)
 
