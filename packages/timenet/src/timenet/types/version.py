@@ -44,7 +44,8 @@ class Version:
             TimeFValidationError: If ``text`` is not exactly three integer components.
         """
         parts = text.split(".")
-        if len(parts) != 3:
+        components = 3  # major.minor.patch
+        if len(parts) != components:
             raise TimeFValidationError(f"Version must be 'major.minor.patch', got {text!r}")
         try:
             major, minor, patch = (int(part) for part in parts)

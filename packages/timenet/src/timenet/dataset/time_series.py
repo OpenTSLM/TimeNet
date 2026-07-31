@@ -57,7 +57,7 @@ class TimeSeries:
             raise ValueError(f"TimeSeries.t_end_s ({self.t_end_s}) must be > t_start_s ({self.t_start_s})")
 
     @classmethod
-    def from_values(
+    def from_values(  # noqa: PLR0913
         cls,
         values: np.ndarray | Sequence[float],
         *,

@@ -314,7 +314,7 @@ def _add_source_links(soup: BeautifulSoup, index: dict, repo_url: str) -> None:
         heading.append(link)
 
 
-def _enhance_html(config: dict) -> None:
+def _enhance_html(config: dict) -> None:  # noqa: PLR0914
     """Inject social meta tags, JSON-LD, a copy button, and API source links into every page.
 
     Args:

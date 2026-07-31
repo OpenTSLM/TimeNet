@@ -89,14 +89,14 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
         A mapping of ``template_id`` to its ordered answer options.
     """
     answers: dict[int, tuple[str, ...]] = {}
-    with path.open(newline="") as handle:
+    with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             classes = ast.literal_eval(row["classes"])
             answers[int(float(row["template_id"]))] = tuple(str(option) for option in classes)
     return answers
 
 
-def _build_refs(
+def _build_refs(  # noqa: PLR0913, PLR0917
     rows: list[dict[str, object]],
     records_dir: Path,
     answers: dict[int, tuple[str, ...]],
@@ -190,7 +190,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         refs: list[EcgQaCotRef] = []
         for split, csv_name in self._COT_CSVS:
             csv_path = _find_dir_containing(cot_root, csv_name) / csv_name
-            with csv_path.open(newline="") as handle:
+            with csv_path.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             refs.extend(_build_refs(rows, ptbxl_root / "records500", answers, split, len(refs), flat_records=False))
         return refs

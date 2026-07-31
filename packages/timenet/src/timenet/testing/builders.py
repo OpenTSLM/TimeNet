@@ -84,7 +84,7 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-def _series(spec, channel, n, time_series_id, source_id, phase=0.0):
+def _series(spec, channel, n, time_series_id, source_id, phase=0.0):  # noqa: PLR0913, PLR0917
     return TimeSeries(
         spec=spec,
         channel=channel,

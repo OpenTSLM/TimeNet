@@ -143,7 +143,7 @@ class ZarrValuesReader(BaseValuesReader):
         """
         if rel_path not in self._array_cache:
             try:
-                import zarr
+                import zarr  # noqa: PLC0415
             except ImportError as exc:  # pragma: no cover - exercised only without the extra
                 raise ImportError(
                     "this dataset version stores values in Zarr; install the extra: pip install 'timenet[zarr]'"

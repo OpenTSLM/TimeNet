@@ -14,7 +14,7 @@ def main() -> None:
             traceback surfaces instead of a misleading install hint.
     """
     try:
-        from timenet.cli.app import main as run
+        from timenet.cli.app import main as run  # noqa: PLC0415
     except ModuleNotFoundError as exc:
         # Only a genuinely missing cli extra (Typer/Rich) should trigger the install hint. A typo in an
         # internal import raises ModuleNotFoundError too; that must surface as a real traceback rather

@@ -381,9 +381,9 @@ class TimeFDataset:
             TimeFValidationError: If the dataset has no samples, or any sample does not carry exactly one
                 task of ``task``.
         """
-        if output not in ("arrow", "numpy"):
+        if output not in {"arrow", "numpy"}:
             raise ValueError(f"output must be 'arrow' or 'numpy', got {output!r}")
-        if features not in ("timestep", "series"):
+        if features not in {"timestep", "series"}:
             raise ValueError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
         matched_by_sample: dict[str, list[TargetTask]] = {}

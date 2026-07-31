@@ -69,9 +69,9 @@ def test_missing_hf_library_raises_helpful_error(monkeypatch):
 
 def test_real_download_reads_auto_converted_parquet(monkeypatch, tmp_path):
     """The real path reads HF's auto-converted parquet branch, not the (CSV-only) main revision."""
-    import huggingface_hub
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    import huggingface_hub  # noqa: PLC0415
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
 
     table = pa.table({"Series": ["[1.0, 2.0]"], "Question": ["q"], "Answer": ["a"], "Task": ["t"], "Label": [""]})
     parquet_path = tmp_path / "default" / "train" / "0000.parquet"

@@ -87,7 +87,7 @@ def list_datasets(registry: str | None = _registry_option) -> None:
 
 
 @app.command()
-def search(
+def search(  # noqa: PLR0913, PLR0917
     registry: str | None = _registry_option,
     query: list[str] = typer.Option([], "--query", "-q", help="Free-text terms."),
     domain: list[str] = typer.Option([], "--domain", help="Domain(s)."),

@@ -60,7 +60,7 @@ from timenet.writer.progress import ProgressStage, WriteProgressEvent
 class TimeFWriter:
     """Context manager that serializes a dataset into the TimeF format and commits it atomically."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         root: Path,
         dataset: TimeFDataset,
@@ -317,7 +317,7 @@ class TimeFWriter:
         self._value_files = result.files
         return result.placements
 
-    def _read_and_validate(self, ts: TimeSeries) -> pa.Array:
+    def _read_and_validate(self, ts: TimeSeries) -> pa.Array:  # noqa: PLR6301
         """Read a series' values and enforce the per-series array contract.
 
         Args:

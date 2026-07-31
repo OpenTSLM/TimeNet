@@ -39,7 +39,7 @@ class TestMeanConnector(BaseConnector[None]):
     Synthetic: :meth:`download` returns no references and :meth:`convert` generates every sample directly.
     """
 
-    def download(self, cache_dir: Path) -> list[None]:  # noqa: ARG002 (synthetic: nothing to download)
+    def download(self, cache_dir: Path) -> list[None]:  # noqa: ARG002, PLR6301 (synthetic: nothing to download)
         """Return no references; the data is synthetic and built entirely in :meth:`convert`.
 
         Args:

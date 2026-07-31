@@ -43,12 +43,12 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
             DatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
         try:
-            from huggingface_hub import hf_hub_download, list_repo_files
+            from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
                 f"reading {self.HF_REPO!r} needs the huggingface extra: pip install 'timenet-connectors[huggingface]'"
             ) from exc
-        import pyarrow.parquet as pq
+        import pyarrow.parquet as pq  # noqa: PLC0415
 
         revision = self.PARQUET_REVISION
         filenames = [

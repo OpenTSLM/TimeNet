@@ -20,7 +20,7 @@ class _Conn(BasePhysioNetConnector[str]):
 
 
 def _zip_bytes(name: str, content: str) -> bytes:
-    from io import BytesIO
+    from io import BytesIO  # noqa: PLC0415
 
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

@@ -227,7 +227,7 @@ def test_per_series_array_contract_enforced(tmp_path):
         unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
-    import pyarrow as pa
+    import pyarrow as pa  # noqa: PLC0415
 
     # window says 10 values at 1 Hz over 5s => mismatch
     ts = TimeSeries(
@@ -283,7 +283,7 @@ def test_tasks_partitioned_by_type(tmp_path):
 
 def test_int32_guard_is_exposed():
     # The guard is a documented invariant; verify the constant/limit exists.
-    from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP
+    from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP  # noqa: PLC0415
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
 

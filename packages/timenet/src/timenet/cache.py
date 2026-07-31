@@ -33,11 +33,12 @@ def human_bytes(n: int) -> str:
     Returns:
         A string like ``"512 B"``, ``"1.5 KB"``, or ``"3.0 GB"``.
     """
+    step = 1024  # bytes per unit step
     size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024:
+        if size < step:
             return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
+        size /= step
     return f"{size:.1f} TB"
 
 

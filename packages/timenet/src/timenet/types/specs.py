@@ -68,7 +68,7 @@ class TimeSeriesSpec:
         second = ureg.second.dimensionality
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
-        if self.spec_type in (".", ".."):
+        if self.spec_type in {".", ".."}:
             # The Zarr backend derives a per-spec_type array path from spec_type; "." and ".." would be
             # filesystem-special path segments that percent-encoding leaves untouched.
             raise TimeFValidationError(f"TimeSeriesSpec.spec_type must not be '.' or '..', got {self.spec_type!r}")

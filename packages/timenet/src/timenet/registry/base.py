@@ -57,7 +57,7 @@ class BaseRegistry(ABC):
             DatasetNotFoundError: If the dataset id or version is unknown.
         """
 
-    def search(
+    def search(  # noqa: PLR0913
         self,
         *,
         query: str | list[str] | None = None,

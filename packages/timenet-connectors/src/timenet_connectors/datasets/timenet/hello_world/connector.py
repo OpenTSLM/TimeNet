@@ -95,7 +95,7 @@ def _wave(
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
-    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002 (synthetic: no cache needed)
+    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002, PLR6301 (override; synthetic: no cache)
         """Return deterministic recording descriptions (no network, ``cache_dir`` unused).
 
         Args:
