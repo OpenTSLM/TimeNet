@@ -21,7 +21,6 @@ from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
-from timenet.reader.values import BaseValuesReader, make_values_reader
 from timenet.types import (
     ANNOTATION_BASES,
     TASKS,
@@ -33,6 +32,7 @@ from timenet.types import (
     TaskType,
     View,
 )
+from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 class TimeFReader:

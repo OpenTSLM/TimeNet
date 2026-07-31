@@ -18,8 +18,8 @@ from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
-from timenet.reader.values import BaseValuesReader
 from timenet.types import TimeSeriesSpec
+from timenet.values_backends.reader import BaseValuesReader
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
