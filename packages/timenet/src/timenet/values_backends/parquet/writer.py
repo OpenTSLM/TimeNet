@@ -17,11 +17,11 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE
 from timenet.format.schemas import IdCodec, shard_schema
 from timenet.values_backends import ValuesBackend
+from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.writer import (
     BaseValuesBackend,
     ChunkDataIndex,
     ChunkPlacement,
-    ParquetValuesConfig,
     ValuesWriteResult,
 )
 from timenet.writer import encodings

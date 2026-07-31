@@ -7,7 +7,7 @@ the deduped, sorted series and writes their values however it likes, returning a
 :class:`ChunkPlacement` per chunk plus the list of value files to record in the manifest. The core
 writer stays ignorant of shards, row groups, or arrays.
 
-Concrete backends live in their own modules — :mod:`timenet.writer.parquet_values` (the default) and
+Concrete backends live in their own modules — :mod:`timenet.values_backends.parquet.writer` (the default) and
 :mod:`timenet.writer.zarr_values` — and are constructed via :func:`make_values_backend`.
 """
 
@@ -20,7 +20,7 @@ from typing import ClassVar, assert_never
 import pyarrow as pa
 
 from timenet.dataset import TimeSeries
-from timenet.format.schemas import IdCodec, IdTypes
+from timenet.values_backends.parquet.config import ParquetValuesConfig
 
 
 @dataclass(frozen=True)
@@ -76,28 +76,6 @@ class ValuesWriteResult:
 
 
 @dataclass(frozen=True)
-class ParquetValuesConfig:
-    """Typed construction options for the Parquet values backend."""
-
-    staging_dir: Path
-    """Version staging directory; shards are written beneath it."""
-    id_types: IdTypes
-    """Resolved logical-id storage types."""
-    codec: IdCodec
-    """Shared logical-id codec used by the rest of the TimeF writer."""
-    shard_target_bytes: int
-    """Target size for rotating shards."""
-    row_group_target_bytes: int
-    """Target size for flushing row groups."""
-    chunk_max_bytes: int
-    """Maximum uncompressed values size of one logical chunk."""
-    compression: str
-    """Parquet compression codec."""
-    compression_level: int
-    """Parquet compression level."""
-
-
-@dataclass(frozen=True)
 class ZarrValuesConfig:
     """Typed construction options for the Zarr values backend."""
 
@@ -119,7 +97,7 @@ ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig
 class BaseValuesBackend(ABC):
     """Writes the values plane of a dataset and reports where each chunk landed.
 
-    Concrete backends (e.g. :class:`~timenet.writer.parquet_values.ParquetValuesBackend`) implement
+    Concrete backends (e.g. :class:`~timenet.values_backends.parquet.writer.ParquetValuesBackend`) implement
     :meth:`write_series`; the core writer stays ignorant of shards, row groups, or arrays.
     """
 
@@ -162,7 +140,7 @@ def make_values_backend(config: ValuesBackendConfig) -> BaseValuesBackend:
         The constructed backend.
     """
     if isinstance(config, ParquetValuesConfig):
-        from timenet.writer.parquet_values import ParquetValuesBackend
+        from timenet.values_backends.parquet.writer import ParquetValuesBackend
 
         return ParquetValuesBackend(config)
     if isinstance(config, ZarrValuesConfig):

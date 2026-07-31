@@ -283,7 +283,7 @@ def test_tasks_partitioned_by_type(tmp_path):
 
 def test_int32_guard_is_exposed():
     # The guard is a documented invariant; verify the constant/limit exists.
-    from timenet.writer.parquet_values import MAX_ELEMENTS_PER_ROW_GROUP
+    from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
 
