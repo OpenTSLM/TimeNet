@@ -106,3 +106,11 @@ include = ["examples/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
+
+[[tool.ty.overrides]]
+# The CI report script declares its dependencies inline (PEP 723) and runs standalone under
+# `uv run`, so PyGithub is deliberately not a project dependency either.
+include = [".github/scripts/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
