@@ -7,7 +7,7 @@ required-version = ">=0.10.10"
 
 [dependency-groups]
 # Optional runtime deps (torch, typer/rich, huggingface-hub) are NOT duplicated here: they come from the
-# packages' extras, installed for dev/test/CI via `uv sync --all-groups --all-extras` (see `make sync`).
+# packages' extras, installed for dev/test/CI via `make sync`.
 dev = [
     "hypothesis>=6.140",
     "pre-commit>=4.6.0",

@@ -47,7 +47,8 @@ Requires Python 3.11 or newer (tested on 3.11 to 3.13).
 ```bash
 uv add timenet            # core: TimeF format, reader/writer, registry client
 uv add 'timenet[cli]'     # add the timenet console command
-uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset)
+uv add 'timenet[torch-gpu]'   # add load_torch (PyTorch Dataset), GPU/CUDA build
+uv add 'timenet[torch-cpu]'   # same, CPU-only build
 ```
 
 Once installed, the CLI is available as `timenet`. See [Get started](https://docs.timenet.ai/get-started.html)
@@ -60,7 +61,7 @@ Clone the repo and set up the environment with uv:
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-make sync           # uv sync --all-groups --all-extras
+make sync           # uv sync --all-groups --all-extras --no-extra torch-cpu
 make install-hooks  # set up pre-commit hooks (run once after cloning)
 ```
 
@@ -71,7 +72,7 @@ for linting and formatting, [ty](https://github.com/astral-sh/ty) for type check
 ### Make targets
 
 ```bash
-make sync           # install all deps (uv sync --all-groups --all-extras)
+make sync           # install all deps, GPU torch (uv sync --all-groups --all-extras --no-extra torch-cpu)
 make test           # run pytest
 make check          # format + lint + typecheck (ruff format, ruff check, ty check)
 make lint-fix       # auto-fix lint issues with ruff

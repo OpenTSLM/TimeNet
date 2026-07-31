@@ -21,7 +21,10 @@ cli = [
     "typer>=0.12",
     "rich>=13",
 ]
-torch = [
+torch-gpu = [
+    "torch>=2.2",
+]
+torch-cpu = [
     "torch>=2.2",
 ]
 # Curating a dataset loads and validates its human-authored card YAML against the packaged JSON Schema.
@@ -38,11 +41,22 @@ zarr = [
     "zarr>=3",
 ]
 all = [
-    "timenet[cli,torch,curation,zarr]",
+    "timenet[cli,torch-gpu,curation,zarr]",
 ]
 
 [project.scripts]
 timenet = "timenet.cli:main"
+
+[tool.uv]
+conflicts = [[{ extra = "torch-gpu" }, { extra = "torch-cpu" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "torch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]
