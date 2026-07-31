@@ -17,37 +17,7 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
-from timenet.types.units import ureg
-
-
-def _normalize_unit(unit: str | pint.Unit | None) -> str | None:
-    """Validate a unit against the shared pint registry, rejecting an unrecognized unit string.
-
-    A :class:`pint.Unit` is stored as its canonical name; a unit string is kept as written but validated
-    (an unknown one raises); ``None`` passes through. The result is always a string (or ``None``), so
-    serialization is unchanged.
-
-    Args:
-        unit: A :class:`pint.Unit`, a unit string (e.g. ``"years"``), or ``None``.
-
-    Returns:
-        The unit as a string, or ``None``.
-
-    Raises:
-        ValueError: If ``unit`` is a string the shared registry does not recognize.
-    """
-    if unit is None:
-        return None
-    if isinstance(unit, pint.Unit):
-        return str(unit)
-    try:
-        ureg.Unit(unit)
-    except pint.UndefinedUnitError as exc:
-        raise ValueError(
-            f"unknown unit {unit!r}; pass a pint unit (e.g. ureg.millivolt) or a unit string pint "
-            f"recognizes, or omit unit="
-        ) from exc
-    return unit
+from timenet.types.units import normalize_unit
 
 
 @unique
@@ -86,7 +56,7 @@ class Annotation:
         """
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
-        object.__setattr__(self, "unit", _normalize_unit(self.unit))
+        object.__setattr__(self, "unit", normalize_unit(self.unit))
 
 
 @dataclass(frozen=True, kw_only=True)

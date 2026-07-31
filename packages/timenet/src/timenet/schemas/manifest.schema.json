@@ -81,11 +81,13 @@
       "description": "Kept in sync with timenet.types.TaskType by a drift test.",
       "enum": [
         "classification",
-        "labeling",
-        "captioning",
-        "question_and_answer",
+        "answer",
+        "scalar_prediction",
+        "temporal_localization",
         "forecasting",
-        "reasoning"
+        "ts_editing",
+        "ts_generation",
+        "ts_correspondence"
       ]
     },
     "metadata": {

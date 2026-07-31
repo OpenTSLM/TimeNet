@@ -18,13 +18,16 @@ import pyarrow as pa
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    AnswerTask,
     ClassificationTask,
     DataSource,
     IntervalAnnotation,
-    LabelingTask,
+    LocalizationMode,
     PointAnnotation,
-    QATask,
+    ScalarPredictionTask,
+    Span,
     StaticAnnotation,
+    TemporalLocalizationTask,
     TimeSeriesSpec,
     View,
     ureg,
@@ -151,8 +154,31 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
         dataset.add_task(
             sample0,
-            QATask(question="What rhythm?", target="Normal.", id="task-qa-0"),
+            AnswerTask(
+                prompt="What rhythm?",
+                target="Normal.",
+                # Any task may carry a chain of thought; an answer task with one is the old reasoning task.
+                rationale="The peaks repeat once per cycle at a constant interval.",
+                # The cohort annotation is context the model reads, not something it has to produce.
+                input_annotation_ids=("cohort-shared",),
+                id="task-answer-0",
+            ),
             from_tasks=(classification,),
+        )
+        dataset.add_task(
+            sample0,
+            ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+        )
+        # Localization runs a scope backwards: the query goes in and the regions come out. Here the
+        # answer is stored by reference, so the target *is* the two temporal annotations above.
+        dataset.add_task(
+            sample0,
+            TemporalLocalizationTask(
+                prompt="Locate the stimulus and the artifact.",
+                mode=LocalizationMode.SPARSE,
+                target_annotation_ids=("stim-0", "art-0"),
+                id="task-localize-0",
+            ),
         )
 
         # Sample 1: reuses the shared series plus a longer series (the writer tests split it under a tiny cap).
@@ -169,9 +195,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
         sample1.add_annotation(cohort)  # same instance/id => shared
 
-        # Sample 2: a windowed slice with a labeling task. It covers the *second* half of rec-0, so it
-        # is a genuine offset window rather than a byte-identical prefix of `ts-shared`. The phase
-        # offset continues the same wave, so the values match rec-0 over [t_start_s, t_end_s).
+        # Sample 2: a windowed slice with a scoped classification task. It covers the *second* half of
+        # rec-0, so it is a genuine offset window rather than a byte-identical prefix of `ts-shared`. The
+        # phase offset continues the same wave, so the values match rec-0 over [t_start_s, t_end_s).
         window_start = short.n_values // 2
         window = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
@@ -187,13 +213,11 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         )
         dataset.add_task(
             sample2,
-            LabelingTask(
-                target="onset",
-                time_series_ids=(window.time_series_id,),
-                # windows_s is in the source recording timeline, so it sits inside the window's span.
-                windows_s=((0.5, 0.75),),
-                id="task-lbl-2",
-            ),
+            ClassificationTask(target="onset", id="task-cls-2"),
+            # A scope narrows the input to a region: same task type as the whole-sample label above, with
+            # the window supplied. Span times are in the source recording timeline, so this sits inside
+            # the window's span.
+            scope=Span.interval(0.5, 0.75, time_series_ids=(window.time_series_id,)),
         )
         return dataset
 

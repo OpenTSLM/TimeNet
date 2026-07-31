@@ -12,7 +12,7 @@ def _convert() -> TimeFDataset:
     return TestMeanConnector().convert([])
 
 
-def _labels_by_sample(dataset: TimeFDataset) -> dict[str, str]:
+def _labels_by_sample(dataset: TimeFDataset) -> dict[str, str | None]:
     return {
         sample_id: task.target
         for task in dataset.tasks

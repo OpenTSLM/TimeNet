@@ -276,9 +276,7 @@ def test_shared_series_stored_once(tmp_path):
 def test_tasks_partitioned_by_type(tmp_path):
     version_dir = _written(tmp_path)
     parts = {p.parent.name for p in version_dir.glob("tasks/task=*/part-0.parquet")}
-    assert "task=classification" in parts
-    assert "task=question_and_answer" in parts
-    assert "task=labeling" in parts
+    assert parts == {"task=classification", "task=answer", "task=scalar_prediction", "task=temporal_localization"}
 
 
 def test_int32_guard_is_exposed():

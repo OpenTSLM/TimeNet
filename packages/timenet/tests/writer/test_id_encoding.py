@@ -14,8 +14,13 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     License,
+    Span,
     StaticAnnotation,
+    TemporalLocalizationTask,
     TimeSeriesSpec,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
     Version,
     View,
     ureg,
@@ -138,3 +143,105 @@ def test_non_uuid_ids_stay_string(tmp_path):
     assert samples.field("sample_id").type == pa.string()
     # a sibling id space that is all-uuid still packs to binary(16)
     assert manifest.id_encoding.get("time_series_id") == "uuid16"
+
+
+def test_span_series_ids_round_trip_as_binary16(tmp_path):
+    """A span nests time_series ids inside a struct column; they encode like any other id column."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    series = _series()
+    sample = dataset.add_sample(time_series=(series,), view=View.FULL)
+    scope = Span(start_s=0.0, end_s=1.0, time_series_ids=(series.time_series_id,))
+    dataset.add_task(sample, ClassificationTask(target="x"), scope=scope)
+    dataset.add_task(
+        sample,
+        TemporalLocalizationTask(
+            prompt="Locate the onsets.",
+            target=(Span(start_s=1.0, time_series_ids=(series.time_series_id,)),),
+        ),
+    )
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+
+    partition = version_dir / "tasks/task=classification/part-0.parquet"
+    scope_type = pq.read_table(partition).schema.field("scope").type
+    assert scope_type.field("time_series_ids").type == pa.list_(pa.binary(16))
+
+    with TimeFReader(version_dir) as reader:
+        tasks = {type(t): t for t in reader.tasks}
+    assert tasks[ClassificationTask].scope == scope
+    localization = tasks[TemporalLocalizationTask]
+    assert isinstance(localization, TemporalLocalizationTask)
+    assert localization.target == (Span(start_s=1.0, time_series_ids=(series.time_series_id,)),)
+
+
+def test_correspondence_target_ids_round_trip(tmp_path):
+    """The correspondence answer is itself a tuple of sample ids, so it encodes as an id column."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    query = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    match = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    other = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    dataset.add_task(
+        query,
+        TSCorrespondenceTask(
+            prompt="Which trace is most similar?",
+            candidate_sample_ids=(match.sample_id, other.sample_id),
+            target=(match.sample_id,),
+        ),
+    )
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        task = reader.tasks[0]
+    assert isinstance(task, TSCorrespondenceTask)
+    assert task.target == (match.sample_id,)
+    assert task.candidate_sample_ids == (match.sample_id, other.sample_id)
+
+
+def test_editing_and_generation_sample_ids_round_trip(tmp_path):
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    source = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    edited = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    dataset.add_task(
+        source,
+        TSEditingTask(
+            prompt="Remove the baseline wander.",
+            source_sample_id=source.sample_id,
+            target_sample_id=edited.sample_id,
+        ),
+    )
+    dataset.add_task(edited, TSGenerationTask(prompt="10 s of sinus rhythm.", target_sample_id=edited.sample_id))
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        tasks = {type(t): t for t in reader.tasks}
+    edit = tasks[TSEditingTask]
+    assert isinstance(edit, TSEditingTask)
+    assert (edit.source_sample_id, edit.target_sample_id) == (source.sample_id, edited.sample_id)
+    assert edit.prompt == "Remove the baseline wander."
+    generation = tasks[TSGenerationTask]
+    assert isinstance(generation, TSGenerationTask)
+    assert generation.target_sample_id == edited.sample_id

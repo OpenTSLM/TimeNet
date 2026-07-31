@@ -5,9 +5,10 @@ from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     AnnotationType,
+    AnswerTask,
     ClassificationTask,
-    LabelingTask,
-    QATask,
+    ScalarPredictionTask,
+    TemporalLocalizationTask,
     View,
 )
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
@@ -41,7 +42,7 @@ def test_schema_covers_every_feature():
     assert len(schema.data_sources) == 1
     annotation_types = {a.annotation_type for a in schema.annotations}
     assert annotation_types == {AnnotationType.STATIC, AnnotationType.POINT, AnnotationType.INTERVAL}
-    assert set(schema.tasks) == {ClassificationTask, QATask, LabelingTask}
+    assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}
 
 
 def test_has_window_sample():

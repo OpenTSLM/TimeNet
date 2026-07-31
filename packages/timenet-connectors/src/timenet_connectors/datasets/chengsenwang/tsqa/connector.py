@@ -2,14 +2,14 @@
 
 Source: ``ChengsenWang/TSQA`` — each row has ``Task, Size, Question, Answer, Label, Series`` where
 ``Series`` is a JSON float list (univariate, or a list-of-lists for multivariate). Each row becomes one
-sample carrying the series plus a :class:`~timenet.types.QATask`.
+sample carrying the series plus an :class:`~timenet.types.AnswerTask`.
 """
 
 import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import QATask, StaticAnnotation, TimeSeriesSpec, ureg
+from timenet.types import AnswerTask, StaticAnnotation, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 
@@ -28,7 +28,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
 
     def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
-        """Build one sample per row: the parsed series plus its QA task.
+        """Build one sample per row: the parsed series plus its question-and-answer task.
 
         Args:
             raw_refs: The rows from :meth:`download`.
@@ -54,7 +54,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(sample, QATask(question=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+            dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 

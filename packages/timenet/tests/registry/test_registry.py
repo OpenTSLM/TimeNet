@@ -15,7 +15,7 @@ from timenet.registry import (
     open_writable_registry,
 )
 from timenet.testing import make_dataset
-from timenet.types import Domain, License, QATask
+from timenet.types import AnswerTask, Domain, License
 
 
 # ---- factory ----------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ def test_search_by_license(registry_root):
 
 def test_search_by_task_type_filter(registry_root):
     # only hello_world has a QA task
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=QATask)} == {"timenet/hello-world"}
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=AnswerTask)} == {"timenet/hello-world"}
 
 
 def test_search_by_time_series_spec(registry_root):

@@ -15,20 +15,24 @@ from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema, validate_dataset_id
+from timenet.types.spans import Span
 from timenet.types.specs import DataSource, TimeSeriesSpec
 from timenet.types.tasks import (
     TASKS,
-    CaptioningTask,
+    AnswerTask,
     ClassificationTask,
     ForecastingTask,
-    LabelingTask,
-    QATask,
-    ReasoningTask,
-    TargetTask,
+    LocalizationMode,
+    ScalarPredictionTask,
     Task,
+    TaskRefs,
     TaskType,
+    TemporalLocalizationTask,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
 )
-from timenet.types.units import ureg, use_as_application_registry
+from timenet.types.units import normalize_unit, ureg, use_as_application_registry
 from timenet.types.version import Version
 from timenet.types.views import View
 
@@ -39,7 +43,7 @@ __all__ = [
     "Annotation",
     "AnnotationDescriptor",
     "AnnotationType",
-    "CaptioningTask",
+    "AnswerTask",
     "ClassificationTask",
     "DataSource",
     "DatasetMetadata",
@@ -47,20 +51,25 @@ __all__ = [
     "Domain",
     "ForecastingTask",
     "IntervalAnnotation",
-    "LabelingTask",
     "License",
+    "LocalizationMode",
     "PointAnnotation",
-    "QATask",
-    "ReasoningTask",
+    "ScalarPredictionTask",
+    "Span",
     "StaticAnnotation",
-    "TargetTask",
+    "TSCorrespondenceTask",
+    "TSEditingTask",
+    "TSGenerationTask",
     "Task",
+    "TaskRefs",
     "TaskType",
+    "TemporalLocalizationTask",
     "TimeSeriesSpec",
     "Version",
     "View",
     "annotation_type_of",
     "new_id",
+    "normalize_unit",
     "ureg",
     "use_as_application_registry",
     "uuid7",

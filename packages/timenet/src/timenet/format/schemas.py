@@ -8,13 +8,13 @@ back to the canonical string, so callers always see string ids.
 """
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import cast
 
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
-from timenet.types import TaskType
+from timenet.types import TASKS, Span, TaskRefs, TaskType
 from timenet.types.ids import id_from_bytes, id_to_bytes
 
 
@@ -175,43 +175,77 @@ def index_schema(id_types: IdTypes) -> pa.Schema:
     )
 
 
+def span_struct(id_types: IdTypes) -> pa.DataType:
+    """Return the struct type a :class:`~timenet.types.Span` is stored as.
+
+    Args:
+        id_types: The resolved id storage types.
+
+    Returns:
+        The struct type used for a task's ``scope`` and for localization target spans.
+    """
+    return pa.struct(
+        [
+            ("start_s", pa.float64()),
+            ("end_s", pa.float64()),  # null => the span is a point at start_s
+            ("time_series_ids", pa.list_(id_types["time_series_id"])),
+        ]
+    )
+
+
 def _task_common(id_types: IdTypes) -> list[tuple[str, pa.DataType]]:
     return [
         ("id", id_types["task_id"]),
         ("sample_ids", pa.list_(id_types["sample_id"])),
         ("from_task_ids", pa.list_(id_types["task_id"])),
+        ("prompt", pa.string()),
+        ("scope", span_struct(id_types)),
+        ("input_annotation_ids", pa.list_(id_types["annotation_id"])),
+        ("target_annotation_ids", pa.list_(id_types["annotation_id"])),
+        ("rationale", pa.string()),
     ]
 
 
 # Names of the columns every task partition shares, regardless of task type. The single source the
 # writer's row builder and the reader's payload split both read, so the copies stay in lockstep.
-TASK_COMMON_NAMES: tuple[str, ...] = ("id", "sample_ids", "from_task_ids")
-
-#: Task payload columns that hold ids, and the logical id each holds. The common id/sample_ids/
-#: from_task_ids columns are handled separately; this covers the type-specific payload ids.
-TASK_PAYLOAD_ID_COLUMNS: dict[str, str] = {
-    "time_series_ids": "time_series_id",
-    "context_sample_ids": "sample_id",
-    "target_sample_id": "sample_id",
-}
+TASK_COMMON_NAMES: tuple[str, ...] = (
+    "id",
+    "sample_ids",
+    "from_task_ids",
+    "prompt",
+    "scope",
+    "input_annotation_ids",
+    "target_annotation_ids",
+    "rationale",
+)
 
 
 def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataType]]]:
     return {
         TaskType.CLASSIFICATION: [("target", pa.string()), ("target_schema", pa.string())],
-        TaskType.LABELING: [
-            ("target", pa.string()),
-            ("target_schema", pa.string()),
-            ("time_series_ids", pa.list_(id_types["time_series_id"])),
-            ("windows_s", pa.list_(pa.list_(pa.float64()))),
+        TaskType.ANSWER: [("target", pa.string())],
+        TaskType.SCALAR_PREDICTION: [
+            ("target", pa.float64()),
+            ("unit", pa.string()),
+            ("target_name", pa.string()),
         ],
-        TaskType.CAPTIONING: [("target", pa.string())],
-        TaskType.QUESTION_AND_ANSWER: [("question", pa.string()), ("target", pa.string())],
+        TaskType.TEMPORAL_LOCALIZATION: [
+            ("target", pa.list_(span_struct(id_types))),
+            ("mode", pa.string()),
+        ],
         TaskType.FORECASTING: [
             ("context_sample_ids", pa.list_(id_types["sample_id"])),
             ("target_sample_id", id_types["sample_id"]),
         ],
-        TaskType.REASONING: [("question", pa.string()), ("rationale", pa.string()), ("target", pa.string())],
+        TaskType.TS_EDITING: [
+            ("source_sample_id", id_types["sample_id"]),
+            ("target_sample_id", id_types["sample_id"]),
+        ],
+        TaskType.TS_GENERATION: [("target_sample_id", id_types["sample_id"])],
+        TaskType.TS_CORRESPONDENCE: [
+            ("candidate_sample_ids", pa.list_(id_types["sample_id"])),
+            ("target", pa.list_(id_types["sample_id"])),
+        ],
     }
 
 
@@ -225,9 +259,23 @@ def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Sche
 
     Returns:
         The Arrow schema (common columns plus the type's payload columns).
+
+    Raises:
+        TimeFValidationError: If the task dataclass payload and its Arrow schema have drifted.
     """
     resolved = id_types if id_types is not None else default_id_types()
-    return pa.schema(_task_common(resolved) + _task_payload(resolved)[task_type])
+    schema = pa.schema(_task_common(resolved) + _task_payload(resolved)[task_type])
+    cls = TASKS[task_type]
+    non_payload = {*TASK_COMMON_NAMES, "from_tasks"}
+    expected = {field.name for field in fields(cls)} - non_payload
+    if cls.answer_is_sample:
+        expected.discard("target")
+    actual = set(schema.names) - set(TASK_COMMON_NAMES)
+    if expected != actual:
+        raise TimeFValidationError(
+            f"{cls.__name__} payload fields {sorted(expected)} do not match its Arrow schema fields {sorted(actual)}"
+        )
+    return schema
 
 
 @dataclass(frozen=True)
@@ -308,20 +356,45 @@ class IdCodec:
         """
         return [self.encode(logical, value) for value in values]
 
-    def encode_payload(self, name: str, value: object) -> object:
-        """Encode a task payload cell if it holds ids, leaving non-id payload untouched.
+    def encode_span(self, span: Span | None) -> dict | None:
+        """Encode a span to its struct row, encoding the series ids it is scoped to.
 
         Args:
+            span: The span, or ``None`` for a whole-sample scope.
+
+        Returns:
+            The struct row, or ``None``.
+        """
+        if span is None:
+            return None
+        return {
+            "start_s": span.start_s,
+            "end_s": span.end_s,
+            "time_series_ids": (
+                None if span.time_series_ids is None else self.encode_list("time_series_id", span.time_series_ids)
+            ),
+        }
+
+    def encode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
+        """Encode a task payload cell holding ids or spans, leaving plain payload untouched.
+
+        Args:
+            refs: The owning task class's reference declaration.
             name: The payload column name.
             value: The (already list-normalized) cell value.
 
         Returns:
             The encoded value.
         """
-        logical = TASK_PAYLOAD_ID_COLUMNS.get(name)
-        if logical is None or logical not in self.uuid16 or value is None:
+        if value is None:
             return value
-        return self.encode_list(logical, value) if isinstance(value, list) else self.encode(logical, value)
+        if name in refs.span_fields:
+            if isinstance(value, Span):
+                return self.encode_span(value)
+            return [self.encode_span(span) for span in cast("list[Span]", value)]
+        if name not in refs.sample_id_fields or "sample_id" not in self.uuid16:
+            return value
+        return self.encode_list("sample_id", value) if isinstance(value, list) else self.encode("sample_id", value)
 
     def decode(self, logical: str, value: object) -> str:
         """Decode one required id, turning 16 raw bytes back into a canonical string for ``uuid16``.
@@ -361,19 +434,44 @@ class IdCodec:
         """
         return [self.decode(logical, value) for value in cast(list, values)]
 
-    def decode_payload(self, name: str, value: object) -> object:
-        """Decode a task payload cell if it holds ids, leaving non-id payload untouched.
+    def decode_span(self, row: object) -> Span | None:
+        """Rebuild a span from its struct row, decoding the series ids it is scoped to.
 
         Args:
+            row: The struct row read from a task partition, or ``None``.
+
+        Returns:
+            The span, or ``None``.
+        """
+        if row is None:
+            return None
+        struct = cast("dict", row)
+        series_ids = struct["time_series_ids"]
+        return Span(
+            start_s=struct["start_s"],
+            end_s=struct["end_s"],
+            time_series_ids=None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids)),
+        )
+
+    def decode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
+        """Decode a task payload cell holding ids or spans, leaving plain payload untouched.
+
+        Args:
+            refs: The owning task class's reference declaration.
             name: The payload column name.
             value: The (already tuple-normalized) cell value.
 
         Returns:
             The decoded value.
         """
-        logical = TASK_PAYLOAD_ID_COLUMNS.get(name)
-        if logical is None or logical not in self.uuid16 or value is None:
+        if value is None:
+            return value
+        if name in refs.span_fields:
+            if isinstance(value, tuple):
+                return tuple(self.decode_span(row) for row in value)
+            return self.decode_span(value)
+        if name not in refs.sample_id_fields or "sample_id" not in self.uuid16:
             return value
         if isinstance(value, tuple):
-            return tuple(self.decode(logical, item) for item in value)
-        return self.decode(logical, value)
+            return tuple(self.decode("sample_id", item) for item in value)
+        return self.decode("sample_id", value)

@@ -207,11 +207,17 @@ class TimeFReader:
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
             for row in pq.read_table(self._root / rel).to_pylist():
                 payload = {
-                    name: self._codec.decode_payload(name, _as_tuple_if_list(row[name])) for name in payload_cols
+                    name: self._codec.decode_payload(cls.refs, name, _as_tuple_if_list(row[name]))
+                    for name in payload_cols
                 }
                 task = cls(
                     id=self._codec.decode("task_id", row["id"]),
                     sample_ids=tuple(self._codec.decode_list("sample_id", row["sample_ids"])),
+                    prompt=row["prompt"],
+                    scope=self._codec.decode_span(row["scope"]),
+                    input_annotation_ids=tuple(self._codec.decode_list("annotation_id", row["input_annotation_ids"])),
+                    target_annotation_ids=tuple(self._codec.decode_list("annotation_id", row["target_annotation_ids"])),
+                    rationale=row["rationale"],
                     **payload,  # ty: ignore[invalid-argument-type]
                 )
                 by_id[task.id] = task
@@ -373,7 +379,11 @@ class _SeriesLoader:
 
 
 def _as_tuple_if_list(value: object) -> object:
-    """Convert list payloads (and nested lists, e.g. windows) to tuples; pass scalars through.
+    """Convert list payloads (and nested lists) to tuples; pass scalars and structs through.
+
+    Span structs stay dicts for :meth:`~timenet.format.schemas.IdCodec.decode_span` to rebuild; only the
+    list nesting around them is normalized, since tasks store tuples.
+
 
     Args:
         value: A cell value read from a task partition.

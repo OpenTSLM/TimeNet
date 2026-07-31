@@ -6,13 +6,13 @@ from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
     DataSource,
     Domain,
     License,
-    QATask,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -36,7 +36,7 @@ def _manifest() -> Manifest:
             AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int", unit="years"),
             AnnotationDescriptor(key="artifact", annotation_type=AnnotationType.INTERVAL),
         ),
-        tasks=(ClassificationTask, QATask),
+        tasks=(ClassificationTask, AnswerTask),
     )
     metadata = DatasetMetadata(
         dataset_id="demo/ecg",

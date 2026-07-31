@@ -7,6 +7,7 @@ Everything is staged in a temporary directory and published with a single atomic
 """
 
 from collections.abc import Callable, Iterable
+from enum import StrEnum
 import json
 from pathlib import Path
 import shutil
@@ -598,17 +599,25 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
 
 
 def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
+    refs = type(task).refs
     row: dict = {
         "id": codec.encode("task_id", task.id),
         "sample_ids": codec.encode_list("sample_id", task.sample_ids),
         "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
+        "prompt": task.prompt,
+        "scope": codec.encode_span(task.scope),
+        "input_annotation_ids": codec.encode_list("annotation_id", task.input_annotation_ids),
+        "target_annotation_ids": codec.encode_list("annotation_id", task.target_annotation_ids),
+        "rationale": task.rationale,
     }
     for name in schema.names:
         if name in TASK_COMMON_NAMES:
             continue
         value = getattr(task, name)
+        if isinstance(value, StrEnum):  # a StrEnum payload (e.g. localization mode) stores as its value
+            value = str(value)
         value = list(value) if isinstance(value, tuple) else value
-        row[name] = codec.encode_payload(name, value)
+        row[name] = codec.encode_payload(refs, name, value)
     return row
 
 

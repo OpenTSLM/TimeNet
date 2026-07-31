@@ -15,7 +15,7 @@ from pathlib import Path
 from timenet.dataset.dataset import TimeFDataset
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
-from timenet.types import DatasetSchema, ForecastingTask, Task, Version
+from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
 
 
@@ -100,11 +100,17 @@ def _tasks_to_remove(dataset: TimeFDataset, remove: set[str], *, cascade: bool) 
 
 
 def _task_invalidated(task: Task, remove: set[str]) -> bool:
-    """Return whether removing ``remove`` strips a required reference from ``task``."""
-    if isinstance(task, ForecastingTask) and (
-        task.target_sample_id in remove or any(cid in remove for cid in task.context_sample_ids)
-    ):
-        return True
+    """Return whether removing ``remove`` strips a required reference from ``task``.
+
+    A payload sample reference is required by construction — a forecast without its horizon, an edit
+    without its source, a correspondence without its candidate pool is not a task any more — so any task
+    class declaring one in :class:`~timenet.types.TaskRefs` is invalidated when that sample goes.
+    """
+    for name in type(task).refs.sample_id_fields:
+        value = getattr(task, name)
+        referenced = (value,) if isinstance(value, str) else tuple(value or ())
+        if any(sample_id in remove for sample_id in referenced):
+            return True
     return bool(task.sample_ids) and all(sid in remove for sid in task.sample_ids)
 
 
