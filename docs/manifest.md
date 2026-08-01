@@ -35,9 +35,9 @@ Manifest(
     schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
     checksums={},               # relpath -> "sha256:..." (default: empty)
-    id_encoding={},             # logical id -> "uuid16" (absent => stored as string)
-    values_backend="parquet",   # values-plane storage: "parquet" or "zarr" (absent => parquet)
-    derived_from=None,          # copy-on-write lineage, e.g. {"dataset_version": "1.0.0", "op": ...}
+    id_encoding={},             # logical id -> "uuid16" (absent => string)
+    values_backend="parquet",   # "parquet" (default) or "zarr"
+    derived_from=None,          # copy-on-write lineage (see below)
     timef_format_version=1,     # validated against the supported set {1}
 )
 ```

@@ -40,8 +40,11 @@ instant.
 ```python
 from timenet.types import Span
 
-Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",))  # an interval on one channel
-Span(start_s=1.2)                                             # a point, every channel
+# an interval on one channel
+Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",))
+
+# a point, every channel
+Span(start_s=1.2)
 ```
 
 One primitive covers both directions of time localization: a `scope` is a region **given** to the model,
@@ -80,9 +83,17 @@ Free-form text out. Unprompted, it is a caption; with a `prompt`, it is a questi
 ```python
 from timenet.types import AnswerTask
 
-AnswerTask(target="A 10-second vibration trace with rising amplitude and a periodic impact after 5 s.")
+AnswerTask(
+    target=(
+        "A 10-second vibration trace with rising amplitude and a periodic "
+        "impact after 5 s."
+    )
+)
 
-AnswerTask(prompt="Is the machine healthy?", target="No, a bearing fault is present")
+AnswerTask(
+    prompt="Is the machine healthy?",
+    target="No, a bearing fault is present",
+)
 ```
 
 <figure markdown="span">
@@ -104,9 +115,10 @@ base = ClassificationTask(target="faulty", target_schema="condition")
 AnswerTask(
     prompt="Does this trace show a bearing fault? Walk through your reasoning.",
     rationale=(
-        "The vibration amplitude grows steadily after 5 s and a sharp impact repeats once per shaft "
-        "revolution. That periodicity matches the bearing's ball-pass frequency rather than imbalance, "
-        "which would track shaft speed."
+        "The vibration amplitude grows steadily after 5 s and a sharp "
+        "impact repeats once per shaft revolution. That periodicity matches "
+        "the bearing's ball-pass frequency rather than imbalance, which "
+        "would track shaft speed."
     ),
     target="Yes, an outer-race bearing fault",
     from_tasks=(base,),
@@ -127,7 +139,10 @@ batching, and unit-aware conversion straightforward.
 from timenet.types import ScalarPredictionTask, Span
 
 ScalarPredictionTask(
-    target=62.0, unit="bpm", target_name="mean_heart_rate", scope=Span(start_s=0.0, end_s=30.0)
+    target=62.0,
+    unit="bpm",
+    target_name="mean_heart_rate",
+    scope=Span(start_s=0.0, end_s=30.0),
 )
 ```
 
@@ -151,13 +166,17 @@ from timenet.types import LocalizationMode, Span, TemporalLocalizationTask
 TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
-    target=(Span(start_s=1.20, time_series_ids=("II",)), Span(start_s=2.05, time_series_ids=("II",))),
+    target=(
+        Span(start_s=1.20, time_series_ids=("II",)),
+        Span(start_s=2.05, time_series_ids=("II",)),
+    ),
 )
 
 TemporalLocalizationTask(
     prompt="Segment the night into sleep stages.",
     mode=LocalizationMode.EXHAUSTIVE,
-    target_annotation_ids=("ann-n2-0007", "ann-n3-0008"),  # the answer is the stored annotations
+    # the answer is the stored annotations
+    target_annotation_ids=("ann-n2-0007", "ann-n3-0008"),
 )
 ```
 
@@ -177,7 +196,9 @@ than raw arrays, so both the context and the horizon stay traceable to their dat
 ```python
 from timenet.types import ForecastingTask
 
-ForecastingTask(context_sample_ids=("2024-01-01",), target_sample_id="2024-01-02")
+ForecastingTask(
+    context_sample_ids=("2024-01-01",), target_sample_id="2024-01-02"
+)
 ```
 
 <figure markdown="span">
@@ -193,7 +214,9 @@ denoising, filtering, and deliberate corruption; both sides of the edit are stor
 from timenet.types import TSEditingTask
 
 TSEditingTask(
-    prompt="Remove the baseline wander.", source_sample_id="ecg-raw", target_sample_id="ecg-clean"
+    prompt="Remove the baseline wander.",
+    source_sample_id="ecg-raw",
+    target_sample_id="ecg-clean",
 )
 ```
 
@@ -209,7 +232,8 @@ A series out from a text specification alone.
 from timenet.types import TSGenerationTask
 
 TSGenerationTask(
-    prompt="Generate a 150 bpm sinus-tachycardia ECG, 10 s at 500 Hz.", target_sample_id="ecg-synth-0001"
+    prompt="Generate a 150 bpm sinus-tachycardia ECG, 10 s at 500 Hz.",
+    target_sample_id="ecg-synth-0001",
 )
 ```
 

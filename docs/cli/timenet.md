@@ -19,7 +19,7 @@ With a registry in place (build one first, see [Get started](../get-started.md))
 ```bash
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
-timenet info chengsenwang/tsqa@1.0.0       # pin a version; omit @ for the latest
+timenet info chengsenwang/tsqa@1.0.0   # pin a version; omit @ for the latest
 timenet download chengsenwang/tsqa
 ```
 

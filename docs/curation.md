@@ -21,7 +21,10 @@ The engine runs one connector through four stages, in `timenet.engine.run_pipeli
 ```python
 from timenet.engine import run_pipeline
 
-run_pipeline(connector, root, *, cache_dir=None, clean_cache=False, progress_cb=None, force=False)
+run_pipeline(
+    connector, root, *,
+    cache_dir=None, clean_cache=False, progress_cb=None, force=False,
+)
 ```
 
 1. cache: create `cache_dir` (defaults to `<TIMENET_CACHE>/<dataset_id>`). With `clean_cache=True` it is

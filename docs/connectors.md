@@ -88,9 +88,9 @@ Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](clien
   (`pip install 'timenet-connectors[huggingface]'`) since it downloads from the Hub.
 
 ```bash
-timenet-curate build timenet/hello-world               # offline, synthetic
-timenet-curate build chengsenwang/tsqa                 # live download from the Hub into the local registry
-timenet-curate build chengsenwang/tsqa --keep-cache    # keep the raw sources for a faster rebuild
+timenet-curate build timenet/hello-world             # offline, synthetic
+timenet-curate build chengsenwang/tsqa               # live, from the Hub
+timenet-curate build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
 A successful build removes the dataset's raw download cache (`<TIMENET_CACHE>/<dataset_id>`), since the

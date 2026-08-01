@@ -53,7 +53,8 @@ yourself, because those store only the unit name and resolve it against pint's *
 which doesn't know `beat` or `bpm`:
 
 ```python
-pickle.loads(pickle.dumps(ureg.bpm))   # UndefinedUnitError: 'bpm' is not defined
+# UndefinedUnitError: 'bpm' is not defined
+pickle.loads(pickle.dumps(ureg.bpm))
 ```
 
 pint's application registry is the only hook for that, so it's opt-in rather than something a library
@@ -78,7 +79,9 @@ dataclass built directly.
 ```python
 from timenet.types import DataSource
 
-DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme")
+DataSource(
+    data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme"
+)
 ```
 
 | Field | Type | Required | Description |
@@ -269,42 +272,69 @@ Span(start_s=1.2)  # a point on every series
 - `ClassificationTask`: one categorical label, for the whole sample or for `scope`; `target_schema` names
   the vocabulary the target is drawn from (`None` for free-form).
   ```python
-  dataset.add_task(sample, ClassificationTask(target="faulty", target_schema="condition"))
+  dataset.add_task(
+      sample, ClassificationTask(target="faulty", target_schema="condition")
+  )
   dataset.add_task(
       sample,
       ClassificationTask(target="fault_episode", target_schema="condition"),
-      scope=Span(start_s=120.0, end_s=480.0, time_series_ids=(vibration.time_series_id,)),
+      scope=Span(
+          start_s=120.0,
+          end_s=480.0,
+          time_series_ids=(vibration.time_series_id,),
+      ),
   )
   ```
 - `AnswerTask`: free text. Without a `prompt` it is a caption; with one it is a question answered, and a
   `rationale` adds the reasoning trace to supervise.
   ```python
-  dataset.add_task(sample, AnswerTask(target="A 10-second vibration trace with a bearing-fault signature after 5 s."))
-  dataset.add_task(sample, AnswerTask(prompt="What happens between 12s and 18s?", target="A bearing fault on the vibration channel."))
+  dataset.add_task(sample, AnswerTask(
+      target="A 10-second vibration trace with a bearing-fault signature "
+      "after 5 s.",
+  ))
+  dataset.add_task(sample, AnswerTask(
+      prompt="What happens between 12s and 18s?",
+      target="A bearing fault on the vibration channel.",
+  ))
   ```
 - `ScalarPredictionTask`: a numeric target that keeps its type. `unit` is validated against the shared
   pint registry (a `pint.Unit` is stored as its name); `target_name` names the quantity.
   ```python
-  dataset.add_task(sample, ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_heart_rate"))
+  dataset.add_task(sample, ScalarPredictionTask(
+      target=62.0, unit="bpm", target_name="mean_heart_rate"
+  ))
   ```
 - `TemporalLocalizationTask`: find the regions matching the prompt. `mode` is `SPARSE` (unmarked time is
   unlabeled) or `EXHAUSTIVE` (the spans must tile the region of interest; a gap is an error).
   ```python
   dataset.add_task(sample, TemporalLocalizationTask(
       prompt="Locate all R-peaks in lead II.",
-      target=(Span(start_s=1.20, time_series_ids=("II",)), Span(start_s=2.05, time_series_ids=("II",))),
+      target=(
+          Span(start_s=1.20, time_series_ids=("II",)),
+          Span(start_s=2.05, time_series_ids=("II",)),
+      ),
   ))
   ```
 - `ForecastingTask`: predict a sample's future values from context samples. Its answer is that future
   series, referenced by `target_sample_id`.
   ```python
-  dataset.add_task(future, ForecastingTask(context_sample_ids=("rec_001::history",), target_sample_id="rec_001::future"))
+  dataset.add_task(future, ForecastingTask(
+      context_sample_ids=("rec_001::history",),
+      target_sample_id="rec_001::future",
+  ))
   ```
 - `TSEditingTask` / `TSGenerationTask`: produce a series, from a source sample plus an instruction, or
   from the specification alone.
   ```python
-  dataset.add_task(source, TSEditingTask(prompt="Remove the baseline wander.", source_sample_id="ecg-raw", target_sample_id="ecg-clean"))
-  dataset.add_task(spec_sample, TSGenerationTask(prompt="10 s of 150 bpm sinus tachycardia at 500 Hz.", target_sample_id="ecg-synth-0001"))
+  dataset.add_task(source, TSEditingTask(
+      prompt="Remove the baseline wander.",
+      source_sample_id="ecg-raw",
+      target_sample_id="ecg-clean",
+  ))
+  dataset.add_task(spec_sample, TSGenerationTask(
+      prompt="10 s of 150 bpm sinus tachycardia at 500 Hz.",
+      target_sample_id="ecg-synth-0001",
+  ))
   ```
 - `TSCorrespondenceTask`: which candidate sample corresponds to the query. The answer must come from
   `candidate_sample_ids` when that pool is set.
