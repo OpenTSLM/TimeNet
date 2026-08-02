@@ -8,7 +8,7 @@ renumbering. On a content-addressed / deduplicating backend the rewrite only re-
 actually changed.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -23,10 +23,11 @@ def remove_samples(dataset: TimeFDataset, sample_ids: Iterable[str], *, cascade:
     """Return a new in-memory dataset with ``sample_ids`` (and, with ``cascade``, their dependents) gone.
 
     Every surviving cross-reference is repaired: a deleted sample id is stripped from each task's
-    ``sample_ids``, and each surviving sample drops task ids that no longer resolve. A task that would
-    lose a *required* reference (a forecasting ``target_sample_id`` / ``context_sample_ids``, its last
-    remaining sample, or a ``from_task`` edge to a removed task) is only removed when ``cascade`` is set;
-    otherwise the edit is rejected so a committed version is never left dangling.
+    ``sample_ids``, each surviving sample drops task ids that no longer resolve, and each task drops
+    ``input_annotation_ids`` its remaining samples no longer carry. A task that would lose a *required*
+    reference (a forecasting ``target_sample_id`` / ``context_sample_ids``, its last remaining sample, an
+    annotation holding its answer, or a ``from_task`` edge to a removed task) is only removed when
+    ``cascade`` is set; otherwise the edit is rejected so a committed version is never left dangling.
 
     Args:
         dataset: The base dataset (typically read back from a committed version).
@@ -46,9 +47,14 @@ def remove_samples(dataset: TimeFDataset, sample_ids: Iterable[str], *, cascade:
         raise TimeFEditError(f"cannot remove unknown sample ids: {sorted(unknown)}")
 
     surviving_ids = known - remove
-    removed_task_ids = _tasks_to_remove(dataset, remove, cascade=cascade)
+    annotations_by_sample = {
+        sample.sample_id: frozenset(annotation.id for annotation in sample.annotations)
+        for sample in dataset.samples
+        if sample.sample_id not in remove
+    }
+    removed_task_ids = _tasks_to_remove(dataset, remove, annotations_by_sample, cascade=cascade)
 
-    tasks = _rebuild_tasks(dataset, removed_task_ids, surviving_ids)
+    tasks = _rebuild_tasks(dataset, removed_task_ids, surviving_ids, annotations_by_sample)
     surviving_task_ids = {task.id for task in tasks}
     samples = [
         replace(sample, task_ids=tuple(tid for tid in sample.task_ids if tid in surviving_task_ids))
@@ -65,12 +71,19 @@ def remove_samples(dataset: TimeFDataset, sample_ids: Iterable[str], *, cascade:
     return edited
 
 
-def _tasks_to_remove(dataset: TimeFDataset, remove: set[str], *, cascade: bool) -> set[str]:
+def _tasks_to_remove(
+    dataset: TimeFDataset,
+    remove: set[str],
+    annotations_by_sample: Mapping[str, frozenset[str]],
+    *,
+    cascade: bool,
+) -> set[str]:
     """Return the ids of tasks invalidated by the removal, honoring the reject-unless-cascade rule.
 
     Args:
         dataset: The base dataset.
         remove: The sample ids being removed.
+        annotations_by_sample: Annotation ids carried by each *surviving* sample.
         cascade: Remove invalidated tasks (transitively) instead of rejecting.
 
     Returns:
@@ -79,7 +92,7 @@ def _tasks_to_remove(dataset: TimeFDataset, remove: set[str], *, cascade: bool) 
     Raises:
         TimeFEditError: If a task would dangle and ``cascade`` is off.
     """
-    invalid = {task.id for task in dataset.tasks if _task_invalidated(task, remove)}
+    invalid = {task.id for task in dataset.tasks if _task_invalidated(task, remove, annotations_by_sample)}
     if invalid and not cascade:
         raise TimeFEditError(
             f"removing {sorted(remove)} would dangle tasks {sorted(invalid)}; pass cascade=True to remove them"
@@ -99,28 +112,65 @@ def _tasks_to_remove(dataset: TimeFDataset, remove: set[str], *, cascade: bool) 
     return invalid
 
 
-def _task_invalidated(task: Task, remove: set[str]) -> bool:
+def _reachable_annotation_ids(task: Task, annotations_by_sample: Mapping[str, frozenset[str]]) -> set[str]:
+    """Return the annotation ids ``task`` can still resolve: those on the samples it keeps.
+
+    :meth:`~timenet.dataset.TimeFDataset.add_task` validates a task's annotation references against its
+    *own* samples, not the dataset at large, so that is the frame an edit has to repair them in. A
+    dataset-wide check would be weaker: an annotation shared with a sample the task is not attached to
+    outlives the removal, yet the task can no longer reach it through any sample of its own.
+
+    Args:
+        task: The task whose references are being resolved.
+        annotations_by_sample: Annotation ids carried by each *surviving* sample; a removed sample is
+            absent, so it contributes nothing.
+
+    Returns:
+        The annotation ids still reachable from the task's surviving samples.
+    """
+    reachable: set[str] = set()
+    for sample_id in task.sample_ids:
+        reachable |= annotations_by_sample.get(sample_id, frozenset())
+    return reachable
+
+
+def _task_invalidated(task: Task, remove: set[str], annotations_by_sample: Mapping[str, frozenset[str]]) -> bool:
     """Return whether removing ``remove`` strips a required reference from ``task``.
 
     A payload sample reference is required by construction — a forecast without its horizon, an edit
     without its source, a correspondence without its candidate pool is not a task any more — so any task
     class declaring one in :class:`~timenet.types.TaskRefs` is invalidated when that sample goes.
+
+    ``target_annotation_ids`` is required for the same reason: it *is* the answer, so an unreachable
+    entry does not merely dangle, it quietly rewrites the ground truth — a localization that loses one of
+    two target regions still reads back as a complete answer. ``input_annotation_ids`` is context handed
+    to the model rather than the answer, so :func:`_rebuild_tasks` strips unreachable entries instead,
+    the way removed ``sample_ids`` and ``from_tasks`` edges are already stripped.
     """
     for name in type(task).refs.sample_id_fields:
         value = getattr(task, name)
         referenced = (value,) if isinstance(value, str) else tuple(value or ())
         if any(sample_id in remove for sample_id in referenced):
             return True
-    return bool(task.sample_ids) and all(sid in remove for sid in task.sample_ids)
+    if task.sample_ids and all(sid in remove for sid in task.sample_ids):
+        return True
+    reachable = _reachable_annotation_ids(task, annotations_by_sample)
+    return any(annotation_id not in reachable for annotation_id in task.target_annotation_ids)
 
 
-def _rebuild_tasks(dataset: TimeFDataset, removed_task_ids: set[str], surviving_ids: set[str]) -> list[Task]:
-    """Rebuild the surviving tasks with removed sample ids and from-task edges stripped out.
+def _rebuild_tasks(
+    dataset: TimeFDataset,
+    removed_task_ids: set[str],
+    surviving_ids: set[str],
+    annotations_by_sample: Mapping[str, frozenset[str]],
+) -> list[Task]:
+    """Rebuild the surviving tasks with unreachable sample, annotation, and from-task refs stripped out.
 
     Args:
         dataset: The base dataset.
         removed_task_ids: The ids of the tasks being dropped.
         surviving_ids: The sample ids that remain.
+        annotations_by_sample: Annotation ids carried by each *surviving* sample.
 
     Returns:
         The rebuilt surviving tasks, with ``from_tasks`` rewired to rebuilt instances.
@@ -129,9 +179,11 @@ def _rebuild_tasks(dataset: TimeFDataset, removed_task_ids: set[str], surviving_
     for task in dataset.tasks:
         if task.id in removed_task_ids:
             continue
+        reachable = _reachable_annotation_ids(task, annotations_by_sample)
         rebuilt[task.id] = replace(
             task,
             sample_ids=tuple(sid for sid in task.sample_ids if sid in surviving_ids),
+            input_annotation_ids=tuple(aid for aid in task.input_annotation_ids if aid in reachable),
             from_tasks=(),
         )
     for task in dataset.tasks:
