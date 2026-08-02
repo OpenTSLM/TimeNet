@@ -17,6 +17,37 @@
   mask-image: var(--md-admonition-icon--planned);
 }
 
+/* ---- Code block wrapping ----------------------------------------------
+   The theme scrolls code horizontally (`pre > code { overflow: auto }`), so a
+   line wider than the content column hides behind a scrollbar. Soft-wrap
+   instead, which adapts to the reader's viewport. `overflow: auto` stays as
+   the fallback for a single token too long to break.
+
+   `.language-text` is what a fence with no language gets, and that is what the
+   ASCII diagrams and the `describe()` output use. Those carry meaning in their
+   column alignment, so they keep scrolling. */
+
+/* `anywhere` rather than `break-word`: only `anywhere` shrinks the intrinsic
+   minimum width, which is what lets a long token break inside a narrowed
+   column such as a code block nested in a list item. */
+
+.md-typeset .highlight:not(.language-text) > pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Offset the continuation of a wrapped line so it reads as a continuation
+   rather than as a new statement. Each source line is its own span because
+   `line_spans = "__span"` is set in zensical.toml. */
+
+.md-typeset .highlight:not(.language-text) > pre > code > span[id^="__span"] {
+  box-sizing: border-box;
+  display: inline-block;
+  width: 100%;
+  padding-left: 2.4ch;
+  text-indent: -2.4ch;
+}
+
 .sr-only,
 .ds-visually-hidden {
   position: absolute !important;

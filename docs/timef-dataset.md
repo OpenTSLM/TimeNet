@@ -24,7 +24,8 @@ TimeSeries(
     spec=vibration,           # a TimeSeriesSpec (the modality)
     channel="axial",          # the channel this series carries
     sampling_rate_hz=500.0,
-    loader=load_axial,        # Callable[[], pa.Array] matching the spec's dtype and value_shape
+    # Callable[[], pa.Array] matching the spec's dtype and value_shape
+    loader=load_axial,
     source_id="rec_001",      # optional
     t_start_s=0.0,
     t_end_s=None,             # None = to end of source
@@ -95,7 +96,8 @@ then).
 from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
-sample = dataset.add_sample(time_series=(...), subject_ids=("p1",))   # view defaults to View.FULL
+# view defaults to View.FULL
+sample = dataset.add_sample(time_series=(...), subject_ids=("p1",))
 dataset.add_task(sample, ClassificationTask(target="faulty"))
 dataset.derive_schema()
 ```
@@ -103,7 +105,10 @@ dataset.derive_schema()
 ### `add_sample()`
 
 ```python
-add_sample(*, time_series, view=View.FULL, subject_ids=(), sample_id=None, t0_unix_ns=None) -> Sample
+add_sample(
+    *, time_series, view=View.FULL, subject_ids=(),
+    sample_id=None, t0_unix_ns=None,
+) -> Sample
 ```
 
 Creates a sample, registers it, returns it. `view` defaults to `View.FULL`; pass `view=View.WINDOW` for

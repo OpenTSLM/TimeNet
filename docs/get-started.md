@@ -17,9 +17,9 @@ extras you opt into.
     Add it to your project with [uv](https://docs.astral.sh/uv/):
 
     ```bash
-    uv add timenet            # core: TimeF format, reader/writer, registry client
-    uv add 'timenet[cli]'     # add the timenet console command
-    uv add 'timenet[torch-gpu]'   # add load_torch (PyTorch Dataset); or timenet[torch-cpu] for CPU-only
+    uv add timenet                # core: TimeF format, reader/writer, registry
+    uv add 'timenet[cli]'         # add the timenet console command
+    uv add 'timenet[torch-gpu]'   # load_torch; torch-cpu for a CPU-only build
     ```
 
 === "pip"
@@ -36,7 +36,7 @@ extras you opt into.
 
     ```bash
     uv tool install 'timenet[cli]'       # the `timenet` command
-    uv tool install timenet-connectors   # `timenet-curate` (for connector authors)
+    uv tool install timenet-connectors   # `timenet-curate` (connector authors)
     # or, with pipx:  pipx install 'timenet[cli]'
     ```
 
@@ -66,7 +66,7 @@ import pandas as pd
 from timenet.client import TimeNet
 
 dataset = TimeNet().load("timenet/hello-world")
-dataset.describe()                                # identity, counts, a quick preview
+dataset.describe()  # identity, counts, a quick preview
 
 # Each channel converts to Arrow or NumPy, so it drops straight into pandas:
 series = dataset.samples[0].time_series[0]

@@ -36,10 +36,11 @@ sample.
     import pandas as pd
     from timenet.client import TimeNet
 
-    dataset = TimeNet().load("chengsenwang/tsqa")   # download if needed, then read
+    # download if needed, then read
+    dataset = TimeNet().load("chengsenwang/tsqa")
     series = dataset.samples[0].time_series[0]
 
-    values = series.to_numpy()                       # shape: (n_steps, *series.spec.value_shape)
+    values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
     t_s = series.t_start_s + np.arange(len(values)) / series.sampling_rate_hz
     frame = pd.DataFrame({"t_s": t_s, series.channel: values})
     ```
@@ -72,7 +73,8 @@ sample.
     from torch.utils.data import DataLoader
     from timenet.client import TimeNet
 
-    ds = TimeNet().load_torch("chengsenwang/tsqa")   # pip install 'timenet[torch-gpu]'
+    # needs: pip install 'timenet[torch-gpu]'
+    ds = TimeNet().load_torch("chengsenwang/tsqa")
     item = ds[0]
     series, question = item["series"][0], item["tasks"][0].question
 
@@ -81,7 +83,9 @@ sample.
     loader = DataLoader(
         ds,
         batch_size=8,
-        collate_fn=lambda batch: [(x["series"][0], x["tasks"][0].target) for x in batch],
+        collate_fn=lambda batch: [
+            (x["series"][0], x["tasks"][0].target) for x in batch
+        ],
     )
     ```
 
@@ -98,15 +102,18 @@ from sklearn.model_selection import train_test_split
 from timenet.client import TimeNet
 import timenet_connectors
 
-# Curate the connector's dataset into the local registry (the producer side), then load it back.
+# Curate the connector's dataset into the local registry (the producer
+# side), then load it back.
 timenet_connectors.build("timenet/test-mean")
 dataset = TimeNet().load("timenet/test-mean")
 
-# Pair each sample's values with its target. Materialization is deferred by default (Arrow); ask for
-# output="numpy" since scikit-learn needs it.
+# Pair each sample's values with its target. Materialization is deferred by
+# default (Arrow); ask for output="numpy" since scikit-learn needs it.
 x, y = dataset.to_features_and_targets(output="numpy")
 
-x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, stratify=y, random_state=0)
+x_train, x_test, y_train, y_test = train_test_split(
+    x, y, test_size=0.25, stratify=y, random_state=0
+)
 model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
 print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 ```

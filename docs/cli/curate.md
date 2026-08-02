@@ -24,7 +24,8 @@ enough to build them. Clone the repo only when you want to *author* a connector.
 ## `timenet-curate build`
 
 ```bash
-timenet-curate [--quiet] build <dataset_id> [--out <dir>] [--force] [--keep-cache]
+timenet-curate [--quiet] build <dataset_id> \
+    [--out <dir>] [--force] [--keep-cache]
 ```
 
 Runs the connector for `<dataset_id>` through the pipeline (download, convert, derive_schema, store)
@@ -73,7 +74,8 @@ The output directory is itself a valid local registry, so you can point the SDK 
 
 ```bash
 timenet-curate build timenet/hello-world --out ./local_registry
-python -c "from timenet.client import TimeNet; print(TimeNet('./local_registry').list())"
+python -c "from timenet.client import TimeNet; \
+    print(TimeNet('./local_registry').list())"
 ```
 
 ## Planned commands

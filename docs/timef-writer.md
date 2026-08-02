@@ -29,13 +29,13 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
 
 ```
 <root>/<dataset_id>/<version>/
-  manifest.json            # written last; its presence marks a committed version
+  manifest.json   # written last; its presence marks a committed version
   samples.parquet
   annotations.parquet
   time_series_index.parquet
   tasks/task=<task_type>/part-0.parquet
-  time_series/shard-00000.parquet ...        # values_backend="parquet" (default)
-  time_series.zarr/<spec_type>/...           # values_backend="zarr" (alternative)
+  time_series/shard-00000.parquet ...   # values_backend="parquet" (default)
+  time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
 ```
 
 ## Constructor options

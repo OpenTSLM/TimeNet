@@ -32,10 +32,16 @@ There can be several registries: one public, private internal ones, or a local d
 ## The two flows
 
 ```
-PRODUCE  dataset.yaml + connector ─► engine (download -> convert -> derive_schema -> store) ─► publish ─┐
-                                                                                                     ▼
-                                                                                                 registry
-CONSUME  SDK ─► get_manifest ─► fetch TimeF files ─► TimeFReader ─► Arrow  ◄──────────────────────────┘
+PRODUCE  dataset.yaml + connector
+             │
+             ▼
+         engine   download ─► convert ─► derive_schema ─► store
+             │
+             ▼
+         registry
+             │
+             ▼
+CONSUME  SDK ─► get_manifest ─► fetch TimeF files ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` (the card's human-authored metadata plus the schema derived from the data)
@@ -55,10 +61,14 @@ Three producer-side pieces, each with one job:
 | **Curator** | the `timenet-curate` CLI ([curation](curation.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
 
 ```
-timenet-curate build org/name                          curator
-  └─ discovery.resolve("org/name") -> Connector class   (datasets/<org>/<name>/ exposes CONNECTOR)
-      └─ run_pipeline(connector, <registry>)            engine
-           metadata -> download -> convert -> derive_schema -> store -> <registry>/org/name/<version>/
+timenet-curate build org/name
+  │
+  ├─ curator  discovery.resolve("org/name") -> Connector class
+  │             datasets/<org>/<name>/ exposes CONNECTOR
+  │
+  └─ engine   run_pipeline(connector, <registry>)
+                metadata -> download -> convert -> derive_schema -> store
+                  -> <registry>/org/name/<version>/
 ```
 
 `metadata()` reads the `dataset.yaml` card and `store()` streams through

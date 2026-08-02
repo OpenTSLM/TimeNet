@@ -16,12 +16,12 @@ connector code. Lives in `timenet.client`.
 from timenet.client import TimeNet
 from timenet.types import Domain
 
-client = TimeNet()                                   # default local registry (~/.cache/timenet/registry)
+client = TimeNet()   # default local registry (~/.cache/timenet/registry)
 
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
 
-dataset = client.load("timenet/hello-world")         # download if needed + read
+dataset = client.load("timenet/hello-world")   # download if needed + read
 values = dataset.samples[0].time_series[0].to_numpy()
 ```
 
@@ -36,7 +36,7 @@ registry (`<home>/registry`). `registry` accepts a `BaseRegistry`, a local path 
 `s3://` URI, or a hosted `timenet://` / `http(s)://` URL:
 
 ```python
-client = TimeNet("./local_registry")                 # any directory a build wrote to
+client = TimeNet("./local_registry")   # any directory a build wrote to
 ```
 
 The `s3://` and remote backends are deferred. Constructing `TimeNet("timenet://")` succeeds, but every
@@ -94,7 +94,8 @@ item is a dict with the sample's `series` as dtype-preserving tensors with shape
 ```python
 from timenet.client import TimeNet
 
-ds = TimeNet().load_torch("chengsenwang/tsqa")   # pip install 'timenet[torch-gpu]'
+# needs: pip install 'timenet[torch-gpu]'
+ds = TimeNet().load_torch("chengsenwang/tsqa")
 item = ds[0]
 series, question = item["series"][0], item["tasks"][0].question
 ```
@@ -106,7 +107,11 @@ or a `collate_fn` on the loader:
 ```python
 from torch.utils.data import DataLoader
 
-loader = DataLoader(ds, batch_size=8, collate_fn=lambda b: [(x["series"][0], x["tasks"][0].target) for x in b])
+loader = DataLoader(
+    ds,
+    batch_size=8,
+    collate_fn=lambda b: [(x["series"][0], x["tasks"][0].target) for x in b],
+)
 ```
 
 The torch module is imported lazily, so base users who never call `load_torch` don't need torch.
