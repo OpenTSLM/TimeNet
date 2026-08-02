@@ -354,10 +354,12 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             subject_ids=(f"subject-{scenario.name}",),
             view=View.FULL,
         )
-        sample.add_annotation(
-            StaticAnnotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
+        sample.add_annotations(
+            [
+                StaticAnnotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),
+                PointAnnotation(key="event", start_time_s=1.0, id=f"annotation-{scenario.name}-event"),
+            ]
         )
-        sample.add_annotation(PointAnnotation(key="event", start_time_s=1.0, id=f"annotation-{scenario.name}-event"))
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             sample.add_annotation(
                 IntervalAnnotation(

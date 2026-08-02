@@ -1,5 +1,6 @@
 """The :class:`Sample` type: one logical unit of time-series data."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -90,6 +91,20 @@ class Sample:
                     )
         self.annotations = (*self.annotations, annotation)
         return annotation
+
+    def add_annotations(self, annotations: Iterable[Annotation]) -> tuple[Annotation, ...]:
+        """Attach several annotations to the sample and return them.
+
+        Each is validated and attached exactly as :meth:`add_annotation` does it, in order, so a
+        rejected annotation leaves the ones before it attached.
+
+        Args:
+            annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
+
+        Returns:
+            The attached annotations (the same instances), in the order given.
+        """
+        return tuple(self.add_annotation(annotation) for annotation in annotations)
 
     def to_arrow(self) -> pa.Array:
         """Read the sole channel's values as an Arrow array, for the common single-channel sample.

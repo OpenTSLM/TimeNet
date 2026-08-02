@@ -79,6 +79,75 @@ def test_add_task_rejects_empty_samples():
         _dataset().add_task((), ClassificationTask(target="x"))
 
 
+def test_add_tasks_rejects_empty_samples():
+    with pytest.raises(ValueError, match="add_tasks requires"):
+        _dataset().add_tasks((), [ClassificationTask(target="x")])
+
+
+def test_add_tasks_registers_a_list_in_order(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    batch = [ClassificationTask(target="afib"), AnswerTask(prompt="q", target="a")]
+    assert ds.add_tasks(sample, batch) == tuple(batch)
+    assert ds.tasks == tuple(batch)
+    assert sample.task_ids == tuple(task.id for task in batch)
+
+
+def test_add_tasks_accepts_a_generator(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    registered = ds.add_tasks(sample, (ClassificationTask(target=label) for label in ("a", "b")))
+    assert [task.target for task in registered] == ["a", "b"]
+
+
+def test_add_tasks_resolves_samples_once_for_every_task(make_series):
+    # A generator of samples must not be exhausted by the first task.
+    ds = _dataset()
+    s1 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    s2 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    registered = ds.add_tasks((s for s in (s1, s2)), [ClassificationTask(target="a"), ClassificationTask(target="b")])
+    assert all(set(task.sample_ids) == {s1.sample_id, s2.sample_id} for task in registered)
+
+
+def test_add_tasks_with_nothing_is_a_no_op(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    assert ds.add_tasks(sample, []) == ()
+    assert ds.tasks == ()
+    assert sample.task_ids == ()
+
+
+def test_add_tasks_applies_scope_to_every_task_in_the_call(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
+    scope = Span(start_s=2.0, end_s=8.0)
+    first, second = ds.add_tasks(
+        sample, [ClassificationTask(target="a"), AnswerTask(prompt="q", target="b")], scope=scope
+    )
+    assert first.scope == scope
+    assert second.scope == scope
+
+
+def test_add_tasks_applies_from_tasks_to_every_task_in_the_call(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    base = ds.add_task(sample, ClassificationTask(target="a"))
+    derived = ds.add_tasks(
+        sample, [AnswerTask(prompt="q", target="b"), AnswerTask(prompt="r", target="c")], from_tasks=(base,)
+    )
+    assert all(task.from_tasks == (base,) for task in derived)
+
+
+def test_add_tasks_rejects_a_bad_task_in_a_batch(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
+    good = ClassificationTask(target="a")
+    bad = ClassificationTask(target="b", input_annotation_ids=("nope",))
+    with pytest.raises(TimeFValidationError, match="not attached to any"):
+        ds.add_tasks(sample, [good, bad])
+    assert ds.tasks == (good,)  # registered as it went, so the valid prefix stays
+
+
 def test_scope_series_id_resolution(make_series):
     ds = _dataset()
     ts = make_series()
@@ -100,7 +169,7 @@ def test_from_tasks_via_kwarg(make_series):
 
 
 def test_from_tasks_on_constructor_not_clobbered(make_series):
-    # A task built with from_tasks= must not lose it when add_task is called without the kwarg.
+    # A task built with from_tasks= must not lose it when add_tasks is called without the kwarg.
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),), view=View.FULL)
     base = ds.add_task(sample, ClassificationTask(target="a"))
@@ -281,8 +350,7 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     context = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
     target = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
     task = dataset.add_task(
-        context,
-        ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id),
+        context, ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id)
     )
     assert task.target is None
 

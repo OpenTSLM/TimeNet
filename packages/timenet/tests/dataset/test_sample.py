@@ -18,6 +18,34 @@ def test_add_multiple_annotations_preserves_order(make_series):
     assert sample.annotations == (a, b)
 
 
+def test_add_annotations_attaches_a_batch_in_order(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    batch = [StaticAnnotation(key="age", value=64), StaticAnnotation(key="sex", value="M")]
+    assert sample.add_annotations(batch) == tuple(batch)
+    assert sample.annotations == tuple(batch)
+
+
+def test_add_annotations_accepts_a_generator(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    attached = sample.add_annotations(StaticAnnotation(key=key, value=1) for key in ("a", "b"))
+    assert [ann.key for ann in attached] == ["a", "b"]
+
+
+def test_add_annotations_with_nothing_is_a_no_op(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    assert sample.add_annotations([]) == ()
+    assert sample.annotations == ()
+
+
+def test_add_annotations_rejects_a_bad_one_in_a_batch(make_series):
+    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    good = StaticAnnotation(key="age", value=64)
+    bad = PointAnnotation(key="stimulus", start_time_s=1.0, time_series_ids=("nope",))
+    with pytest.raises(ValueError, match="unknown"):
+        sample.add_annotations([good, bad])
+    assert sample.annotations == (good,)  # attached as it went, so the valid prefix stays
+
+
 def test_channel_level_point_resolves_series_id(make_series):
     ts = make_series()
     sample = Sample(time_series=(ts,), view=View.FULL)
@@ -46,7 +74,7 @@ def test_trial_level_interval_common_span_ok(make_series):
 
 
 def test_empty_time_series_ids_rejected():
-    # The annotation itself rejects `()`, so add_annotation never sees one.
+    # The annotation itself rejects `()`, so add_annotations never sees one.
     with pytest.raises(ValueError, match="must be None"):
         IntervalAnnotation(key="artifact", start_time_s=1.0, end_time_s=2.0, time_series_ids=())
 

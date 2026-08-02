@@ -123,7 +123,7 @@ def test_from_task_ids_property():
 
 
 def test_task_is_mutable_for_post_construction_linking():
-    # add_task() populates sample_ids after construction, so Task must be mutable.
+    # add_tasks() populates sample_ids after construction, so Task must be mutable.
     t = ClassificationTask(target="a")
     t.sample_ids = ("sample-0",)
     assert t.sample_ids == ("sample-0",)

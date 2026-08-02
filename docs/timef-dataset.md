@@ -80,9 +80,22 @@ via `TimeFDataset.add_sample`.
 All series and annotations in an anchored sample share this clock and relative-time coordinate system.
 Use `sample.has_absolute_time` to check whether the anchor is known.
 
-`add_annotation(annotation)` attaches and returns it, validating that a temporal annotation's
+`add_annotation(annotation)` attaches one and returns it, validating that a temporal annotation's
 `time_series_ids` resolve to series on the sample, and that a trial-level `IntervalAnnotation` is only
 added when the sample's series share a common `(t_start_s, t_end_s)` span.
+`add_annotations(annotations)` takes an iterable and returns a tuple, validating and attaching each in
+order exactly as the singular does:
+
+```python
+sample.add_annotation(cohort)
+sample.add_annotations([
+    StaticAnnotation(key="age", value=64, unit="years"),
+    PointAnnotation(key="stimulus", start_time_s=0.5),
+])
+```
+
+Hold an annotation you need to reference later and read its `id` off it, rather than repeating the
+literal in a task's `input_annotation_ids` or `target_annotation_ids`.
 
 `to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common
 single-channel sample, raising `ValueError` for a multi-channel sample (index `time_series` yourself
@@ -117,16 +130,31 @@ deterministic output (e.g. golden fixtures), and `t0_unix_ns` to anchor the samp
 to wall-clock time (Unix epoch, UTC, integer nanoseconds) so samples can be synchronized across
 datasets and devices.
 
-### `add_task()`
+### `add_task()` / `add_tasks()`
 
 ```python
 add_task(samples, task, *, scope=None, from_tasks=()) -> Task
+add_tasks(samples, tasks, *, scope=None, from_tasks=()) -> tuple[Task, ...]
 ```
 
 Registers a task and links it to its samples: populates `task.sample_ids` and appends `task.id` to each
-sample's `task_ids`. `scope`, when passed, is stamped onto `task.scope` (equivalent to constructing the
-task with it, and rejected if the task already has one). `from_tasks` overrides the task's own value only
-when non-empty, so a task built with `from_tasks=` is never clobbered.
+sample's `task_ids`. `add_tasks` takes an iterable and applies the same treatment to each in order, so
+several tasks on one sample are a single call:
+
+```python
+classification = ClassificationTask(target="normal")
+dataset.add_tasks(sample, [
+    classification,
+    AnswerTask(prompt="What rhythm?", target="Normal.",
+               from_tasks=(classification,)),
+])
+dataset.add_task(sample, ScalarPredictionTask(target=60.0, unit="bpm"))
+```
+
+`scope`, when passed, is stamped onto `task.scope` (equivalent to constructing the task with it, and
+rejected if the task already has one). `from_tasks` overrides the task's own value only when non-empty,
+so a task built with `from_tasks=` is never clobbered. Through `add_tasks` both apply to **every** task
+in the call; register tasks separately, or set the field on the constructor, when they differ.
 
 This is where a task is checked against the samples it is attached to, since this is the first point that
 has both. Raises `ValueError` on empty `samples`; on a task that sets both `target` and

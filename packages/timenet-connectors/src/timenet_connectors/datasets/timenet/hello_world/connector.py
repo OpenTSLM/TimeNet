@@ -143,42 +143,49 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-cos-0",
         )
         sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
-        sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
-        sample0.add_annotation(cohort)
-        sample0.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0"))
-        sample0.add_annotation(
-            IntervalAnnotation(
-                key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
-            )
+        # Named so the localization task below can reference them by id instead of repeating the literals.
+        stimulus = PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0")
+        artifact = IntervalAnnotation(
+            key="artifact",
+            start_time_s=0.0,
+            end_time_s=0.25,
+            time_series_ids=(shared.time_series_id,),
+            id="art-0",
         )
-        classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
-        dataset.add_task(
-            sample0,
-            AnswerTask(
-                prompt="What rhythm?",
-                target="Normal.",
-                # Any task may carry a chain of thought; an answer task with one is the old reasoning task.
-                rationale="The peaks repeat once per cycle at a constant interval.",
-                # The cohort annotation is context the model reads, not something it has to produce.
-                input_annotation_ids=("cohort-shared",),
-                id="task-answer-0",
-            ),
-            from_tasks=(classification,),
+        sample0.add_annotations(
+            [
+                StaticAnnotation(key="age", value=64, unit="years", id="age-0"),
+                cohort,
+                stimulus,
+                artifact,
+            ]
         )
-        dataset.add_task(
+        classification = ClassificationTask(target="normal", id="task-cls-0")
+        dataset.add_tasks(
             sample0,
-            ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
-        )
-        # Localization runs a scope backwards: the query goes in and the regions come out. Here the
-        # answer is stored by reference, so the target *is* the two temporal annotations above.
-        dataset.add_task(
-            sample0,
-            TemporalLocalizationTask(
-                prompt="Locate the stimulus and the artifact.",
-                mode=LocalizationMode.SPARSE,
-                target_annotation_ids=("stim-0", "art-0"),
-                id="task-localize-0",
-            ),
+            [
+                classification,
+                AnswerTask(
+                    prompt="What rhythm?",
+                    target="Normal.",
+                    # Any task may carry a chain of thought; an answer task with one is the old
+                    # reasoning task.
+                    rationale="The peaks repeat once per cycle at a constant interval.",
+                    # The cohort annotation is context the model reads, not something it has to produce.
+                    input_annotation_ids=(cohort.id,),
+                    from_tasks=(classification,),
+                    id="task-answer-0",
+                ),
+                ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+                # Localization runs a scope backwards: the query goes in and the regions come out. Here
+                # the answer is stored by reference, so the target *is* the two temporal annotations above.
+                TemporalLocalizationTask(
+                    prompt="Locate the stimulus and the artifact.",
+                    mode=LocalizationMode.SPARSE,
+                    target_annotation_ids=(stimulus.id, artifact.id),
+                    id="task-localize-0",
+                ),
+            ],
         )
 
         # Sample 1: reuses the shared series plus a longer series (the writer tests split it under a tiny cap).

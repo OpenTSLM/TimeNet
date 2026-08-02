@@ -123,8 +123,7 @@ def test_forecasting_scalar_id_round_trips(tmp_path):
     context = dataset.add_sample(time_series=(_series(),), view=View.FULL)
     target = dataset.add_sample(time_series=(_series(),), view=View.FULL)
     dataset.add_task(
-        target,
-        ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id),
+        target, ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id)
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)

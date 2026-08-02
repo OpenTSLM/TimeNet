@@ -276,14 +276,12 @@ Span(start_s=1.2)  # a point on every series
       sample, ClassificationTask(target="faulty", target_schema="condition")
   )
   dataset.add_task(
-      sample,
-      ClassificationTask(target="fault_episode", target_schema="condition"),
+      sample, ClassificationTask(target="fault_episode", target_schema="condition"),
       scope=Span(
           start_s=120.0,
           end_s=480.0,
           time_series_ids=(vibration.time_series_id,),
-      ),
-  )
+      ))
   ```
 - `AnswerTask`: free text. Without a `prompt` it is a caption; with one it is a question answered, and a
   `rationale` adds the reasoning trace to supervise.
@@ -353,13 +351,18 @@ The derived task records the chain it was built from, which is how a handful of 
 into many higher-level training samples:
 
 ```python
-base = dataset.add_task(sample, ClassificationTask(target="faulty"))
-dataset.add_task(sample, AnswerTask(
-    prompt="Is this machine healthy?",
-    rationale="The trace is classified faulty: a bearing fault is present.",
-    target="No.",
-    from_tasks=(base,),
-))
+base = ClassificationTask(target="faulty")
+dataset.add_tasks(
+    sample, [
+        base,
+        AnswerTask(
+            prompt="Is this machine healthy?",
+            rationale="The trace is classified faulty: a bearing fault is "
+            "present.",
+            target="No.",
+            from_tasks=(base,),
+        ),
+    ])
 ```
 
 ### Annotations vs tasks

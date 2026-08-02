@@ -97,9 +97,13 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. `view` defaults to
   `View.FULL`; pass `view=View.WINDOW` for a windowed view.
-- `sample.add_annotation(StaticAnnotation(key=..., value=..., id=...))`. Annotation shapes:
+- `sample.add_annotation(StaticAnnotation(key=..., value=..., id=...))` attaches one and returns it;
+  `sample.add_annotations([...])` takes an iterable and returns a tuple. Annotation shapes:
   `StaticAnnotation` (whole-sample), `PointAnnotation`, `IntervalAnnotation`.
-- `dataset.add_task(sample, <Task>(...))`. Compose derived tasks with `from_tasks=(...)`.
+- `dataset.add_task(sample, <Task>(...))` registers one and returns it; `dataset.add_tasks(sample, [...])`
+  takes an iterable. Through `add_tasks`, `scope=` and `from_tasks=` apply to every task in the call.
+- Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal
+  in `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
 
 ## Task types (`timenet.types.tasks`)
 
@@ -166,10 +170,10 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 for channel, values in enumerate(channels)
             )
             sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
-            sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
+            sample.add_annotations(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
-                sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+                sample.add_annotations(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
+            dataset.add_tasks(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 CONNECTOR = TSQAConnector
