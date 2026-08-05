@@ -22,6 +22,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.clock import seconds_to_us
 
 
 T = TypeVar("T")
@@ -284,15 +285,25 @@ class TimeFDataset:
         ]
         if not covered:
             return
-        start = min(ts.t_start_s for ts in covered)
+        # The series window is still recording seconds; the span is microseconds. Compare in
+        # microseconds so the span's own resolution decides the boundary rather than a float.
+        start = seconds_to_us(min(ts.t_start_s for ts in covered))
         ends = [ts.t_end_s for ts in covered]
-        end = None if any(e is None for e in ends) else max(e for e in ends if e is not None)
-        # A point span (end_s is None) is bounded by its own time offset; `or` would misread an end_s of 0.0.
-        span_end = span.start_s if span.end_s is None else span.end_s
-        if span.start_s < start or (end is not None and span_end > end):
+        end = None if any(e is None for e in ends) else seconds_to_us(max(e for e in ends if e is not None))
+        # The window is half-open [start, end): a point at exactly `end` is outside, and so is an
+        # interval whose exclusive end runs past it. The two shapes need different upper tests.
+        below_start = span.start < start
+        above_end = False
+        if end is not None:
+            if span.is_point:
+                above_end = span.start >= end
+            elif span.end is not None:
+                above_end = span.end > end
+        if below_start or above_end:
             raise TimeFValidationError(
-                f"{task_name} span ({span.start_s}, {span.end_s}) falls outside sample "
-                f"{sample.sample_id!r} span ({start}, {end}); span times are in the source recording timeline"
+                f"{task_name} span ({span.start}, {span.end}) us falls outside sample "
+                f"{sample.sample_id!r} span ({start}, {end}) us; span times are in the source "
+                f"recording timeline"
             )
 
     @staticmethod
@@ -455,17 +466,17 @@ class TimeFDataset:
             ``(X, y)`` as two Arrow arrays (``output="arrow"``) or two NumPy arrays (``output="numpy"``).
 
         Raises:
-            ValueError: If ``output``/``features`` is invalid; if ``task`` is omitted and the dataset has
-                zero or several task types with inline targets; if a matched task carries no inline target
+            TimeFValidationError: If ``output``/``features`` is invalid; if ``task`` is omitted and the
+                dataset has zero or several task types with inline targets; if a matched task carries no inline target
                 (its answer is a produced series, or stored as ``target_annotation_ids``); if a matched
                 sample is not single-channel; or ``features="timestep"`` is asked of samples that are not
                 all the same length; or if the dataset has no samples or any sample does not carry exactly
                 one task of ``task``.
         """
         if output not in {"arrow", "numpy"}:
-            raise ValueError(f"output must be 'arrow' or 'numpy', got {output!r}")
+            raise TimeFValidationError(f"output must be 'arrow' or 'numpy', got {output!r}")
         if features not in {"timestep", "series"}:
-            raise ValueError(f"features must be 'timestep' or 'series', got {features!r}")
+            raise TimeFValidationError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
         rows, targets = self._rows_and_targets(resolved)
         # Build only the representation asked for: no Arrow list array on the NumPy path, and no
@@ -473,7 +484,7 @@ class TimeFDataset:
         try:
             y = pa.array(targets)
         except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
-            raise ValueError(
+            raise TimeFValidationError(
                 f"{resolved.__name__} targets cannot be represented as a scalar Arrow target array"
             ) from exc
         if features == "series":  # one variable-length sequence per sample
@@ -488,7 +499,7 @@ class TimeFDataset:
         # features == "timestep": a rectangular matrix, so every sample must share one length
         length = len(rows[0])
         if any(len(row) != length for row in rows):
-            raise ValueError(
+            raise TimeFValidationError(
                 f"features='timestep' needs equal-length samples (got {sorted({len(r) for r in rows})}); "
                 "use features='series'"
             )
@@ -507,12 +518,13 @@ class TimeFDataset:
             The per-sample Arrow value arrays and their targets, in sample order.
 
         Raises:
-            ValueError: If a matched task carries no inline target.
-            TimeFValidationError: If the dataset has no samples, or any sample does not carry exactly one
-                task of ``resolved``.
+            TimeFValidationError: If a matched task carries no inline target, if the dataset has no
+                samples, or any sample does not carry exactly one task of ``resolved``.
         """
         if not resolved.target_is_scalar:
-            raise ValueError(f"{resolved.__name__} does not carry scalar targets supported by to_features_and_targets")
+            raise TimeFValidationError(
+                f"{resolved.__name__} does not carry scalar targets supported by to_features_and_targets"
+            )
         matched_by_sample: dict[str, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
             for sample_id in candidate.sample_ids:
@@ -527,7 +539,7 @@ class TimeFDataset:
                     "to_features_and_targets needs exactly one per sample"
                 )
             if matched[0].target is None:
-                raise ValueError(
+                raise TimeFValidationError(
                     f"{resolved.__name__} {matched[0].id!r} has no inline target to use as y; its answer is "
                     f"a produced series or stored as target_annotation_ids"
                 )
@@ -544,13 +556,13 @@ class TimeFDataset:
             The single task class whose instances carry a ``target``.
 
         Raises:
-            ValueError: If the dataset has zero or several such task types (pass ``task=``).
+            TimeFValidationError: If the dataset has zero or several such task types (pass ``task=``).
         """
         kinds = {type(task) for task in self._tasks if task.target is not None and type(task).target_is_scalar}
         if len(kinds) == 1:
             return kinds.pop()
         names = ", ".join(sorted(kind.__name__ for kind in kinds)) or "(none)"
-        raise ValueError(f"pass task= to to_features_and_targets; dataset has target task types: {names}")
+        raise TimeFValidationError(f"pass task= to to_features_and_targets; dataset has target task types: {names}")
 
     def describe(self, *, rows: int = 5, file: TextIO | None = None) -> None:
         """Print a plain-text summary: identity, counts, specs/columns, and a sample preview.

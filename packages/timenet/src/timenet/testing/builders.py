@@ -13,11 +13,12 @@ from timenet.types import (
     DataSource,
     Domain,
     IntervalAnnotation,
+    IntervalSpan,
     License,
     LocalizationMode,
     PointAnnotation,
+    PointSpan,
     ScalarPredictionTask,
-    Span,
     StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
@@ -163,8 +164,8 @@ def make_dataset() -> TimeFDataset:
             prompt="Locate the stimulus and the artifact.",
             mode=LocalizationMode.SPARSE,
             target=(
-                Span.point(0.5),
-                Span.interval(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                PointSpan.seconds(0.5),
+                IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
             ),
             id="task-localize-0",
         ),
@@ -183,7 +184,7 @@ def make_dataset() -> TimeFDataset:
     dataset.add_task(
         sample2,
         ClassificationTask(target="onset", id="task-cls-2"),
-        scope=Span.interval(0.0, 0.25, time_series_ids=(window.time_series_id,)),
+        scope=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
     )
     return dataset
 

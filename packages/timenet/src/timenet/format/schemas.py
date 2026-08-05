@@ -14,7 +14,7 @@ from typing import cast
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
-from timenet.types import TASKS, Span, TaskRefs, TaskType
+from timenet.types import TASKS, IntervalSpan, PointSpan, Span, TaskRefs, TaskType
 from timenet.types.ids import id_from_bytes, id_to_bytes
 
 
@@ -182,8 +182,8 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
     """
     return pa.struct(
         [
-            ("start_s", pa.float64()),
-            ("end_s", pa.float64()),  # null => the span is a point at start_s
+            ("start_us", pa.int64()),
+            ("end_us", pa.int64()),  # null => the span is a point at start_s
             ("time_series_ids", pa.list_(id_types["time_series_id"])),
         ]
     )
@@ -364,8 +364,8 @@ class IdCodec:
         if span is None:
             return None
         return {
-            "start_s": span.start_s,
-            "end_s": span.end_s,
+            "start_us": span.start,
+            "end_us": span.end,
             "time_series_ids": (
                 None if span.time_series_ids is None else self.encode_list("time_series_id", span.time_series_ids)
             ),
@@ -443,9 +443,12 @@ class IdCodec:
             return None
         struct = cast("dict", row)
         series_ids = struct["time_series_ids"]
-        return Span(
-            start_s=struct["start_s"],
-            end_s=struct["end_s"],
+        # A round-tripped span must come back as the class its bounds describe, or it stops
+        # comparing equal to the one that was written.
+        shape: type[Span] = PointSpan if struct["end_us"] is None else IntervalSpan
+        return shape(
+            start=struct["start_us"],
+            end=struct["end_us"],
             time_series_ids=None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids)),
         )
 

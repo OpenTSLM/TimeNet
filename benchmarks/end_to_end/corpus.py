@@ -18,9 +18,9 @@ from timenet.types import (
     Domain,
     ForecastingTask,
     IntervalAnnotation,
+    IntervalSpan,
     License,
     PointAnnotation,
-    Span,
     StaticAnnotation,
     TimeSeriesSpec,
     Version,
@@ -147,7 +147,7 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
         ClassificationTask(
             target="N2",
             target_schema="sleep-stage",
-            scope=Span(start_s=30.0, end_s=60.0),
+            scope=IntervalSpan.seconds(30.0, 60.0),
             id="task-sleep-label",
         ),
     )
