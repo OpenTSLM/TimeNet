@@ -58,6 +58,7 @@ from timenet.values_backends.writer import (
 )
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
+from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
 class TimeFWriter:
@@ -74,6 +75,7 @@ class TimeFWriter:
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int = DEFAULT_COMPRESSION_LEVEL,
         values_backend: str = ValuesBackend.PARQUET,
+        value_encoding: str = AUTO,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         derived_from: dict[str, str] | None = None,
     ) -> None:
@@ -88,19 +90,29 @@ class TimeFWriter:
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned level (applied for zstd) for reproducible output.
             values_backend: Storage backend for the values plane.
+            value_encoding: ``"auto"`` (the default) selects the values-column encoding per
+                ``spec_type`` from the data; ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
+                forces one for every modality. An explicit argument overrides the dataset card's
+                ``value_encoding``. Ignored by backends that have no such choice.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
             derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
                 another (e.g. ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
-            TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty or ``values_backend`` is
-                unsupported.
+            TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, or ``values_backend``
+                or ``value_encoding`` is unsupported.
         """
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
         if values_backend not in SUPPORTED_VALUES_BACKENDS:
             raise TimeFValidationError(
                 f"unknown values_backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
+            )
+        requested = value_encoding if value_encoding != AUTO else (dataset.metadata.value_encoding or AUTO)
+        if requested != AUTO and requested not in SUPPORTED_VALUE_ENCODINGS:
+            raise TimeFValidationError(
+                f"unknown value_encoding {requested!r}; "
+                f"supported: {AUTO}, {', '.join(sorted(SUPPORTED_VALUE_ENCODINGS))}"
             )
         self._root = Path(root)
         self._dataset = dataset
@@ -111,6 +123,8 @@ class TimeFWriter:
         self._compression = compression
         self._compression_level = compression_level
         self._values_backend_name = values_backend
+        self._forced_value_encoding = None if requested == AUTO else ValueEncoding(requested)
+        self._value_encoding: dict[str, str] = {}
         self._progress_cb = progress_cb
 
         version = str(dataset.metadata.dataset_version)
@@ -301,6 +315,7 @@ class TimeFWriter:
                 chunk_max_bytes=self._chunk_max_bytes,
                 compression=self._compression,
                 compression_level=self._compression_level,
+                value_encoding=self._forced_value_encoding,
             )
         else:
             config = ZarrValuesConfig(
@@ -319,6 +334,7 @@ class TimeFWriter:
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
         self._value_files = result.files
+        self._value_encoding = dict(result.value_encoding)
         return result.placements
 
     def _read_and_validate(self, ts: TimeSeries) -> pa.Array:  # noqa: PLR6301
@@ -514,6 +530,7 @@ class TimeFWriter:
             checksums=checksums,
             id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
+            value_encoding=self._value_encoding,
             derived_from=self._derived_from,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

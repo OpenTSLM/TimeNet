@@ -21,6 +21,11 @@
       "type": "string",
       "enum": ["parquet", "zarr"],
       "description": "Storage backend for the time-series values plane. Determines how files.time_series and the index's chunk locator are interpreted. Defaults to 'parquet' when absent."
+    },
+    "value_encoding": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
+      "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Empty or absent for a backend with no such choice."
     }
   },
   "$defs": {
@@ -71,6 +76,15 @@
       "description": "Kept in sync with timenet.types.AnnotationType by a drift test.",
       "enum": ["static", "point", "interval"]
     },
+    "valueEncoding": {
+      "type": "string",
+      "description": "Parquet encoding of the shard values column. Kept in sync with timenet.writer.value_encoding.ValueEncoding by a drift test.",
+      "enum": [
+        "dictionary",
+        "byte_stream_split",
+        "plain"
+      ]
+    },
     "valueType": {
       "type": "string",
       "description": "The manifest value_type tag for an annotation value. Kept in sync with timenet.types.value_type_of by a drift test.",
@@ -103,6 +117,7 @@
         "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
         "tags": { "type": "array", "items": { "type": "string" } },
         "source_url": { "type": ["string", "null"] },
+        "value_encoding": { "anyOf": [{ "$ref": "#/$defs/valueEncoding" }, { "type": "null" }] },
         "yaml_schema_version": { "type": "integer" }
       }
     },

@@ -19,7 +19,11 @@
     "license": { "$ref": "#/$defs/license" },
     "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
     "tags": { "type": "array", "items": { "type": "string" } },
-    "source_url": { "type": ["string", "null"] }
+    "source_url": { "type": ["string", "null"] },
+    "value_encoding": {
+      "anyOf": [{ "$ref": "#/$defs/valueEncoding" }, { "type": "null" }],
+      "description": "Force the values-column encoding for this dataset instead of letting the writer select one from the data. Omit unless a measurement shows the selection is wrong for this source."
+    }
   },
   "$defs": {
     "datasetId": {
@@ -62,6 +66,15 @@
         "economics",
         "finance",
         "general"
+      ]
+    },
+    "valueEncoding": {
+      "type": "string",
+      "description": "Parquet encoding of the shard values column. Kept in sync with timenet.writer.value_encoding.ValueEncoding by a drift test.",
+      "enum": [
+        "dictionary",
+        "byte_stream_split",
+        "plain"
       ]
     }
   }

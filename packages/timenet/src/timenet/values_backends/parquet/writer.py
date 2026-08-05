@@ -1,8 +1,10 @@
 """The default values backend: streams ``list<float32>`` chunks into rotating Parquet shards.
 
-Shards use BYTE_STREAM_SPLIT + zstd. Each chunk's placement is recorded in the backend-neutral
-time-series index as a ``chunk_file`` plus a :class:`~timenet.values_backends.writer.ChunkDataIndex` — for
-Parquet, the shard path, the row group (``major_idx``), and the row offset (``minor_idx``).
+Shards are zstd-compressed and single-modality, each carrying the values encoding chosen for its
+``spec_type`` (see :mod:`timenet.writer.value_encoding`). Each chunk's placement is recorded in the
+backend-neutral time-series index as a ``chunk_file`` plus a
+:class:`~timenet.values_backends.writer.ChunkDataIndex` — for Parquet, the shard path, the row group
+(``major_idx``), and the row offset (``minor_idx``).
 """
 
 from collections.abc import Callable
@@ -25,6 +27,7 @@ from timenet.values_backends.writer import (
     ValuesWriteResult,
 )
 from timenet.writer import encodings
+from timenet.writer.value_encoding import ValueEncoding, select_value_encoding
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
@@ -68,7 +71,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         self._chunk_max_bytes = config.chunk_max_bytes
         self._compression = config.compression
         self._compression_level = config.compression_level
-        self._bss_checked = False
+        self._forced_encoding = config.value_encoding
         self._time_offsets_checked = False
 
     def write_series(
@@ -90,7 +93,7 @@ class ParquetValuesBackend(BaseValuesBackend):
             on_file_done: Progress callback invoked ``(files_finalized)`` after each shard closes.
 
         Returns:
-            The chunk placements and the shard files written.
+            The chunk placements, the shard files written, and the encoding applied per ``spec_type``.
 
         Raises:
             TimeFValidationError: If a spec uses an N-D shape or non-float32 dtype.
@@ -109,44 +112,70 @@ class ParquetValuesBackend(BaseValuesBackend):
                 stream.add(chunk)
             on_series_done(completed, total)
         stream.finish()
-        return ValuesWriteResult(placements=stream.placements, files=list(stream.shard_paths))
+        return ValuesWriteResult(
+            placements=stream.placements,
+            files=list(stream.shard_paths),
+            value_encoding={spec_type: str(encoding) for spec_type, encoding in stream.encodings.items()},
+        )
 
-    def _new_shard_writer(self, rel_path: str) -> pq.ParquetWriter:
+    def encoding_for(self, buffered: list[pa.Array]) -> ValueEncoding:
+        """Return the encoding to use for a modality, deciding it on first sight.
+
+        The caller passes the values it has buffered for the modality's first row group, so the
+        decision costs a distinct-value count over data already in memory: no second pass over the
+        series, no extra loader calls, and the buffer stays bounded by ``row_group_target_bytes``.
+
+        Args:
+            buffered: The buffered chunks' values, used only the first time a modality appears.
+
+        Returns:
+            The forced encoding when the caller set one, else the encoding selected from the sample.
+        """
+        if self._forced_encoding is not None:
+            return self._forced_encoding
+        arrays = [np.asarray(values.to_numpy(zero_copy_only=False), dtype=np.float32) for values in buffered]
+        return select_value_encoding(arrays)
+
+    def _new_shard_writer(self, rel_path: str, value_encoding: ValueEncoding) -> pq.ParquetWriter:
         path = self._staging_dir / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
         return pq.ParquetWriter(
             path,
             self._shard_schema,
             **encodings.parquet_kwargs(
-                dictionary_columns=encodings.SHARD_DICTIONARY,
-                column_encoding=encodings.SHARD_ENCODING,
+                dictionary_columns=encodings.shard_dictionary(value_encoding),
+                column_encoding=encodings.shard_encoding(value_encoding),
                 compression=self._compression,
                 compression_level=self._compression_level,
             ),
         )
 
-    def _verify_bss_once(self, rel_path: str) -> None:
-        """Verify BYTE_STREAM_SPLIT was applied on a finalized shard (guards silent path mismatch).
+    def _verify_values_encoding(self, rel_path: str, value_encoding: ValueEncoding) -> None:
+        """Verify a finalized shard's values column carries the encoding that was selected for it.
+
+        pyarrow drops a column encoding silently when the column path does not match, so without this
+        the size the selection was made for would not be the size on disk. Parquet's own
+        dictionary-to-plain fallback is permitted: it happens when a dictionary outgrows its page
+        limit, is lossless, and is not something the writer chose.
 
         Args:
             rel_path: The finalized shard's path relative to the staging directory.
+            value_encoding: The encoding the shard was opened with.
 
         Raises:
-            TimeFValidationError: If the values column is not BYTE_STREAM_SPLIT encoded, or a shard
-                that carries time offsets does not encode them DELTA_BINARY_PACKED.
+            TimeFValidationError: If the values column does not carry the selected encoding, or a
+                shard that carries time offsets does not encode them DELTA_BINARY_PACKED.
         """
-        if self._bss_checked and self._time_offsets_checked:
-            return
         path = self._staging_dir / rel_path
-        if not self._bss_checked:
-            applied = encodings.values_encoding_of(str(path))
-            if not applied:  # empty shard (no values written yet); nothing to verify
-                return
-            if "BYTE_STREAM_SPLIT" not in applied:
-                raise TimeFValidationError(f"expected BYTE_STREAM_SPLIT on shard values, got {sorted(applied)}")
-            self._bss_checked = True
+        applied = encodings.values_encoding_of(str(path))
+        if not applied:  # empty shard (no values written yet); nothing to verify
+            return
+        if not encodings.applied_matches(value_encoding, applied):
+            raise TimeFValidationError(
+                f"expected {value_encoding} on the shard values column of {rel_path}, got {sorted(applied)}"
+            )
         if not self._time_offsets_checked:
-            time_offsets = encodings.values_encoding_of(str(path), "time_offsets_us.list.element")
+            time_offsets = encodings.values_encoding_of(str(path), encodings.TIME_OFFSETS_COLUMN)
             # An all-regular shard carries only RLE definition levels here and has no time offsets to
             # encode, so it settles nothing and the check stays armed for a later shard.
             if time_offsets and time_offsets != {"RLE"}:
@@ -177,7 +206,12 @@ class _Chunk:
 
 
 class _ShardStream:
-    """Buffers chunks into rotating shard files and records each chunk's on-disk placement."""
+    """Buffers chunks into rotating shard files and records each chunk's on-disk placement.
+
+    Shards are single-modality: the writer hands chunks over sorted by ``spec_type``, and the stream
+    rotates whenever that changes. A shard fixes its column encodings when it is opened, so keeping
+    one modality per shard is what lets each modality carry the encoding chosen for it.
+    """
 
     def __init__(
         self,
@@ -199,30 +233,48 @@ class _ShardStream:
         self._shard_target_bytes = shard_target_bytes
         self._on_file_done = on_file_done
         self._shard: pq.ParquetWriter | None = None
+        self._shard_encoding: ValueEncoding | None = None
         self._shard_idx = 0
         self._row_group = 0
         self._shard_bytes = 0
+        self._spec_type: str | None = None
         self._buffer: list[_Chunk] = []
         self._buffer_bytes = 0
         self.shard_paths: list[str] = []
         self.placements: dict[tuple[str, int], ChunkPlacement] = {}
+        self.encodings: dict[str, ValueEncoding] = {}
+        """The encoding settled on for each ``spec_type``, in first-seen order."""
 
     def add(self, chunk: _Chunk) -> None:
-        """Buffer one chunk, flushing a row group and rotating shards as the byte targets are reached."""
+        """Buffer one chunk, flushing a row group and rotating shards as the boundaries are reached."""
+        if self._spec_type is not None and chunk.spec_type != self._spec_type:
+            self._flush()
+            self._rotate()
+        self._spec_type = chunk.spec_type
         self._buffer.append(chunk)
         self._buffer_bytes += chunk.n_bytes
         if self._buffer_bytes >= self._row_group_target_bytes:
             self._flush()
             if self._shard_bytes >= self._shard_target_bytes:
-                self._close_shard()
-                self._shard_idx += 1
-                self._row_group = 0
-                self._shard_bytes = 0
+                self._rotate()
 
     def finish(self) -> None:
         """Flush any remaining buffered chunks and close the final shard."""
         self._flush()
         self._close_shard()
+
+    def _rotate(self) -> None:
+        """Close the open shard and start counting a fresh one.
+
+        A no-op when no shard is open: the previous rotation already advanced the index, and
+        advancing again would leave a gap that no file is ever written for.
+        """
+        if self._shard is None:
+            return
+        self._close_shard()
+        self._shard_idx += 1
+        self._row_group = 0
+        self._shard_bytes = 0
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -231,9 +283,13 @@ class _ShardStream:
             raise TimeFValidationError("row group would exceed the 2^31 element limit")
         shard = self._shard
         if shard is None:
+            spec_type = self._buffer[0].spec_type
+            if spec_type not in self.encodings:
+                self.encodings[spec_type] = self._backend.encoding_for([chunk.values for chunk in self._buffer])
+            self._shard_encoding = self.encodings[spec_type]
             rel = SHARD_TEMPLATE.format(self._shard_idx)
             self.shard_paths.append(rel)
-            shard = self._backend._new_shard_writer(rel)
+            shard = self._backend._new_shard_writer(rel, self._shard_encoding)
             self._shard = shard
         shard.write_table(_shard_table(self._buffer, self._backend._shard_schema, self._backend._codec))
         shard_path = self.shard_paths[self._shard_idx]
@@ -251,12 +307,13 @@ class _ShardStream:
         self._buffer_bytes = 0
 
     def _close_shard(self) -> None:
-        if self._shard is None:
+        if self._shard is None or self._shard_encoding is None:
             return
         self._shard.close()
-        self._backend._verify_bss_once(self.shard_paths[self._shard_idx])
+        self._backend._verify_values_encoding(self.shard_paths[self._shard_idx], self._shard_encoding)
         self._on_file_done(self._shard_idx + 1)
         self._shard = None
+        self._shard_encoding = None
 
 
 def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.Table:

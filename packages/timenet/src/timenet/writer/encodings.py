@@ -1,10 +1,11 @@
 """Role-based Parquet encodings, pinned in code rather than left to writer heuristics.
 
-Float waveform values get BYTE_STREAM_SPLIT + zstd (measured ~30% smaller than plain+zstd on quantized
-biosignals); monotonic ints get DELTA_BINARY_PACKED; bounded categoricals get dictionary+RLE; id-like
-columns stay plain. Encodings are addressed by the explicit ``use_dictionary`` list plus a
-``column_encoding`` map (nested elements as ``values.list.element``), the only combination pyarrow
-applies reliably.
+Monotonic ints get DELTA_BINARY_PACKED, bounded categoricals get dictionary+RLE, and id-like columns
+stay plain. Float waveform values are the one column no fixed rule fits, so the writer measures the
+data and picks per modality (see :mod:`timenet.writer.value_encoding`); this module translates that
+choice into pyarrow write options and back out of a finished file's footer. Encodings are addressed
+by the explicit ``use_dictionary`` list plus a ``column_encoding`` map (nested elements as
+``values.list.element``), the only combination pyarrow applies reliably.
 """
 
 from typing import Any
@@ -12,13 +13,26 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.writer.value_encoding import ValueEncoding
 
-SHARD_DICTIONARY = ["spec_type", "channel"]
-SHARD_ENCODING = {
-    "values.list.element": "BYTE_STREAM_SPLIT",
-    "time_offsets_us.list.element": "DELTA_BINARY_PACKED",
-    "chunk_idx": "DELTA_BINARY_PACKED",
+VALUES_COLUMN = "values.list.element"
+"""Parquet path of the shard values column; the nested element, not the list."""
+
+TIME_OFFSETS_COLUMN = "time_offsets_us.list.element"
+"""Parquet path of the shard time-offsets column; the nested element of the irregular-series list."""
+
+SHARD_CATEGORICAL = ["spec_type", "channel"]
+"""Shard columns dictionary-encoded regardless of the values encoding."""
+
+_PARQUET_COLUMN_ENCODING = {
+    ValueEncoding.BYTE_STREAM_SPLIT: "BYTE_STREAM_SPLIT",
+    ValueEncoding.PLAIN: "PLAIN",
 }
+"""Parquet ``column_encoding`` name per value encoding. Dictionary is absent: pyarrow requests it
+through ``use_dictionary``, and passing a column in both lists is rejected."""
+
+_DICTIONARY_MARKERS = frozenset({"RLE_DICTIONARY", "PLAIN_DICTIONARY"})
+"""Footer names for dictionary-encoded indices; PLAIN_DICTIONARY is the pre-2.4 spelling."""
 
 INDEX_DICTIONARY = ["spec_type", "channel", "chunk_file"]
 INDEX_ENCODING = {
@@ -36,6 +50,61 @@ SAMPLES_DICTIONARY = [
 ANNOTATIONS_DICTIONARY = ["key"]
 
 _TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
+
+
+def shard_dictionary(value_encoding: ValueEncoding) -> list[str]:
+    """Return the shard columns to dictionary-encode.
+
+    Args:
+        value_encoding: The encoding selected for this shard's values column.
+
+    Returns:
+        The categorical columns, plus the values column when it was selected for dictionary encoding.
+    """
+    columns = list(SHARD_CATEGORICAL)
+    if value_encoding == ValueEncoding.DICTIONARY:
+        columns.append(VALUES_COLUMN)
+    return columns
+
+
+def shard_encoding(value_encoding: ValueEncoding) -> dict[str, str]:
+    """Return the shard's explicit per-column encodings.
+
+    Args:
+        value_encoding: The encoding selected for this shard's values column.
+
+    Returns:
+        The ``column_encoding`` map, always pinning the monotonic index and the irregular series'
+        time offsets, and without a values entry when the values column goes through
+        ``use_dictionary`` instead.
+    """
+    column_encoding = {"chunk_idx": "DELTA_BINARY_PACKED", TIME_OFFSETS_COLUMN: "DELTA_BINARY_PACKED"}
+    parquet_name = _PARQUET_COLUMN_ENCODING.get(value_encoding)
+    if parquet_name is not None:
+        column_encoding[VALUES_COLUMN] = parquet_name
+    return column_encoding
+
+
+def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
+    """Report whether a footer's values-column encodings are the ones that were asked for.
+
+    A dictionary column chunk lists a dictionary marker for its indices *and* PLAIN for the
+    dictionary page itself, so PLAIN alone is not evidence of a plain column. It is, however, all
+    that is left when Parquet abandons a dictionary that outgrew its page limit and finishes the
+    chunk plain, which is lossless and not the writer's choice, so the dictionary case accepts it.
+
+    Args:
+        value_encoding: The encoding the writer selected.
+        applied: Encoding names read from the finished file, via :func:`values_encoding_of`.
+
+    Returns:
+        ``True`` if the selection landed (or fell back in a way Parquet permits).
+    """
+    if value_encoding is ValueEncoding.DICTIONARY:
+        return bool(applied & (_DICTIONARY_MARKERS | {"PLAIN"}))
+    if value_encoding is ValueEncoding.BYTE_STREAM_SPLIT:
+        return "BYTE_STREAM_SPLIT" in applied
+    return "PLAIN" in applied and not (applied & _DICTIONARY_MARKERS)
 
 
 def task_dictionary(schema: pa.Schema) -> list[str]:
@@ -64,7 +133,7 @@ def parquet_kwargs(
 
     Args:
         dictionary_columns: Columns to dictionary-encode (must be disjoint from ``column_encoding``).
-        column_encoding: Explicit per-column encodings (e.g. BYTE_STREAM_SPLIT on ``values.list.element``).
+        column_encoding: Explicit per-column encodings (e.g. BYTE_STREAM_SPLIT on the values column).
         compression: Codec name (``"zstd"``, ``"snappy"``, ``"none"``).
         compression_level: Pinned level, applied only for zstd.
 
@@ -108,3 +177,26 @@ def values_encoding_of(path: str, column_path: str = "values.list.element") -> s
             if chunk.path_in_schema == column_path:
                 encodings.update(chunk.encodings)
     return encodings
+
+
+def values_column_bytes(path: str) -> int:
+    """Return the compressed on-disk size of a shard's ``values.list.element`` column.
+
+    The values plane is what an encoding choice moves; whole-file size also carries the id, index,
+    and statistics columns, which the choice does not touch.
+
+    Args:
+        path: Path to a shard parquet file.
+
+    Returns:
+        Summed ``total_compressed_size`` of the values column across all row groups.
+    """
+    meta = pq.ParquetFile(path).metadata
+    total = 0
+    for row_group in range(meta.num_row_groups):
+        group = meta.row_group(row_group)
+        for column in range(meta.num_columns):
+            chunk = group.column(column)
+            if chunk.path_in_schema == VALUES_COLUMN:
+                total += chunk.total_compressed_size
+    return total
