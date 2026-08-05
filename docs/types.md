@@ -415,7 +415,13 @@ A dataset's descriptive identity (authored in the card).
 | `domains` | `tuple[Domain, ...]` | no | Application/clinical domains. |
 | `tags` | `tuple[str, ...]` | no | Free-form labels. |
 | `source_url` | `str \| None` | no | Canonical source URL. |
+| `value_encoding` | `str \| None` | no | Force the [values encoding](timef-writer.md#values-encoding): `dictionary`, `byte_stream_split`, or `plain`. Omit to let the writer measure. |
 | `yaml_schema_version` | `int` | no | The card's field-schema version (default `1`). |
+
+`value_encoding` is the one field here that is not descriptive identity. It lives on the card because
+the card is the only per-dataset file a curator authors, and the case it covers is per-dataset: a source
+whose values the writer's cardinality rule classifies wrongly. Leave it out unless a measurement says
+otherwise.
 
 ---
 

@@ -83,16 +83,16 @@ defined. A [copy-on-write edit](#copy-on-write-edits) keeps the base version's b
 `write()` dedupes series by `time_series_id` (each unique series' loader is called exactly once), sorts
 them by `(spec_type, channel, time_series_id)`, then streams through the values backend. With Parquet:
 each series is split into chunks of at most `chunk_max_bytes`, chunks are buffered until
-`row_group_target_bytes` and flushed as one row group, and shards rotate at `shard_target_bytes`. A row
-group never spans shards, so the index's `(chunk_file, chunk_major_idx, chunk_minor_idx)` pointers are
-exact. A hard invariant caps a row group at 2³¹ values (`list<float32>` uses 32-bit offsets); the
-byte-based flush keeps it well under.
+`row_group_target_bytes` and flushed as one row group, and shards rotate at `shard_target_bytes` **and
+at every `spec_type` boundary**, so each shard holds one modality. A row group never spans shards, so
+the index's `(chunk_file, chunk_major_idx, chunk_minor_idx)` pointers are exact. A hard invariant caps
+a row group at 2³¹ values (`list<float32>` uses 32-bit offsets); the byte-based flush keeps it well
+under.
 
 ## Encodings
 
 Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay stable:
 
-- `values.list.element` -> **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
 - `time_offsets_us.list.element` -> **DELTA_BINARY_PACKED** + zstd, for the irregular series that
   carry one time offset per value. A monotonic stream stores as small deltas rather than full
   int64s. Verified by the same read-back self-check.
@@ -101,11 +101,55 @@ Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay
   -> dictionary + RLE.
 - id columns -> plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
   UUID (see below), otherwise as a UTF-8 string.
+- `values.list.element` -> measured, not pinned. See below.
 
 Every file is written with `write_statistics`, `write_page_index`, `write_page_checksum`, and
 **`use_content_defined_chunking`** on. Content-defined chunking aligns data pages to content so a
 re-curated or [edited](#copy-on-write-edits) version re-stores only the chunks that changed on a
 deduplicating backend (e.g. Xet); the reader treats the files as ordinary Parquet.
+
+### Values encoding
+
+No single encoding is right for every waveform, so the writer measures the data rather than pinning one.
+Real measurements on real sources, zstd level 3, values column only:
+
+| Encoding | PTB-XL ECG (quantized, 11k distinct in 69M) | TSQA (continuous, 10.5M distinct in 11.5M) |
+| --- | --- | --- |
+| `dictionary` | **71.1 MB** | 42.9 MB |
+| `plain` | 85.1 MB | 42.3 MB |
+| `byte_stream_split` | 127.8 MB | **37.6 MB** |
+
+BYTE_STREAM_SPLIT transposes each float into four byte planes and compresses each apart. It wins on
+smooth, high-cardinality signals, where the sign and high-mantissa planes are nearly constant. It loses
+badly on quantized data, where the low mantissa byte is noise the split isolates into an incompressible
+plane. Dictionary wins there instead, because a physical conversion onto a fixed grid (wfdb's 0.001 mV
+step, an integer ADC scale) leaves only a few thousand distinct values behind tens of millions of
+samples.
+
+The rule is cardinality on a sample: **at most 65,536 distinct values selects `dictionary`, more selects
+`byte_stream_split`.** `plain` is never selected automatically. The sample is the values already
+buffered for a modality's first row group, so the decision costs a distinct-value count and no extra
+reads. One decision per `spec_type`, taken before its first shard is opened, and deterministic in the
+data, so re-curating an unchanged source reaches the same encoding. `benchmarks/value_encoding/`
+holds the sweep behind the constant.
+
+The choice is recorded in the manifest as `value_encoding`, a `spec_type` -> encoding map. That is
+provenance, not contract: Parquet records the applied encoding in every file's footer, so a reader
+resolves it without the manifest.
+
+To override, set `value_encoding` on the [dataset card](types.md#datasetmetadata) or pass
+`TimeFWriter(value_encoding=...)`; the argument wins over the card. The case that needs it is
+high-cardinality *quantized* data (say a 24-bit integer-scaled signal), which suits neither branch: too
+many distinct values for a dictionary, too much low-bit noise for a byte split.
+
+```python
+with TimeFWriter(root, dataset, value_encoding="plain") as writer:
+    writer.write()
+```
+
+A read-back self-check verifies the selection actually landed on every shard, since pyarrow drops a
+column encoding silently when the column path does not match. Parquet's own dictionary-to-plain
+fallback, which happens when a dictionary outgrows its page limit, is lossless and permitted.
 
 ### Id storage
 
