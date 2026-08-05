@@ -17,6 +17,7 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
+from timenet.types.spans import IntervalSpan, PointSpan
 from timenet.types.units import normalize_unit
 
 
@@ -80,52 +81,58 @@ class StaticAnnotation(Annotation):
 
 @dataclass(frozen=True, kw_only=True)
 class PointAnnotation(Annotation):
-    """Anchored to a single instant in the original recording timeline."""
+    """Anchored to a single instant in the original recording timeline.
 
-    start_time_s: float
-    """Instant on the original recording timeline, in seconds."""
-    time_series_ids: tuple[str, ...] | None = None
-    """Series this annotation targets; ``None`` covers the whole sample."""
+    The instant, and which series it applies to, are a :class:`~timenet.types.PointSpan`. That is the
+    same type a task's ``scope`` uses, so a region means one thing across the format::
+
+        PointAnnotation(key="stimulus", span=PointSpan.seconds(0.5))
+    """
+
+    span: PointSpan
+    """Where on the recording timeline this annotation sits, and which series it targets."""
 
     def __post_init__(self) -> None:
-        """Reject an explicitly empty ``time_series_ids``.
+        """Reject a span that is not a point.
+
+        The annotation is typed to a point, so a caller cannot get this wrong. A span rebuilt from a
+        file can be, since its shape comes from the bounds on disk.
 
         Raises:
-            TimeFValidationError: If ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+            TimeFValidationError: If ``span`` carries an end, making it an interval.
         """
         super().__post_init__()
-        if self.time_series_ids is not None and not self.time_series_ids:
+        if not self.span.is_point:
             raise TimeFValidationError(
-                "PointAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
+                f"PointAnnotation {self.key!r} needs a point span, got one ending at {self.span.end}"
             )
 
 
 @dataclass(frozen=True, kw_only=True)
 class IntervalAnnotation(Annotation):
-    """Anchored to a bounded interval in the original recording timeline."""
+    """Anchored to a bounded interval in the original recording timeline.
 
-    start_time_s: float
-    """Interval start on the recording timeline, in seconds."""
-    end_time_s: float
-    """Interval end in seconds; must exceed ``start_time_s``."""
-    time_series_ids: tuple[str, ...] | None = None
-    """Series this annotation targets; ``None`` covers the whole sample."""
+    The interval, and which series it applies to, are an :class:`~timenet.types.IntervalSpan`::
+
+        IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(0.0, 0.25))
+    """
+
+    span: IntervalSpan
+    """Where on the recording timeline this annotation sits, and which series it targets."""
 
     def __post_init__(self) -> None:
-        """Reject a non-positive interval or an explicitly empty ``time_series_ids``.
+        """Reject a span that is not an interval.
+
+        The annotation is typed to an interval, so a caller cannot get this wrong. A span rebuilt
+        from a file can be, since its shape comes from the bounds on disk.
 
         Raises:
-            TimeFValidationError: If ``end_time_s`` is not strictly greater than ``start_time_s``, or
-                if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+            TimeFValidationError: If ``span`` is a point, which names an instant rather than a region.
         """
         super().__post_init__()
-        if self.end_time_s <= self.start_time_s:
+        if self.span.is_point:
             raise TimeFValidationError(
-                f"IntervalAnnotation end_time_s ({self.end_time_s}) must be > start_time_s ({self.start_time_s})"
-            )
-        if self.time_series_ids is not None and not self.time_series_ids:
-            raise TimeFValidationError(
-                "IntervalAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
+                f"IntervalAnnotation {self.key!r} needs an interval span, got a point at {self.span.start}"
             )
 
 

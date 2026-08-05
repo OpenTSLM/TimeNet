@@ -79,16 +79,16 @@ class Sample:
             The attached annotation (the same instance).
 
         Raises:
-            ValueError: If a temporal annotation's ``time_series_ids`` references a series not on this
-                sample, or a trial-level ``IntervalAnnotation`` is added when the sample's series do
-                not share a common ``(t_start_s, t_end_s)`` span.
+            ValueError: If the annotation's span references a series not on this sample, or a
+                trial-level ``IntervalAnnotation`` is added when the sample's series do not share a
+                common ``(t_start_s, t_end_s)`` span.
         """
         if isinstance(annotation, PointAnnotation | IntervalAnnotation):
             series_ids = {ts.time_series_id for ts in self.time_series}
-            if annotation.time_series_ids is not None:
-                # An empty tuple is rejected by the annotation's own __post_init__, so by here
-                # time_series_ids is guaranteed non-empty and only the ids need checking.
-                for series_id in annotation.time_series_ids:
+            if annotation.span.time_series_ids is not None:
+                # An empty tuple is rejected by Span's own __post_init__, so by here the ids are
+                # guaranteed non-empty and only their membership needs checking.
+                for series_id in annotation.span.time_series_ids:
                     if series_id not in series_ids:
                         raise ValueError(
                             f"annotation {annotation.key!r} references unknown time_series_id {series_id!r}"

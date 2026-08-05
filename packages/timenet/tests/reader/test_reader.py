@@ -95,7 +95,7 @@ def test_annotation_value_types_round_trip(tmp_path):
     assert anns["age"].value == 64 and isinstance(anns["age"].value, int)
     assert isinstance(anns["stimulus"], PointAnnotation)
     assert isinstance(anns["artifact"], IntervalAnnotation)
-    assert anns["artifact"].time_series_ids == ("ts-shared",)
+    assert anns["artifact"].span.time_series_ids == ("ts-shared",)
 
 
 def test_task_chain_round_trips(tmp_path):

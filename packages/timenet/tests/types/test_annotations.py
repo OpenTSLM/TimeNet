@@ -10,7 +10,9 @@ from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
     IntervalAnnotation,
+    IntervalSpan,
     PointAnnotation,
+    PointSpan,
     StaticAnnotation,
     annotation_type_of,
     ureg,
@@ -38,33 +40,35 @@ def test_unknown_unit_string_raises():
 
 
 def test_point_is_a_pure_marker_by_default():
-    ann = PointAnnotation(key="stimulus", start_time_s=4.0)
+    ann = PointAnnotation(key="stimulus", span=PointSpan.seconds(4.0))
     assert ann.value is None
-    assert ann.start_time_s == pytest.approx(4.0)
-    assert ann.time_series_ids is None
+    assert ann.span.start == 4_000_000
+    assert ann.span.time_series_ids is None
 
 
 def test_interval_requires_end_after_start():
     with pytest.raises(TimeFValidationError):
-        IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=8.0)
-    ann = IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
-    assert ann.end_time_s == pytest.approx(12.0)
+        IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(10.0, 8.0))
+    ann = IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
+    assert ann.span.end == 12_000_000
 
 
 def test_point_rejects_empty_time_series_ids():
     with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        PointAnnotation(key="stimulus", start_time_s=4.0, time_series_ids=())
+        PointAnnotation(key="stimulus", span=PointSpan.seconds(4.0, time_series_ids=()))
 
 
 def test_interval_rejects_empty_time_series_ids():
     with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        IntervalAnnotation(key="artifact", start_time_s=1.0, end_time_s=2.0, time_series_ids=())
+        IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0, time_series_ids=()))
 
 
 def test_annotation_type_of():
     assert annotation_type_of(StaticAnnotation(key="a", value=1)) is AnnotationType.STATIC
-    assert annotation_type_of(PointAnnotation(key="a", start_time_s=1.0)) is AnnotationType.POINT
-    assert annotation_type_of(IntervalAnnotation(key="a", start_time_s=1.0, end_time_s=2.0)) is AnnotationType.INTERVAL
+    assert annotation_type_of(PointAnnotation(key="a", span=PointSpan.seconds(1.0))) is AnnotationType.POINT
+    assert (
+        annotation_type_of(IntervalAnnotation(key="a", span=IntervalSpan.seconds(1.0, 2.0))) is AnnotationType.INTERVAL
+    )
 
 
 def test_annotation_bases_map():
@@ -94,7 +98,7 @@ def test_frozen():
 
 
 def test_picklable():
-    ann = IntervalAnnotation(key="artifact", start_time_s=1.0, end_time_s=2.0, time_series_ids=("s1",))
+    ann = IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0, time_series_ids=("s1",)))
     assert pickle.loads(pickle.dumps(ann)) == ann
 
 

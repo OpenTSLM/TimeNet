@@ -116,9 +116,7 @@ def annotations_schema(id_types: IdTypes) -> pa.Schema:
             ("key", pa.string()),
             ("annotation_type", pa.string()),
             ("value", pa.string()),  # JSON-encoded scalar/list, null for a pure marker
-            ("start_time_s", pa.float64()),
-            ("end_time_s", pa.float64()),
-            ("time_series_ids", pa.list_(id_types["time_series_id"])),
+            ("span", span_struct(id_types)),  # null for a static annotation
             ("sample_ids", pa.list_(id_types["sample_id"])),
         ]
     )

@@ -398,7 +398,6 @@ class TimeFWriter:
         by_id: dict[str, dict] = {}
         for sample in self._dataset.samples:
             for ann in sample.annotations:
-                series_ids = getattr(ann, "time_series_ids", None)
                 row = by_id.setdefault(
                     ann.id,
                     {
@@ -406,11 +405,7 @@ class TimeFWriter:
                         "key": ann.key,
                         "annotation_type": str(annotation_type_of(ann)),
                         "value": None if ann.value is None else json.dumps(ann.value),
-                        "start_time_s": getattr(ann, "start_time_s", None),
-                        "end_time_s": getattr(ann, "end_time_s", None),
-                        "time_series_ids": (
-                            None if series_ids is None else codec.encode_list("time_series_id", series_ids)
-                        ),
+                        "span": codec.encode_span(getattr(ann, "span", None)),
                         "sample_ids": [],
                     },
                 )

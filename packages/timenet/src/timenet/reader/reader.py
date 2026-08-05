@@ -248,12 +248,9 @@ class TimeFReader:
                 "unit": descriptor.unit,
                 "description": descriptor.description,
             }
-            if row["start_time_s"] is not None:
-                fields["start_time_s"] = row["start_time_s"]
-            if row["end_time_s"] is not None:
-                fields["end_time_s"] = row["end_time_s"]
-            if row["time_series_ids"] is not None:
-                fields["time_series_ids"] = tuple(self._codec.decode_list("time_series_id", row["time_series_ids"]))
+            span = self._codec.decode_span(row["span"])
+            if span is not None:
+                fields["span"] = span
             annotations[annotation_id] = base(**fields)
         return annotations
 

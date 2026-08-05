@@ -41,7 +41,7 @@ specific channels, or leave it `None` for the whole sample.
 ```python
 from timenet.types import PointAnnotation
 
-PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
+PointAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 <figure markdown="span">
@@ -51,7 +51,7 @@ PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
 ## IntervalAnnotation
 
 An `IntervalAnnotation` covers a start-to-end window on one or more channels, and it is the workhorse.
-`end_time_s` must exceed `start_time_s`. Everything expressive about the scoping grammar, which channels
+Its `span` is an `IntervalSpan`, whose end must exceed its start. Everything expressive about the scoping grammar, which channels
 by which time range, lives here, and the `value` and free-text `description` can carry the full reading
 of what happens in that window.
 
@@ -61,9 +61,7 @@ from timenet.types import IntervalAnnotation
 IntervalAnnotation(
     key="fault",
     value="bearing fault",
-    start_time_s=5.0,
-    end_time_s=8.0,
-    time_series_ids=("vibration",),
+    span=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),
 )
 ```
 

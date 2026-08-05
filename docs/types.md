@@ -152,7 +152,7 @@ can read as input, or that can itself become a task's question or answer. It is 
 levels, and the scopes combine:
 
 - sample: the whole sample (a static fact, or a trial-level temporal marker),
-- time range: a span in the recording timeline (`start_time_s` … `end_time_s`),
+- time range: a `Span` in the recording timeline,
 - signal: one or more specific channels (`time_series_ids`).
 
 Three shapes, one flat frozen dataclass each. `key` / `value` / `unit` / `description` / `id` are
@@ -162,8 +162,8 @@ reuse) and they round-trip without runtime class synthesis.
 | Class | Extra fields | Scope |
 | --- | --- | --- |
 | `StaticAnnotation` | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `PointAnnotation` | `start_time_s`, `time_series_ids` | One instant, on specific signals or the whole sample. |
-| `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
+| `PointAnnotation` | `span: PointSpan` | One instant, on specific signals or the whole sample. |
+| `IntervalAnnotation` | `span: IntervalSpan` | A bounded region, on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
 `description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
@@ -179,19 +179,17 @@ from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
 StaticAnnotation(key="operating_hours", value=1200, unit="hours")
 
 # time range on the whole sample (trial-level)
-IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
+IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
 
 # signal + time range: the vibration and current channels, seconds 5 to 6
 IntervalAnnotation(
     key="fault",
     value="bearing fault",
-    start_time_s=5.0,
-    end_time_s=6.0,
-    time_series_ids=("vibration", "current"),
+    span=IntervalSpan.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
 )
 
 # one instant on a single channel
-PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
+PointAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 A connector that emits the same key repeatedly can subclass with field defaults:
