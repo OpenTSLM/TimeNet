@@ -58,12 +58,8 @@ class ChunkPlacement:
     """Spec type of the source series."""
     channel: str
     """Channel name of the source series."""
-    t_start_s: float
-    """Start time of the chunk in seconds."""
     n_values: int
     """Number of values in the chunk."""
-    sampling_rate_hz: float
-    """Sampling rate of the series in Hz."""
 
 
 @dataclass

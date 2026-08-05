@@ -453,8 +453,6 @@ class TimeFWriter:
                         "chunk_file": placement.chunk_file,
                         "chunk_major_idx": placement.data_index.major_idx,
                         "chunk_minor_idx": placement.data_index.minor_idx,
-                        "t_start_s": placement.t_start_s,
-                        "t_end_s": placement.t_start_s + placement.n_values / placement.sampling_rate_hz,
                         "n_values": placement.n_values,
                     }
                 )
