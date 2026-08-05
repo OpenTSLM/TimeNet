@@ -196,7 +196,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         unit_value=ureg.dimensionless,
     )
     sample = dataset.add_sample(
-        time_series=(TimeSeries(spec=spec, channel="c", sampling_rate_hz=1.0, loader=bad_loader),),
+        time_series=(TimeSeries(spec=spec, channel="c", sampling_rate_hz=1.0, n_values=1, loader=bad_loader),),
         view=View.FULL,
     )
     sample.add_annotation(Annotation(key="k", value=1))
@@ -229,14 +229,14 @@ def test_per_series_array_contract_enforced(tmp_path):
     )
     import pyarrow as pa  # noqa: PLC0415
 
-    # window says 10 values at 1 Hz over 5s => mismatch
+    # declares 5 observations, loader returns 3
     ts = TimeSeries(
         spec=spec,
         channel="c",
         sampling_rate_hz=1.0,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         t_start_s=0.0,
-        t_end_s=5.0,
+        n_values=5,
     )
     dataset.add_sample(time_series=(ts,), view=View.WINDOW)
     dataset.derive_schema()
@@ -313,6 +313,7 @@ def test_same_id_different_series_rejected(tmp_path):
         spec=spec,
         channel="a",
         sampling_rate_hz=1.0,
+        n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-x",
     )
@@ -320,6 +321,7 @@ def test_same_id_different_series_rejected(tmp_path):
         spec=spec,
         channel="b",
         sampling_rate_hz=1.0,
+        n_values=2,
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         time_series_id="ts-x",
     )
@@ -347,6 +349,7 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
         spec=spec,
         channel="a",
         sampling_rate_hz=1.0,
+        n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-shared",
     )

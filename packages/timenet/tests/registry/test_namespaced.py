@@ -38,7 +38,7 @@ def _namespaced_dataset() -> TimeFDataset:
         loader=sine_loader(n=8, sampling_rate_hz=1.0),
         time_series_id="ns-ts-0",
         t_start_s=0.0,
-        t_end_s=8.0,
+        n_values=8,
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ns-sample-0")
     dataset.add_task(sample, ClassificationTask(target="x", id="ns-task-0"))

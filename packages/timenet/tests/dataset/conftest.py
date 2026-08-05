@@ -25,6 +25,7 @@ def make_series(spec):
             spec=spec,
             channel=channel,
             sampling_rate_hz=500.0,
+            n_values=len(values),
             loader=lambda v=tuple(values): pa.array(list(v), type=pa.float32()),
         )
         return replace(base, **overrides) if overrides else base

@@ -35,26 +35,43 @@ class TimeSeries:
     """Optional identifier of the raw source recording."""
     time_series_id: str = field(default_factory=new_id)
     """Stable identity used to dedupe and share chunks; defaults to a UUIDv7."""
+    n_values: int
+    """How many values the series holds, counting one per timestep. A series whose ``spec`` gives each
+    timestep a shape contributes one value per timestep, not one per scalar, which is the same count
+    a chunk's ``n_values`` reports.
+
+    """
     t_start_s: float = 0.0
     """Start of the series window in seconds; must be non-negative."""
-    t_end_s: float | None = None
-    """Optional end of the series window in seconds; must exceed t_start_s."""
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            ValueError: If ``channel`` is empty, ``sampling_rate_hz`` is not positive and finite,
-                ``t_start_s`` is negative, or ``t_end_s`` is not greater than ``t_start_s``.
+            TimeFValidationError: If ``n_values`` is not a positive integer.
+            ValueError: If ``channel`` is empty, ``sampling_rate_hz`` is not positive and finite, or
+                ``t_start_s`` is negative.
         """
         if not self.channel:
             raise ValueError("TimeSeries.channel must be non-empty")
         if not math.isfinite(self.sampling_rate_hz) or self.sampling_rate_hz <= 0:
             raise ValueError(f"TimeSeries.sampling_rate_hz must be positive and finite, got {self.sampling_rate_hz!r}")
+        if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
+            raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
         if self.t_start_s < 0:
             raise ValueError(f"TimeSeries.t_start_s must be >= 0, got {self.t_start_s}")
-        if self.t_end_s is not None and self.t_end_s <= self.t_start_s:
-            raise ValueError(f"TimeSeries.t_end_s ({self.t_end_s}) must be > t_start_s ({self.t_start_s})")
+
+    @property
+    def t_end_s(self) -> float:
+        """End of the series window in seconds, exclusive.
+
+        Derived from the length and the rate rather than stored, so the window and the value count
+        cannot disagree.
+
+        Returns:
+            ``t_start_s + n_values / sampling_rate_hz``.
+        """
+        return self.t_start_s + self.n_values / self.sampling_rate_hz
 
     @classmethod
     def from_values(  # noqa: PLR0913
@@ -67,13 +84,13 @@ class TimeSeries:
         source_id: str | None = None,
         time_series_id: str | None = None,
         t_start_s: float = 0.0,
-        t_end_s: float | None = None,
     ) -> "TimeSeries":
         """Build a series from already-materialized values, wrapping them in a float32 loader.
 
         The convenience path for connectors that hold an in-memory array: it caches ``values`` as a
-        float32 Arrow array behind the loader and derives ``t_end_s`` from the length when omitted. Use
-        the ``loader=`` constructor directly for genuinely lazy sources (files, remote shards).
+        float32 Arrow array behind the loader and takes ``n_values`` from the array's own length. Use the
+        ``loader=`` constructor directly for genuinely lazy sources (files, remote shards), where the
+        length has to be stated because nothing has read the values yet.
 
         Args:
             values: The channel's values (cast to float32).
@@ -83,7 +100,6 @@ class TimeSeries:
             source_id: Optional id of the raw source recording.
             time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
             t_start_s: Start of the window in seconds.
-            t_end_s: End of the window in seconds, or ``None`` to derive it from the length.
 
         Returns:
             The constructed :class:`TimeSeries`.
@@ -97,7 +113,7 @@ class TimeSeries:
             source_id=source_id,
             time_series_id=time_series_id or new_id(),
             t_start_s=t_start_s,
-            t_end_s=t_end_s if t_end_s is not None else t_start_s + len(array) / sampling_rate_hz,
+            n_values=len(array),
         )
 
     def to_arrow(self) -> pa.Array:

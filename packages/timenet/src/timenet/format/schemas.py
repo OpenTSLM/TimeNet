@@ -73,7 +73,7 @@ def time_series_struct(id_types: IdTypes) -> pa.DataType:
             ("time_series_id", id_types["time_series_id"]),
             ("sampling_rate_hz", pa.float64()),
             ("t_start_s", pa.float64()),
-            ("t_end_s", pa.float64()),
+            ("n_values", pa.int64()),
         ]
     )
 

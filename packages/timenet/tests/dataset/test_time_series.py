@@ -23,6 +23,7 @@ def _series(**overrides):
         spec=_spec(),
         channel="II",
         sampling_rate_hz=500.0,
+        n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
     return replace(base, **overrides) if overrides else base
@@ -82,8 +83,12 @@ def test_default_id_unique_explicit_id_kept():
         {"sampling_rate_hz": -1.0},
         {"sampling_rate_hz": float("inf")},
         {"t_start_s": -1.0},
-        {"t_start_s": 5.0, "t_end_s": 5.0},
-        {"t_start_s": 5.0, "t_end_s": 4.0},
+        # The window used to be stated and could contradict the values; now it is derived from a
+        # count, so the count is what has to be sound.
+        {"n_values": 0},
+        {"n_values": -1},
+        {"n_values": 1.5},
+        {"n_values": True},
     ],
 )
 def test_validation_rejects(overrides):
@@ -91,9 +96,9 @@ def test_validation_rejects(overrides):
         _series(**overrides)
 
 
-def test_window_ok():
-    ts = _series(t_start_s=0.0, t_end_s=10.0)
-    assert ts.t_end_s == pytest.approx(10.0)
+def test_the_window_end_is_derived_from_the_count():
+    ts = _series(t_start_s=0.0, n_values=5000)
+    assert ts.t_end_s == pytest.approx(10.0)  # 5000 observations at 500 Hz
 
 
 def test_from_values_casts_to_float32_and_derives_t_end():
@@ -104,11 +109,11 @@ def test_from_values_casts_to_float32_and_derives_t_end():
     assert ts.t_end_s == pytest.approx(2.0)  # t_start_s(0) + 4 / 2.0 Hz
 
 
-def test_from_values_respects_explicit_window():
-    ts = TimeSeries.from_values(
-        np.array([1.0, 2.0]), spec=_spec(), channel="II", sampling_rate_hz=4.0, t_start_s=1.0, t_end_s=9.0
-    )
-    assert (ts.t_start_s, ts.t_end_s) == (1.0, 9.0)
+def test_from_values_counts_the_array_it_was_given():
+    # The window is derived, so a caller cannot hand it one that disagrees with the values.
+    ts = TimeSeries.from_values(np.array([1.0, 2.0]), spec=_spec(), channel="II", sampling_rate_hz=4.0, t_start_s=1.0)
+    assert ts.n_values == 2
+    assert (ts.t_start_s, ts.t_end_s) == (1.0, 1.5)
 
 
 def test_from_values_generates_unique_id_unless_given():

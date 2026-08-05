@@ -295,7 +295,7 @@ class TimeFReader:
             source_id=self._codec.decode_opt("source_id", struct["source_id"]),
             time_series_id=time_series_id,
             t_start_s=struct["t_start_s"],
-            t_end_s=struct["t_end_s"],
+            n_values=struct["n_values"],
         )
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:

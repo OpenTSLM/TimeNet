@@ -240,7 +240,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         """
         header = self._read_header(ref.record_base)
         sampling_rate_hz = float(header.fs)
-        t_end_s = int(header.sig_len) / sampling_rate_hz
         return tuple(
             TimeSeries(
                 spec=_ECG,
@@ -250,7 +249,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
                 source_id=f"ptbxl-{ref.ecg_id}",
                 time_series_id=f"ecg-{ref.ecg_id}-{name}",
                 t_start_s=0.0,
-                t_end_s=t_end_s,
+                n_values=int(header.sig_len),
             )
             for lead_idx, name in enumerate(header.sig_name)
         )

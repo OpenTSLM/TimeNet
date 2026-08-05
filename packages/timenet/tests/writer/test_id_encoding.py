@@ -44,6 +44,7 @@ def _series():
         spec=_spec(),
         channel="c",
         sampling_rate_hz=1.0,
+        n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
 

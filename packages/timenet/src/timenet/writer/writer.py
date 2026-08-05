@@ -328,8 +328,8 @@ class TimeFWriter:
             The validated values in the spec's canonical Arrow representation.
 
         Raises:
-            TimeFValidationError: If the array is empty, disagrees with the spec's dtype/shape, has
-                non-finite inexact values, or its length disagrees with a set window.
+            TimeFValidationError: If the array disagrees with the spec's dtype/shape, has
+                non-finite inexact values, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
         expected_type = pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
@@ -351,8 +351,6 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        if len(values) == 0:
-            raise TimeFValidationError(f"series {ts.time_series_id!r} loaded an empty array")
         as_numpy = (
             values.to_numpy_ndarray()
             if isinstance(values, pa.FixedShapeTensorArray)
@@ -360,13 +358,11 @@ class TimeFWriter:
         )
         if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
             raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
-        if ts.t_end_s is not None:
-            expected = round((ts.t_end_s - ts.t_start_s) * ts.sampling_rate_hz)
-            if len(values) != expected:
-                raise TimeFValidationError(
-                    f"series {ts.time_series_id!r}: len(values)={len(values)} != expected {expected} "
-                    f"from window/sampling rate"
-                )
+        if len(values) != ts.n_values:
+            raise TimeFValidationError(
+                f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "
+                f"declares n_values={ts.n_values}"
+            )
         return values
 
     # ---- metadata tables -----------------------------------------------------------------------
@@ -572,7 +568,7 @@ def _series_identity(ts: TimeSeries) -> tuple:
     Returns:
         The identifying fields, suitable for equality comparison and for error messages.
     """
-    return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.t_end_s)
+    return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.n_values)
 
 
 def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
@@ -583,7 +579,7 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
         "time_series_id": codec.encode("time_series_id", ts.time_series_id),
         "sampling_rate_hz": ts.sampling_rate_hz,
         "t_start_s": ts.t_start_s,
-        "t_end_s": ts.t_end_s,
+        "n_values": ts.n_values,
     }
 
 

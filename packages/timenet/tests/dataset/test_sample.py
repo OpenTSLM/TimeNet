@@ -33,16 +33,16 @@ def test_channel_level_annotation_unknown_id_rejected(make_series):
 
 
 def test_trial_level_interval_requires_common_span(make_series):
-    a = make_series(channel="I", t_start_s=0.0, t_end_s=10.0)
-    b = make_series(channel="II", t_start_s=0.0, t_end_s=20.0)
+    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
+    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 10000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     with pytest.raises(ValueError, match="common"):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
 
 def test_trial_level_interval_common_span_ok(make_series):
-    a = make_series(channel="I", t_start_s=0.0, t_end_s=10.0)
-    b = make_series(channel="II", t_start_s=0.0, t_end_s=10.0)
+    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
+    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 5000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
@@ -54,8 +54,8 @@ def test_empty_time_series_ids_rejected():
 
 
 def test_trial_level_point_needs_no_common_span(make_series):
-    a = make_series(channel="I", t_start_s=0.0, t_end_s=10.0)
-    b = make_series(channel="II", t_start_s=0.0, t_end_s=20.0)
+    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
+    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 10000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     # A point marker imposes no common-span requirement.
     sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0)))

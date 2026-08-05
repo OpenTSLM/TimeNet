@@ -191,7 +191,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             source_id="rec-1",
             time_series_id="ts-long-1",
             t_start_s=0.0,
-            t_end_s=long.n_values / _SAMPLING_RATE_HZ,
+            n_values=long.n_values,
         )
         sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
         sample1.add_annotation(cohort)  # same instance/id => shared
