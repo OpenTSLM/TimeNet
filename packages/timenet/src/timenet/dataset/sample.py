@@ -1,6 +1,7 @@
 """The :class:`Sample` type: one logical unit of time-series data."""
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import numpy as np
 import pyarrow as pa
@@ -8,6 +9,7 @@ import pyarrow as pa
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, IntervalAnnotation, PointAnnotation, View, new_id
+from timenet.types.clock import unix_us
 
 
 _INT64_MIN = -(2**63)
@@ -34,28 +36,38 @@ class Sample:
     """Ids of the tasks attached to this sample."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the sample."""
-    t0_unix_ns: int | None = None
-    """Wall-clock anchor: the Unix time (UTC, integer nanoseconds) that relative time zero refers to,
-    for every series and annotation on this sample. ``None`` means no wall-clock reference exists;
-    never fabricate one."""
+    start_time: datetime | int | None = None
+    """Wall-clock instant that this sample's relative time zero refers to, for every series and
+    annotation on it. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix microseconds;
+    either normalizes to microseconds on construction, so the field always holds an ``int``
+    afterwards. ``None`` means no wall-clock reference exists; never fabricate one.
+
+    A bare float is refused, because seconds and microseconds are both plausible readings of it. When
+    the source really does hand over seconds, convert at the call site so the unit is visible::
+
+        start_time=datetime(2026, 8, 5, tzinfo=timezone.utc)   # 1_785_888_000_000_000
+        start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
+        start_time=1_000_000                                   # the same instant, written directly
+    """
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-sample invariants.
 
         Raises:
-            TimeFValidationError: If ``t0_unix_ns`` does not fit a signed 64-bit integer.
+            TimeFValidationError: If ``start_time`` is neither a timezone-aware datetime nor whole
+                Unix microseconds, or does not fit int64.
         """
-        if self.t0_unix_ns is None:
+        if self.start_time is None:
             return
-        if not isinstance(self.t0_unix_ns, int) or isinstance(self.t0_unix_ns, bool):
-            raise TimeFValidationError(f"Sample.t0_unix_ns must be an integer or None, got {self.t0_unix_ns!r}")
-        if not (_INT64_MIN <= self.t0_unix_ns <= _INT64_MAX):
-            raise TimeFValidationError(f"Sample.t0_unix_ns must fit int64, got {self.t0_unix_ns}")
+        anchor = unix_us(self.start_time)
+        if not (_INT64_MIN <= anchor <= _INT64_MAX):
+            raise TimeFValidationError(f"Sample.start_time must fit int64 microseconds, got {anchor}")
+        object.__setattr__(self, "start_time", anchor)
 
     @property
     def has_absolute_time(self) -> bool:
         """Whether this sample's relative timeline has a Unix-time anchor."""
-        return self.t0_unix_ns is not None
+        return self.start_time is not None
 
     def add_annotation(self, annotation: Annotation) -> Annotation:
         """Attach an annotation to the sample and return it.
