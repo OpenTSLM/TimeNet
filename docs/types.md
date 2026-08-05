@@ -162,8 +162,8 @@ reuse) and they round-trip without runtime class synthesis.
 | Class | Extra fields | Scope |
 | --- | --- | --- |
 | `StaticAnnotation` | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `PointAnnotation` | `span: PointSpan` | One instant, on specific signals or the whole sample. |
-| `IntervalAnnotation` | `span: IntervalSpan` | A bounded region, on specific signals or the whole sample. |
+| `TemporalAnnotation` | `span: PointSpan` | One instant, on specific signals or the whole sample. |
+| `TemporalAnnotation` | `span: IntervalSpan` | A bounded region, on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
 `description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
@@ -173,23 +173,23 @@ sample); a non-empty tuple restricts the annotation to those channels (each id m
 `TimeSeries.time_series_id` on the sample).
 
 ```python
-from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
+from timenet.types import StaticAnnotation, TemporalAnnotation, TemporalAnnotation
 
 # sample scope
 StaticAnnotation(key="operating_hours", value=1200, unit="hours")
 
 # time range on the whole sample (trial-level)
-IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
+TemporalAnnotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
 
 # signal + time range: the vibration and current channels, seconds 5 to 6
-IntervalAnnotation(
+TemporalAnnotation(
     key="fault",
     value="bearing fault",
     span=IntervalSpan.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
 )
 
 # one instant on a single channel
-PointAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
+TemporalAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 A connector that emits the same key repeatedly can subclass with field defaults:
@@ -366,7 +366,7 @@ An annotation is sample-level information; a task is a learning target. A connec
 source annotation in either role:
 
 - As task **input**, the annotation is fed to the model as grounding: list it in `input_annotation_ids`.
-  An `IntervalAnnotation` marking a bearing fault on the vibration channel over seconds 5 to 6 supplies
+  An `TemporalAnnotation` marking a bearing fault on the vibration channel over seconds 5 to 6 supplies
   the detail an `AnswerTask` prompt builds on.
 - As the task **target**, either copy the information into the task payload, or point at the stored
   annotations with `target_annotation_ids` and leave `target` unset. The by-reference form avoids
@@ -443,7 +443,7 @@ errors also derive from `ValueError` so existing handlers keep working.
 | `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
 
 `TimeFValidationError` covers both a value that would be *stored in a dataset* violating an invariant (a
-negative `Version` component, a `unit_value` that isn't a frequency, an `IntervalAnnotation` that ends
+negative `Version` component, a `unit_value` that isn't a frequency, an `TemporalAnnotation` that ends
 before it starts, a `DatasetSchema` whose specs and data sources disagree) and an *invalid input to the
 API* (a malformed dataset ref, a `dataset_id` that isn't an `org/name` pair, a version supplied twice).
 Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.

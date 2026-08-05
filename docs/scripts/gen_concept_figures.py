@@ -172,7 +172,7 @@ def fig_annotation_static():
 
 
 def fig_annotation_point():
-    """PointAnnotation: one instant in time."""
+    """TemporalAnnotation: one instant in time."""
 
     def draw(ax):
         ax.axvline(3.4, color=POINT, lw=1.6, zorder=3)
@@ -182,7 +182,7 @@ def fig_annotation_point():
 
 
 def fig_annotation_interval():
-    """IntervalAnnotation: a span in time."""
+    """TemporalAnnotation: a span in time."""
 
     def draw(ax):
         ax.axvspan(3.0, 5.2, color=SPAN_FACE, alpha=0.85, zorder=0)

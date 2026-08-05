@@ -12,14 +12,13 @@ from timenet.types import (
     DatasetMetadata,
     DataSource,
     Domain,
-    IntervalAnnotation,
     IntervalSpan,
     License,
     LocalizationMode,
-    PointAnnotation,
     PointSpan,
     ScalarPredictionTask,
     StaticAnnotation,
+    TemporalAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
@@ -136,9 +135,9 @@ def make_dataset() -> TimeFDataset:
     )
     sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
     sample0.add_annotation(cohort)
-    sample0.add_annotation(PointAnnotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
+    sample0.add_annotation(TemporalAnnotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
     sample0.add_annotation(
-        IntervalAnnotation(
+        TemporalAnnotation(
             key="artifact", span=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)), id="art-0"
         )
     )

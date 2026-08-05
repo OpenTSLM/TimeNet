@@ -31,34 +31,34 @@ StaticAnnotation(key="operating_hours", value=1200, unit="hours")
   ![A band over the whole recording marking a sample-level fact](../assets/figures/annotation-static.svg)
 </figure>
 
-## PointAnnotation
+## TemporalAnnotation
 
-A `PointAnnotation` marks one instant on one or more channels. It is the right shape for discrete
+A `TemporalAnnotation` marks one instant on one or more channels. It is the right shape for discrete
 events: a shock, a valve actuation, a detected spike. Points are cheap to store, are often produced in
 bulk by detectors, and then serve as anchors for downstream windowing. Pass `time_series_ids` to target
 specific channels, or leave it `None` for the whole sample.
 
 ```python
-from timenet.types import PointAnnotation
+from timenet.types import TemporalAnnotation
 
-PointAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
+TemporalAnnotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 <figure markdown="span">
   ![A marker at one instant on a channel](../assets/figures/annotation-point.svg)
 </figure>
 
-## IntervalAnnotation
+## TemporalAnnotation
 
-An `IntervalAnnotation` covers a start-to-end window on one or more channels, and it is the workhorse.
+An `TemporalAnnotation` covers a start-to-end window on one or more channels, and it is the workhorse.
 Its `span` is an `IntervalSpan`, whose end must exceed its start. Everything expressive about the scoping grammar, which channels
 by which time range, lives here, and the `value` and free-text `description` can carry the full reading
 of what happens in that window.
 
 ```python
-from timenet.types import IntervalAnnotation
+from timenet.types import TemporalAnnotation
 
-IntervalAnnotation(
+TemporalAnnotation(
     key="fault",
     value="bearing fault",
     span=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),

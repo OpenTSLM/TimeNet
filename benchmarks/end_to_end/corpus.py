@@ -17,12 +17,11 @@ from timenet.types import (
     DataSource,
     Domain,
     ForecastingTask,
-    IntervalAnnotation,
     IntervalSpan,
     License,
-    PointAnnotation,
     PointSpan,
     StaticAnnotation,
+    TemporalAnnotation,
     TimeSeriesSpec,
     Version,
     View,
@@ -359,11 +358,11 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             StaticAnnotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
         )
         sample.add_annotation(
-            PointAnnotation(key="event", span=PointSpan.seconds(1.0), id=f"annotation-{scenario.name}-event")
+            TemporalAnnotation(key="event", span=PointSpan.seconds(1.0), id=f"annotation-{scenario.name}-event")
         )
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             sample.add_annotation(
-                IntervalAnnotation(
+                TemporalAnnotation(
                     key="quality-window",
                     span=IntervalSpan.seconds(1.0, 2.0),
                     id=f"annotation-{scenario.name}-window",

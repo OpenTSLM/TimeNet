@@ -11,12 +11,12 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
-    IntervalAnnotation,
     IntervalSpan,
     License,
     PointSpan,
     ScalarPredictionTask,
     StaticAnnotation,
+    TemporalAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
@@ -115,7 +115,7 @@ def test_derive_schema(make_series):
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
     sample.add_annotation(StaticAnnotation(key="age", value=64, unit="years"))
-    sample.add_annotation(IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(0.0, 1.0)))
+    sample.add_annotation(TemporalAnnotation(key="artifact", span=IntervalSpan.seconds(0.0, 1.0)))
     ds.add_task(sample, ClassificationTask(target="afib"))
 
     schema = ds.derive_schema()
@@ -263,7 +263,7 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
-    annotation = IntervalAnnotation(key="stage", value="N2", span=IntervalSpan.seconds(0.0, 30.0))
+    annotation = TemporalAnnotation(key="stage", value="N2", span=IntervalSpan.seconds(0.0, 30.0))
     sample.add_annotation(annotation)
     task = dataset.add_task(
         sample, TemporalLocalizationTask(prompt="Segment it.", target_annotation_ids=(annotation.id,))

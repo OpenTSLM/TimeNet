@@ -17,7 +17,7 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
-from timenet.types.spans import IntervalSpan, PointSpan
+from timenet.types.spans import Span
 from timenet.types.units import normalize_unit
 
 
@@ -80,66 +80,26 @@ class StaticAnnotation(Annotation):
 
 
 @dataclass(frozen=True, kw_only=True)
-class PointAnnotation(Annotation):
-    """Anchored to a single instant in the original recording timeline.
+class TemporalAnnotation(Annotation):
+    """Anchored to a region of the original recording timeline.
 
-    The instant, and which series it applies to, are a :class:`~timenet.types.PointSpan`. That is the
-    same type a task's ``scope`` uses, so a region means one thing across the format::
+    The region, and which series it applies to, are a :class:`~timenet.types.Span`. That is the same
+    type a task's ``scope`` uses, so a region means one thing across the format. The span's own shape
+    says whether the annotation marks an instant or covers a stretch, which is why there is one class
+    here rather than one per shape::
 
-        PointAnnotation(key="stimulus", span=PointSpan.seconds(0.5))
+        TemporalAnnotation(key="stimulus", span=PointSpan.seconds(0.5))
+        TemporalAnnotation(key="artifact", span=IntervalSpan.seconds(0.0, 0.25))
     """
 
-    span: PointSpan
+    span: Span
     """Where on the recording timeline this annotation sits, and which series it targets."""
-
-    def __post_init__(self) -> None:
-        """Reject a span that is not a point.
-
-        The annotation is typed to a point, so a caller cannot get this wrong. A span rebuilt from a
-        file can be, since its shape comes from the bounds on disk.
-
-        Raises:
-            TimeFValidationError: If ``span`` carries an end, making it an interval.
-        """
-        super().__post_init__()
-        if not self.span.is_point:
-            raise TimeFValidationError(
-                f"PointAnnotation {self.key!r} needs a point span, got one ending at {self.span.end}"
-            )
-
-
-@dataclass(frozen=True, kw_only=True)
-class IntervalAnnotation(Annotation):
-    """Anchored to a bounded interval in the original recording timeline.
-
-    The interval, and which series it applies to, are an :class:`~timenet.types.IntervalSpan`::
-
-        IntervalAnnotation(key="artifact", span=IntervalSpan.seconds(0.0, 0.25))
-    """
-
-    span: IntervalSpan
-    """Where on the recording timeline this annotation sits, and which series it targets."""
-
-    def __post_init__(self) -> None:
-        """Reject a span that is not an interval.
-
-        The annotation is typed to an interval, so a caller cannot get this wrong. A span rebuilt
-        from a file can be, since its shape comes from the bounds on disk.
-
-        Raises:
-            TimeFValidationError: If ``span`` is a point, which names an instant rather than a region.
-        """
-        super().__post_init__()
-        if self.span.is_point:
-            raise TimeFValidationError(
-                f"IntervalAnnotation {self.key!r} needs an interval span, got a point at {self.span.start}"
-            )
 
 
 ANNOTATION_BASES: dict[AnnotationType, type[Annotation]] = {
     AnnotationType.STATIC: StaticAnnotation,
-    AnnotationType.POINT: PointAnnotation,
-    AnnotationType.INTERVAL: IntervalAnnotation,
+    AnnotationType.POINT: TemporalAnnotation,
+    AnnotationType.INTERVAL: TemporalAnnotation,
 }
 
 
@@ -155,10 +115,8 @@ def annotation_type_of(annotation: Annotation) -> AnnotationType:
     Raises:
         ValueError: If ``annotation`` is not one of the three concrete shapes.
     """
-    if isinstance(annotation, IntervalAnnotation):
-        return AnnotationType.INTERVAL
-    if isinstance(annotation, PointAnnotation):
-        return AnnotationType.POINT
+    if isinstance(annotation, TemporalAnnotation):
+        return AnnotationType.POINT if annotation.span.is_point else AnnotationType.INTERVAL
     if isinstance(annotation, StaticAnnotation):
         return AnnotationType.STATIC
     raise ValueError(f"not a concrete annotation shape: {type(annotation).__name__}")

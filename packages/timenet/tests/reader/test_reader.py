@@ -12,13 +12,12 @@ from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     AnswerTask,
     ClassificationTask,
-    IntervalAnnotation,
     IntervalSpan,
     LocalizationMode,
-    PointAnnotation,
     PointSpan,
     ScalarPredictionTask,
     StaticAnnotation,
+    TemporalAnnotation,
     TemporalLocalizationTask,
     View,
 )
@@ -93,8 +92,8 @@ def test_annotation_value_types_round_trip(tmp_path):
     anns = {a.key: a for a in samples["sample-0"].annotations}
     assert isinstance(anns["age"], StaticAnnotation)
     assert anns["age"].value == 64 and isinstance(anns["age"].value, int)
-    assert isinstance(anns["stimulus"], PointAnnotation)
-    assert isinstance(anns["artifact"], IntervalAnnotation)
+    assert isinstance(anns["stimulus"], TemporalAnnotation)
+    assert isinstance(anns["artifact"], TemporalAnnotation)
     assert anns["artifact"].span.time_series_ids == ("ts-shared",)
 
 
