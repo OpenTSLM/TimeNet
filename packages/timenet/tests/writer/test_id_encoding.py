@@ -13,8 +13,9 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
+    IntervalSpan,
     License,
-    Span,
+    PointSpan,
     StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
@@ -158,13 +159,13 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     )
     series = _series()
     sample = dataset.add_sample(time_series=(series,), view=View.FULL)
-    scope = Span(start_s=0.0, end_s=1.0, time_series_ids=(series.time_series_id,))
+    scope = IntervalSpan.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
     dataset.add_task(sample, ClassificationTask(target="x"), scope=scope)
     dataset.add_task(
         sample,
         TemporalLocalizationTask(
             prompt="Locate the onsets.",
-            target=(Span(start_s=1.0, time_series_ids=(series.time_series_id,)),),
+            target=(PointSpan.seconds(1.0, time_series_ids=(series.time_series_id,)),),
         ),
     )
     dataset.derive_schema()
@@ -179,7 +180,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     assert tasks[ClassificationTask].scope == scope
     localization = tasks[TemporalLocalizationTask]
     assert isinstance(localization, TemporalLocalizationTask)
-    assert localization.target == (Span(start_s=1.0, time_series_ids=(series.time_series_id,)),)
+    assert localization.target == (PointSpan.seconds(1.0, time_series_ids=(series.time_series_id,)),)
 
 
 def test_correspondence_target_ids_round_trip(tmp_path):

@@ -257,14 +257,18 @@ of type. The three series-output types are the exception: their answer is a *ser
 ### Span
 
 `Span` is the geometry primitive shared by a task's `scope` and a localization target: a point
-(`end_s=None`) or a half-open interval `[start_s, end_s)`, optionally scoped to `time_series_ids`
+(`end=None`) or a half-open interval `[start, end)`, optionally scoped to `time_series_ids`
 (`None` = every series). Times are in the **source recording timeline**, the same frame as
-`TimeSeries.t_start_s`. `Span.is_point` distinguishes the two shapes; `add_task` checks every span a task
-carries against the samples it is attached to.
+`TimeSeries.t_start_s`, and bounds are whole microseconds so two equal regions compare equal.
+
+Build one with `Span.seconds`, which takes the seconds a recording documents itself in, or with
+`Span.micros` when the source already has integers. Each returns the shape its bounds describe, so a
+field that accepts only an interval can say so and be checked before the code runs.
 
 ```python
-Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",))
-Span(start_s=1.2)  # a point on every series
+IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",))   # -> IntervalSpan, start=5_000_000
+PointSpan.seconds(1.2)                                        # -> PointSpan, on every series
+IntervalSpan.micros(5_000_000, 8_000_000)                        # the same interval, written directly
 ```
 
 ### Per-type payloads
@@ -278,11 +282,7 @@ Span(start_s=1.2)  # a point on every series
   dataset.add_task(
       sample,
       ClassificationTask(target="fault_episode", target_schema="condition"),
-      scope=Span(
-          start_s=120.0,
-          end_s=480.0,
-          time_series_ids=(vibration.time_series_id,),
-      ),
+      scope=IntervalSpan.seconds(120.0, 480.0, time_series_ids=(vibration.time_series_id,)),
   )
   ```
 - `AnswerTask`: free text. Without a `prompt` it is a caption; with one it is a question answered, and a
@@ -310,8 +310,8 @@ Span(start_s=1.2)  # a point on every series
   dataset.add_task(sample, TemporalLocalizationTask(
       prompt="Locate all R-peaks in lead II.",
       target=(
-          Span(start_s=1.20, time_series_ids=("II",)),
-          Span(start_s=2.05, time_series_ids=("II",)),
+          IntervalSpan.seconds(1.20, time_series_ids=("II",)),
+          IntervalSpan.seconds(2.05, time_series_ids=("II",)),
       ),
   ))
   ```

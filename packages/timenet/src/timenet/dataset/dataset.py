@@ -22,6 +22,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.clock import seconds_to_us
 
 
 T = TypeVar("T")
@@ -284,15 +285,18 @@ class TimeFDataset:
         ]
         if not covered:
             return
-        start = min(ts.t_start_s for ts in covered)
+        # The series window is still recording seconds; the span is microseconds. Compare in
+        # microseconds so the span's own resolution decides the boundary rather than a float.
+        start = seconds_to_us(min(ts.t_start_s for ts in covered))
         ends = [ts.t_end_s for ts in covered]
-        end = None if any(e is None for e in ends) else max(e for e in ends if e is not None)
-        # A point span (end_s is None) is bounded by its own instant; `or` would misread an end_s of 0.0.
-        span_end = span.start_s if span.end_s is None else span.end_s
-        if span.start_s < start or (end is not None and span_end > end):
+        end = None if any(e is None for e in ends) else seconds_to_us(max(e for e in ends if e is not None))
+        # A point span (end is None) is bounded by its own instant; `or` would misread an end of 0.
+        span_end = span.start if span.end is None else span.end
+        if span.start < start or (end is not None and span_end > end):
             raise TimeFValidationError(
-                f"{task_name} span ({span.start_s}, {span.end_s}) falls outside sample "
-                f"{sample.sample_id!r} span ({start}, {end}); span times are in the source recording timeline"
+                f"{task_name} span ({span.start}, {span.end}) us falls outside sample "
+                f"{sample.sample_id!r} span ({start}, {end}) us; span times are in the source "
+                f"recording timeline"
             )
 
     @staticmethod

@@ -12,9 +12,10 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     IntervalAnnotation,
+    IntervalSpan,
     License,
+    PointSpan,
     ScalarPredictionTask,
-    Span,
     StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
@@ -84,10 +85,10 @@ def test_scope_series_id_resolution(make_series):
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
     ds.add_task(
-        sample, ClassificationTask(target="beat", scope=Span(start_s=0.0, time_series_ids=(ts.time_series_id,)))
+        sample, ClassificationTask(target="beat", scope=PointSpan.seconds(0.0, time_series_ids=(ts.time_series_id,)))
     )
     with pytest.raises(ValueError, match="unknown time_series_id"):
-        ds.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=0.0, time_series_ids=("nope",))))
+        ds.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(0.0, time_series_ids=("nope",))))
 
 
 def test_from_tasks_via_kwarg(make_series):
@@ -211,13 +212,13 @@ def test_add_task_rejects_scope_outside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="walking", scope=Span(start_s=5.0, end_s=20.0)))
+        dataset.add_task(sample, ClassificationTask(target="walking", scope=IntervalSpan.seconds(5.0, 20.0)))
 
 
 def test_add_task_accepts_scope_inside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
-    scope = Span(start_s=2.0, end_s=8.0)
+    scope = IntervalSpan.seconds(2.0, 8.0)
     task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=scope)
     assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
 
@@ -225,9 +226,9 @@ def test_add_task_accepts_scope_inside_sample_span(make_series):
 def test_add_task_rejects_a_second_scope(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
-    task = ClassificationTask(target="walking", scope=Span(start_s=1.0, end_s=2.0))
+    task = ClassificationTask(target="walking", scope=IntervalSpan.seconds(1.0, 2.0))
     with pytest.raises(TimeFValidationError, match="pass it once"):
-        dataset.add_task(sample, task, scope=Span(start_s=3.0, end_s=4.0))
+        dataset.add_task(sample, task, scope=IntervalSpan.seconds(3.0, 4.0))
 
 
 def test_add_task_checks_every_span_a_task_carries(make_series):
@@ -237,7 +238,9 @@ def test_add_task_checks_every_span_a_task_carries(make_series):
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
         dataset.add_task(
             sample,
-            TemporalLocalizationTask(prompt="Locate the onsets.", target=(Span(start_s=2.0), Span(start_s=42.0))),
+            TemporalLocalizationTask(
+                prompt="Locate the onsets.", target=(PointSpan.seconds(2.0), PointSpan.seconds(42.0))
+            ),
         )
 
 
@@ -452,6 +455,6 @@ def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_serie
 def test_add_task_bounds_checks_a_point_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(t_start_s=0.0, t_end_s=10.0),), view=View.FULL)
-    dataset.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=9.5)))  # inside
+    dataset.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(9.5)))  # inside
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="beat", scope=Span(start_s=10.5)))
+        dataset.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(10.5)))

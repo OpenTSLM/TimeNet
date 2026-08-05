@@ -1,46 +1,87 @@
 import dataclasses
+from datetime import UTC, datetime
 
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import Span
+from timenet.types import IntervalSpan, PointSpan
 
 
 def test_interval_and_point():
-    interval = Span(start_s=5.0, end_s=8.0)
+    interval = IntervalSpan.seconds(5.0, 8.0)
     assert not interval.is_point
-    assert Span(start_s=5.0).is_point  # no end => an instant at start_s
+    assert PointSpan.seconds(5.0).is_point  # no end => an instant at start
 
 
-def test_named_constructors_match_direct_construction():
-    assert Span.point(5.0, time_series_ids=("ecg",)) == Span(start_s=5.0, time_series_ids=("ecg",))
-    assert Span.interval(5.0, 8.0, time_series_ids=("ecg",)) == Span(
-        start_s=5.0,
-        end_s=8.0,
-        time_series_ids=("ecg",),
+def test_the_bounds_pick_the_shape():
+    assert isinstance(IntervalSpan.seconds(5.0, 8.0), IntervalSpan)
+    assert isinstance(PointSpan.seconds(5.0), PointSpan)
+    assert isinstance(IntervalSpan.micros(5_000_000, 8_000_000), IntervalSpan)
+    assert isinstance(PointSpan.micros(5_000_000), PointSpan)
+
+
+def test_seconds_rounds_onto_the_microsecond_timeline():
+    span = IntervalSpan.seconds(5.0, 8.0)
+    assert (span.start, span.end) == (5_000_000, 8_000_000)
+    assert PointSpan.seconds(1.2).start == 1_200_000
+
+
+def test_the_builders_agree():
+    assert IntervalSpan.seconds(5.0, 8.0) == IntervalSpan.micros(5_000_000, 8_000_000)
+
+
+def test_micros_rejects_a_fractional_bound():
+    # Seconds are what a caller usually has, and passing them here would be off by a million.
+    with pytest.raises(TimeFValidationError, match="whole microseconds"):
+        PointSpan.micros(5.5)  # ty: ignore[invalid-argument-type]
+
+
+def test_an_interval_cannot_be_built_without_its_end():
+    # A bare `end: int` would inherit the base's None default and construct clean.
+    with pytest.raises(TypeError, match="end"):
+        IntervalSpan(start=0)  # ty: ignore[missing-argument]
+
+
+def test_a_point_and_an_interval_never_compare_equal():
+    assert PointSpan(start=5_000_000) != IntervalSpan(start=5_000_000, end=8_000_000)
+
+
+def test_from_datetime_measures_against_the_sample_anchor():
+    anchor = datetime(2026, 8, 5, 9, 0, 0, tzinfo=UTC)
+    span = IntervalSpan.from_datetime(
+        datetime(2026, 8, 5, 9, 0, 5, tzinfo=UTC),
+        datetime(2026, 8, 5, 9, 0, 8, tzinfo=UTC),
+        start_time=anchor,
     )
+    assert span == IntervalSpan.seconds(5.0, 8.0)
 
 
-def test_named_interval_constructor_preserves_validation():
-    with pytest.raises(TimeFValidationError, match="must be >"):
-        Span.interval(8.0, 5.0)
+def test_from_datetime_needs_an_anchored_sample():
+    # A sample with no wall-clock anchor has no calendar time to measure a moment against.
+    with pytest.raises(TimeFValidationError, match="start_time"):
+        PointSpan.from_datetime(datetime(2026, 8, 5, tzinfo=UTC), start_time=None)
+
+
+def test_from_datetime_rejects_a_naive_moment():
+    with pytest.raises(TimeFValidationError, match="must carry a timezone"):
+        PointSpan.from_datetime(datetime(2026, 8, 5), start_time=1_000_000)
 
 
 def test_rejects_a_non_positive_interval():
     with pytest.raises(TimeFValidationError, match="must be >"):
-        Span(start_s=8.0, end_s=5.0)
+        IntervalSpan.seconds(8.0, 5.0)
     with pytest.raises(TimeFValidationError, match="must be >"):
-        Span(start_s=5.0, end_s=5.0)
+        IntervalSpan.seconds(5.0, 5.0)
 
 
 def test_rejects_an_explicitly_empty_channel_scope():
     # () would silently mean "no series at all"; None is how you say "every series".
     with pytest.raises(TimeFValidationError, match="non-empty"):
-        Span(start_s=0.0, end_s=1.0, time_series_ids=())
+        IntervalSpan.seconds(0.0, 1.0, time_series_ids=())
 
 
 def test_is_frozen_and_hashable():
-    span = Span(start_s=0.0, end_s=1.0, time_series_ids=("II",))
+    span = IntervalSpan.seconds(0.0, 1.0, time_series_ids=("II",))
     with pytest.raises(dataclasses.FrozenInstanceError):
-        span.start_s = 2.0  # ty: ignore[invalid-assignment]
+        span.start = 2  # ty: ignore[invalid-assignment]
     assert span in {span}

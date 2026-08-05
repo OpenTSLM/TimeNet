@@ -41,10 +41,10 @@ instant.
 from timenet.types import Span
 
 # an interval on one channel
-Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",))
+IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",))
 
 # a point, every channel
-Span(start_s=1.2)
+PointSpan.seconds(1.2)
 ```
 
 One primitive covers both directions of time localization: a `scope` is a region **given** to the model,
@@ -64,7 +64,7 @@ ClassificationTask(target="faulty", target_schema="condition")
 ClassificationTask(
     target="fault_episode",
     target_schema="condition",
-    scope=Span(start_s=5.0, end_s=8.0, time_series_ids=("vibration",)),
+    scope=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),
 )
 ```
 
@@ -142,7 +142,7 @@ ScalarPredictionTask(
     target=62.0,
     unit="bpm",
     target_name="mean_heart_rate",
-    scope=Span(start_s=0.0, end_s=30.0),
+    scope=IntervalSpan.seconds(0.0, 30.0),
 )
 ```
 
@@ -167,8 +167,8 @@ TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
     target=(
-        Span(start_s=1.20, time_series_ids=("II",)),
-        Span(start_s=2.05, time_series_ids=("II",)),
+        IntervalSpan.seconds(1.20, time_series_ids=("II",)),
+        IntervalSpan.seconds(2.05, time_series_ids=("II",)),
     ),
 )
 
