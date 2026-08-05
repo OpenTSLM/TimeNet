@@ -9,10 +9,10 @@ from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
 from timenet.types import (
+    Annotation,
     ClassificationTask,
     DatasetMetadata,
     License,
-    StaticAnnotation,
     TimeSeriesSpec,
     Version,
     View,
@@ -199,7 +199,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         time_series=(TimeSeries(spec=spec, channel="c", sampling_rate_hz=1.0, loader=bad_loader),),
         view=View.FULL,
     )
-    sample.add_annotation(StaticAnnotation(key="k", value=1))
+    sample.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(sample, ClassificationTask(target="x"))
     dataset.derive_schema()
 

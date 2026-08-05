@@ -34,8 +34,8 @@ streams samples one at a time without building a `TimeFDataset`.
 
 Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors.
 There is no runtime class synthesis. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor for its
-`spec_type`; annotations are rebuilt as real `StaticAnnotation` / `PointAnnotation` /
-`IntervalAnnotation` instances (values decoded from JSON); tasks are resolved against the built-in
+`spec_type`; annotations are rebuilt as real `Annotation` instances (values decoded from JSON, the
+span rebuilt as a `PointSpan` or `IntervalSpan`); tasks are resolved against the built-in
 `TASKS` registry with `from_tasks` linked. Everything pickles and compares equal to the originals
 field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
 

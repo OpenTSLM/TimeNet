@@ -10,13 +10,13 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
+    Annotation,
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
     IntervalSpan,
     License,
     PointSpan,
-    StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     TSCorrespondenceTask,
@@ -60,7 +60,7 @@ def _uuid_dataset(*, sample_id=None):
         )
     )
     sample = dataset.add_sample(time_series=(_series(),), view=View.FULL, sample_id=sample_id)
-    sample.add_annotation(StaticAnnotation(key="k", value=1))
+    sample.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(sample, ClassificationTask(target="x"))
     dataset.derive_schema()
     return dataset

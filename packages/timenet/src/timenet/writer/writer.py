@@ -45,7 +45,7 @@ from timenet.format.schemas import (
     task_schema,
 )
 from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
-from timenet.types import Task, annotation_type_of
+from timenet.types import Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -381,9 +381,6 @@ class TimeFWriter:
                     "view": str(sample.view),
                     "start_time_us": sample.start_time,
                     "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
-                    "source_ids": codec.encode_list(
-                        "source_id", _ordered_unique(ts.source_id for ts in sample.time_series if ts.source_id)
-                    ),
                     "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
                     "task_ids": codec.encode_list("task_id", sample.task_ids),
                     "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
@@ -398,24 +395,18 @@ class TimeFWriter:
         by_id: dict[str, dict] = {}
         for sample in self._dataset.samples:
             for ann in sample.annotations:
-                series_ids = getattr(ann, "time_series_ids", None)
                 row = by_id.setdefault(
                     ann.id,
                     {
                         "id": codec.encode("annotation_id", ann.id),
                         "key": ann.key,
-                        "annotation_type": str(annotation_type_of(ann)),
                         "value": None if ann.value is None else json.dumps(ann.value),
-                        "start_time_s": getattr(ann, "start_time_s", None),
-                        "end_time_s": getattr(ann, "end_time_s", None),
-                        "time_series_ids": (
-                            None if series_ids is None else codec.encode_list("time_series_id", series_ids)
-                        ),
+                        "span": codec.encode_span(ann.span),
                         "sample_ids": [],
                     },
                 )
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
-        rows = sorted(by_id.values(), key=lambda r: (r["annotation_type"], r["key"], r["id"]))
+        rows = sorted(by_id.values(), key=lambda r: (r["key"], r["id"]))
         self._write_table(
             rows,
             annotations_schema(self._id_types),

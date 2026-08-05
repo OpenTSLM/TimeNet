@@ -162,7 +162,7 @@ def _annotation_fig(name, cap, draw, seed):
 
 
 def fig_annotation_static():
-    """StaticAnnotation: one fact about the whole recording."""
+    """Annotation: one fact about the whole recording."""
     _annotation_fig(
         "annotation-static",
         "one fact about the whole recording",
@@ -172,7 +172,7 @@ def fig_annotation_static():
 
 
 def fig_annotation_point():
-    """PointAnnotation: one time offset in time."""
+    """An annotation with a PointSpan: one time offset in time."""
 
     def draw(ax):
         ax.axvline(3.4, color=POINT, lw=1.6, zorder=3)
@@ -182,7 +182,7 @@ def fig_annotation_point():
 
 
 def fig_annotation_interval():
-    """IntervalAnnotation: a span in time."""
+    """An annotation with an IntervalSpan: a region in time."""
 
     def draw(ax):
         ax.axvspan(3.0, 5.2, color=SPAN_FACE, alpha=0.85, zorder=0)

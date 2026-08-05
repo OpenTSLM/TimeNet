@@ -22,10 +22,8 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
 from timenet.types import (
-    ANNOTATION_BASES,
     TASKS,
     Annotation,
-    AnnotationType,
     DatasetMetadata,
     DatasetSchema,
     Task,
@@ -238,7 +236,6 @@ class TimeFReader:
             if key not in self._annotation_descriptors:
                 raise ValueError(f"annotation row references unknown key {key!r} (not in schema)")
             descriptor = self._annotation_descriptors[key]
-            base = ANNOTATION_BASES[AnnotationType(row["annotation_type"])]
             value = None if row["value"] is None else json.loads(row["value"])
             annotation_id = self._codec.decode("annotation_id", row["id"])
             fields: dict = {
@@ -248,13 +245,10 @@ class TimeFReader:
                 "unit": descriptor.unit,
                 "description": descriptor.description,
             }
-            if row["start_time_s"] is not None:
-                fields["start_time_s"] = row["start_time_s"]
-            if row["end_time_s"] is not None:
-                fields["end_time_s"] = row["end_time_s"]
-            if row["time_series_ids"] is not None:
-                fields["time_series_ids"] = tuple(self._codec.decode_list("time_series_id", row["time_series_ids"]))
-            annotations[annotation_id] = base(**fields)
+            span = self._codec.decode_span(row["span"])
+            if span is not None:
+                fields["span"] = span
+            annotations[annotation_id] = Annotation(**fields)
         return annotations
 
     def _load_index(self) -> dict[tuple[str, str], list[dict]]:

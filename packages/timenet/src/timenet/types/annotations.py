@@ -1,9 +1,11 @@
 """Annotations: contextual metadata attached to a sample.
 
-An annotation is either **static** (sample-scoped, time-independent context such as demographics or a
-ticker symbol) or **temporal** (anchored to a point or bounded interval in the original recording
-timeline). All three shapes are flat frozen dataclasses carrying ``key`` / ``unit`` / ``description`` as
-instance fields so connectors can author them directly (or subclass with field defaults for reuse) and
+One :class:`Annotation` class covers every case, and its optional ``span`` says how it sits in time:
+absent for sample-scoped, time-independent context such as demographics or a ticker symbol, a
+:class:`~timenet.types.spans.PointSpan` for one time offset, an
+:class:`~timenet.types.spans.IntervalSpan` for a bounded region of the original recording timeline. It
+is a flat frozen dataclass carrying ``key`` / ``unit`` / ``description`` as
+instance fields so connectors can author it directly (or subclass with field defaults for reuse) and
 :class:`~timenet.reader.TimeFReader` can reconstruct the identical instances from the manifest without
 runtime class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema
 and manifest.
@@ -17,12 +19,13 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
+from timenet.types.spans import Span
 from timenet.types.units import normalize_unit
 
 
 @unique
 class AnnotationType(StrEnum):
-    """The three annotation shapes; the discriminator stored on disk and in the manifest."""
+    """The shape an annotation key takes across the dataset; a schema-level projection in the manifest."""
 
     STATIC = "static"
     POINT = "point"
@@ -31,12 +34,26 @@ class AnnotationType(StrEnum):
 
 @dataclass(frozen=True, kw_only=True)
 class Annotation:
-    """Base for all annotations. Not instantiated directly; use one of the three shapes below."""
+    """Contextual metadata attached to a sample, optionally anchored to a region of its timeline.
+
+    An annotation carries a ``value``, a ``span``, or both. With a span it says where on the
+    recording timeline it applies and which series it targets; without one it is sample-scoped
+    context that has no place in time, like a subject's age. The span's own shape says whether it
+    marks a time offset or covers a stretch, so there is one class here rather than one per shape::
+
+        Annotation(key="age", value=64)
+        Annotation(key="stimulus", span=PointSpan.seconds(0.5))
+        Annotation(key="artifact", value="motion", span=IntervalSpan.seconds(0.0, 0.25))
+    """
 
     key: str
     """Name identifying the annotation."""
     value: Any = None
-    """The annotation's payload value."""
+    """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
+    mark something."""
+    span: Span | None = None
+    """Where on the recording timeline this annotation applies, and which series it targets.
+    ``None`` means it is sample-scoped context with no place in time."""
     unit: str | pint.Unit | None = None
     """Optional physical unit of ``value`` — a unit string (e.g. ``"years"``) or a :class:`pint.Unit`.
     Validated against the shared registry on construction; an unrecognized string raises ``ValueError``,
@@ -52,88 +69,23 @@ class Annotation:
         ``value_type`` is ``"list"`` for any sequence and the manifest stores it as a JSON array,
         which decodes back to a list. Normalizing a tuple here (and the unit to a string) keeps an
         in-memory annotation equal to its read-back form (the reader's field-for-field guarantee).
-        Subclasses that override ``__post_init__`` must call ``super().__post_init__()``.
+
+        Raises:
+            TimeFValidationError: If ``span`` is set to something that is not a span, or the
+                annotation has neither a value nor a span.
         """
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
-
-
-@dataclass(frozen=True, kw_only=True)
-class StaticAnnotation(Annotation):
-    """Sample-scoped, time-independent context. Carries a required ``value`` and no time fields."""
-
-    value: Any = None
-    """Required payload value; must not be ``None``."""
-
-    def __post_init__(self) -> None:
-        """Reject a missing value.
-
-        Raises:
-            TimeFValidationError: If ``value`` is ``None``. Redeclaring the field without a default does not
-                remove the base's inherited ``None`` default at runtime, so the check is explicit.
-        """
-        super().__post_init__()
-        if self.value is None:
-            raise TimeFValidationError("StaticAnnotation requires a value")
-
-
-@dataclass(frozen=True, kw_only=True)
-class PointAnnotation(Annotation):
-    """Anchored to a single time offset in the original recording timeline."""
-
-    start_time_s: float
-    """Time offset on the original recording timeline, in seconds."""
-    time_series_ids: tuple[str, ...] | None = None
-    """Series this annotation targets; ``None`` covers the whole sample."""
-
-    def __post_init__(self) -> None:
-        """Reject an explicitly empty ``time_series_ids``.
-
-        Raises:
-            TimeFValidationError: If ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
-        """
-        super().__post_init__()
-        if self.time_series_ids is not None and not self.time_series_ids:
+        if self.span is not None and not isinstance(self.span, Span):
             raise TimeFValidationError(
-                "PointAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
+                f"annotation {self.key!r} span must be a PointSpan or an IntervalSpan, got {type(self.span).__name__}"
             )
-
-
-@dataclass(frozen=True, kw_only=True)
-class IntervalAnnotation(Annotation):
-    """Anchored to a bounded interval in the original recording timeline."""
-
-    start_time_s: float
-    """Interval start on the recording timeline, in seconds."""
-    end_time_s: float
-    """Interval end in seconds; must exceed ``start_time_s``."""
-    time_series_ids: tuple[str, ...] | None = None
-    """Series this annotation targets; ``None`` covers the whole sample."""
-
-    def __post_init__(self) -> None:
-        """Reject a non-positive interval or an explicitly empty ``time_series_ids``.
-
-        Raises:
-            TimeFValidationError: If ``end_time_s`` is not strictly greater than ``start_time_s``, or
-                if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
-        """
-        super().__post_init__()
-        if self.end_time_s <= self.start_time_s:
+        if self.value is None and self.span is None:
             raise TimeFValidationError(
-                f"IntervalAnnotation end_time_s ({self.end_time_s}) must be > start_time_s ({self.start_time_s})"
+                f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
+                f"a value, or a span to mark a region of the timeline"
             )
-        if self.time_series_ids is not None and not self.time_series_ids:
-            raise TimeFValidationError(
-                "IntervalAnnotation time_series_ids must be None (whole sample) or non-empty, got ()"
-            )
-
-
-ANNOTATION_BASES: dict[AnnotationType, type[Annotation]] = {
-    AnnotationType.STATIC: StaticAnnotation,
-    AnnotationType.POINT: PointAnnotation,
-    AnnotationType.INTERVAL: IntervalAnnotation,
-}
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:
@@ -143,18 +95,11 @@ def annotation_type_of(annotation: Annotation) -> AnnotationType:
         annotation: The annotation to classify.
 
     Returns:
-        The matching :class:`AnnotationType`.
-
-    Raises:
-        ValueError: If ``annotation`` is not one of the three concrete shapes.
+        The matching :class:`AnnotationType`, derived from the span rather than from a class.
     """
-    if isinstance(annotation, IntervalAnnotation):
-        return AnnotationType.INTERVAL
-    if isinstance(annotation, PointAnnotation):
-        return AnnotationType.POINT
-    if isinstance(annotation, StaticAnnotation):
+    if annotation.span is None:
         return AnnotationType.STATIC
-    raise ValueError(f"not a concrete annotation shape: {type(annotation).__name__}")
+    return AnnotationType.POINT if annotation.span.is_point else AnnotationType.INTERVAL
 
 
 @dataclass(frozen=True)

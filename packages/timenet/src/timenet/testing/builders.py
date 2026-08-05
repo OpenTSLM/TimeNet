@@ -7,19 +7,17 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DataSource,
     Domain,
-    IntervalAnnotation,
     IntervalSpan,
     License,
     LocalizationMode,
-    PointAnnotation,
     PointSpan,
     ScalarPredictionTask,
-    StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
@@ -125,7 +123,7 @@ def make_dataset() -> TimeFDataset:
         )
     )
     shared = _series(_SINE, "a", 16, "ts-shared", "rec-0")
-    cohort = StaticAnnotation(key="cohort", value="A", id="cohort-shared")
+    cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
     sample0 = dataset.add_sample(
         time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
@@ -134,12 +132,12 @@ def make_dataset() -> TimeFDataset:
         sample_id="sample-0",
         start_time=9_007_199_254_740_993,  # anchored sample; the other samples stay unanchored
     )
-    sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
+    sample0.add_annotation(Annotation(key="age", value=64, unit="years", id="age-0"))
     sample0.add_annotation(cohort)
-    sample0.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0"))
+    sample0.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
     sample0.add_annotation(
-        IntervalAnnotation(
-            key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
+        Annotation(
+            key="artifact", span=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)), id="art-0"
         )
     )
     classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))

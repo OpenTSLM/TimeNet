@@ -20,9 +20,9 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    Annotation,
     AnswerTask,
     DataSource,
-    StaticAnnotation,
     TimeSeriesSpec,
     ureg,
 )
@@ -213,19 +213,15 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
                 leads = self._leads_for(ref)
                 leads_by_ecg[ref.ecg_id] = leads
             sample = dataset.add_sample(time_series=leads, sample_id=f"ecgqa-{ref.split}-{ref.index}")
-            sample.add_annotation(StaticAnnotation(key="split", value=ref.split, id=f"split-{ref.index}"))
+            sample.add_annotation(Annotation(key="split", value=ref.split, id=f"split-{ref.index}"))
+            sample.add_annotation(Annotation(key="question_type", value=ref.question_type, id=f"qtype-{ref.index}"))
+            sample.add_annotation(Annotation(key="template_id", value=ref.template_id, id=f"template-{ref.index}"))
             sample.add_annotation(
-                StaticAnnotation(key="question_type", value=ref.question_type, id=f"qtype-{ref.index}")
-            )
-            sample.add_annotation(
-                StaticAnnotation(key="template_id", value=ref.template_id, id=f"template-{ref.index}")
-            )
-            sample.add_annotation(
-                StaticAnnotation(key="clinical_context", value=ref.clinical_context, id=f"context-{ref.index}")
+                Annotation(key="clinical_context", value=ref.clinical_context, id=f"context-{ref.index}")
             )
             if ref.answer_options:
                 sample.add_annotation(
-                    StaticAnnotation(key="answer_options", value=list(ref.answer_options), id=f"options-{ref.index}")
+                    Annotation(key="answer_options", value=list(ref.answer_options), id=f"options-{ref.index}")
                 )
             dataset.add_task(
                 sample,

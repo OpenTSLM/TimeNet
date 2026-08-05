@@ -81,7 +81,8 @@ All series and annotations in an anchored sample share this clock and relative-t
 Use `sample.has_absolute_time` to check whether the anchor is known.
 
 `add_annotation(annotation)` attaches and returns it, validating that a temporal annotation's
-`time_series_ids` resolve to series on the sample, and that a trial-level `IntervalAnnotation` is only
+`time_series_ids` resolve to series on the sample, and that a trial-level annotation (an interval
+span covering the sample rather than named channels) is only
 added when the sample's series share a common `(t_start_s, t_end_s)` span.
 
 `to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common

@@ -93,7 +93,6 @@ def samples_schema(id_types: IdTypes) -> pa.Schema:
             ("view", pa.string()),
             ("start_time_us", pa.int64()),
             ("subject_ids", pa.list_(id_types["subject_id"])),
-            ("source_ids", pa.list_(id_types["source_id"])),
             ("time_series", pa.list_(time_series_struct(id_types))),
             ("task_ids", pa.list_(id_types["task_id"])),
             ("annotation_ids", pa.list_(id_types["annotation_id"])),
@@ -114,11 +113,8 @@ def annotations_schema(id_types: IdTypes) -> pa.Schema:
         [
             ("id", id_types["annotation_id"]),
             ("key", pa.string()),
-            ("annotation_type", pa.string()),
             ("value", pa.string()),  # JSON-encoded scalar/list, null for a pure marker
-            ("start_time_s", pa.float64()),
-            ("end_time_s", pa.float64()),
-            ("time_series_ids", pa.list_(id_types["time_series_id"])),
+            ("span", span_struct(id_types)),  # null for a static annotation
             ("sample_ids", pa.list_(id_types["sample_id"])),
         ]
     )

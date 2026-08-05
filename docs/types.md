@@ -152,18 +152,18 @@ can read as input, or that can itself become a task's question or answer. It is 
 levels, and the scopes combine:
 
 - sample: the whole sample (a static fact, or a trial-level temporal marker),
-- time range: a span in the recording timeline (`start_time_s` … `end_time_s`),
+- time range: a `Span` in the recording timeline,
 - signal: one or more specific channels (`time_series_ids`).
 
-Three shapes, one flat frozen dataclass each. `key` / `value` / `unit` / `description` / `id` are
+One flat frozen dataclass, and the optional `span` is what gives it a shape. `key` / `value` / `unit` / `description` / `id` are
 **instance fields**, so connectors author annotations directly (or subclass with field defaults for
 reuse) and they round-trip without runtime class synthesis.
 
-| Class | Extra fields | Scope |
+| `span` | Extra fields | Scope |
 | --- | --- | --- |
-| `StaticAnnotation` | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `PointAnnotation` | `start_time_s`, `time_series_ids` | One time offset, on specific signals or the whole sample. |
-| `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
+| absent | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
+| `PointSpan` | — | One time offset, on specific signals or the whole sample. |
+| `IntervalSpan` | — | A bounded region, on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
 `description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
@@ -173,25 +173,23 @@ sample); a non-empty tuple restricts the annotation to those channels (each id m
 `TimeSeries.time_series_id` on the sample).
 
 ```python
-from timenet.types import StaticAnnotation, PointAnnotation, IntervalAnnotation
+from timenet.types import Annotation, IntervalSpan, PointSpan
 
 # sample scope
-StaticAnnotation(key="operating_hours", value=1200, unit="hours")
+Annotation(key="operating_hours", value=1200, unit="hours")
 
 # time range on the whole sample (trial-level)
-IntervalAnnotation(key="artifact", start_time_s=10.0, end_time_s=12.0)
+Annotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
 
 # signal + time range: the vibration and current channels, seconds 5 to 6
-IntervalAnnotation(
+Annotation(
     key="fault",
     value="bearing fault",
-    start_time_s=5.0,
-    end_time_s=6.0,
-    time_series_ids=("vibration", "current"),
+    span=IntervalSpan.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
 )
 
 # one time offset on a single channel
-PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
+Annotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 A connector that emits the same key repeatedly can subclass with field defaults:
@@ -200,13 +198,13 @@ A connector that emits the same key repeatedly can subclass with field defaults:
 from dataclasses import dataclass
 
 @dataclass(frozen=True, kw_only=True)
-class OperatingHours(StaticAnnotation):
+class OperatingHours(Annotation):
     key: str = "operating_hours"
     unit: str | None = "hours"
 ```
 
 `annotation_type_of(ann)` returns the `AnnotationType` (`STATIC` / `POINT` / `INTERVAL`);
-`ANNOTATION_BASES` maps each back to its class. `AnnotationDescriptor` is the type-level projection
+There is no reverse mapping: one class covers every shape. `AnnotationDescriptor` is the type-level projection
 (`key`, `annotation_type`, `value_type`, `unit`, `description`) hoisted into the schema and manifest at
 write time.
 
@@ -377,7 +375,7 @@ An annotation is sample-level information; a task is a learning target. A connec
 source annotation in either role:
 
 - As task **input**, the annotation is fed to the model as grounding: list it in `input_annotation_ids`.
-  An `IntervalAnnotation` marking a bearing fault on the vibration channel over seconds 5 to 6 supplies
+  An `Annotation` marking a bearing fault on the vibration channel over seconds 5 to 6 supplies
   the detail an `AnswerTask` prompt builds on.
 - As the task **target**, either copy the information into the task payload, or point at the stored
   annotations with `target_annotation_ids` and leave `target` unset. The by-reference form avoids
@@ -454,15 +452,15 @@ errors also derive from `ValueError` so existing handlers keep working.
 | `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
 
 `TimeFValidationError` covers both a value that would be *stored in a dataset* violating an invariant (a
-negative `Version` component, a `unit_value` that isn't a frequency, an `IntervalAnnotation` that ends
+negative `Version` component, a `unit_value` that isn't a frequency, an `Annotation` that ends
 before it starts, a `DatasetSchema` whose specs and data sources disagree) and an *invalid input to the
 API* (a malformed dataset ref, a `dataset_id` that isn't an `org/name` pair, a version supplied twice).
 Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.
 
 Plain `ValueError` is reserved for genuine programming bugs rather than bad data or input:
-`annotation_type_of()` handed something that isn't one of the three shapes, or two `Task` classes
-declaring the same `task_type` (a definition bug, raised at import). Those are never data or input
-problems, so tagging them as TimeF validation failures would make the distinction useless.
+two `Task` classes declaring the same `task_type` (a definition bug, raised at import). That is never
+a data or input problem, so tagging it as a TimeF validation failure would make the distinction
+useless.
 
 ---
 
