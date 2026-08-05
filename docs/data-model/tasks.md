@@ -35,7 +35,7 @@ concrete types.
 A `Span` is a point or a half-open interval `[start_s, end_s)`, optionally scoped to particular series.
 Times are in the **source recording timeline**, the same frame as `TimeSeries.t_start_s`, so a span stays
 meaningful on a windowed sample that starts partway into the recording. Omit `end_s` and the span is an
-instant.
+time offset.
 
 ```python
 from timenet.types import Span

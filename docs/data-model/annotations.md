@@ -33,7 +33,7 @@ StaticAnnotation(key="operating_hours", value=1200, unit="hours")
 
 ## PointAnnotation
 
-A `PointAnnotation` marks one instant on one or more channels. It is the right shape for discrete
+A `PointAnnotation` marks one time offset on one or more channels. It is the right shape for discrete
 events: a shock, a valve actuation, a detected spike. Points are cheap to store, are often produced in
 bulk by detectors, and then serve as anchors for downstream windowing. Pass `time_series_ids` to target
 specific channels, or leave it `None` for the whole sample.
@@ -45,7 +45,7 @@ PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
 ```
 
 <figure markdown="span">
-  ![A marker at one instant on a channel](../assets/figures/annotation-point.svg)
+  ![A marker at one time offset on a channel](../assets/figures/annotation-point.svg)
 </figure>
 
 ## IntervalAnnotation

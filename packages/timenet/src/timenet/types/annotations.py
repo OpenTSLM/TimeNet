@@ -80,10 +80,10 @@ class StaticAnnotation(Annotation):
 
 @dataclass(frozen=True, kw_only=True)
 class PointAnnotation(Annotation):
-    """Anchored to a single instant in the original recording timeline."""
+    """Anchored to a single time offset in the original recording timeline."""
 
     start_time_s: float
-    """Instant on the original recording timeline, in seconds."""
+    """Time offset on the original recording timeline, in seconds."""
     time_series_ids: tuple[str, ...] | None = None
     """Series this annotation targets; ``None`` covers the whole sample."""
 

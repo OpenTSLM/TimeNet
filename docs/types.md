@@ -162,7 +162,7 @@ reuse) and they round-trip without runtime class synthesis.
 | Class | Extra fields | Scope |
 | --- | --- | --- |
 | `StaticAnnotation` | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `PointAnnotation` | `start_time_s`, `time_series_ids` | One instant, on specific signals or the whole sample. |
+| `PointAnnotation` | `start_time_s`, `time_series_ids` | One time offset, on specific signals or the whole sample. |
 | `IntervalAnnotation` | `start_time_s`, `end_time_s`, `time_series_ids` | A bounded span (`end > start`), on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
@@ -190,7 +190,7 @@ IntervalAnnotation(
     time_series_ids=("vibration", "current"),
 )
 
-# one instant on a single channel
+# one time offset on a single channel
 PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
 ```
 
