@@ -52,7 +52,7 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
   `ScalarPredictionTask` (a number with a unit), `TemporalLocalizationTask` (regions to find),
   `ForecastingTask`, `TSEditingTask`, `TSGenerationTask`, or `TSCorrespondenceTask`. Any of them can carry
   a `rationale`, so a chain-of-thought dataset is not a separate type.
-- Sketch one `Sample`: its `TimeSeries` channel(s) with their `spec`, `sampling_rate_hz`, and window;
+- Sketch one `Sample`: its `TimeSeries` channel(s) with their `spec` and `time_axis`;
   the annotations you'll attach; and the task payload. Concrete values, not placeholders.
 
 ### 5. HARD GATE: confirm with the user

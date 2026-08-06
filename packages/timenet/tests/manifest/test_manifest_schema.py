@@ -24,8 +24,6 @@ def _manifest() -> Manifest:
     spec = TimeSeriesSpec(
         spec_type="ecg",
         name="ECG",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
         data_source=source,
     )

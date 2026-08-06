@@ -94,7 +94,7 @@ DataSource(
 
 ## TimeSeriesSpec
 
-The contract for a measurement **modality**: its type tag, display name, axis units, scalar dtype, and
+The contract for a measurement **modality**: its type tag, display name, value unit, scalar dtype, and
 per-timestep shape. One spec is shared across every logical stream of a modality; the stream identifier
 lives on [`TimeSeries.channel`](timef-dataset.md), not here.
 
@@ -104,8 +104,6 @@ from timenet.types import TimeSeriesSpec, ureg
 vibration = TimeSeriesSpec(
     spec_type="vibration",
     name="Vibration",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.standard_gravity,
 )
 ```
@@ -114,8 +112,6 @@ vibration = TimeSeriesSpec(
 | --- | --- | --- | --- |
 | `spec_type` | `str` | yes | Dataset-unique modality tag (e.g. `"vibration"`). |
 | `name` | `str` | yes | Human-readable modality label. |
-| `unit_sampling_rate` | `pint.Unit` | yes | Must be a frequency, else `ValueError`. |
-| `unit_timestamp` | `pint.Unit` | yes | Must be a time, else `ValueError`. |
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
 | `dtype` | `str` | no | Canonical NumPy scalar dtype; defaults to `"float32"`. |
@@ -138,8 +134,6 @@ import pint
 class Vibration(TimeSeriesSpec):
     spec_type: str = "vibration"
     name: str = "Vibration"
-    unit_sampling_rate: pint.Unit = ureg.hertz
-    unit_timestamp: pint.Unit = ureg.second
     unit_value: pint.Unit = ureg.standard_gravity
 ```
 
@@ -257,7 +251,7 @@ of type. The three series-output types are the exception: their answer is a *ser
 `Span` is the geometry primitive shared by a task's `scope` and a localization target: a point
 (`end=None`) or a half-open interval `[start, end)`, optionally scoped to `time_series_ids`
 (`None` = every series). Times are in the **source recording timeline**, the same frame as
-`TimeSeries.t_start_s`, and bounds are whole microseconds so two equal regions compare equal.
+a series' `time_axis`, and bounds are whole microseconds so two equal regions compare equal.
 
 Build one on the shape you mean: `IntervalSpan` or `PointSpan`, each with `.seconds()` for the seconds
 a recording documents itself in, `.micros()` when the source already has integers, and

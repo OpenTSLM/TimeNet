@@ -63,8 +63,6 @@ def test_schema_holds_descriptors_and_task_types():
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
     )
     schema = DatasetSchema(
@@ -81,8 +79,6 @@ def test_schema_rejects_spec_referencing_unknown_data_source():
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
         data_source=DataSource(data_source_type="holter", name="Holter"),
     )
@@ -94,8 +90,6 @@ def test_schema_rejects_spec_referencing_mismatched_data_source():
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
         data_source=DataSource(data_source_type="holter", name="B"),
     )
@@ -111,8 +105,6 @@ def test_schema_accepts_spec_with_matching_data_source():
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
         data_source=source,
     )

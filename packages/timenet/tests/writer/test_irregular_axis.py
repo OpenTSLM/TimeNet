@@ -18,8 +18,6 @@ def _spec(spec_type="env"):
     return TimeSeriesSpec(
         spec_type=spec_type,
         name=spec_type,
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
 

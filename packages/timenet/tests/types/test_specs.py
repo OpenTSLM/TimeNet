@@ -4,7 +4,6 @@ import pickle
 import pint
 import pytest
 
-from timenet.errors import TimeFValidationError
 from timenet.types import DataSource, TimeSeriesSpec, ureg
 
 
@@ -12,8 +11,6 @@ def _ecg_spec(**overrides):
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
     )
     return replace(spec, **overrides) if overrides else spec
@@ -76,16 +73,6 @@ def test_pickle_round_trips_a_custom_unit():
     assert pickle.loads(pickle.dumps(spec)).unit_value == ureg.bpm
 
 
-def test_spec_rejects_non_frequency_sampling_rate():
-    with pytest.raises(TimeFValidationError, match="sampling"):
-        _ecg_spec(unit_sampling_rate=ureg.volt)
-
-
-def test_spec_rejects_non_time_timestamp():
-    with pytest.raises(TimeFValidationError, match="timestamp"):
-        _ecg_spec(unit_timestamp=ureg.volt)
-
-
 def test_spec_value_unit_unconstrained():
     # Any unit is a valid channel value unit (mV, g, bpm, dimensionless, ...).
     assert _ecg_spec(unit_value=ureg.dimensionless).unit_value == ureg.dimensionless
@@ -105,8 +92,6 @@ def test_pickle_round_trips_a_subclass_added_unit_field():
     spec = _WithGain(
         spec_type="hr",
         name="HR",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
     )
     restored = pickle.loads(pickle.dumps(spec))

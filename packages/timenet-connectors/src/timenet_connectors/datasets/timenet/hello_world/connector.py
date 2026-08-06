@@ -40,16 +40,12 @@ _SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", p
 _SINE = TimeSeriesSpec(
     spec_type="sine",
     name="Sine",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
     data_source=_SOURCE,
 )
 _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
     data_source=_SOURCE,
 )

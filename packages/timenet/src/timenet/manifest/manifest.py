@@ -242,8 +242,6 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
             {
                 "spec_type": spec.spec_type,
                 "name": spec.name,
-                "unit_sampling_rate": str(spec.unit_sampling_rate),
-                "unit_timestamp": str(spec.unit_timestamp),
                 "unit_value": str(spec.unit_value),
                 "data_source": spec.data_source.data_source_type if spec.data_source else None,
                 "dtype": spec.dtype,
@@ -285,8 +283,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
             TimeSeriesSpec(
                 spec_type=entry["spec_type"],
                 name=entry["name"],
-                unit_sampling_rate=ureg.Unit(entry["unit_sampling_rate"]),
-                unit_timestamp=ureg.Unit(entry["unit_timestamp"]),
                 unit_value=ureg.Unit(entry["unit_value"]),
                 data_source=_resolve_data_source(entry.get("data_source"), by_type),
                 dtype=entry.get("dtype", "float32"),

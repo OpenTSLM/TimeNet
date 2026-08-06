@@ -46,8 +46,6 @@ _SOURCE = DataSource(data_source_type="physionet", name="PTB-XL", provider="Phys
 _ECG = TimeSeriesSpec(
     spec_type="ecg",
     name="12-lead ECG",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.millivolt,
     data_source=_SOURCE,
 )

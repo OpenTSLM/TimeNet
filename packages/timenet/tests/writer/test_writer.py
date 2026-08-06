@@ -192,8 +192,6 @@ def test_abort_leaves_no_partial_dir(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     sample = dataset.add_sample(
@@ -226,8 +224,6 @@ def test_per_series_array_contract_enforced(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     import pyarrow as pa  # noqa: PLC0415
@@ -306,8 +302,6 @@ def test_same_id_different_series_rejected(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
@@ -342,8 +336,6 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()

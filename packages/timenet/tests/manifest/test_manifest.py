@@ -1,4 +1,5 @@
 from hypothesis import given, strategies as st
+import pint
 import pytest
 
 from timenet.errors import InvalidManifestError
@@ -24,8 +25,6 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
         data_source=holter,
     )
@@ -124,7 +123,7 @@ def test_from_dict_resolves_tasks_to_real_classes():
 def test_units_roundtrip_as_pint():
     spec = Manifest.from_dict(_manifest().to_dict()).schema.time_series_specs[0]
     assert spec.unit_value == ureg.millivolt
-    assert spec.unit_sampling_rate == ureg.hertz
+    assert isinstance(spec.unit_value, pint.Unit)
 
 
 def test_unsupported_format_version_rejected():

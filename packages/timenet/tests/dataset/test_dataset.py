@@ -144,8 +144,6 @@ def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
     image_spec = TimeSeriesSpec(
         spec_type=scalar.spec.spec_type,
         name=scalar.spec.name,
-        unit_sampling_rate=scalar.spec.unit_sampling_rate,
-        unit_timestamp=scalar.spec.unit_timestamp,
         unit_value=scalar.spec.unit_value,
         dtype="uint8",
         value_shape=(8, 8, 3),
@@ -189,8 +187,6 @@ def test_no_loader_calls_during_build():
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     ts = TimeSeries(spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
@@ -209,7 +205,7 @@ def test_add_sample_rejects_duplicate_time_series_ids(make_series):
 
 
 def test_add_task_rejects_scope_outside_sample_span(make_series):
-    # Span times are in the source recording timeline, so a window past the series' t_end_s is invalid.
+    # Span times are in the source recording timeline, so a window past the series' end is invalid.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),), view=View.FULL)
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
