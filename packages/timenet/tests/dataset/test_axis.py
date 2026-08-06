@@ -198,3 +198,13 @@ def test_to_time_offsets_us_rejects_a_uint64_past_int64():
     # np.uint64(2**63) would wrap to a negative int64 on the cast; the range check catches it first.
     with pytest.raises(TimeFValidationError, match="fit int64"):
         to_time_offsets_us(np.array([0, 2**63], dtype=np.uint64))
+
+
+def test_regular_axis_rejects_a_period_past_int64():
+    with pytest.raises(TimeFValidationError, match="fit int64"):
+        RegularAxis(period_us=Fraction(2**63))
+
+
+def test_regular_axis_rejects_a_start_index_past_int64():
+    with pytest.raises(TimeFValidationError, match="fit int64"):
+        RegularAxis(period_us=Fraction(2000), start_index=2**63)

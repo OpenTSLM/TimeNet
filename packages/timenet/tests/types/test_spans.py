@@ -107,3 +107,9 @@ def test_an_interval_with_no_end_is_rejected():
 def test_a_span_with_no_start_is_rejected():
     with pytest.raises(TimeFValidationError, match="start must be whole microseconds"):
         PointSpan(start=None)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("bound", [2**63, -(2**63) - 1])
+def test_rejects_a_bound_past_int64(bound):
+    with pytest.raises(TimeFValidationError, match="fit int64"):
+        PointSpan.micros(bound)

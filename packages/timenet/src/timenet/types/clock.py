@@ -16,6 +16,27 @@ US_PER_S = 1_000_000
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+
+
+def check_int64(name: str, value: int) -> None:
+    """Reject a value that would not fit the int64 microsecond column TimeF stores it in.
+
+    Every stored time quantity is int64 microseconds. A Python int is unbounded, so a value past the
+    range wraps silently in numpy or raises a bare ``OverflowError`` from pyarrow on write rather than
+    being caught. Enforcing the range at construction turns that into a clear failure at the boundary.
+
+    Args:
+        name: The field being checked, used in the error message.
+        value: The value to range-check.
+
+    Raises:
+        TimeFValidationError: If ``value`` is outside the signed 64-bit range.
+    """
+    if not (INT64_MIN <= value <= INT64_MAX):
+        raise TimeFValidationError(f"{name} must fit int64 microseconds, got {value}")
+
 
 def seconds_to_us(seconds: float) -> int:
     """Round seconds onto the microsecond timeline.
