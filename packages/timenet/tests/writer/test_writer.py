@@ -16,7 +16,6 @@ from timenet.types import (
     License,
     TimeSeriesSpec,
     Version,
-    View,
     ureg,
 )
 from timenet.writer import TimeFWriter
@@ -198,7 +197,6 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         time_series=(
             TimeSeries(spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader),
         ),
-        view=View.FULL,
     )
     sample.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(sample, ClassificationTask(target="x"))
@@ -236,7 +234,7 @@ def test_per_series_array_contract_enforced(tmp_path):
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         n_values=5,
     )
-    dataset.add_sample(time_series=(ts,), view=View.WINDOW)
+    dataset.add_sample(time_series=(ts,))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
@@ -246,7 +244,6 @@ def test_samples_parquet_content(tmp_path):
     version_dir = _written(tmp_path)
     rows = {r["sample_id"]: r for r in pq.read_table(version_dir / "samples.parquet").to_pylist()}
     assert set(rows) == {"sample-0", "sample-1", "sample-2"}
-    assert rows["sample-0"]["view"] == "full"
     # shared series appears in both sample-0 and sample-1
     ids0 = {ts["time_series_id"] for ts in rows["sample-0"]["time_series"]}
     ids1 = {ts["time_series_id"] for ts in rows["sample-1"]["time_series"]}
@@ -321,8 +318,8 @@ def test_same_id_different_series_rejected(tmp_path):
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         time_series_id="ts-x",
     )
-    dataset.add_sample(time_series=(a,), view=View.FULL, sample_id="s-a")
-    dataset.add_sample(time_series=(b,), view=View.FULL, sample_id="s-b")
+    dataset.add_sample(time_series=(a,), sample_id="s-a")
+    dataset.add_sample(time_series=(b,), sample_id="s-b")
     dataset.derive_schema()
     with (
         pytest.raises(TimeFValidationError, match="claimed by two different series"),
@@ -347,8 +344,8 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-shared",
     )
-    dataset.add_sample(time_series=(shared,), view=View.FULL, sample_id="s-a")
-    dataset.add_sample(time_series=(shared,), view=View.FULL, sample_id="s-b")
+    dataset.add_sample(time_series=(shared,), sample_id="s-a")
+    dataset.add_sample(time_series=(shared,), sample_id="s-b")
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()

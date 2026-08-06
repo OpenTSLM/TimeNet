@@ -120,7 +120,6 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                     {
                         "sample_id": sample.sample_id,
                         "subject_ids": sample.subject_ids,
-                        "view": sample.view,
                         "task_ids": sample.task_ids,
                         "annotations": _canonical(sample.annotations),
                     },

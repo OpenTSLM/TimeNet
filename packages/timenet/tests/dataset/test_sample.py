@@ -6,18 +6,18 @@ import pytest
 from timenet.dataset import Sample, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, IntervalSpan, PointSpan, View
+from timenet.types import Annotation, IntervalSpan, PointSpan
 
 
 def test_add_static_annotation(make_series):
-    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    sample = Sample(time_series=(make_series(),))
     ann = sample.add_annotation(Annotation(key="age", value=64))
     assert ann.value == 64
     assert sample.annotations == (ann,)
 
 
 def test_add_multiple_annotations_preserves_order(make_series):
-    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    sample = Sample(time_series=(make_series(),))
     a = sample.add_annotation(Annotation(key="age", value=64))
     b = sample.add_annotation(Annotation(key="sex", value="M"))
     assert sample.annotations == (a, b)
@@ -25,14 +25,14 @@ def test_add_multiple_annotations_preserves_order(make_series):
 
 def test_channel_level_point_resolves_series_id(make_series):
     ts = make_series()
-    sample = Sample(time_series=(ts,), view=View.FULL)
+    sample = Sample(time_series=(ts,))
     sample.add_annotation(
         Annotation(key="stimulus", span=PointSpan.seconds(0.002, time_series_ids=(ts.time_series_id,)))
     )
 
 
 def test_channel_level_annotation_unknown_id_rejected(make_series):
-    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    sample = Sample(time_series=(make_series(),))
     with pytest.raises(ValueError, match="unknown"):
         sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0, time_series_ids=("nope",))))
 
@@ -40,7 +40,7 @@ def test_channel_level_annotation_unknown_id_rejected(make_series):
 def test_trial_level_interval_requires_common_span(make_series):
     a = make_series(channel="I", values=(0.0,) * 5000)
     b = make_series(channel="II", values=(0.0,) * 10000)
-    sample = Sample(time_series=(a, b), view=View.SUBSET)
+    sample = Sample(time_series=(a, b))
     with pytest.raises(ValueError, match="common"):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
@@ -48,7 +48,7 @@ def test_trial_level_interval_requires_common_span(make_series):
 def test_trial_level_interval_common_span_ok(make_series):
     a = make_series(channel="I", values=(0.0,) * 5000)
     b = make_series(channel="II", values=(0.0,) * 5000)
-    sample = Sample(time_series=(a, b), view=View.SUBSET)
+    sample = Sample(time_series=(a, b))
     sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
 
@@ -61,7 +61,7 @@ def test_empty_time_series_ids_rejected():
 def test_trial_level_point_needs_no_common_span(make_series):
     a = make_series(channel="I", values=(0.0,) * 5000)
     b = make_series(channel="II", values=(0.0,) * 10000)
-    sample = Sample(time_series=(a, b), view=View.SUBSET)
+    sample = Sample(time_series=(a, b))
     # A point marker imposes no common-span requirement.
     sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0)))
 
@@ -78,26 +78,26 @@ def test_to_numpy_rejects_multi_channel(make_series):
 
 
 def test_start_time_defaults_to_none(make_series):
-    sample = Sample(time_series=(make_series(),), view=View.FULL)
+    sample = Sample(time_series=(make_series(),))
     assert sample.start_time is None
 
 
 def test_start_time_takes_whole_microseconds(make_series):
     anchor = 1_700_000_000_000_001
-    sample = Sample(time_series=(make_series(),), view=View.FULL, start_time=anchor)
+    sample = Sample(time_series=(make_series(),), start_time=anchor)
     assert sample.start_time == anchor
 
 
 def test_start_time_takes_an_aware_datetime_and_normalizes_it(make_series):
     moment = datetime(2026, 8, 5, 0, 0, 0, 123456, tzinfo=UTC)
-    sample = Sample(time_series=(make_series(),), view=View.FULL, start_time=moment)
+    sample = Sample(time_series=(make_series(),), start_time=moment)
     assert sample.start_time == 1_785_888_000_123_456
 
 
 @pytest.mark.parametrize("anchor", [2**63, -(2**63) - 1])
 def test_start_time_rejects_an_anchor_that_overflows_int64(anchor, make_series):
     with pytest.raises(ValueError, match="int64"):
-        Sample(time_series=(make_series(),), view=View.FULL, start_time=anchor)
+        Sample(time_series=(make_series(),), start_time=anchor)
 
 
 @pytest.mark.parametrize("anchor", [True, "1700000000", 1_700_000_000.5])
@@ -130,7 +130,7 @@ def test_a_trial_interval_is_refused_on_a_timeless_sample(make_series):
 
 def test_annotation_span_outside_the_window_is_rejected(make_series):
     # 5000 values at 500 Hz is a 10 s window [0, 10); an interval past it means nothing on the data.
-    sample = Sample(time_series=(make_series(values=(0.0,) * 5000),), view=View.FULL)
+    sample = Sample(time_series=(make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(5.0, 20.0)))
 

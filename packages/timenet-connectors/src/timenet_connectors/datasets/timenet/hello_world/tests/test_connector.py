@@ -10,7 +10,6 @@ from timenet.types import (
     DataSource,
     ScalarPredictionTask,
     TemporalLocalizationTask,
-    View,
 )
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 
@@ -47,11 +46,6 @@ def test_schema_covers_every_feature():
     annotation_types = {a.annotation_type for a in schema.annotations}
     assert annotation_types == {AnnotationType.STATIC, AnnotationType.POINT, AnnotationType.INTERVAL}
     assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}
-
-
-def test_has_window_sample():
-    views = {s.view for s in _convert().samples}
-    assert View.WINDOW in views
 
 
 def test_shares_a_series_across_samples_by_id():

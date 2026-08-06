@@ -25,7 +25,6 @@ from timenet.types import (
     PointSpan,
     TimeSeriesSpec,
     Version,
-    View,
     ureg,
 )
 
@@ -206,7 +205,6 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             time_series=ecg.time_series,
             sample_id=f"sample-ecg-question-{index:03d}",
             subject_ids=("subject-ecg",),
-            view=View.FULL,
         )
         sample.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
@@ -235,7 +233,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             )
             for channel in range(channel_count)
         )
-        sample = dataset.add_sample(time_series=series, sample_id=f"sample-tsqa-{index:04d}", view=View.FULL)
+        sample = dataset.add_sample(time_series=series, sample_id=f"sample-tsqa-{index:04d}")
         sample.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             sample,
@@ -259,7 +257,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             time_series_id=f"mean-series-{index:04d}",
             n_values=len(values),
         )
-        sample = dataset.add_sample(time_series=(series,), sample_id=f"sample-mean-{index:04d}", view=View.FULL)
+        sample = dataset.add_sample(time_series=(series,), sample_id=f"sample-mean-{index:04d}")
         sample.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             sample,
@@ -305,7 +303,6 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             time_series=(tensor(values, spec, name),),
             sample_id=f"sample-rich-{name}",
             subject_ids=(f"subject-rich-{name}",),
-            view=View.FULL,
         )
         sample.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
@@ -349,7 +346,6 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             time_series=series,
             sample_id=f"sample-{scenario.name}",
             subject_ids=(f"subject-{scenario.name}",),
-            view=View.FULL,
         )
         sample.add_annotation(
             Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")

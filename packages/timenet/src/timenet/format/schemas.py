@@ -94,7 +94,6 @@ def samples_schema(id_types: IdTypes) -> pa.Schema:
     return pa.schema(
         [
             ("sample_id", id_types["sample_id"]),
-            ("view", pa.string()),
             ("start_time_us", pa.int64()),
             ("subject_ids", pa.list_(id_types["subject_id"])),
             ("time_series", pa.list_(time_series_struct(id_types))),

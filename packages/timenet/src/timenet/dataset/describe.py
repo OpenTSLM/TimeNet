@@ -103,14 +103,13 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
     samples = dataset.samples
     if not samples:
         return ""
-    header = ("sample_id", "view", "channels", "length", "tasks", "annotations")
+    header = ("sample_id", "channels", "length", "tasks", "annotations")
     table_rows = []
     for sample in samples[:rows]:
         length = point_count(sample.time_series[0]) if sample.time_series else None
         table_rows.append(
             (
                 sample.sample_id,
-                str(sample.view),
                 str(len(sample.time_series)),
                 "?" if length is None else str(length),
                 str(len(sample.task_ids)),

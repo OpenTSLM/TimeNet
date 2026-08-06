@@ -69,7 +69,7 @@ checksummed artifact is missing or its content does not match the manifest.
 ## Round-trip guarantee
 
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every sample's
-`sample_id`, `view`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
+`sample_id`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
 `source_id`, `time_series_id`, window, and exact dtype/shape-preserving values; and each task's payload
 and resolved `from_tasks`. `TimeSeries` object identity is not preserved. `time_series_id` is the
 durable handle.

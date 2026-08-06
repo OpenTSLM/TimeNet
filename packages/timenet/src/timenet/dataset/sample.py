@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Span, View, new_id
+from timenet.types import Annotation, Span, new_id
 from timenet.types.clock import unix_us
 
 
@@ -77,8 +77,6 @@ class Sample:
 
     time_series: tuple[TimeSeries, ...]
     """The logical :class:`TimeSeries` streams the sample uses."""
-    view: View = View.FULL
-    """Which slice of the source this sample represents (defaults to the full recording)."""
     sample_id: str = field(default_factory=new_id)
     """Unique id for the sample (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()

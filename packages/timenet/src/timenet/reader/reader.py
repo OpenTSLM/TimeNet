@@ -32,7 +32,6 @@ from timenet.types import (
     DatasetSchema,
     Task,
     TaskType,
-    View,
     annotation_type_of,
     value_type_of,
 )
@@ -304,7 +303,6 @@ class TimeFReader:
         return Sample(
             sample_id=sample_id,
             time_series=series,
-            view=View(row["view"]),
             subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
             task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
             annotations=annotations,
