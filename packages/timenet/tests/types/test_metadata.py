@@ -3,7 +3,6 @@ import pickle
 
 import pytest
 
-from timenet.errors import TimeFValidationError
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
@@ -54,7 +53,6 @@ def test_metadata_frozen():
 def test_schema_defaults_empty():
     s = DatasetSchema()
     assert s.time_series_specs == ()
-    assert s.data_sources == ()
     assert s.annotations == ()
     assert s.tasks == ()
 
@@ -67,7 +65,6 @@ def test_schema_holds_descriptors_and_task_types():
     )
     schema = DatasetSchema(
         time_series_specs=(spec,),
-        data_sources=(DataSource(data_source_type="holter", name="Holter"),),
         annotations=(AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int"),),
         tasks=(ClassificationTask,),
     )
@@ -75,32 +72,8 @@ def test_schema_holds_descriptors_and_task_types():
     assert schema.tasks == (ClassificationTask,)
 
 
-def test_schema_rejects_spec_referencing_unknown_data_source():
-    spec = TimeSeriesSpec(
-        spec_type="ecg_lead",
-        name="ECG Lead",
-        unit_value=ureg.millivolt,
-        data_source=DataSource(data_source_type="holter", name="Holter"),
-    )
-    with pytest.raises(TimeFValidationError, match="not in data_sources"):
-        DatasetSchema(time_series_specs=(spec,), data_sources=())
-
-
-def test_schema_rejects_spec_referencing_mismatched_data_source():
-    spec = TimeSeriesSpec(
-        spec_type="ecg_lead",
-        name="ECG Lead",
-        unit_value=ureg.millivolt,
-        data_source=DataSource(data_source_type="holter", name="B"),
-    )
-    with pytest.raises(TimeFValidationError, match="not in data_sources"):
-        DatasetSchema(
-            time_series_specs=(spec,),
-            data_sources=(DataSource(data_source_type="holter", name="A"),),
-        )
-
-
-def test_schema_accepts_spec_with_matching_data_source():
+def test_a_spec_carries_its_own_data_source():
+    # No side table to agree with: the record lives on the spec and round-trips with it.
     source = DataSource(data_source_type="holter", name="Holter")
     spec = TimeSeriesSpec(
         spec_type="ecg_lead",
@@ -108,18 +81,7 @@ def test_schema_accepts_spec_with_matching_data_source():
         unit_value=ureg.millivolt,
         data_source=source,
     )
-    schema = DatasetSchema(time_series_specs=(spec,), data_sources=(source,))
-    assert schema.time_series_specs[0].data_source == source
-
-
-def test_schema_rejects_conflicting_data_sources():
-    with pytest.raises(TimeFValidationError, match="conflicting entries"):
-        DatasetSchema(
-            data_sources=(
-                DataSource(data_source_type="holter", name="A"),
-                DataSource(data_source_type="holter", name="B"),
-            ),
-        )
+    assert DatasetSchema(time_series_specs=(spec,)).time_series_specs[0].data_source == source
 
 
 def test_metadata_picklable():

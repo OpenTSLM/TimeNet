@@ -79,14 +79,12 @@ dataclass built directly.
 ```python
 from timenet.types import DataSource
 
-DataSource(
-    data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme"
-)
+DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme")
 ```
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `data_source_type` | `str` | yes | Dataset-unique type tag, referenced by `TimeSeriesSpec.data_source`. |
+| `data_source_type` | `str` | yes | Type tag identifying the kind of source. |
 | `name` | `str` | yes | Human-readable name. |
 | `provider` | `str \| None` | no | Vendor / originator. |
 
@@ -407,13 +405,12 @@ A dataset's descriptive identity (authored in the card).
 ## DatasetSchema
 
 A dataset's type declaration, **derived** from its data (never hand-authored), then serialized into the
-manifest. Holds flat descriptors for specs / data sources / annotations and the real built-in `Task`
+manifest. Holds flat descriptors for specs / annotations and the real built-in `Task`
 subclasses.
 
 ```python
 DatasetSchema(
     time_series_specs: tuple[TimeSeriesSpec, ...] = (),
-    data_sources:      tuple[DataSource, ...] = (),
     annotations:       tuple[AnnotationDescriptor, ...] = (),
     tasks:             tuple[type[Task], ...] = (),
 )
@@ -447,8 +444,8 @@ errors also derive from `ValueError` so existing handlers keep working.
 
 `TimeFValidationError` covers both a value that would be *stored in a dataset* violating an invariant (a
 negative `Version` component, a `unit_value` that isn't a frequency, an `Annotation` that ends
-before it starts, a `DatasetSchema` whose specs and data sources disagree) and an *invalid input to the
-API* (a malformed dataset ref, a `dataset_id` that isn't an `org/name` pair, a version supplied twice).
+before it starts) and an *invalid input to the API* (a malformed dataset ref, a `dataset_id` that
+isn't an `org/name` pair, a version supplied twice).
 Because it subclasses `ValueError`, `except ValueError` keeps catching all of it.
 
 Plain `ValueError` is reserved for genuine programming bugs rather than bad data or input:

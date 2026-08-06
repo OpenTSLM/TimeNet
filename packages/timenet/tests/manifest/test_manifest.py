@@ -30,7 +30,6 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
     )
     schema = DatasetSchema(
         time_series_specs=(ecg,),
-        data_sources=(holter,),
         annotations=(
             AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int", unit="years"),
             AnnotationDescriptor(key="artifact", annotation_type=AnnotationType.INTERVAL),
@@ -101,18 +100,21 @@ def test_to_dict_shape():
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
     assert d["schema"]["time_series_specs"][0]["unit_value"] == "millivolt"
-    # spec references its data source by type tag, not by embedding it
-    assert d["schema"]["time_series_specs"][0]["data_source"] == "holter_x"
+    # the record sits on the spec, so nothing has to be resolved against a side table on read
+    assert d["schema"]["time_series_specs"][0]["data_source"] == {
+        "data_source_type": "holter_x",
+        "name": "Holter Monitor X",
+        "provider": "Acme",
+    }
+    assert "data_sources" not in d["schema"]
     assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "answer"}]
     assert d["counts"]["tasks"] == {"classification": 2}
 
 
-def test_from_dict_resolves_data_source_reference():
+def test_from_dict_reads_the_data_source_stored_on_the_spec():
     schema = Manifest.from_dict(_manifest().to_dict()).schema
     spec = schema.time_series_specs[0]
-    assert spec.data_source is not None
-    assert spec.data_source.data_source_type == "holter_x"
-    assert spec.data_source in schema.data_sources
+    assert spec.data_source == DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
 
 
 def test_from_dict_resolves_tasks_to_real_classes():

@@ -145,7 +145,7 @@ derive_schema() -> DatasetSchema
 ```
 
 Walks the dataset's instances and builds its [`DatasetSchema`](types.md#datasetschema): the distinct
-specs, data sources, annotation descriptors, and task types (order-preserving dedupe). Stores the result
+specs, annotation descriptors, and task types (order-preserving dedupe). Stores the result
 (`dataset.schema`) and returns it. Never reads series values. The engine calls it after `convert()`,
 before the writer runs.
 
