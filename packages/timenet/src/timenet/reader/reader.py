@@ -8,6 +8,7 @@ synthesis), so read-back objects pickle and match the originals field-for-field.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from fractions import Fraction
 import json
 from pathlib import Path
 import types as _types
@@ -16,7 +17,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
-from timenet.errors import TimeFFormatError
+from timenet.dataset.axis import AxisType, OrdinalAxis, RegularAxis, TimeAxis
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
@@ -290,13 +292,60 @@ class TimeFReader:
         return TimeSeries(
             spec=self._spec_by_type[spec_type],
             channel=struct["channel"],
-            sampling_rate_hz=struct["sampling_rate_hz"],
+            time_axis=self._axis(struct, sample_id),
             loader=_SeriesLoader(self, sample_id, time_series_id),
             source_id=self._codec.decode_opt("source_id", struct["source_id"]),
             time_series_id=time_series_id,
-            t_start_s=struct["t_start_s"],
             n_values=struct["n_values"],
         )
+
+    @staticmethod
+    def _axis(struct: dict, sample_id: str) -> TimeAxis:
+        """Rebuild a series' time axis from the stored discriminator.
+
+        The tag is read before any shape-specific column, so a corrupt row raises here rather than
+        producing an axis inferred from which columns happen to be null.
+
+        Args:
+            struct: The stored time-series struct.
+            sample_id: The owning sample, for the error message.
+
+        Returns:
+            The axis.
+
+        Raises:
+            TimeFFormatError: If the tag is missing, unknown, or disagrees with the columns beside it.
+        """
+        kind = struct["axis_type"]
+        numerator, denominator = struct["period_numerator_us"], struct["period_denominator"]
+        start_index = struct["start_index"]
+        if kind == AxisType.ORDINAL:
+            # An ordinal series has no cadence, so its regular columns must be null. A populated one
+            # means the tag and the columns disagree, which is the corruption this method catches.
+            if numerator is not None or denominator is not None or start_index is not None:
+                raise TimeFFormatError(
+                    f"sample {sample_id!r} has a series tagged {kind!r} but carries regular-axis "
+                    f"columns; an ordinal series has no period or start index"
+                )
+            return OrdinalAxis()
+        if kind != AxisType.REGULAR:
+            raise TimeFFormatError(
+                f"sample {sample_id!r} has a series with axis_type {kind!r}; expected one of "
+                f"{[t.value for t in AxisType]}"
+            )
+        if numerator is None or denominator is None or start_index is None:
+            raise TimeFFormatError(
+                f"sample {sample_id!r} has a series tagged {kind!r} with no period or start index; a "
+                f"regular axis needs both. pyarrow only enforces non-null when the file is written, "
+                f"so this is the check that catches a corrupt row"
+            )
+        try:
+            return RegularAxis(period_us=Fraction(numerator, denominator), start_index=start_index)
+        except (ZeroDivisionError, TypeError, TimeFValidationError) as exc:
+            raise TimeFFormatError(
+                f"sample {sample_id!r} has a series with an unbuildable regular axis "
+                f"(period {numerator}/{denominator}, start_index {start_index}): {exc}"
+            ) from exc
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
         if annotation_id not in self._annotations:

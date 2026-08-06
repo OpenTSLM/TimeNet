@@ -71,8 +71,10 @@ def time_series_struct(id_types: IdTypes) -> pa.DataType:
             ("channel", pa.string()),
             ("source_id", id_types["source_id"]),
             ("time_series_id", id_types["time_series_id"]),
-            ("sampling_rate_hz", pa.float64()),
-            ("t_start_s", pa.float64()),
+            ("axis_type", pa.string()),  # dispatched on before any shape-specific column is read
+            ("period_numerator_us", pa.int64()),  # null iff ordinal
+            ("period_denominator", pa.int64()),  # null iff ordinal
+            ("start_index", pa.int64()),  # null iff ordinal
             ("n_values", pa.int64()),
         ]
     )

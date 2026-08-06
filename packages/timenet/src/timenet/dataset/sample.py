@@ -8,12 +8,63 @@ import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, View, new_id
+from timenet.types import Annotation, Span, View, new_id
 from timenet.types.clock import unix_us
 
 
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+
+
+def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeries, ...], sample_id: str) -> None:
+    """Reject a span whose series are unknown, timeless, or that falls outside the sample's span.
+
+    A span's bounds are in the source recording timeline, the same frame as each series' axis, so the
+    span is checked against the sample's overall span: the bounding interval from the earliest start
+    to the latest end of the targeted series. This is deliberately the bounding interval, not a
+    per-series or gap-free rule, so an annotation can mark a time offset that falls in a gap between two
+    series' windows (a note logged between one sensor coming off and another going on, say). Shared
+    by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
+
+    Args:
+        label: Human-readable label for the span, used in the error message.
+        span: The span to check.
+        time_series: The series the span is checked against.
+        sample_id: The owning sample's id, for the error message.
+
+    Raises:
+        TimeFValidationError: If a series id is unknown, a targeted series has no timeline, or the
+            span falls outside the covered window.
+    """
+    scope = span.time_series_ids
+    # A span with no time_series_ids covers every series on the sample.
+    in_scope = [ts for ts in time_series if scope is None or ts.time_series_id in scope]
+    covered = {ts.time_series_id: ts.span_us for ts in in_scope}
+    for series_id in scope or ():
+        if series_id not in covered:
+            raise TimeFValidationError(
+                f"{label} references unknown time_series_id {series_id!r} on sample {sample_id!r}"
+            )
+    if not covered:
+        return
+    windows = [w for w in covered.values() if w is not None]
+    if len(windows) < len(covered):
+        timeless = sorted(sid for sid, w in covered.items() if w is None)
+        raise TimeFValidationError(
+            f"{label} covers {timeless}, which have no timeline at all, so a time-valued region "
+            f"means nothing on them. Scope it to the series that do"
+        )
+    start = min(w[0] for w in windows)  # bounding span of the targeted series; gaps between them stay valid
+    end = max(w[1] for w in windows)
+    # The window is half-open [start, end). A point's own exclusive end is start + 1; an interval's
+    # is its end. Either is outside when it runs past the window, which catches a point sitting
+    # exactly on the excluded upper bound.
+    span_end = span.start + 1 if span.is_point else span.end
+    if span.start < start or (span_end is not None and span_end > end):
+        raise TimeFValidationError(
+            f"{label} ({span.start}, {span.end}) us falls outside sample {sample_id!r} span "
+            f"({start}, {end}) us; span times are in the source recording timeline"
+        )
 
 
 @dataclass(kw_only=True)
@@ -79,26 +130,24 @@ class Sample:
             The attached annotation (the same instance).
 
         Raises:
-            ValueError: If the annotation's span references a series not on this sample, or a
+            TimeFValidationError: If the annotation's span references a series not on this sample, a
+                targeted series has no timeline, the span falls outside the covered window, or a
                 trial-level interval annotation is added when the sample's series do not share a
-                common ``(t_start_s, t_end_s)`` span.
+                common window.
         """
         if annotation.span is not None:
-            series_ids = {ts.time_series_id for ts in self.time_series}
-            if annotation.span.time_series_ids is not None:
-                # An empty tuple is rejected by Span's own __post_init__, so by here the ids are
-                # guaranteed non-empty and only their membership needs checking.
-                for series_id in annotation.span.time_series_ids:
-                    if series_id not in series_ids:
-                        raise ValueError(
-                            f"annotation {annotation.key!r} references unknown time_series_id {series_id!r}"
-                        )
-            elif not annotation.span.is_point:
-                spans = {(ts.t_start_s, ts.t_end_s) for ts in self.time_series}
-                if len(spans) != 1:
-                    raise ValueError(
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, self.time_series, self.sample_id
+            )
+            if not annotation.span.is_point and annotation.span.time_series_ids is None:
+                # A trial-level interval applies to every series at once, so they must agree on the
+                # window it is measured against. The shared check has already refused any timeless
+                # series, so every window here is a concrete pair.
+                windows = {ts.span_us for ts in self.time_series}
+                if len(windows) != 1:
+                    raise TimeFValidationError(
                         f"trial-level interval annotation {annotation.key!r} requires a common "
-                        "(t_start_s, t_end_s) span across the sample's time_series"
+                        "window across the sample's time_series"
                     )
         self.annotations = (*self.annotations, annotation)
         return annotation

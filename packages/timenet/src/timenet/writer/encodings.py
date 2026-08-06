@@ -27,6 +27,7 @@ SAMPLES_DICTIONARY = [
     "view",
     "time_series.list.element.spec_type",
     "time_series.list.element.channel",
+    "time_series.list.element.axis_type",
 ]
 
 ANNOTATIONS_DICTIONARY = ["key"]

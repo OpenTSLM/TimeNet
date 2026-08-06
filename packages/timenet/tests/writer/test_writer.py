@@ -5,6 +5,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
@@ -196,7 +197,9 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         unit_value=ureg.dimensionless,
     )
     sample = dataset.add_sample(
-        time_series=(TimeSeries(spec=spec, channel="c", sampling_rate_hz=1.0, n_values=1, loader=bad_loader),),
+        time_series=(
+            TimeSeries(spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader),
+        ),
         view=View.FULL,
     )
     sample.add_annotation(Annotation(key="k", value=1))
@@ -233,9 +236,8 @@ def test_per_series_array_contract_enforced(tmp_path):
     ts = TimeSeries(
         spec=spec,
         channel="c",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
-        t_start_s=0.0,
         n_values=5,
     )
     dataset.add_sample(time_series=(ts,), view=View.WINDOW)
@@ -312,7 +314,7 @@ def test_same_id_different_series_rejected(tmp_path):
     a = TimeSeries(
         spec=spec,
         channel="a",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-x",
@@ -320,7 +322,7 @@ def test_same_id_different_series_rejected(tmp_path):
     b = TimeSeries(  # same id, different channel and window
         spec=spec,
         channel="b",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         time_series_id="ts-x",
@@ -348,7 +350,7 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
     shared = TimeSeries(
         spec=spec,
         channel="a",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-shared",

@@ -13,6 +13,7 @@ import numpy as np
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.types import ClassificationTask, DataSource, TimeSeriesSpec, ureg
 
 
@@ -68,7 +69,7 @@ class TestMeanConnector(BaseConnector[None]):
                 values,
                 spec=_SIGNAL,
                 channel="signal",
-                sampling_rate_hz=_SAMPLING_RATE_HZ,
+                time_axis=RegularAxis.from_rate_hz(16),
                 source_id=f"rec-{index}",
                 time_series_id=f"ts-{index}",
             )

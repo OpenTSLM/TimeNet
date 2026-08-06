@@ -58,7 +58,7 @@ class Span:
     """A point (``end is None``) or half-open interval ``[start, end)``, optionally per-channel.
 
     Bounds are microseconds on the **source recording timeline**, the same frame as
-    :attr:`~timenet.dataset.TimeSeries.t_start_s`, so a span stays meaningful on a windowed sample
+    the frame a series' axis places its values in, so a span stays meaningful on a windowed sample
     that starts partway into the recording. That a span actually falls inside the sample it is
     attached to is checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample.
 

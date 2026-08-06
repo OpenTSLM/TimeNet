@@ -6,6 +6,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -90,11 +91,10 @@ def _series(spec, channel, n, time_series_id, source_id, phase=0.0):  # noqa: PL
     return TimeSeries(
         spec=spec,
         channel=channel,
-        sampling_rate_hz=_RATE_HZ,
+        time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
         source_id=source_id,
         time_series_id=time_series_id,
-        t_start_s=0.0,
         n_values=n,
     )
 
@@ -231,7 +231,6 @@ def _assert_series_equal(sample_id: str, expected: tuple[TimeSeries, ...], actua
         assert exp_ts.spec == act_ts.spec, f"spec differs for {series_id}"
         assert exp_ts.channel == act_ts.channel, f"channel differs for {series_id}"
         assert exp_ts.source_id == act_ts.source_id, f"source_id differs for {series_id}"
-        assert exp_ts.sampling_rate_hz == act_ts.sampling_rate_hz, f"sampling_rate differs for {series_id}"
-        assert exp_ts.t_start_s == act_ts.t_start_s, f"t_start_s differs for {series_id}"
-        assert exp_ts.t_end_s == act_ts.t_end_s, f"t_end_s differs for {series_id}"
+        assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
+        assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"

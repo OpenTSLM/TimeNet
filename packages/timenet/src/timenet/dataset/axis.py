@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum, unique
 from fractions import Fraction
 import math
-from typing import Self
+from typing import ClassVar, Self
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import US_PER_S
@@ -46,6 +46,9 @@ class RegularAxis:
     would be inexact for almost every window a curator cuts. An index is exact for all of them.
     """
 
+    axis_type: ClassVar[AxisType] = AxisType.REGULAR
+    """The stored discriminator. Declared on each shape rather than derived by a dispatch function,
+    so a new shape cannot be added without giving itself a tag."""
     period_us: Fraction
     """Microseconds between values. A :class:`~fractions.Fraction` because not every real rate is a
     whole number of microseconds: 360 Hz is 25000/9 and 256 Hz is 15625/4, the ECG and EEG rates a
@@ -148,13 +151,11 @@ class RegularAxis:
 
 @dataclass(frozen=True, kw_only=True)
 class OrdinalAxis:
-    """Order and nothing more: no cadence, no time offsets, no place on any timeline.
+    """An Axis to indicate an order without a cadence, time offsets, or place on any timeline."""
 
-    It has no fields, so there is nowhere to record a rate nobody measured. It also has no
-    ``time_offset_us`` and no ``index_at_or_after``, so a caller that has narrowed to this class cannot
-    ask a time-valued question at all; the type checker rejects it before the code runs.
-    """
+    axis_type: ClassVar[AxisType] = AxisType.ORDINAL
+    """The stored discriminator."""
 
 
 TimeAxis = RegularAxis | OrdinalAxis
-"""Every shape a series' time axis can have. Closed, so narrowing over it is exhaustive."""
+"""Every shape a series' time axis can have."""

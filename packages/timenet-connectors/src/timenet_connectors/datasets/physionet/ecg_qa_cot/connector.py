@@ -15,10 +15,12 @@ PTB-XL download.
 import ast
 import csv
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -239,16 +241,15 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
             One :class:`TimeSeries` per lead, sharing the ECG spec and a stable per-recording id.
         """
         header = self._read_header(ref.record_base)
-        sampling_rate_hz = float(header.fs)
+        axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
         return tuple(
             TimeSeries(
                 spec=_ECG,
                 channel=name,
-                sampling_rate_hz=sampling_rate_hz,
+                time_axis=axis,
                 loader=self._lead_loader(ref.record_base, lead_idx),
                 source_id=f"ptbxl-{ref.ecg_id}",
                 time_series_id=f"ecg-{ref.ecg_id}-{name}",
-                t_start_s=0.0,
                 n_values=int(header.sig_len),
             )
             for lead_idx, name in enumerate(header.sig_name)

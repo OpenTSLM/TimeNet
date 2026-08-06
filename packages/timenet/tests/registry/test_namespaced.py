@@ -1,4 +1,5 @@
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
@@ -34,10 +35,9 @@ def _namespaced_dataset() -> TimeFDataset:
     series = TimeSeries(
         spec=spec,
         channel="v",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         loader=sine_loader(n=8, sampling_rate_hz=1.0),
         time_series_id="ns-ts-0",
-        t_start_s=0.0,
         n_values=8,
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ns-sample-0")

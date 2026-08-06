@@ -2,12 +2,12 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-import math
 
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.axis import OrdinalAxis, TimeAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import TimeSeriesSpec, new_id
 
@@ -27,8 +27,9 @@ class TimeSeries:
     """Measurement-modality contract: type tag, units, dtype, and per-timestep shape."""
     channel: str
     """Name of this channel within the modality; must be non-empty."""
-    sampling_rate_hz: float
-    """Sampling rate in hertz; must be positive and finite."""
+    time_axis: TimeAxis
+    """Where this series' values sit in time: a :class:`~timenet.dataset.axis.RegularAxis` for a
+    cadence, or an :class:`~timenet.dataset.axis.OrdinalAxis` for a sequence with no time at all."""
     loader: Callable[[], pa.Array]
     """Lazy callable returning the series' values as an Arrow array."""
     source_id: str | None = None
@@ -41,37 +42,32 @@ class TimeSeries:
     a chunk's ``n_values`` reports.
 
     """
-    t_start_s: float = 0.0
-    """Start of the series window in seconds; must be non-negative."""
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
 
         Raises:
             TimeFValidationError: If ``n_values`` is not a positive integer.
-            ValueError: If ``channel`` is empty, ``sampling_rate_hz`` is not positive and finite, or
-                ``t_start_s`` is negative.
+            ValueError: If ``channel`` is empty. The axis validates itself.
         """
         if not self.channel:
             raise ValueError("TimeSeries.channel must be non-empty")
-        if not math.isfinite(self.sampling_rate_hz) or self.sampling_rate_hz <= 0:
-            raise ValueError(f"TimeSeries.sampling_rate_hz must be positive and finite, got {self.sampling_rate_hz!r}")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
-        if self.t_start_s < 0:
-            raise ValueError(f"TimeSeries.t_start_s must be >= 0, got {self.t_start_s}")
 
     @property
-    def t_end_s(self) -> float:
-        """End of the series window in seconds, exclusive.
+    def span_us(self) -> tuple[int, int] | None:
+        """The half-open microsecond window this series covers, or ``None`` if it has no timeline.
 
-        Derived from the length and the rate rather than stored, so the window and the value count
+        Derived from the axis and the value count rather than stored, so the window and the count
         cannot disagree.
 
         Returns:
-            ``t_start_s + n_values / sampling_rate_hz``.
+            ``(first time_offset, one past the last)`` in microseconds, or ``None`` for an ordinal series.
         """
-        return self.t_start_s + self.n_values / self.sampling_rate_hz
+        if isinstance(self.time_axis, OrdinalAxis):
+            return None
+        return (self.time_axis.time_offset_us(0), self.time_axis.time_offset_us(self.n_values))
 
     @classmethod
     def from_values(  # noqa: PLR0913
@@ -80,10 +76,9 @@ class TimeSeries:
         *,
         spec: TimeSeriesSpec,
         channel: str,
-        sampling_rate_hz: float,
+        time_axis: TimeAxis,
         source_id: str | None = None,
         time_series_id: str | None = None,
-        t_start_s: float = 0.0,
     ) -> "TimeSeries":
         """Build a series from already-materialized values, wrapping them in a float32 loader.
 
@@ -96,10 +91,9 @@ class TimeSeries:
             values: The channel's values (cast to float32).
             spec: The series' measurement-modality spec.
             channel: The channel name.
-            sampling_rate_hz: Sampling rate in hertz.
+            time_axis: Where the values sit in time.
             source_id: Optional id of the raw source recording.
             time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
-            t_start_s: Start of the window in seconds.
 
         Returns:
             The constructed :class:`TimeSeries`.
@@ -108,11 +102,10 @@ class TimeSeries:
         return cls(
             spec=spec,
             channel=channel,
-            sampling_rate_hz=sampling_rate_hz,
+            time_axis=time_axis,
             loader=lambda: array,
             source_id=source_id,
             time_series_id=time_series_id or new_id(),
-            t_start_s=t_start_s,
             n_values=len(array),
         )
 
