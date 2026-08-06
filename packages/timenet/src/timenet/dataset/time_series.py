@@ -2,12 +2,13 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import assert_never
 
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.axis import OrdinalAxis, TimeAxis
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.types import TimeSeriesSpec, new_id
 
@@ -29,9 +30,16 @@ class TimeSeries:
     """Name of this channel within the modality; must be non-empty."""
     time_axis: TimeAxis
     """Where this series' values sit in time: a :class:`~timenet.dataset.axis.RegularAxis` for a
-    cadence, or an :class:`~timenet.dataset.axis.OrdinalAxis` for a sequence with no time at all."""
+    cadence, an :class:`~timenet.dataset.axis.IrregularAxis` for stored per-value time offsets, or an
+    :class:`~timenet.dataset.axis.OrdinalAxis` for a sequence with no time at all."""
     loader: Callable[[], pa.Array]
     """Lazy callable returning the series' values as an Arrow array."""
+    time_offsets_loader: Callable[[], pa.Array] | None = None
+    """Lazy callable returning one int64 microsecond time offset per value, for an irregular series only.
+
+    Required exactly when ``time_axis`` is an :class:`~timenet.dataset.axis.IrregularAxis`, and
+    rejected otherwise: a regular axis computes its time offsets and an ordinal one has none, so a stream
+    attached to either would be a second, unreconcilable answer to the same question."""
     source_id: str | None = None
     """Optional identifier of the raw source recording."""
     time_series_id: str = field(default_factory=new_id)
@@ -47,27 +55,47 @@ class TimeSeries:
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer.
+            TimeFValidationError: If ``n_values`` is not a positive integer, or if ``time_offsets_loader``
+                and the axis shape disagree about whether this series stores per-value time offsets.
             ValueError: If ``channel`` is empty. The axis validates itself.
         """
         if not self.channel:
             raise ValueError("TimeSeries.channel must be non-empty")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
+        irregular = isinstance(self.time_axis, IrregularAxis)
+        if irregular and self.time_offsets_loader is None:
+            raise TimeFValidationError(
+                "an IrregularAxis series must carry time_offsets_loader: the axis states no cadence, so "
+                "nothing else can say where its values sit. Build it with TimeSeries.from_irregular()"
+            )
+        if not irregular and self.time_offsets_loader is not None:
+            raise TimeFValidationError(
+                f"time_offsets_loader is only for an IrregularAxis series, but this one has "
+                f"{type(self.time_axis).__name__}, which already determines every time offset"
+            )
 
     @property
     def span_us(self) -> tuple[int, int] | None:
         """The half-open microsecond window this series covers, or ``None`` if it has no timeline.
 
-        Derived from the axis and the value count rather than stored, so the window and the count
-        cannot disagree.
+        Derived from the axis rather than stored, so the window and the axis cannot disagree. The
+        dispatch is positive and ends in :func:`~typing.assert_never`: a new axis shape breaks this
+        method at type-check time instead of falling into whichever branch happens to be last.
 
         Returns:
             ``(first time_offset, one past the last)`` in microseconds, or ``None`` for an ordinal series.
         """
-        if isinstance(self.time_axis, OrdinalAxis):
+        axis = self.time_axis
+        if isinstance(axis, RegularAxis):
+            return (axis.time_offset_us(0), axis.time_offset_us(self.n_values))
+        if isinstance(axis, IrregularAxis):
+            # One microsecond past the last stored time_offset: the axis states no cadence, so there is no
+            # next time offset to end on, and a microsecond is the finest the format addresses.
+            return (axis.first_us, axis.last_us + 1)
+        if isinstance(axis, OrdinalAxis):
             return None
-        return (self.time_axis.time_offset_us(0), self.time_axis.time_offset_us(self.n_values))
+        assert_never(axis)
 
     @classmethod
     def from_values(  # noqa: PLR0913
@@ -108,6 +136,75 @@ class TimeSeries:
             time_series_id=time_series_id or new_id(),
             n_values=len(array),
         )
+
+    @classmethod
+    def from_irregular(  # noqa: PLR0913
+        cls,
+        values: np.ndarray | Sequence[float],
+        *,
+        time_offsets_us: np.ndarray | Sequence[int],
+        spec: TimeSeriesSpec,
+        channel: str,
+        source_id: str | None = None,
+        time_series_id: str | None = None,
+    ) -> "TimeSeries":
+        """Build an irregular series from materialized values and their time offsets.
+
+        The axis endpoints come from the stream itself, so the two cannot disagree: there is no way to
+        state a first or last time offset that the time offsets do not have. Convert wall-clock moments with
+        :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before calling.
+
+        Args:
+            values: The channel's values (cast to float32).
+            time_offsets_us: One time offset per value, in microseconds from the sample's relative zero.
+            spec: The series' measurement-modality spec.
+            channel: The channel name.
+            source_id: Optional id of the raw source recording.
+            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+
+        Returns:
+            The constructed :class:`TimeSeries`.
+
+        Raises:
+            TimeFValidationError: If the time offsets are unusable, or if there is not exactly one per
+                value.
+        """
+        array = pa.array(np.asarray(values, dtype=np.float32))
+        time_offsets = to_time_offsets_us(time_offsets_us)
+        if len(time_offsets) != len(array):
+            raise TimeFValidationError(
+                f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"
+            )
+        time_offset_array = pa.array(time_offsets)
+        return cls(
+            spec=spec,
+            channel=channel,
+            time_axis=IrregularAxis.spanning(time_offsets),
+            loader=lambda: array,
+            time_offsets_loader=lambda: time_offset_array,
+            source_id=source_id,
+            time_series_id=time_series_id or new_id(),
+            n_values=len(array),
+        )
+
+    def time_offsets_us(self) -> np.ndarray:
+        """Read this series' per-value time offsets.
+
+        Available only on an irregular series. A regular axis computes its time offsets without a read and
+        an ordinal one has none, so neither has a stream to return.
+
+        Returns:
+            One int64 microsecond time offset per value.
+
+        Raises:
+            TimeFValidationError: If this series' axis is not an
+                :class:`~timenet.dataset.axis.IrregularAxis`.
+        """
+        if self.time_offsets_loader is None:
+            raise TimeFValidationError(
+                f"only an IrregularAxis series stores time offsets, and this one has {type(self.time_axis).__name__}"
+            )
+        return self.time_offsets_loader().to_numpy(zero_copy_only=False)
 
     def to_arrow(self) -> pa.Array:
         """Read the series' values as an Arrow array.

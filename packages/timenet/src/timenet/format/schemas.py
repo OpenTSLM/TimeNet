@@ -72,9 +72,11 @@ def time_series_struct(id_types: IdTypes) -> pa.DataType:
             ("source_id", id_types["source_id"]),
             ("time_series_id", id_types["time_series_id"]),
             ("axis_type", pa.string()),  # dispatched on before any shape-specific column is read
-            ("period_numerator_us", pa.int64()),  # null iff ordinal
-            ("period_denominator", pa.int64()),  # null iff ordinal
-            ("start_index", pa.int64()),  # null iff ordinal
+            ("period_numerator_us", pa.int64()),  # non-null iff regular
+            ("period_denominator", pa.int64()),  # non-null iff regular
+            ("start_index", pa.int64()),  # non-null iff regular
+            ("first_time_offset_us", pa.int64()),  # non-null iff irregular
+            ("last_time_offset_us", pa.int64()),  # non-null iff irregular
             ("n_values", pa.int64()),
         ]
     )
@@ -139,6 +141,7 @@ def shard_schema(id_types: IdTypes) -> pa.Schema:
             ("chunk_idx", pa.int32()),
             ("n_values", pa.int32()),
             ("values", pa.list_(pa.float32())),
+            ("time_offsets_us", pa.list_(pa.int64())),
         ]
     )
 

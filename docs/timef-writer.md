@@ -61,7 +61,7 @@ tasks, and the time-series index are always Parquet. The manifest records the ch
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows; currently scalar float32 only | `(shard path, row group, row offset)` |
+| `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows, plus a `list<int64>` `time_offsets_us` column that is null unless the series stores per-value time offsets; currently scalar float32 only | `(shard path, row group, row offset)` |
 | `zarr` | one array per `spec_type` under `time_series.zarr/`, shaped `(total_steps, *value_shape)` with the spec dtype; a series is **one index row** spanning its time axis | `(array path, step start, –)` |
 
 Each backend chunks on its own terms: Parquet needs the logical `chunk_max_bytes` split to pack series
@@ -91,6 +91,9 @@ byte-based flush keeps it well under.
 Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay stable:
 
 - `values.list.element` -> **BYTE_STREAM_SPLIT** + zstd (verified applied via a read-back self-check).
+- `time_offsets_us.list.element` -> **DELTA_BINARY_PACKED** + zstd, for the irregular series that
+  carry one time offset per value. A monotonic stream stores as small deltas rather than full
+  int64s. Verified by the same read-back self-check.
 - monotonic ints (`chunk_idx`, `chunk_major_idx`, `chunk_minor_idx`) -> DELTA_BINARY_PACKED.
 - bounded categoricals (`spec_type`, `channel`, `view`, `key`, `target`, `chunk_file`)
   -> dictionary + RLE.

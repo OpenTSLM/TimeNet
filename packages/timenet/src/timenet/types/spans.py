@@ -27,30 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from timenet.errors import TimeFValidationError
-from timenet.types.clock import seconds_to_us, unix_us
-
-
-def _offset_us(moment: datetime, start_time: datetime | int | None) -> int:
-    """Convert a wall-clock moment to an offset on a sample's recording timeline.
-
-    Args:
-        moment: The wall-clock moment, timezone-aware.
-        start_time: The target sample's ``start_time``.
-
-    Returns:
-        Microseconds from the sample's relative zero.
-
-    Raises:
-        TimeFValidationError: If ``start_time`` is ``None``, because a sample with no wall-clock
-            anchor has no calendar time to measure a moment against.
-    """
-    if start_time is None:
-        raise TimeFValidationError(
-            "from_datetime needs the target sample's start_time, and that sample has none. A sample "
-            "with no wall-clock anchor has no calendar time to measure against; use seconds() with "
-            "an offset into the recording instead"
-        )
-    return unix_us(moment) - unix_us(start_time)
+from timenet.types.clock import offset_us, seconds_to_us
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -179,7 +156,7 @@ class PointSpan(Span):
         Returns:
             The point.
         """
-        return cls(start=_offset_us(at, start_time), time_series_ids=time_series_ids)
+        return cls(start=offset_us(at, start_time), time_series_ids=time_series_ids)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -255,7 +232,7 @@ class IntervalSpan(Span):
             The interval.
         """
         return cls(
-            start=_offset_us(start, start_time),
-            end=_offset_us(end, start_time),
+            start=offset_us(start, start_time),
+            end=offset_us(end, start_time),
             time_series_ids=time_series_ids,
         )

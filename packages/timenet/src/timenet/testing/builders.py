@@ -234,3 +234,11 @@ def _assert_series_equal(sample_id: str, expected: tuple[TimeSeries, ...], actua
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
+        # An irregular axis carries only its endpoints, so two streams differing in the middle compare
+        # equal above. The stream is data and is compared as data, like the values.
+        exp_time_offsets, act_time_offsets = exp_ts.time_offsets_loader, act_ts.time_offsets_loader
+        assert (exp_time_offsets is None) == (act_time_offsets is None), (
+            f"one side stores time offsets and the other does not for {series_id}"
+        )
+        if exp_time_offsets is not None and act_time_offsets is not None:
+            assert exp_time_offsets().equals(act_time_offsets()), f"time offsets differ for {series_id}"
