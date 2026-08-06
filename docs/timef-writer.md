@@ -36,6 +36,8 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
   tasks/task=<task_type>/part-0.parquet
   time_series/shard-00000.parquet ...   # values_backend="parquet" (default)
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
+  time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
+  time_series.zarr/_time_offsets/<spec_type>/...    # their int64 time offsets, one per value
 ```
 
 ## Constructor options
@@ -62,13 +64,13 @@ tasks, and the time-series index are always Parquet. The manifest records the ch
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
 | `parquet` (default) | rotating `time_series/shard-*.parquet` files of `list<float32>` rows, plus a `list<int64>` `time_offsets_us` column that is null unless the series stores per-value time offsets; currently scalar float32 only | `(shard path, row group, row offset)` |
-| `zarr` | one array per `spec_type` under `time_series.zarr/`, shaped `(total_steps, *value_shape)` with the spec dtype; a series is **one index row** spanning its time axis | `(array path, step start, –)` |
+| `zarr` | one array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`, shaped `(total_steps, *value_shape)` with the spec dtype. Irregular values sit under `_irregular/` with their int64 time offsets in a parallel array under `_time_offsets/`; a series is **one index row** spanning its time axis | `(array path, step start, –)` |
 
 Each backend chunks on its own terms: Parquet needs the logical `chunk_max_bytes` split to pack series
 into row groups, while Zarr chunks the storage itself, so its index carries one placement per series
 (split only past 2³⁰ values to keep `n_values` in int32). The Zarr writer buffers appends per
-`spec_type` and flushes at shard-aligned boundaries, so every shard object is written exactly once
-rather than read-modify-written per series.
+`(spec_type, stores_time_offsets)` partition and flushes at shard-aligned boundaries, so every shard
+object is written exactly once rather than read-modify-written per series.
 
 The Zarr backend needs the `zarr` extra (`pip install 'timenet[zarr]'`); the core never imports it. A
 Zarr series can hold embeddings, pose tensors, spectrogram frames, or image sequences. Recordings may

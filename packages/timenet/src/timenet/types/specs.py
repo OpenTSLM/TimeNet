@@ -18,6 +18,9 @@ from timenet.errors import TimeFValidationError
 from timenet.types.units import ureg
 
 
+#: Spec types the Zarr backend cannot encode as its own array path segment.
+_RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets"})
+
 SUPPORTED_VALUE_DTYPES = frozenset(
     {"bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32"}
 )
@@ -83,10 +86,13 @@ class TimeSeriesSpec:
             raise TimeFValidationError(
                 f"TimeSeriesSpec.data_source must be a DataSource or None, got {type(self.data_source).__name__}"
             )
-        if self.spec_type in {".", ".."}:
-            # The Zarr backend derives a per-spec_type array path from spec_type; "." and ".." would be
-            # filesystem-special path segments that percent-encoding leaves untouched.
-            raise TimeFValidationError(f"TimeSeriesSpec.spec_type must not be '.' or '..', got {self.spec_type!r}")
+        if self.spec_type in _RESERVED_SPEC_TYPES:
+            # The Zarr backend derives a per-spec_type array path from spec_type, and percent-encoding
+            # leaves all of these untouched: "." and ".." are filesystem-special, and the two
+            # underscore names are the groups it puts irregular values and their time offsets under.
+            raise TimeFValidationError(
+                f"TimeSeriesSpec.spec_type must not be one of {sorted(_RESERVED_SPEC_TYPES)}, got {self.spec_type!r}"
+            )
         try:
             normalized_dtype = np.dtype(self.dtype).name
         except TypeError as exc:

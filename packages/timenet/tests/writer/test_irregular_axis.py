@@ -1,5 +1,7 @@
 """Round-trips for a series whose time offsets are stored rather than computed (TimeF cases 3 and 4)."""
 
+import json
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -45,13 +47,14 @@ _HATCH_US = [0, 1_655_412_000, 6_486_006_000, 6_527_881_000]
 _HATCH_VALUES = [1.0, 0.0, 1.0, 0.0]
 
 
-def test_an_irregular_series_round_trips(tmp_path):
+@pytest.mark.parametrize("values_backend", ["parquet", "zarr"])
+def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), channel="hatch")
     dataset.add_sample(time_series=(ts,), view=View.WINDOW)
     dataset.derive_schema()
 
-    reader = TimeFReader(_written(tmp_path, dataset))
+    reader = TimeFReader(_written(tmp_path, dataset, values_backend=values_backend))
     back = next(iter(reader.iter_samples())).time_series[0]
     assert back.time_axis == IrregularAxis(first_us=0, last_us=6_527_881_000)
     assert back.time_offsets_us().tolist() == _HATCH_US
@@ -177,13 +180,56 @@ def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
         _written(tmp_path, dataset)
 
 
-def test_zarr_refuses_an_irregular_series_for_now(tmp_path):
+@pytest.mark.parametrize("chunk_max_bytes", [64, 480, 1000, 4096])
+def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes):
+    # Zarr requires the shard shape to be a multiple of the chunk shape. The time offsets array has its
+    # own byte width, so it needs the same rounding the values array does; without it every byte
+    # target where the two do not divide aborts create_array.
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), channel="hatch")
-    dataset.add_sample(time_series=(ts,), view=View.WINDOW)
+    dataset.add_sample(time_series=(ts,))
     dataset.derive_schema()
-    with pytest.raises(TimeFValidationError, match="cannot store per-value time offsets"):
-        _written(tmp_path, dataset, values_backend="zarr")
+
+    version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
+    back = next(iter(TimeFReader(version).iter_samples())).time_series[0]
+    assert back.time_offsets_us().tolist() == _HATCH_US
+
+
+def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
+    # The partition is what lets one element offset address both a partition's values and its
+    # time_offsets: mixing the two in one array would let the offsets drift apart silently.
+    dataset = _dataset()
+    dataset.add_sample(
+        time_series=(
+            TimeSeries.from_values(
+                np.arange(8, dtype=np.float32),
+                spec=_spec(),
+                channel="steady",
+                time_axis=RegularAxis.from_rate_hz(2),
+            ),
+            TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), channel="hatch"),
+        ),
+        view=View.WINDOW,
+    )
+    dataset.derive_schema()
+    version = _written(tmp_path, dataset, values_backend="zarr")
+
+    store = version / "time_series.zarr"
+    assert (store / "env").is_dir()  # regular values keep today's top-level path
+    assert (store / "_irregular" / "env").is_dir()
+    assert (store / "_time_offsets" / "env").is_dir()
+
+    back = {ts.channel: ts for ts in next(iter(TimeFReader(version).iter_samples())).time_series}
+    assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
+    assert back["steady"].to_numpy().tolist() == list(range(8))
+    assert back["steady"].time_offsets_loader is None
+
+
+def test_a_spec_type_cannot_collide_with_the_zarr_groups():
+    # quote() leaves underscores alone, so these would land on the groups the writer owns.
+    for reserved in ("_irregular", "_time_offsets"):
+        with pytest.raises(TimeFValidationError, match="must not be one of"):
+            _spec(reserved)
 
 
 def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
@@ -202,3 +248,17 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     back = next(iter(TimeFReader(version_dir).iter_samples())).time_series[0]
     with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
         back.time_offsets_us()
+
+
+def test_zarr_time_offsets_persist_the_delta_filter(tmp_path):
+    # The time offsets array claims a Delta filter for its monotonic stream; confirm it lands in the
+    # written zarr.json rather than trusting the create_array call that requested it.
+    dataset = _dataset()
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), channel="hatch")
+    dataset.add_sample(time_series=(ts,))
+    dataset.derive_schema()
+    version = _written(tmp_path, dataset, values_backend="zarr")
+
+    meta = json.loads((version / "time_series.zarr" / "_time_offsets" / "env" / "zarr.json").read_text())
+    inner = meta["codecs"][0]["configuration"]["codecs"]  # inside the sharding codec
+    assert any(codec["name"] == "numcodecs.delta" for codec in inner)
