@@ -22,10 +22,10 @@ from timenet.types import (
     ClassificationTask,
     DataSource,
     IntervalAnnotation,
+    IntervalSpan,
     LocalizationMode,
     PointAnnotation,
     ScalarPredictionTask,
-    Span,
     StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
@@ -217,7 +217,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             # A scope narrows the input to a region: same task type as the whole-sample label above, with
             # the window supplied. Span times are in the source recording timeline, so this sits inside
             # the window's span.
-            scope=Span.interval(0.5, 0.75, time_series_ids=(window.time_series_id,)),
+            scope=IntervalSpan.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
         )
         return dataset
 

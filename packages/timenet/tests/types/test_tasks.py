@@ -5,9 +5,10 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     ForecastingTask,
+    IntervalSpan,
     LocalizationMode,
+    PointSpan,
     ScalarPredictionTask,
-    Span,
     Task,
     TaskType,
     TemporalLocalizationTask,
@@ -40,7 +41,7 @@ def test_series_output_tasks_answer_with_a_sample():
 def test_classification_labels_the_whole_sample_or_a_scope():
     whole = ClassificationTask(target="afib", target_schema="rhythm")
     assert whole.scope is None
-    scoped = ClassificationTask(target="N2", scope=Span(start_s=30.0, end_s=60.0))
+    scoped = ClassificationTask(target="N2", scope=IntervalSpan.seconds(30.0, 60.0))
     assert scoped.scope is not None and not scoped.scope.is_point
 
 
@@ -65,7 +66,7 @@ def test_scalar_prediction_rejects_an_unknown_unit():
 def test_localization_target_holds_points_and_intervals():
     task = TemporalLocalizationTask(
         prompt="Locate all R-peaks.",
-        target=(Span(start_s=1.2, time_series_ids=("II",)), Span(start_s=2.0, end_s=2.5)),
+        target=(PointSpan.seconds(1.2, time_series_ids=("II",)), IntervalSpan.seconds(2.0, 2.5)),
     )
     assert task.mode is LocalizationMode.SPARSE  # sparse by default: unmarked time is unlabeled
     assert task.target is not None
@@ -74,7 +75,7 @@ def test_localization_target_holds_points_and_intervals():
 
 def test_localization_mode_is_coerced_so_a_read_back_task_compares_equal():
     # The reader passes the raw string read from the partition, so the enum is restored on construction.
-    task = TemporalLocalizationTask(target=(Span(start_s=0.0),), mode="exhaustive")  # ty: ignore[invalid-argument-type]
+    task = TemporalLocalizationTask(target=(PointSpan.seconds(0.0),), mode="exhaustive")  # ty: ignore[invalid-argument-type]
     assert task.mode is LocalizationMode.EXHAUSTIVE
 
 
@@ -104,10 +105,10 @@ def test_correspondence_allows_an_unconstrained_pool():
 
 
 def test_spans_collects_scope_and_span_valued_payload():
-    scope = Span(start_s=0.0, end_s=1.0)
+    scope = IntervalSpan.seconds(0.0, 1.0)
     assert ClassificationTask(target="a", scope=scope).spans() == (scope,)
     assert ClassificationTask(target="a").spans() == ()
-    target = (Span(start_s=1.0), Span(start_s=2.0))
+    target = (PointSpan.seconds(1.0), PointSpan.seconds(2.0))
     localization = TemporalLocalizationTask(target=target, scope=scope)
     assert localization.spans() == (scope, *target)
 

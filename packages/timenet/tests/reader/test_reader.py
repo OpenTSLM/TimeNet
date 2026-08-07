@@ -13,10 +13,11 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     IntervalAnnotation,
+    IntervalSpan,
     LocalizationMode,
     PointAnnotation,
+    PointSpan,
     ScalarPredictionTask,
-    Span,
     StaticAnnotation,
     TemporalLocalizationTask,
     View,
@@ -129,12 +130,12 @@ def test_scope_and_localization_spans_round_trip(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
         tasks = {t.id: t for t in reader.tasks}
-    assert tasks["task-cls-2"].scope == Span(start_s=0.0, end_s=0.25, time_series_ids=("ts-window-2",))
+    assert tasks["task-cls-2"].scope == IntervalSpan.seconds(0.0, 0.25, time_series_ids=("ts-window-2",))
     localization = tasks["task-localize-0"]
     assert isinstance(localization, TemporalLocalizationTask)
     assert localization.target == (
-        Span(start_s=0.5),  # a point: end_s stays None rather than becoming 0.0
-        Span(start_s=0.0, end_s=0.25, time_series_ids=("ts-shared",)),
+        PointSpan.seconds(0.5),  # a point: end_s stays None rather than becoming 0.0
+        IntervalSpan.seconds(0.0, 0.25, time_series_ids=("ts-shared",)),
     )
     assert localization.mode is LocalizationMode.SPARSE
 
