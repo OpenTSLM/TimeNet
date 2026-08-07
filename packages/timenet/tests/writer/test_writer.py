@@ -18,7 +18,7 @@ from timenet.types import (
     Version,
     ureg,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import TimeFWriter, writer as writer_module
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -272,6 +272,23 @@ def test_tasks_partitioned_by_type(tmp_path):
     version_dir = _written(tmp_path)
     parts = {p.parent.name for p in version_dir.glob("tasks/task=*/part-0.parquet")}
     assert parts == {"task=classification", "task=answer", "task=scalar_prediction", "task=temporal_localization"}
+
+
+def test_control_plane_tables_are_written_in_row_group_batches(tmp_path, monkeypatch):
+    # One row group per two rows: the batching is what gives the reader something to prune against, so
+    # a file written as a single row group would silently disable it.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _written(tmp_path)
+    index = pq.ParquetFile(version_dir / "time_series_index.parquet")
+    assert index.metadata.num_rows > 2
+    assert index.metadata.num_row_groups == -(-index.metadata.num_rows // 2)
+
+
+def test_control_plane_row_groups_carry_id_statistics(tmp_path):
+    index = pq.ParquetFile(_written(tmp_path) / "time_series_index.parquet")
+    column = index.metadata.schema.names.index("sample_id")
+    stats = index.metadata.row_group(0).column(column).statistics
+    assert stats is not None and stats.has_min_max
 
 
 def test_int32_guard_is_exposed():

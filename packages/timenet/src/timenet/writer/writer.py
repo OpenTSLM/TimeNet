@@ -28,6 +28,7 @@ from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_COMPRESSION_LEVEL,
+    DEFAULT_CONTROL_PLANE_BATCH_ROWS,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     INDEX_FILE,
@@ -578,17 +579,30 @@ class TimeFWriter:
         dictionary_columns: list[str],
         column_encoding: dict[str, str] | None = None,
     ) -> None:
-        table = pa.Table.from_pylist(rows, schema=schema)
-        pq.write_table(
-            table,
-            self._staging_dir / rel_path,
-            **encodings.parquet_kwargs(
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
+        """Write one control-plane table, streaming it in fixed-size row batches.
+
+        Materializing every row as one ``pa.Table.from_pylist`` peaks at the whole table in Arrow on top
+        of the Python rows that built it, which is what makes a large index or annotation table
+        expensive to write. Batching also gives the file more than one row group, which is what lets the
+        reader prune on a sorted key column.
+
+        Args:
+            rows: The already-ordered rows to write.
+            schema: The table's Arrow schema.
+            rel_path: The staging-relative output path.
+            dictionary_columns: Columns to dictionary-encode.
+            column_encoding: Explicit per-column encodings.
+        """
+        kwargs = encodings.parquet_kwargs(
+            dictionary_columns=dictionary_columns,
+            column_encoding=column_encoding,
+            compression=self._compression,
+            compression_level=self._compression_level,
         )
+        with pq.ParquetWriter(self._staging_dir / rel_path, schema, **kwargs) as writer:
+            for start in range(0, len(rows), DEFAULT_CONTROL_PLANE_BATCH_ROWS):
+                batch = rows[start : start + DEFAULT_CONTROL_PLANE_BATCH_ROWS]
+                writer.write_table(pa.Table.from_pylist(batch, schema=schema))
 
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:

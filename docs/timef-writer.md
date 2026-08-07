@@ -88,6 +88,11 @@ group never spans shards, so the index's `(chunk_file, chunk_major_idx, chunk_mi
 exact. A hard invariant caps a row group at 2³¹ values (`list<float32>` uses 32-bit offsets); the
 byte-based flush keeps it well under.
 
+The control plane streams too. Samples, annotations, tasks, and the index go through a
+`pq.ParquetWriter` in batches of 50,000 rows instead of one table built from every row at once, so a
+large control table never has to exist twice in memory. Batching is also what gives those files more
+than one row group, which is what lets the reader skip the ones a lookup cannot match.
+
 ## Encodings
 
 Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay stable:

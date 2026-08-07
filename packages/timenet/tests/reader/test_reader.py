@@ -3,11 +3,12 @@ from pathlib import Path
 import pickle
 
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -19,7 +20,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import TimeFWriter, writer as writer_module
 
 
 def _write(tmp_path, dataset=None, **kwargs) -> Path:
@@ -157,7 +158,138 @@ def test_iter_samples_matches_read(tmp_path):
     assert streamed == read_ids
 
 
+# ---- filtered sample reads --------------------------------------------------------------------
+
+
+def test_iter_samples_returns_only_the_requested_ids(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        selected = list(reader.iter_samples(sample_ids=["sample-2", "sample-0"]))
+    assert [s.sample_id for s in selected] == ["sample-0", "sample-2"]  # stored order, not asked order
+    assert selected[0].time_series[0].to_arrow() is not None
+
+
+def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_samples())).time_series}
+    with TimeFReader(version_dir) as reader:
+        (only,) = reader.iter_samples(sample_ids=["sample-0"])
+        assert {ts.time_series_id: ts.to_arrow() for ts in only.time_series}.keys() == expected.keys()
+        for ts in only.time_series:
+            assert ts.to_arrow().equals(expected[ts.time_series_id])
+
+
+def test_iter_samples_with_an_unknown_id_raises(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFValidationError, match="no such sample"):
+        list(reader.iter_samples(sample_ids=["sample-0", "sample-nope"]))
+
+
+def test_iter_samples_with_an_empty_id_list_yields_nothing(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        assert list(reader.iter_samples(sample_ids=[])) == []
+
+
 # ---- laziness ---------------------------------------------------------------------------------
+
+
+def _count_control_plane_reads(monkeypatch) -> list[str]:
+    """Record every file the reader opens or decodes, whole-table, filtered, or by handle."""
+    read = []
+    original_read_table, original_dataset, original_file = pq.read_table, pads.dataset, pq.ParquetFile
+
+    def counting_read_table(source, *args, **kwargs):
+        read.append(str(source))
+        return original_read_table(source, *args, **kwargs)
+
+    def counting_dataset(source, *args, **kwargs):
+        read.extend(str(p) for p in source) if isinstance(source, list) else read.append(str(source))
+        return original_dataset(source, *args, **kwargs)
+
+    def counting_file(source, *args, **kwargs):
+        read.append(str(source))
+        return original_file(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    monkeypatch.setattr(pads, "dataset", counting_dataset)
+    monkeypatch.setattr(pq, "ParquetFile", counting_file)
+    return read
+
+
+def test_open_decodes_no_control_plane_table(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    reader = TimeFReader(version_dir)
+    assert read == []  # only manifest.json, which is plain JSON
+    assert reader._tasks is None
+    assert reader._annotation_table is None
+    assert reader._index_directory is None
+    assert reader.metadata.dataset_id  # metadata comes from the manifest, still free
+
+
+def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    with TimeFReader(version_dir) as reader:
+        assert read == []
+        first = reader.tasks
+        opened = [p for p in read if "/tasks/" in p]
+        assert opened  # first access decodes the task partitions
+        assert reader.tasks is first  # second access re-uses the cached tuple
+        assert [p for p in read if "/tasks/" in p] == opened
+
+
+def test_annotations_are_decoded_only_when_a_sample_resolves_them(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    with TimeFReader(version_dir) as reader:
+        assert not [p for p in read if p.endswith("annotations.parquet")]
+        sample = next(iter(reader.iter_samples()))
+        assert sample.annotations
+        assert [p for p in read if p.endswith("annotations.parquet")]
+
+
+def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path, monkeypatch):
+    # One row group per two index rows, so the statistics on the sample_id column have something to
+    # rule out. Without pruning, one lookup would decode every row group in the file.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        sample = next(iter(reader.iter_samples()))
+        for series in sample.time_series:
+            series.to_arrow()
+        total = len(reader._index_groups())
+        assert total > 1, "the fixture must span several row groups for this to mean anything"
+        assert len(reader._index_cache) < total
+
+
+def test_index_row_groups_are_pruned_by_their_statistics(tmp_path, monkeypatch):
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        groups = reader._index_groups()
+        assert all(g.min_sample_id is not None for g in groups), "the index must carry sample_id statistics"
+        assert [g.may_hold("sample-0") for g in groups].count(False) > 0
+
+
+def test_getstate_drops_every_control_plane_cache(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        next(iter(reader.iter_samples())).time_series[0].to_arrow()
+        _ = reader.tasks
+        state = reader.__getstate__()
+    assert state["_tasks"] is None
+    assert state["_annotation_table"] is None
+    assert state["_annotation_rows"] is None
+    assert state["_annotation_cache"] == {}
+    assert state["_index_directory"] is None
+    assert state["_index_maxima"] is None
+    assert state["_index_files"] == {}
+    assert state["_index_cache"] == {}
+    assert state["_samples_data"] is None
+    assert state["_values"] is None
 
 
 def test_values_are_lazy(tmp_path, monkeypatch):
@@ -268,9 +400,10 @@ def test_verify_detects_a_deleted_file(tmp_path):
         TimeFReader(version_dir)
 
 
-def test_corrupt_task_partition_raises_format_error(tmp_path):
+def test_corrupt_task_partition_raises_format_error_on_first_task_access(tmp_path):
     # An unknown task partition name is corrupt on-disk data, so it must surface as TimeFFormatError
-    # rather than the bare ValueError that TaskType() happens to raise.
+    # rather than the bare ValueError that TaskType() happens to raise. Tasks are decoded on first
+    # access, so that is where it surfaces — construction no longer touches the partition.
     version_dir = _write(tmp_path)
     tasks_dir = next((version_dir / "tasks").iterdir())
     tasks_dir.rename(tasks_dir.parent / "task=not_a_real_task_type")
@@ -283,8 +416,9 @@ def test_corrupt_task_partition_raises_format_error(tmp_path):
         k.replace(tasks_dir.name, "task=not_a_real_task_type"): v for k, v in manifest["checksums"].items()
     }
     manifest_path.write_text(json.dumps(manifest))
+    reader = TimeFReader(version_dir)  # construction is happy: it read only the manifest
     with pytest.raises(TimeFFormatError):
-        TimeFReader(version_dir)
+        _ = reader.tasks
 
 
 def test_start_time_round_trips_exactly(tmp_path):
@@ -343,18 +477,19 @@ def _corrupt_descriptor(version_dir, key, field, value):
 
 def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
+    # Annotations decode when a sample resolves them, so that is where the disagreement surfaces.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
-    with pytest.raises(TimeFFormatError, match="decodes to shape"):
-        TimeFReader(version_dir)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="decodes to shape"):
+        list(reader.iter_samples())
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "age" is an int; a descriptor that calls it a str no longer matches the decoded value.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "age", "value_type", "str")
-    with pytest.raises(TimeFFormatError, match="value type"):
-        TimeFReader(version_dir)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="value type"):
+        list(reader.iter_samples())
 
 
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
