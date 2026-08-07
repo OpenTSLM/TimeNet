@@ -8,7 +8,7 @@ from timenet.testing import (
     make_dataset,
     sine_loader,
 )
-from timenet.types import StaticAnnotation
+from timenet.types import Annotation
 
 
 def test_counting_loader_counts_and_returns():
@@ -39,6 +39,6 @@ def test_assert_datasets_equal_reflexive():
 def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
     other = make_dataset()
-    other.samples[0].add_annotation(StaticAnnotation(key="extra", value=1))
+    other.samples[0].add_annotation(Annotation(key="extra", value=1))
     with pytest.raises(AssertionError):
         assert_datasets_equal(ds, other)

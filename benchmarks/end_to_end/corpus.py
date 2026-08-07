@@ -11,17 +11,16 @@ import pyarrow as pa
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.types import (
+    Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     DataSource,
     Domain,
     ForecastingTask,
-    IntervalAnnotation,
     IntervalSpan,
     License,
-    PointAnnotation,
-    StaticAnnotation,
+    PointSpan,
     TimeSeriesSpec,
     Version,
     View,
@@ -209,7 +208,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             subject_ids=("subject-ecg",),
             view=View.FULL,
         )
-        sample.add_annotation(StaticAnnotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
+        sample.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
             sample,
             AnswerTask(
@@ -237,7 +236,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             for channel in range(channel_count)
         )
         sample = dataset.add_sample(time_series=series, sample_id=f"sample-tsqa-{index:04d}", view=View.FULL)
-        sample.add_annotation(StaticAnnotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
+        sample.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             sample,
             AnswerTask(
@@ -261,7 +260,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             t_end_s=len(values) / 16.0,
         )
         sample = dataset.add_sample(time_series=(series,), sample_id=f"sample-mean-{index:04d}", view=View.FULL)
-        sample.add_annotation(StaticAnnotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
+        sample.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             sample,
             ClassificationTask(
@@ -310,7 +309,7 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             subject_ids=(f"subject-rich-{name}",),
             view=View.FULL,
         )
-        sample.add_annotation(StaticAnnotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
+        sample.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
 def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
@@ -355,15 +354,16 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             view=View.FULL,
         )
         sample.add_annotation(
-            StaticAnnotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
+            Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
         )
-        sample.add_annotation(PointAnnotation(key="event", start_time_s=1.0, id=f"annotation-{scenario.name}-event"))
+        sample.add_annotation(
+            Annotation(key="event", span=PointSpan.seconds(1.0), id=f"annotation-{scenario.name}-event")
+        )
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             sample.add_annotation(
-                IntervalAnnotation(
+                Annotation(
                     key="quality-window",
-                    start_time_s=1.0,
-                    end_time_s=2.0,
+                    span=IntervalSpan.seconds(1.0, 2.0),
                     id=f"annotation-{scenario.name}-window",
                 )
             )

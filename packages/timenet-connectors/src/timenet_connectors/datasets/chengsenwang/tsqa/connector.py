@@ -9,7 +9,7 @@ import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import AnswerTask, StaticAnnotation, TimeSeriesSpec, ureg
+from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 
@@ -51,9 +51,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 for channel, values in enumerate(channels)
             )
             sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
-            sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
+            sample.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
-                sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
+                sample.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
             dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 

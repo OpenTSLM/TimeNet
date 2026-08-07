@@ -1,13 +1,9 @@
 """TimeF value types and type system: versions, units, enums, specs, annotations, tasks, metadata."""
 
 from timenet.types.annotations import (
-    ANNOTATION_BASES,
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
-    IntervalAnnotation,
-    PointAnnotation,
-    StaticAnnotation,
     annotation_type_of,
     value_type_of,
 )
@@ -39,7 +35,6 @@ from timenet.types.views import View
 
 
 __all__ = [
-    "ANNOTATION_BASES",
     "TASKS",
     "US_PER_S",
     "Annotation",
@@ -52,15 +47,12 @@ __all__ = [
     "DatasetSchema",
     "Domain",
     "ForecastingTask",
-    "IntervalAnnotation",
     "IntervalSpan",
     "License",
     "LocalizationMode",
-    "PointAnnotation",
     "PointSpan",
     "ScalarPredictionTask",
     "Span",
-    "StaticAnnotation",
     "TSCorrespondenceTask",
     "TSEditingTask",
     "TSGenerationTask",

@@ -5,18 +5,17 @@ import pytest
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
+    Annotation,
     AnnotationDescriptor,
     AnnotationType,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
-    IntervalAnnotation,
     IntervalSpan,
     License,
     PointSpan,
     ScalarPredictionTask,
-    StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
@@ -114,8 +113,8 @@ def test_derive_schema(make_series):
     ds = _dataset()
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,), view=View.FULL)
-    sample.add_annotation(StaticAnnotation(key="age", value=64, unit="years"))
-    sample.add_annotation(IntervalAnnotation(key="artifact", start_time_s=0.0, end_time_s=1.0))
+    sample.add_annotation(Annotation(key="age", value=64, unit="years"))
+    sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(0.0, 1.0)))
     ds.add_task(sample, ClassificationTask(target="afib"))
 
     schema = ds.derive_schema()
@@ -164,9 +163,9 @@ def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
 def test_derive_schema_rejects_conflicting_annotation_descriptors(make_series):
     ds = _dataset()
     s1 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    s1.add_annotation(StaticAnnotation(key="age", value=64))
+    s1.add_annotation(Annotation(key="age", value=64))
     s2 = ds.add_sample(time_series=(make_series(),), view=View.FULL)
-    s2.add_annotation(StaticAnnotation(key="age", value="sixty-four"))
+    s2.add_annotation(Annotation(key="age", value="sixty-four"))
     with pytest.raises(ValueError, match="conflicting descriptors"):
         ds.derive_schema()
 
@@ -254,7 +253,7 @@ def test_add_task_requires_an_answer(make_series):
 def test_add_task_rejects_an_answer_given_twice(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
-    annotation = StaticAnnotation(key="stage", value="N2")
+    annotation = Annotation(key="stage", value="N2")
     sample.add_annotation(annotation)
     with pytest.raises(TimeFValidationError, match="not both"):
         dataset.add_task(sample, ClassificationTask(target="N2", target_annotation_ids=(annotation.id,)))
@@ -263,7 +262,7 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(),), view=View.FULL)
-    annotation = IntervalAnnotation(key="stage", value="N2", start_time_s=0.0, end_time_s=30.0)
+    annotation = Annotation(key="stage", value="N2", span=IntervalSpan.seconds(0.0, 30.0))
     sample.add_annotation(annotation)
     task = dataset.add_task(
         sample, TemporalLocalizationTask(prompt="Segment it.", target_annotation_ids=(annotation.id,))
@@ -445,7 +444,7 @@ def test_to_features_and_targets_keeps_a_scalar_target_numeric(make_series):
 def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_series):
     ds = _dataset()
     s = ds.add_sample(time_series=(make_series(),))
-    annotation = StaticAnnotation(key="stage", value="N2")
+    annotation = Annotation(key="stage", value="N2")
     s.add_annotation(annotation)
     ds.add_task(s, ClassificationTask(target_annotation_ids=(annotation.id,)))
     with pytest.raises(ValueError, match="no inline target"):

@@ -1,6 +1,6 @@
 ---
 icon: lucide/highlighter
-description: "Annotations: scoped side-information on a sample, in three shapes, that become task context or targets."
+description: "Annotations: scoped side-information on a sample that becomes task context or targets."
 tags:
   - guide
   - concepts
@@ -10,60 +10,59 @@ tags:
 
 An annotation is side-information attached to a [sample](samples.md). Every annotation has two parts: a
 **scope** (which channels, and which point or window in time it refers to) and a free-text **content**
-that can be as short as a tag or as long as a paragraph of reasoning. The three shapes differ only in
-how they sit in time. All are keyword-only frozen dataclasses sharing `key`, `value`, `unit`, and
-`description` fields, so a connector authors them directly (or subclasses with field defaults for reuse).
+that can be as short as a tag or as long as a paragraph of reasoning. One `Annotation` class covers
+every case; its optional `span` is what says how it sits in time. It is a keyword-only frozen
+dataclass with `key`, `value`, `unit` and `description` fields, so a connector authors it directly
+(or subclasses with field defaults for reuse).
 
-## StaticAnnotation
+## Sample-wide facts
 
-A `StaticAnnotation` has no time reference: it describes the whole recording. It requires a `value` and
-carries no time fields. Sample-level facts live here: the machine id, its firmware version, an operating
+An `Annotation` with no `span` has no time reference: it describes the whole recording. It requires a
+`value`. Sample-level facts live here: the machine id, its firmware version, an operating
 mode, or a single condition label that should travel with every window later drawn from the sample.
 
 ```python
-from timenet.types import StaticAnnotation
+from timenet.types import Annotation
 
-StaticAnnotation(key="condition", value="healthy")
-StaticAnnotation(key="operating_hours", value=1200, unit="hours")
+Annotation(key="condition", value="healthy")
+Annotation(key="operating_hours", value=1200, unit="hours")
 ```
 
 <figure markdown="span">
   ![A band over the whole recording marking a sample-level fact](../assets/figures/annotation-static.svg)
 </figure>
 
-## PointAnnotation
+## One time offset
 
-A `PointAnnotation` marks one time offset on one or more channels. It is the right shape for discrete
+An `Annotation` whose `span` is a `PointSpan` marks one time offset on one or more channels. It is the right shape for discrete
 events: a shock, a valve actuation, a detected spike. Points are cheap to store, are often produced in
 bulk by detectors, and then serve as anchors for downstream windowing. Pass `time_series_ids` to target
 specific channels, or leave it `None` for the whole sample.
 
 ```python
-from timenet.types import PointAnnotation
+from timenet.types import Annotation
 
-PointAnnotation(key="impact", start_time_s=4.2, time_series_ids=("vibration",))
+Annotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 <figure markdown="span">
   ![A marker at one time offset on a channel](../assets/figures/annotation-point.svg)
 </figure>
 
-## IntervalAnnotation
+## A bounded window
 
-An `IntervalAnnotation` covers a start-to-end window on one or more channels, and it is the workhorse.
-`end_time_s` must exceed `start_time_s`. Everything expressive about the scoping grammar, which channels
+An `Annotation` whose `span` is an `IntervalSpan` covers a start-to-end window on one or more
+channels, and it is the workhorse. The interval's end must exceed its start. Everything expressive about the scoping grammar, which channels
 by which time range, lives here, and the `value` and free-text `description` can carry the full reading
 of what happens in that window.
 
 ```python
-from timenet.types import IntervalAnnotation
+from timenet.types import Annotation
 
-IntervalAnnotation(
+Annotation(
     key="fault",
     value="bearing fault",
-    start_time_s=5.0,
-    end_time_s=8.0,
-    time_series_ids=("vibration",),
+    span=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),
 )
 ```
 
@@ -82,6 +81,6 @@ per-channel artifact.
 </figure>
 
 A sample holds a *list* of annotations, so several spans can sit on one channel, windows can overlap or
-nest, and the three shapes can coexist on one signal. Because the text field is free-form, an annotation
+nest, and all three ways of sitting in time can coexist on one signal. Because the text field is free-form, an annotation
 can carry a multi-sentence reading rather than just a label, which is what lets it become a reasoning
 target. That is the bridge to [tasks](tasks.md).

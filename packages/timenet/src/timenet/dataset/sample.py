@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, IntervalAnnotation, PointAnnotation, View, new_id
+from timenet.types import Annotation, View, new_id
 from timenet.types.clock import unix_us
 
 
@@ -73,31 +73,31 @@ class Sample:
         """Attach an annotation to the sample and return it.
 
         Args:
-            annotation: A ``StaticAnnotation``, ``PointAnnotation``, or ``IntervalAnnotation``.
+            annotation: The annotation to attach.
 
         Returns:
             The attached annotation (the same instance).
 
         Raises:
-            ValueError: If a temporal annotation's ``time_series_ids`` references a series not on this
-                sample, or a trial-level ``IntervalAnnotation`` is added when the sample's series do
-                not share a common ``(t_start_s, t_end_s)`` span.
+            ValueError: If the annotation's span references a series not on this sample, or a
+                trial-level interval annotation is added when the sample's series do not share a
+                common ``(t_start_s, t_end_s)`` span.
         """
-        if isinstance(annotation, PointAnnotation | IntervalAnnotation):
+        if annotation.span is not None:
             series_ids = {ts.time_series_id for ts in self.time_series}
-            if annotation.time_series_ids is not None:
-                # An empty tuple is rejected by the annotation's own __post_init__, so by here
-                # time_series_ids is guaranteed non-empty and only the ids need checking.
-                for series_id in annotation.time_series_ids:
+            if annotation.span.time_series_ids is not None:
+                # An empty tuple is rejected by Span's own __post_init__, so by here the ids are
+                # guaranteed non-empty and only their membership needs checking.
+                for series_id in annotation.span.time_series_ids:
                     if series_id not in series_ids:
                         raise ValueError(
                             f"annotation {annotation.key!r} references unknown time_series_id {series_id!r}"
                         )
-            elif isinstance(annotation, IntervalAnnotation):
+            elif not annotation.span.is_point:
                 spans = {(ts.t_start_s, ts.t_end_s) for ts in self.time_series}
                 if len(spans) != 1:
                     raise ValueError(
-                        f"trial-level IntervalAnnotation {annotation.key!r} requires a common "
+                        f"trial-level interval annotation {annotation.key!r} requires a common "
                         "(t_start_s, t_end_s) span across the sample's time_series"
                     )
         self.annotations = (*self.annotations, annotation)

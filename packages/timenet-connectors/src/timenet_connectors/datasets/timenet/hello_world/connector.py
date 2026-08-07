@@ -18,15 +18,14 @@ import pyarrow as pa
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.types import (
+    Annotation,
     AnswerTask,
     ClassificationTask,
     DataSource,
-    IntervalAnnotation,
     IntervalSpan,
     LocalizationMode,
-    PointAnnotation,
+    PointSpan,
     ScalarPredictionTask,
-    StaticAnnotation,
     TemporalLocalizationTask,
     TimeSeriesSpec,
     View,
@@ -131,7 +130,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-shared",
         )
         # An annotation shared across two samples (dedupe-by-id path).
-        cohort = StaticAnnotation(key="cohort", value="A", id="cohort-shared")
+        cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
         # Sample 0: full recording, two modalities, all annotation shapes, a task chain.
         cosine = TimeSeries.from_values(
@@ -143,12 +142,14 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-cos-0",
         )
         sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
-        sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
+        sample0.add_annotation(Annotation(key="age", value=64, unit="years", id="age-0"))
         sample0.add_annotation(cohort)
-        sample0.add_annotation(PointAnnotation(key="stimulus", start_time_s=0.5, id="stim-0"))
+        sample0.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
         sample0.add_annotation(
-            IntervalAnnotation(
-                key="artifact", start_time_s=0.0, end_time_s=0.25, time_series_ids=(shared.time_series_id,), id="art-0"
+            Annotation(
+                key="artifact",
+                span=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                id="art-0",
             )
         )
         classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))

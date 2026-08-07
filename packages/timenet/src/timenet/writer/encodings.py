@@ -29,7 +29,7 @@ SAMPLES_DICTIONARY = [
     "time_series.list.element.channel",
 ]
 
-ANNOTATIONS_DICTIONARY = ["key", "annotation_type"]
+ANNOTATIONS_DICTIONARY = ["key"]
 
 _TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
 

@@ -97,8 +97,9 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. `view` defaults to
   `View.FULL`; pass `view=View.WINDOW` for a windowed view.
-- `sample.add_annotation(StaticAnnotation(key=..., value=..., id=...))`. Annotation shapes:
-  `StaticAnnotation` (whole-sample), `PointAnnotation`, `IntervalAnnotation`.
+- `sample.add_annotation(Annotation(key=..., value=..., id=...))`. One class: its shape comes from its
+  `span`. No span means whole-sample; `span=PointSpan.seconds(...)` a time offset; `span=IntervalSpan.seconds(...)`
+  a region.
 - `dataset.add_task(sample, <Task>(...))`. Compose derived tasks with `from_tasks=(...)`.
 
 ## Task types (`timenet.types.tasks`)
@@ -134,7 +135,7 @@ import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.types import AnswerTask, StaticAnnotation, TimeSeriesSpec, ureg
+from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 _SPEC = TimeSeriesSpec(
@@ -166,9 +167,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 for channel, values in enumerate(channels)
             )
             sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
-            sample.add_annotation(StaticAnnotation(key="task", value=row["Task"], id=f"task-{index}"))
+            sample.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
-                sample.add_annotation(StaticAnnotation(key="label", value=row["Label"], id=f"label-{index}"))
+                sample.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
             dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
@@ -189,7 +190,7 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
 `download` calls `_ensure_archive` / `_stream_download` and returns refs; `convert` shares the 12-lead
 ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
-`StaticAnnotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
+whole-sample `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
 `AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
 `fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
 pattern, including sharing a series across many samples.
