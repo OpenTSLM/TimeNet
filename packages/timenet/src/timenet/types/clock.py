@@ -45,7 +45,7 @@ def us_to_seconds(microseconds: int) -> float:
 
 
 def unix_us(moment: datetime | int) -> int:
-    """Normalize a wall-clock time offset to Unix microseconds.
+    """Normalize a wall-clock timestamp to Unix microseconds.
 
     Accepts the two forms a curator actually has. A timezone-aware :class:`~datetime.datetime` is the
     common one, and it already resolves to microseconds, so this is a change of origin rather than a
@@ -85,3 +85,26 @@ def unix_us(moment: datetime | int) -> int:
             f"if it is local time"
         )
     return (moment - _EPOCH) // timedelta(microseconds=1)
+
+
+def offset_us(moment: datetime, start_time: datetime | int | None) -> int:
+    """Convert a wall-clock moment to an offset on a sample's recording timeline.
+
+    Args:
+        moment: The wall-clock moment, timezone-aware.
+        start_time: The target sample's ``start_time``.
+
+    Returns:
+        Microseconds from the sample's relative zero.
+
+    Raises:
+        TimeFValidationError: If ``start_time`` is ``None``, because a sample with no wall-clock
+            anchor has no calendar time to measure a moment against.
+    """
+    if start_time is None:
+        raise TimeFValidationError(
+            "a wall-clock moment needs the target sample's start_time, and that sample has none. A "
+            "sample with no wall-clock anchor has no calendar time to measure against; use an offset "
+            "into the recording instead"
+        )
+    return unix_us(moment) - unix_us(start_time)

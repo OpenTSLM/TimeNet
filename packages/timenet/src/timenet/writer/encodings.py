@@ -14,7 +14,11 @@ import pyarrow.parquet as pq
 
 
 SHARD_DICTIONARY = ["spec_type", "channel"]
-SHARD_ENCODING = {"values.list.element": "BYTE_STREAM_SPLIT", "chunk_idx": "DELTA_BINARY_PACKED"}
+SHARD_ENCODING = {
+    "values.list.element": "BYTE_STREAM_SPLIT",
+    "time_offsets_us.list.element": "DELTA_BINARY_PACKED",
+    "chunk_idx": "DELTA_BINARY_PACKED",
+}
 
 INDEX_DICTIONARY = ["spec_type", "channel", "chunk_file"]
 INDEX_ENCODING = {
@@ -82,17 +86,18 @@ def parquet_kwargs(
     }
 
 
-def values_encoding_of(path: str) -> set[str]:
-    """Return the encodings applied to the shard ``values.list.element`` column.
+def values_encoding_of(path: str, column_path: str = "values.list.element") -> set[str]:
+    """Return the encodings applied to one shard column.
 
-    Used as a writer self-check that BYTE_STREAM_SPLIT was actually applied (the encoding is silently
-    dropped if the column path is wrong).
+    Used as a writer self-check that the configured encoding was actually applied; pyarrow drops it
+    silently when the column path is wrong, which costs the compression with no error to notice.
 
     Args:
         path: Path to a shard parquet file.
+        column_path: The column's path in the parquet schema.
 
     Returns:
-        The set of encoding names found on ``values.list.element`` across all row groups.
+        The set of encoding names found on ``column_path`` across all row groups.
     """
     parquet_file = pq.ParquetFile(path)
     meta = parquet_file.metadata
@@ -101,6 +106,6 @@ def values_encoding_of(path: str) -> set[str]:
         group = meta.row_group(row_group)
         for column in range(meta.num_columns):
             chunk = group.column(column)
-            if chunk.path_in_schema == "values.list.element":
+            if chunk.path_in_schema == column_path:
                 encodings.update(chunk.encodings)
     return encodings

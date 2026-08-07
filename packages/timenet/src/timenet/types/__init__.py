@@ -7,7 +7,7 @@ from timenet.types.annotations import (
     annotation_type_of,
     value_type_of,
 )
-from timenet.types.clock import US_PER_S, seconds_to_us, unix_us, us_to_seconds
+from timenet.types.clock import US_PER_S, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
@@ -66,6 +66,7 @@ __all__ = [
     "annotation_type_of",
     "new_id",
     "normalize_unit",
+    "offset_us",
     "seconds_to_us",
     "unix_us",
     "ureg",

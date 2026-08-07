@@ -10,13 +10,35 @@ tags:
 
 A time series is one channel of a [sample](samples.md): `float32` values over time. A sample carries one
 or more of them, each identified by a `time_series_id` (the vibration and temperature channels of a
-machine, for example). Its type, the units of its value, timestamp, and sampling-rate axes, comes from a
+machine, for example). Its type, the units of its value, time, and sampling-rate axes, comes from a
 [`TimeSeriesSpec`](../types.md), so a g-scale accelerometer channel and a °C temperature channel read
 through the same API.
 
 <figure markdown="span">
   ![One channel labelled with its time_series_id, spec, and units](../assets/figures/time-series-example.svg)
 </figure>
+
+## Time offsets and timestamps
+
+The docs and the API use two words for time, and they do not mean the same thing.
+
+An **time offset** is a position on a series' own axis: microseconds counted from the sample's relative
+zero. Every axis quantity is one, and so are a [span](annotations.md)'s bounds. A time offset says where
+a value sits inside its recording, and nothing about what day that was.
+
+A **timestamp** is an absolute point on the wall clock, in Unix microseconds. Exactly one field
+carries one: a sample's `start_time`, which is what its relative zero refers to.
+
+Wall clock therefore enters a dataset once and composes by addition:
+
+```text
+value timestamp = sample.start_time + value time offset
+```
+
+A recording with no known date has time offsets and no timestamps, and that is a supported case rather
+than missing data. A 500 Hz ECG whose source gives no `base_date` is placed exactly on its own axis;
+asking what calendar day it fell on has no answer, and the format prefers no answer to a fabricated
+one.
 
 ## Reading values
 

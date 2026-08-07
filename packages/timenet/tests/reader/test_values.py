@@ -14,8 +14,15 @@ class _Shard:
 
     def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
         assert row_group == 0
-        assert columns == ["values"]
-        return pa.table({"values": pa.array([[self._value]], type=pa.list_(pa.float32()))})
+        # Projected, never the whole row group: a shard also carries ids, spec_type and channel, and
+        # decoding those on every value read is what the projection exists to avoid.
+        assert columns == ["values", "time_offsets_us"]
+        return pa.table(
+            {
+                "values": pa.array([[self._value]], type=pa.list_(pa.float32())),
+                "time_offsets_us": pa.nulls(1, type=pa.list_(pa.int64())),
+            }
+        )
 
 
 def test_row_group_cache_includes_dataset_root(monkeypatch):

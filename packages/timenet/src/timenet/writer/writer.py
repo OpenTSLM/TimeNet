@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import types as _types
+from typing import assert_never
 import uuid
 
 import numpy as np
@@ -19,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import OrdinalAxis
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -313,6 +314,7 @@ class TimeFWriter:
         result = values_backend.write_series(
             unique_series,
             read_and_validate=self._read_and_validate,
+            read_time_offsets=self._read_time_offsets,
             on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
@@ -365,6 +367,44 @@ class TimeFWriter:
                 f"declares n_values={ts.n_values}"
             )
         return values
+
+    def _read_time_offsets(self, ts: TimeSeries) -> pa.Array | None:  # noqa: PLR6301
+        """Read an irregular series' time offsets and check them against what it declares.
+
+        Returns ``None`` for every other axis shape, which is what the backend writes as a null cell.
+        The checks here are the reason ``first_time_offset_us`` and ``last_time_offset_us`` are verified
+        metadata: an axis cannot claim endpoints its own stream does not have.
+
+        Args:
+            ts: The series to read.
+
+        Returns:
+            The validated int64 time offsets, or ``None`` if the series stores none.
+
+        Raises:
+            TimeFValidationError: If the stream is unusable, its length disagrees with ``n_values``, or
+                its endpoints disagree with the axis.
+        """
+        if ts.time_offsets_loader is None:
+            return None
+        axis = ts.time_axis
+        if not isinstance(axis, IrregularAxis):  # pragma: no cover - TimeSeries.__post_init__ pairs these
+            raise TimeFValidationError(
+                f"series {ts.time_series_id!r} carries time offsets but has {type(axis).__name__}"
+            )
+        time_offsets = to_time_offsets_us(ts.time_offsets_loader().to_numpy(zero_copy_only=False))
+        if len(time_offsets) != ts.n_values:
+            raise TimeFValidationError(
+                f"series {ts.time_series_id!r}: its time_offsets_loader returned {len(time_offsets)} time offsets "
+                f"but it declares n_values={ts.n_values}"
+            )
+        if int(time_offsets[0]) != axis.first_us or int(time_offsets[-1]) != axis.last_us:
+            raise TimeFValidationError(
+                f"series {ts.time_series_id!r}: its axis claims the stream runs "
+                f"{axis.first_us}..{axis.last_us} us but the stream runs "
+                f"{int(time_offsets[0])}..{int(time_offsets[-1])} us"
+            )
+        return pa.array(time_offsets)
 
     # ---- metadata tables -----------------------------------------------------------------------
 
@@ -572,6 +612,38 @@ def _series_identity(ts: TimeSeries) -> tuple:
     return (ts.spec.spec_type, ts.channel, ts.time_axis, ts.source_id, ts.n_values)
 
 
+def _axis_columns(axis: TimeAxis) -> dict:
+    """Return the shape-specific axis columns, with every column the shape does not use set null.
+
+    Dispatch is positive and ends in :func:`~typing.assert_never`, so a new axis shape fails here at
+    type-check time rather than writing a row of nulls under someone else's tag.
+
+    Args:
+        axis: The series' time axis.
+
+    Returns:
+        The axis columns of the series struct.
+    """
+    empty = {
+        "period_numerator_us": None,
+        "period_denominator": None,
+        "start_index": None,
+        "first_time_offset_us": None,
+        "last_time_offset_us": None,
+    }
+    if isinstance(axis, RegularAxis):
+        return empty | {
+            "period_numerator_us": axis.period_us.numerator,
+            "period_denominator": axis.period_us.denominator,
+            "start_index": axis.start_index,
+        }
+    if isinstance(axis, IrregularAxis):
+        return empty | {"first_time_offset_us": axis.first_us, "last_time_offset_us": axis.last_us}
+    if isinstance(axis, OrdinalAxis):
+        return empty
+    assert_never(axis)
+
+
 def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
     return {
         "spec_type": ts.spec.spec_type,
@@ -579,9 +651,7 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
         "source_id": codec.encode("source_id", ts.source_id),
         "time_series_id": codec.encode("time_series_id", ts.time_series_id),
         "axis_type": str(ts.time_axis.axis_type),
-        "period_numerator_us": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.period_us.numerator,
-        "period_denominator": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.period_us.denominator,
-        "start_index": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.start_index,
+        **_axis_columns(ts.time_axis),
         "n_values": ts.n_values,
     }
 

@@ -18,6 +18,7 @@ from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
+from timenet.errors import TimeFFormatError
 from timenet.types import TimeSeriesSpec
 from timenet.values_backends.reader import BaseValuesReader
 
@@ -71,6 +72,22 @@ class ZarrValuesReader(BaseValuesReader):
             cursor += run_len
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
         return _to_arrow(combined, spec)
+
+    def load_time_offsets(self, root: Path, rows: list[dict]) -> pa.Array:
+        """Refuse: this backend cannot store per-value time offsets yet, so it can never have written any.
+
+        Args:
+            root: The version directory.
+            rows: The series' index rows.
+
+        Raises:
+            TimeFFormatError: Always.
+        """
+        del self, root, rows
+        raise TimeFFormatError(
+            "the Zarr values backend cannot store per-value time offsets, so this artifact should not "
+            "contain an irregular series; it was written by a different or newer writer"
+        )
 
     def close(self) -> None:
         """Drop cached arrays and decoded chunks (Zarr arrays hold no OS file handles to close)."""

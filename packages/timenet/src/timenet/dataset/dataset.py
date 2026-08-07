@@ -59,7 +59,7 @@ class TimeFDataset:
             subject_ids: Subjects this sample belongs to (empty for subject-less domains).
             sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic
                 output, e.g. when generating golden fixtures.
-            start_time: Wall-clock time offset that the sample's relative zero refers to: a
+            start_time: Wall-clock timestamp that the sample's relative zero refers to: a
                 timezone-aware datetime or whole Unix microseconds, or ``None`` when no wall-clock
                 reference exists.
 

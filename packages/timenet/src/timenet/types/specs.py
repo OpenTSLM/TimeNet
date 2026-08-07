@@ -46,7 +46,7 @@ class TimeSeriesSpec:
     unit_sampling_rate: pint.Unit
     """Unit of the sampling rate; must have frequency dimensionality."""
     unit_timestamp: pint.Unit
-    """Unit of the timestamp axis; must have time dimensionality."""
+    """Unit the time axis is measured in; must have time dimensionality."""
     unit_value: pint.Unit
     """Unit of the measured values."""
     data_source: DataSource | None = None

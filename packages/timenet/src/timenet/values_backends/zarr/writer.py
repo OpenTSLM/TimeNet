@@ -27,6 +27,8 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import TimeSeries
+from timenet.dataset.axis import IrregularAxis
+from timenet.errors import TimeFValidationError
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.writer import (
     BaseValuesBackend,
@@ -80,6 +82,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         unique_series: list[TimeSeries],
         *,
         read_and_validate: Callable[[TimeSeries], pa.Array],
+        read_time_offsets: Callable[[TimeSeries], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -88,6 +91,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series against its dtype and shape contract.
+            read_time_offsets: Loads an irregular series' time offsets. This backend cannot store them yet.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(arrays_finalized)`` as each spec-type array closes.
 
@@ -96,7 +100,15 @@ class ZarrValuesBackend(BaseValuesBackend):
 
         Raises:
             ImportError: If the ``zarr`` extra is not installed.
+            TimeFValidationError: If any series has an irregular axis.
         """
+        del read_time_offsets  # this backend refuses irregular series below, so it never reads a stream
+        irregular = [ts.spec.spec_type for ts in unique_series if isinstance(ts.time_axis, IrregularAxis)]
+        if irregular:
+            raise TimeFValidationError(
+                "the Zarr values backend cannot store per-value time offsets yet; use "
+                f"values_backend='parquet' for irregular series: {sorted(set(irregular))}"
+            )
         try:
             import zarr  # noqa: PLC0415
             from zarr.codecs import BloscCname, BloscCodec, BloscShuffle  # noqa: PLC0415

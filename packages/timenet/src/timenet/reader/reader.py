@@ -13,11 +13,13 @@ import json
 from pathlib import Path
 import types as _types
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
-from timenet.dataset.axis import AxisType, OrdinalAxis, RegularAxis, TimeAxis
+from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
+from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
@@ -31,6 +33,8 @@ from timenet.types import (
     Task,
     TaskType,
     View,
+    annotation_type_of,
+    value_type_of,
 )
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -226,7 +230,7 @@ class TimeFReader:
             resolved = []
             for from_id in from_ids:
                 if from_id not in by_id:
-                    raise ValueError(f"task {task_id!r} references unknown from_task_id {from_id!r}")
+                    raise TimeFFormatError(f"task {task_id!r} references unknown from_task_id {from_id!r}")
                 resolved.append(by_id[from_id])
             by_id[task_id].from_tasks = tuple(resolved)
         return tuple(by_id.values())
@@ -236,7 +240,7 @@ class TimeFReader:
         for row in self._read_rows(self._manifest.files.annotations):
             key = row["key"]
             if key not in self._annotation_descriptors:
-                raise ValueError(f"annotation row references unknown key {key!r} (not in schema)")
+                raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
             descriptor = self._annotation_descriptors[key]
             value = None if row["value"] is None else json.loads(row["value"])
             annotation_id = self._codec.decode("annotation_id", row["id"])
@@ -250,7 +254,22 @@ class TimeFReader:
             span = self._codec.decode_span(row["span"])
             if span is not None:
                 fields["span"] = span
-            annotations[annotation_id] = Annotation(**fields)
+            annotation = Annotation(**fields)
+            # The descriptor is what a registry query filters on, so a decoded annotation whose shape
+            # or value type disagrees with it would answer those queries wrongly. That is corruption.
+            derived_type = annotation_type_of(annotation)
+            if derived_type != descriptor.annotation_type:
+                raise TimeFFormatError(
+                    f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
+                    f"says {descriptor.annotation_type.value!r}"
+                )
+            derived_value_type = value_type_of(annotation.value)
+            if derived_value_type != descriptor.value_type:
+                raise TimeFFormatError(
+                    f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
+                    f"descriptor says {descriptor.value_type!r}"
+                )
+            annotations[annotation_id] = annotation
         return annotations
 
     def _load_index(self) -> dict[tuple[str, str], list[dict]]:
@@ -274,6 +293,14 @@ class TimeFReader:
             self._resolve_annotation(sample_id, aid)
             for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
         )
+        # A span is stored on the annotation but resolved against the sample; a stored span that no
+        # longer fits the series it lands on is a corrupt artifact, not a caller mistake.
+        for annotation in annotations:
+            if annotation.span is not None:
+                try:
+                    check_span_within_window(f"annotation {annotation.key!r}", annotation.span, series, sample_id)
+                except TimeFValidationError as exc:
+                    raise TimeFFormatError(str(exc)) from exc
         return Sample(
             sample_id=sample_id,
             time_series=series,
@@ -287,17 +314,30 @@ class TimeFReader:
     def _build_series(self, sample_id: str, struct: dict) -> TimeSeries:
         spec_type = struct["spec_type"]
         if spec_type not in self._spec_by_type:
-            raise ValueError(f"sample {sample_id!r} references unknown spec_type {spec_type!r}")
+            raise TimeFFormatError(f"sample {sample_id!r} references unknown spec_type {spec_type!r}")
         time_series_id = self._codec.decode("time_series_id", struct["time_series_id"])
-        return TimeSeries(
-            spec=self._spec_by_type[spec_type],
-            channel=struct["channel"],
-            time_axis=self._axis(struct, sample_id),
-            loader=_SeriesLoader(self, sample_id, time_series_id),
-            source_id=self._codec.decode_opt("source_id", struct["source_id"]),
-            time_series_id=time_series_id,
-            n_values=struct["n_values"],
-        )
+        axis = self._axis(struct, sample_id)
+        n_values = struct["n_values"]
+        time_offsets_loader = None
+        if isinstance(axis, IrregularAxis):
+            time_offsets_loader = _TimeOffsetsLoader(
+                self, sample_id, time_series_id, axis.first_us, axis.last_us, n_values
+            )
+        try:
+            return TimeSeries(
+                spec=self._spec_by_type[spec_type],
+                channel=struct["channel"],
+                time_axis=axis,
+                loader=_SeriesLoader(self, sample_id, time_series_id),
+                time_offsets_loader=time_offsets_loader,
+                source_id=self._codec.decode_opt("source_id", struct["source_id"]),
+                time_series_id=time_series_id,
+                n_values=n_values,
+            )
+        except TimeFValidationError as exc:
+            # A series rebuilt from a corrupt struct (bad n_values, a time offsets/axis mismatch) is a
+            # format failure, not a caller mistake, even though TimeSeries raises the same type for both.
+            raise TimeFFormatError(f"sample {sample_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
     @staticmethod
     def _axis(struct: dict, sample_id: str) -> TimeAxis:
@@ -317,39 +357,85 @@ class TimeFReader:
             TimeFFormatError: If the tag is missing, unknown, or disagrees with the columns beside it.
         """
         kind = struct["axis_type"]
-        numerator, denominator = struct["period_numerator_us"], struct["period_denominator"]
-        start_index = struct["start_index"]
         if kind == AxisType.ORDINAL:
-            # An ordinal series has no cadence, so its regular columns must be null. A populated one
-            # means the tag and the columns disagree, which is the corruption this method catches.
-            if numerator is not None or denominator is not None or start_index is not None:
+            # An ordinal series has no cadence and no per-value time offsets, so every shape column must
+            # be null. A populated one means the tag and the columns disagree, the corruption this
+            # method catches.
+            shape_cols = (
+                "period_numerator_us",
+                "period_denominator",
+                "start_index",
+                "first_time_offset_us",
+                "last_time_offset_us",
+            )
+            if any(struct[c] is not None for c in shape_cols):
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series tagged {kind!r} but carries regular-axis "
-                    f"columns; an ordinal series has no period or start index"
+                    f"sample {sample_id!r} has a series tagged {kind!r} but carries regular- or "
+                    f"irregular-axis columns; an ordinal series has neither"
                 )
             return OrdinalAxis()
-        if kind != AxisType.REGULAR:
-            raise TimeFFormatError(
-                f"sample {sample_id!r} has a series with axis_type {kind!r}; expected one of "
-                f"{[t.value for t in AxisType]}"
-            )
-        if numerator is None or denominator is None or start_index is None:
-            raise TimeFFormatError(
-                f"sample {sample_id!r} has a series tagged {kind!r} with no period or start index; a "
-                f"regular axis needs both. pyarrow only enforces non-null when the file is written, "
-                f"so this is the check that catches a corrupt row"
-            )
+        if kind == AxisType.REGULAR:
+            numerator, denominator = struct["period_numerator_us"], struct["period_denominator"]
+            start_index = struct["start_index"]
+            if numerator is None or denominator is None or start_index is None:
+                raise TimeFFormatError(
+                    f"sample {sample_id!r} has a series tagged {kind!r} with no period or start "
+                    f"index; a regular axis needs both. pyarrow only enforces non-null when the file "
+                    f"is written, so this is the check that catches a corrupt row"
+                )
+            try:
+                return RegularAxis(period_us=Fraction(numerator, denominator), start_index=start_index)
+            except (ZeroDivisionError, TypeError, TimeFValidationError) as exc:
+                raise TimeFFormatError(
+                    f"sample {sample_id!r} has a series with an unbuildable regular axis "
+                    f"(period {numerator}/{denominator}, start_index {start_index}): {exc}"
+                ) from exc
+        if kind == AxisType.IRREGULAR:
+            first, last = struct["first_time_offset_us"], struct["last_time_offset_us"]
+            if first is None or last is None:
+                raise TimeFFormatError(
+                    f"sample {sample_id!r} has a series tagged {kind!r} with no endpoints; an "
+                    f"irregular axis needs both. pyarrow only enforces non-null when the file is "
+                    f"written, so this check catches a corrupt row"
+                )
+            try:
+                return IrregularAxis(first_us=first, last_us=last)
+            except TimeFValidationError as exc:
+                raise TimeFFormatError(
+                    f"sample {sample_id!r} has a series with unbuildable irregular endpoints ({first}, {last}): {exc}"
+                ) from exc
+        raise TimeFFormatError(
+            f"sample {sample_id!r} has a series with axis_type {kind!r}; expected one of {[t.value for t in AxisType]}"
+        )
+
+    def _load_time_offsets(self, sample_id: str, time_series_id: str) -> pa.Array:
+        """Read an irregular series' per-value time offsets through the values backend.
+
+        Args:
+            sample_id: The owning sample's id.
+            time_series_id: The series id to read.
+
+        Returns:
+            One int64 microsecond time offset per value.
+
+        Raises:
+            TimeFFormatError: If the series has no index entry or its time offsets cannot be read.
+        """
+        rows = self._index.get((sample_id, time_series_id))
+        if not rows:
+            raise TimeFFormatError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
+        if self._values is None:
+            self._values = make_values_reader(self._manifest.values_backend)
         try:
-            return RegularAxis(period_us=Fraction(numerator, denominator), start_index=start_index)
-        except (ZeroDivisionError, TypeError, TimeFValidationError) as exc:
+            return self._values.load_time_offsets(self._root, rows)
+        except (KeyError, OSError, IndexError, ValueError) as exc:
             raise TimeFFormatError(
-                f"sample {sample_id!r} has a series with an unbuildable regular axis "
-                f"(period {numerator}/{denominator}, start_index {start_index}): {exc}"
+                f"failed to read time offsets for series {time_series_id!r} for sample {sample_id!r}: {exc}"
             ) from exc
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
         if annotation_id not in self._annotations:
-            raise ValueError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
+            raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
         return self._annotations[annotation_id]
 
     # ---- id decoding ---------------------------------------------------------------------------
@@ -365,18 +451,18 @@ class TimeFReader:
             The series values in the spec's canonical Arrow representation.
 
         Raises:
-            ValueError: If the series has no index entry or a chunk cannot be read.
+            TimeFFormatError: If the series has no index entry or a chunk cannot be read.
         """
         rows = self._index.get((sample_id, time_series_id))
         if not rows:
-            raise ValueError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
+            raise TimeFFormatError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
             spec_type = rows[0]["spec_type"]
             return self._values.load(self._root, rows, self._spec_by_type[spec_type])
         except (KeyError, OSError, IndexError, ValueError) as exc:
-            raise ValueError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
+            raise TimeFFormatError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -410,11 +496,11 @@ class _SeriesLoader:
             The requested steps in their canonical Arrow representation.
 
         Raises:
-            ValueError: If this series has no index entry.
+            TimeFFormatError: If this series has no index entry.
         """
         rows = self.reader._index.get((self.sample_id, self.time_series_id))
         if not rows:
-            raise ValueError(f"no index entry for sample {self.sample_id!r} series {self.time_series_id!r}")
+            raise TimeFFormatError(f"no index entry for sample {self.sample_id!r} series {self.time_series_id!r}")
         if self.reader._values is None:
             self.reader._values = make_values_reader(self.reader._manifest.values_backend)
         spec = self.reader._spec_by_type[rows[0]["spec_type"]]
@@ -437,3 +523,54 @@ def _as_tuple_if_list(value: object) -> object:
     if isinstance(value, list):
         return tuple(_as_tuple_if_list(item) for item in value)
     return value
+
+
+@dataclass(frozen=True)
+class _TimeOffsetsLoader:
+    """A picklable lazy loader for an irregular series' per-value time offsets.
+
+    A nested closure can't be pickled, so this is a class rather than a lambda: a multi-worker torch
+    DataLoader sends the series to its workers, and a closure would fail there. It mirrors
+    :class:`_SeriesLoader` because time offsets and values are separate columns and each is read on its
+    own.
+    """
+
+    reader: "TimeFReader"
+    """The reader that reads and decodes the series' time offsets."""
+    sample_id: str
+    """The owning sample's id."""
+    time_series_id: str
+    """The id of the series to read."""
+    first_us: int
+    """The axis' first time offset, checked against the stored stream."""
+    last_us: int
+    """The axis' last time offset, checked against the stored stream."""
+    n_values: int
+    """The declared value count, checked against the stored stream's length."""
+
+    def __call__(self) -> pa.Array:
+        """Read the series' time offsets, checking them against the axis and value count.
+
+        The writer verifies ordering, count, and endpoints, but nothing re-checks them on read, so a
+        corrupt shard could otherwise hand back a decreasing, wrong-length, or off-endpoint stream.
+
+        Returns:
+            One int64 microsecond time offset per value.
+
+        Raises:
+            TimeFFormatError: If the stored time offsets disagree with the axis endpoints or value count,
+                or are not non-decreasing.
+        """
+        time_offsets = self.reader._load_time_offsets(self.sample_id, self.time_series_id)
+        values = time_offsets.to_numpy(zero_copy_only=False)
+        where = f"series {self.time_series_id!r} on sample {self.sample_id!r}"
+        if len(values) != self.n_values:
+            raise TimeFFormatError(f"{where} stores {len(values)} time offsets but declares n_values={self.n_values}")
+        if len(values) and (int(values[0]) != self.first_us or int(values[-1]) != self.last_us):
+            raise TimeFFormatError(
+                f"{where} has time offsets [{values[0]}, {values[-1]}] disagreeing with its axis "
+                f"endpoints ({self.first_us}, {self.last_us})"
+            )
+        if np.any(np.diff(values) < 0):
+            raise TimeFFormatError(f"{where} has non-decreasing time offsets that decrease on disk")
+        return time_offsets

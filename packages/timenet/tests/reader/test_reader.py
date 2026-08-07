@@ -229,7 +229,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     with TimeFReader(version_dir) as reader:
         key = next(iter(reader._index))
         del reader._index[key][0]["chunk_file"]
-        with pytest.raises(ValueError, match=f"failed to read series {key[1]!r} for sample {key[0]!r}"):
+        with pytest.raises(TimeFFormatError, match=f"failed to read series {key[1]!r} for sample {key[0]!r}"):
             reader._load_values(*key)
 
 
@@ -318,7 +318,7 @@ def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
     # The tag and the columns disagree: an ordinal series must have no period or start index.
     version_dir = _write(tmp_path)
     _corrupt_first_series(version_dir, "axis_type", "ordinal")
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="carries regular-axis columns"):
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="carries regular- or"):
         list(reader.iter_samples())
 
 
@@ -327,4 +327,45 @@ def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
     version_dir = _write(tmp_path)
     _corrupt_first_series(version_dir, "period_denominator", 0)
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="unbuildable regular axis"):
+        list(reader.iter_samples())
+
+
+def _corrupt_descriptor(version_dir, key, field, value):
+    """Rewrite one annotation descriptor field in the manifest, simulating on-disk corruption."""
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for descriptor in manifest["schema"]["annotations"]:
+        if descriptor["key"] == key:
+            descriptor[field] = value
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
+    # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
+    version_dir = _write(tmp_path)
+    _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
+    with pytest.raises(TimeFFormatError, match="decodes to shape"):
+        TimeFReader(version_dir)
+
+
+def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
+    # "age" is an int; a descriptor that calls it a str no longer matches the decoded value.
+    version_dir = _write(tmp_path)
+    _corrupt_descriptor(version_dir, "age", "value_type", "str")
+    with pytest.raises(TimeFFormatError, match="value type"):
+        TimeFReader(version_dir)
+
+
+def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
+    # A stored span that no longer fits the series it resolves to is corruption, not a caller mistake.
+    version_dir = _write(tmp_path)
+    ann_path = version_dir / "annotations.parquet"
+    table = pq.read_table(ann_path)
+    rows = table.to_pylist()
+    for row in rows:
+        # Only stretch an interval's end; nulling a point's would change its shape instead.
+        if row["span"] is not None and row["span"]["end_us"] is not None:
+            row["span"]["end_us"] = 10**15  # far past any series window
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
         list(reader.iter_samples())
