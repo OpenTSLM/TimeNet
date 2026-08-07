@@ -126,41 +126,42 @@ def make_dataset() -> TimeFDataset:
         sample_id="sample-0",
         start_time=9_007_199_254_740_993,  # anchored sample; the other samples stay unanchored
     )
-    sample0.add_annotation(Annotation(key="age", value=64, unit="years", id="age-0"))
-    sample0.add_annotation(cohort)
-    sample0.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"))
-    sample0.add_annotation(
-        Annotation(
-            key="artifact", span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)), id="art-0"
-        )
-    )
-    classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
-    dataset.add_task(
-        sample0,
-        AnswerTask(
-            prompt="What rhythm?",
-            target="Normal.",
-            rationale="Regular intervals with one peak per cycle.",
-            input_annotation_ids=("cohort-shared",),
-            id="task-answer-0",
-            from_tasks=(classification,),
-        ),
-    )
-    dataset.add_task(
-        sample0,
-        ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
-    )
-    dataset.add_task(
-        sample0,
-        TemporalLocalizationTask(
-            prompt="Locate the stimulus and the artifact.",
-            mode=LocalizationMode.SPARSE,
-            target=(
-                TimePoint.seconds(0.5),
-                TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+    sample0.add_annotations(
+        [
+            Annotation(key="age", value=64, unit="years", id="age-0"),
+            cohort,
+            Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
+            Annotation(
+                key="artifact",
+                span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                id="art-0",
             ),
-            id="task-localize-0",
-        ),
+        ]
+    )
+    classification = ClassificationTask(target="normal", id="task-cls-0")
+    dataset.add_tasks(
+        sample0,
+        [
+            classification,
+            AnswerTask(
+                prompt="What rhythm?",
+                target="Normal.",
+                rationale="Regular intervals with one peak per cycle.",
+                input_annotation_ids=(cohort.id,),
+                from_tasks=(classification,),
+                id="task-answer-0",
+            ),
+            ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+            TemporalLocalizationTask(
+                prompt="Locate the stimulus and the artifact.",
+                mode=LocalizationMode.SPARSE,
+                target=(
+                    TimePoint.seconds(0.5),
+                    TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                ),
+                id="task-localize-0",
+            ),
+        ],
     )
 
     sample1 = dataset.add_sample(

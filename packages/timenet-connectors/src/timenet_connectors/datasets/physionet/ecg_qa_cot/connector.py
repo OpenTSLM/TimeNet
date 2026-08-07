@@ -213,16 +213,17 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
                 leads = self._leads_for(ref)
                 leads_by_ecg[ref.ecg_id] = leads
             sample = dataset.add_sample(time_series=leads, sample_id=f"ecgqa-{ref.split}-{ref.index}")
-            sample.add_annotation(Annotation(key="split", value=ref.split, id=f"split-{ref.index}"))
-            sample.add_annotation(Annotation(key="question_type", value=ref.question_type, id=f"qtype-{ref.index}"))
-            sample.add_annotation(Annotation(key="template_id", value=ref.template_id, id=f"template-{ref.index}"))
-            sample.add_annotation(
-                Annotation(key="clinical_context", value=ref.clinical_context, id=f"context-{ref.index}")
-            )
+            annotations = [
+                Annotation(key="split", value=ref.split, id=f"split-{ref.index}"),
+                Annotation(key="question_type", value=ref.question_type, id=f"qtype-{ref.index}"),
+                Annotation(key="template_id", value=ref.template_id, id=f"template-{ref.index}"),
+                Annotation(key="clinical_context", value=ref.clinical_context, id=f"context-{ref.index}"),
+            ]
             if ref.answer_options:
-                sample.add_annotation(
+                annotations.append(
                     Annotation(key="answer_options", value=list(ref.answer_options), id=f"options-{ref.index}")
                 )
+            sample.add_annotations(annotations)
             dataset.add_task(
                 sample,
                 AnswerTask(prompt=ref.question, rationale=ref.rationale, target=ref.answer, id=f"reason-{ref.index}"),

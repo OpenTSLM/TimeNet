@@ -105,6 +105,8 @@ same rule a task's `scope` uses. A span scoped to named `time_series_ids` must l
 *intersection* of those series' windows. An unscoped span is checked against the sample's `time_span`
 when it declares one, and otherwise against the *union* of the series' windows, so an event landing in
 an unrecorded gap between series is rejected unless a `time_span` says the session spanned it.
+`add_annotations([...])` attaches an iterable the same way, all-or-nothing: it validates the whole
+batch first and leaves the sample untouched if any annotation fails.
 
 `to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common
 single-channel sample, raising `ValueError` for a multi-channel sample (index `time_series` yourself
@@ -137,23 +139,30 @@ Pass `sample_id` for deterministic output (e.g. golden fixtures), and `start_tim
 sample's relative timeline to wall-clock time so samples can be synchronized across datasets and
 devices.
 
-### `add_task()`
+### `add_task()` / `add_tasks()`
 
 ```python
-add_task(samples, task, *, scope=None, from_tasks=()) -> Task
+add_task(samples, task) -> Task
+add_tasks(samples, tasks) -> tuple[Task, ...]
 ```
 
-Registers a task and links it to its samples: populates `task.sample_ids` and appends `task.id` to each
-sample's `task_ids`. `scope`, when passed, is stamped onto `task.scope` (equivalent to constructing the
-task with it, and rejected if the task already has one). `from_tasks` overrides the task's own value only
-when non-empty, so a task built with `from_tasks=` is never clobbered.
+Register a task, or a batch of them, against the same sample(s): each task gets its `sample_ids`
+populated and its `id` appended to every target sample's `task_ids`. Put `scope` and `from_tasks` on the
+task itself; they describe that one task, not the call.
 
 This is where a task is checked against the samples it is attached to, since this is the first point that
-has both. Raises `ValueError` on empty `samples`; on a task that sets both `target` and
+has both. Raises `TimeFValidationError` on empty `samples`; on a task that sets both `target` and
 `target_annotation_ids`, or neither unless its answer is a produced series; on a
 [`Span`](types.md#span) — the `scope` or a localization target — whose `time_series_ids` do not resolve on
 every target sample or that falls outside a sample's covered span; and on an `input_annotation_ids` /
 `target_annotation_ids` entry that no target sample carries.
+
+`add_tasks` is all-or-nothing: the whole batch is validated before any of it is attached, so a single
+bad task raises and leaves the dataset untouched. Loop `add_task` instead when you want the tasks before
+a failure to stay. Validating the batch as a unit also lets it enforce the relationships a batch makes
+possible: task ids stay unique against the batch and the dataset, every `from_tasks` parent is already
+registered or included in the same batch, and no task derives from itself or closes a cycle. So a task
+may derive from another in the same call regardless of order.
 
 ### `derive_schema()`
 
