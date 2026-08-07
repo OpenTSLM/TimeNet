@@ -75,7 +75,7 @@ via `TimeFDataset.add_sample`.
 | `subject_ids` | `tuple[str, ...]` | Subjects (empty for subject-less domains). |
 | `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |
 | `annotations` | `tuple[Annotation, ...]` | Attached via `add_annotation`. |
-| `t0_unix_ns` | `int \| None` | Wall-clock anchor: the Unix time (UTC, integer nanoseconds) that relative time zero refers to, for every series and annotation on the sample. `None` means no wall-clock reference exists (e.g. de-identified or synthetic data) — never fabricate one. |
+| `start_time` | `datetime \| int \| None` | Wall-clock anchor that relative time zero refers to, for every series and annotation on the sample. Pass a timezone-aware `datetime` or whole Unix microseconds; construction normalizes either one to microseconds. A bare float is refused, since seconds and microseconds are both plausible readings of it. `None` means no wall-clock reference exists (e.g. de-identified or synthetic data) — never fabricate one. |
 
 All series and annotations in an anchored sample share this clock and relative-time coordinate system.
 Use `sample.has_absolute_time` to check whether the anchor is known.
@@ -107,14 +107,14 @@ dataset.derive_schema()
 ```python
 add_sample(
     *, time_series, view=View.FULL, subject_ids=(),
-    sample_id=None, t0_unix_ns=None,
+    sample_id=None, start_time=None,
 ) -> Sample
 ```
 
 Creates a sample, registers it, returns it. `view` defaults to `View.FULL`; pass `view=View.WINDOW` for
 a windowed sample. Raises `TimeFValidationError` if `time_series` is empty. Pass `sample_id` for
-deterministic output (e.g. golden fixtures), and `t0_unix_ns` to anchor the sample's relative timeline
-to wall-clock time (Unix epoch, UTC, integer nanoseconds) so samples can be synchronized across
+deterministic output (e.g. golden fixtures), and `start_time` to anchor the sample's relative timeline
+to wall-clock time (Unix epoch, UTC, integer microseconds) so samples can be synchronized across
 datasets and devices.
 
 ### `add_task()`

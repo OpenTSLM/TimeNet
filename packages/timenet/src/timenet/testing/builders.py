@@ -131,7 +131,7 @@ def make_dataset() -> TimeFDataset:
         view=View.FULL,
         subject_ids=("subj-0",),
         sample_id="sample-0",
-        t0_unix_ns=1_700_000_000_000_000_001,  # anchored sample; the other samples stay unanchored
+        start_time=9_007_199_254_740_993,  # anchored sample; the other samples stay unanchored
     )
     sample0.add_annotation(StaticAnnotation(key="age", value=64, unit="years", id="age-0"))
     sample0.add_annotation(cohort)
@@ -207,7 +207,7 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     for sample_id, exp in exp_samples.items():
         act = act_samples[sample_id]
         assert exp.view == act.view, f"view differs for {sample_id}"
-        assert exp.t0_unix_ns == act.t0_unix_ns, f"t0_unix_ns differs for {sample_id}"
+        assert exp.start_time == act.start_time, f"start_time differs for {sample_id}"
         assert exp.subject_ids == act.subject_ids, f"subject_ids differ for {sample_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {sample_id}"
         assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (

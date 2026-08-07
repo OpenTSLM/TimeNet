@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from timenet.dataset import Sample
@@ -70,30 +72,42 @@ def test_to_numpy_rejects_multi_channel(make_series):
         sample.to_numpy()
 
 
-def test_t0_unix_ns_defaults_to_none(make_series):
+def test_start_time_defaults_to_none(make_series):
     sample = Sample(time_series=(make_series(),), view=View.FULL)
-    assert sample.t0_unix_ns is None
+    assert sample.start_time is None
 
 
-def test_t0_unix_ns_accepts_int64(make_series):
-    anchor = 1_700_000_000_000_000_001
-    sample = Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=anchor)
-    assert sample.t0_unix_ns == anchor
+def test_start_time_takes_whole_microseconds(make_series):
+    anchor = 1_700_000_000_000_001
+    sample = Sample(time_series=(make_series(),), view=View.FULL, start_time=anchor)
+    assert sample.start_time == anchor
 
 
-def test_t0_unix_ns_rejects_out_of_int64_range(make_series):
+def test_start_time_takes_an_aware_datetime_and_normalizes_it(make_series):
+    moment = datetime(2026, 8, 5, 0, 0, 0, 123456, tzinfo=UTC)
+    sample = Sample(time_series=(make_series(),), view=View.FULL, start_time=moment)
+    assert sample.start_time == 1_785_888_000_123_456
+
+
+@pytest.mark.parametrize("anchor", [2**63, -(2**63) - 1])
+def test_start_time_rejects_an_anchor_that_overflows_int64(anchor, make_series):
     with pytest.raises(ValueError, match="int64"):
-        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=2**63)
-    with pytest.raises(ValueError, match="int64"):
-        Sample(time_series=(make_series(),), view=View.FULL, t0_unix_ns=-(2**63) - 1)
+        Sample(time_series=(make_series(),), view=View.FULL, start_time=anchor)
 
 
-@pytest.mark.parametrize("anchor", [True, 1.5, "1700000000000000000"])
-def test_t0_unix_ns_rejects_non_integer(anchor, make_series):
-    with pytest.raises(ValueError, match="integer or None"):
-        Sample(time_series=(make_series(),), t0_unix_ns=anchor)
+@pytest.mark.parametrize("anchor", [True, "1700000000", 1_700_000_000.5])
+def test_start_time_rejects_an_ambiguous_anchor(anchor, make_series):
+    # A bare float reads as either seconds or microseconds, and the wrong reading is off by a
+    # million with nothing downstream to catch it.
+    with pytest.raises(ValueError, match="datetime or whole Unix microseconds"):
+        Sample(time_series=(make_series(),), start_time=anchor)
+
+
+def test_start_time_rejects_a_naive_datetime(make_series):
+    with pytest.raises(ValueError, match="must carry a timezone"):
+        Sample(time_series=(make_series(),), start_time=datetime(2026, 8, 5))
 
 
 def test_has_absolute_time(make_series):
     assert not Sample(time_series=(make_series(),)).has_absolute_time
-    assert Sample(time_series=(make_series(),), t0_unix_ns=0).has_absolute_time
+    assert Sample(time_series=(make_series(),), start_time=0).has_absolute_time

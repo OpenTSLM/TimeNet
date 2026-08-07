@@ -11,6 +11,7 @@ from timenet.types.annotations import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.clock import US_PER_S, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
@@ -40,6 +41,7 @@ from timenet.types.views import View
 __all__ = [
     "ANNOTATION_BASES",
     "TASKS",
+    "US_PER_S",
     "Annotation",
     "AnnotationDescriptor",
     "AnnotationType",
@@ -70,7 +72,10 @@ __all__ = [
     "annotation_type_of",
     "new_id",
     "normalize_unit",
+    "seconds_to_us",
+    "unix_us",
     "ureg",
+    "us_to_seconds",
     "use_as_application_registry",
     "uuid7",
     "validate_dataset_id",
