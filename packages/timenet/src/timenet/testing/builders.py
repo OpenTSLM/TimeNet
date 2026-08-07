@@ -95,7 +95,7 @@ def _series(spec, channel, n, time_series_id, source_id, phase=0.0):  # noqa: PL
         source_id=source_id,
         time_series_id=time_series_id,
         t_start_s=0.0,
-        t_end_s=n / _RATE_HZ,
+        n_values=n,
     )
 
 

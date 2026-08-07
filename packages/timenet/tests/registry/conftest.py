@@ -44,7 +44,7 @@ def _ecg_dataset() -> TimeFDataset:
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
         time_series_id="ecg-ts-0",
         t_start_s=0.0,
-        t_end_s=1.0,
+        n_values=16,
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ecg-sample-0")
     sample.add_annotation(Annotation(key="age", value=70, unit="years", id="ecg-age-0"))

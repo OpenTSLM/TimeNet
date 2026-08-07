@@ -18,18 +18,16 @@ if TYPE_CHECKING:
     from timenet.dataset.time_series import TimeSeries
 
 
-def point_count(series: TimeSeries) -> int | None:
-    """Return a series' number of points from its span metadata, without loading values.
+def point_count(series: TimeSeries) -> int:
+    """Return a series' value count, without loading values.
 
     Args:
         series: The series to measure.
 
     Returns:
-        ``round((t_end_s - t_start_s) * sampling_rate_hz)``, or ``None`` if the series has no ``t_end_s``.
+        The series' value count.
     """
-    if series.t_end_s is None:
-        return None
-    return round((series.t_end_s - series.t_start_s) * series.sampling_rate_hz)
+    return series.n_values
 
 
 def describe_text(dataset: TimeFDataset, *, rows: int) -> str:

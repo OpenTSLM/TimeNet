@@ -110,7 +110,7 @@ def _scalar_series(
         sampling_rate_hz=scenario.sampling_rate_hz,
         source_id=f"{scenario.name}-recording",
         time_series_id=f"{scenario.name}-{channel}",
-        t_end_s=len(values) / scenario.sampling_rate_hz,
+        n_values=len(values),
     )
 
 
@@ -231,7 +231,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
                 sampling_rate_hz=1.0,
                 source_id=f"tsqa-row-{index:04d}",
                 time_series_id=f"tsqa-row-{index:04d}-c{channel}",
-                t_end_s=float(length),
+                n_values=length,
             )
             for channel in range(channel_count)
         )
@@ -257,7 +257,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             sampling_rate_hz=16.0,
             source_id=f"mean-recording-{index:04d}",
             time_series_id=f"mean-series-{index:04d}",
-            t_end_s=len(values) / 16.0,
+            n_values=len(values),
         )
         sample = dataset.add_sample(time_series=(series,), sample_id=f"sample-mean-{index:04d}", view=View.FULL)
         sample.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
@@ -282,7 +282,7 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             sampling_rate_hz=50.0,
             loader=lambda: array,
             time_series_id=f"rich-{channel}",
-            t_end_s=len(values) / 50.0,
+            n_values=len(values),
         )
 
     rich_cases: tuple[tuple[str, np.ndarray, tuple[str, ...]], ...] = (
