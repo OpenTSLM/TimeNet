@@ -127,6 +127,61 @@ class TimeFDataset:
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
             raise TimeFValidationError("add_task requires at least one sample")
+        return self._register_task(task, targets, scope=scope, from_tasks=from_tasks)
+
+    def add_tasks(
+        self,
+        samples: Sample | Iterable[Sample],
+        tasks: Iterable[Task],
+        *,
+        scope: Span | None = None,
+        from_tasks: tuple[Task, ...] = (),
+    ) -> tuple[Task, ...]:
+        """Register several tasks against the same samples and return them.
+
+        Each is validated and registered exactly as :meth:`add_task` does it, in order, so a rejected
+        task leaves the ones before it registered.
+
+        Args:
+            samples: The sample, or samples, the tasks are attached to.
+            tasks: The task instances to register. Pass a single one to :meth:`add_task`.
+            scope: The input region the tasks are about, stamped onto every task's ``scope``. Register
+                the tasks separately when they need different scopes.
+            from_tasks: Source tasks these derive from, applied to every task in the call.
+
+        Returns:
+            The registered tasks (the same instances, with ``sample_ids`` populated), in the order given.
+
+        Raises:
+            TimeFValidationError: If ``samples`` is empty, or any task fails the checks :meth:`add_task`
+                documents.
+        """
+        targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
+        if not targets:
+            raise TimeFValidationError("add_tasks requires at least one sample")
+        # Drain `tasks` before validating: a connector generator may attach an annotation and then yield
+        # a task referencing it, so the annotation must already be on the sample when the refs are checked.
+        batch = tuple(tasks)
+        return tuple(self._register_task(task, targets, scope=scope, from_tasks=from_tasks) for task in batch)
+
+    def _register_task(
+        self,
+        task: Task,
+        targets: tuple[Sample, ...],
+        *,
+        scope: Span | None,
+        from_tasks: tuple[Task, ...],
+    ) -> Task:
+        """Validate one task against already-resolved targets and register it.
+
+        Shared by :meth:`add_task` and :meth:`add_tasks` so the singular and plural forms cannot drift.
+
+        Returns:
+            The registered task (the same instance, with ``sample_ids`` populated).
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_task`.
+        """
         if scope is not None:
             if task.scope is not None:
                 raise TimeFValidationError(

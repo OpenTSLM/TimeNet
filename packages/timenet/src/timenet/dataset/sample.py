@@ -1,5 +1,6 @@
 """The :class:`Sample` type: one logical unit of time-series data."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -132,6 +133,45 @@ class Sample:
                 targeted series has no timeline, the span falls outside the covered window, or a
                 trial-level interval annotation is added when the sample's series do not share a
                 common window.
+        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        self._validate_annotation(annotation)
+        self.annotations = (*self.annotations, annotation)
+        return annotation
+
+    def add_annotations(self, annotations: Iterable[Annotation]) -> tuple[Annotation, ...]:
+        """Attach several annotations to the sample and return them.
+
+        Each is validated exactly as :meth:`add_annotation` does it, in order, so a rejected annotation
+        leaves the ones before it attached. Valid ones are committed in a single tuple concatenation
+        rather than one copy of ``annotations`` per item.
+
+        Args:
+            annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
+
+        Returns:
+            The attached annotations (the same instances), in the order given.
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_annotation`.
+        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        validated: list[Annotation] = []
+        try:
+            for annotation in annotations:
+                self._validate_annotation(annotation)
+                validated.append(annotation)
+        finally:
+            if validated:
+                self.annotations = (*self.annotations, *validated)
+        return tuple(validated)
+
+    def _validate_annotation(self, annotation: Annotation) -> None:
+        """Run :meth:`add_annotation`'s checks without attaching it.
+
+        Split out so :meth:`add_annotations` can validate each item before committing the batch in one
+        tuple concatenation, and so the singular and plural forms share one definition of "valid".
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_annotation`.
         """
         if annotation.span is not None:
             check_span_within_window(
@@ -147,8 +187,6 @@ class Sample:
                         f"trial-level interval annotation {annotation.key!r} requires a common "
                         "window across the sample's time_series"
                     )
-        self.annotations = (*self.annotations, annotation)
-        return annotation
 
     def to_arrow(self) -> pa.Array:
         """Read the sole channel's values as an Arrow array, for the common single-channel sample.

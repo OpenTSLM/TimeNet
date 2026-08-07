@@ -476,3 +476,60 @@ def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
         sample.add_annotation(Annotation(key="mark", span=outside))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
         dataset.add_task(sample, ClassificationTask(target="x"), scope=outside)
+
+
+def test_add_annotations_attaches_all_and_returns_them(make_series):
+    sample = _dataset().add_sample(time_series=(make_series(),))
+    anns = sample.add_annotations([Annotation(key="a", value=1), Annotation(key="b", value=2)])
+    assert tuple(a.key for a in anns) == ("a", "b")
+    assert sample.annotations == anns
+
+
+def test_add_annotations_leaves_earlier_ones_attached_when_one_is_rejected(make_series):
+    sample = _dataset().add_sample(time_series=(make_series(),))
+    good = Annotation(key="a", value=1)
+    bad = Annotation(key="b", span=PointSpan.seconds(0.0, time_series_ids=("nope",)))
+    with pytest.raises(TimeFValidationError):
+        sample.add_annotations([good, bad])
+    assert sample.annotations == (good,)
+
+
+def test_add_tasks_registers_all_in_order_and_links(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    tasks = ds.add_tasks(sample, [ClassificationTask(target="a"), ClassificationTask(target="b")])
+    assert tuple(t.target for t in tasks) == ("a", "b")
+    assert ds.tasks == tasks
+    assert sample.task_ids == tuple(t.id for t in tasks)
+
+
+def test_add_tasks_leaves_earlier_ones_registered_when_one_is_rejected(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    good = ClassificationTask(target="a")
+    bad = ClassificationTask(target="b", scope=IntervalSpan.seconds(5.0, 20.0))  # outside the sample span
+    with pytest.raises(TimeFValidationError):
+        ds.add_tasks(sample, [good, bad])
+    assert ds.tasks == (good,)
+
+
+def test_add_tasks_shares_from_tasks_with_add_task(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    base = ds.add_task(sample, ClassificationTask(target="a"))
+    (derived,) = ds.add_tasks(sample, [AnswerTask(prompt="q", target="a")], from_tasks=(base,))
+    assert derived.from_tasks == (base,)
+
+
+def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
+    # A connector generator may attach an annotation and then yield a task referencing it; draining the
+    # batch before the refs are checked means the annotation is already on the sample by then.
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+
+    def gen():
+        ann = sample.add_annotation(Annotation(key="peak", span=PointSpan.seconds(0.0)))
+        yield ClassificationTask(target="x", input_annotation_ids=(ann.id,))
+
+    (task,) = ds.add_tasks(sample, gen())
+    assert task.input_annotation_ids == (sample.annotations[0].id,)
