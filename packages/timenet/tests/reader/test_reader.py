@@ -18,7 +18,6 @@ from timenet.types import (
     PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
-    View,
 )
 from timenet.writer import TimeFWriter
 
@@ -156,13 +155,6 @@ def test_iter_samples_matches_read(tmp_path):
     with TimeFReader(version_dir) as reader:
         read_ids = {s.sample_id for s in reader.read().samples}
     assert streamed == read_ids
-
-
-def test_window_sample_preserved(tmp_path):
-    version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
-        views = {s.sample_id: s.view for s in reader.read().samples}
-    assert views["sample-2"] == View.WINDOW
 
 
 # ---- laziness ---------------------------------------------------------------------------------

@@ -18,7 +18,6 @@ from timenet.types import (
     DatasetSchema,
     Span,
     Task,
-    View,
     annotation_type_of,
     value_type_of,
 )
@@ -46,7 +45,6 @@ class TimeFDataset:
         self,
         *,
         time_series: tuple[TimeSeries, ...],
-        view: View = View.FULL,
         subject_ids: tuple[str, ...] = (),
         sample_id: str | None = None,
         start_time: datetime | int | None = None,
@@ -55,7 +53,6 @@ class TimeFDataset:
 
         Args:
             time_series: The logical :class:`TimeSeries` streams the sample uses.
-            view: Which slice of the source this sample represents (defaults to the full recording).
             subject_ids: Subjects this sample belongs to (empty for subject-less domains).
             sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic
                 output, e.g. when generating golden fixtures.
@@ -81,7 +78,6 @@ class TimeFDataset:
         if sample_id is None:
             sample = Sample(
                 time_series=tuple(time_series),
-                view=view,
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
             )
@@ -89,7 +85,6 @@ class TimeFDataset:
             sample = Sample(
                 sample_id=sample_id,
                 time_series=tuple(time_series),
-                view=view,
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
             )

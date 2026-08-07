@@ -97,7 +97,7 @@ Pinned by data role, not left to pyarrow heuristics, so re-curated versions stay
   carry one time offset per value. A monotonic stream stores as small deltas rather than full
   int64s. Verified by the same read-back self-check.
 - monotonic ints (`chunk_idx`, `chunk_major_idx`, `chunk_minor_idx`) -> DELTA_BINARY_PACKED.
-- bounded categoricals (`spec_type`, `channel`, `view`, `key`, `target`, `chunk_file`)
+- bounded categoricals (`spec_type`, `channel`, `key`, `target`, `chunk_file`)
   -> dictionary + RLE.
 - id columns -> plain, but stored as **`binary(16)`** when every value in the id's space is a canonical
   UUID (see below), otherwise as a UTF-8 string.

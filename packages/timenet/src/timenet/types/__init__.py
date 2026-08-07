@@ -31,7 +31,6 @@ from timenet.types.tasks import (
 )
 from timenet.types.units import normalize_unit, ureg, use_as_application_registry
 from timenet.types.version import Version
-from timenet.types.views import View
 
 
 __all__ = [
@@ -62,7 +61,6 @@ __all__ = [
     "TemporalLocalizationTask",
     "TimeSeriesSpec",
     "Version",
-    "View",
     "annotation_type_of",
     "new_id",
     "normalize_unit",

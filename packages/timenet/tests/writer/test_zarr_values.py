@@ -12,7 +12,7 @@ from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, View, ureg
+from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.values_backends.zarr import reader as zarr_reader_module
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.values_backends.zarr.writer import _array_name
@@ -157,7 +157,6 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                 time_series_id="camera-1",
             ),
         ),
-        view=View.FULL,
         sample_id="sample-camera",
     )
     dataset.derive_schema()
@@ -220,7 +219,6 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                 loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
             ),
         ),
-        view=View.FULL,
         sample_id="sample-0",
     )
     dataset.derive_schema()

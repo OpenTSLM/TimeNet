@@ -24,7 +24,6 @@ from timenet.types import (
     TSEditingTask,
     TSGenerationTask,
     Version,
-    View,
     ureg,
 )
 from timenet.writer import TimeFWriter
@@ -59,7 +58,7 @@ def _uuid_dataset(*, sample_id=None):
             license=License.MIT,
         )
     )
-    sample = dataset.add_sample(time_series=(_series(),), view=View.FULL, sample_id=sample_id)
+    sample = dataset.add_sample(time_series=(_series(),), sample_id=sample_id)
     sample.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(sample, ClassificationTask(target="x"))
     dataset.derive_schema()
@@ -121,8 +120,8 @@ def test_forecasting_scalar_id_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    context = dataset.add_sample(time_series=(_series(),), view=View.FULL)
-    target = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    context = dataset.add_sample(time_series=(_series(),))
+    target = dataset.add_sample(time_series=(_series(),))
     dataset.add_task(
         target,
         ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id),
@@ -158,7 +157,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
         )
     )
     series = _series()
-    sample = dataset.add_sample(time_series=(series,), view=View.FULL)
+    sample = dataset.add_sample(time_series=(series,))
     scope = IntervalSpan.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
     dataset.add_task(sample, ClassificationTask(target="x"), scope=scope)
     dataset.add_task(
@@ -194,9 +193,9 @@ def test_correspondence_target_ids_round_trip(tmp_path):
             license=License.MIT,
         )
     )
-    query = dataset.add_sample(time_series=(_series(),), view=View.FULL)
-    match = dataset.add_sample(time_series=(_series(),), view=View.FULL)
-    other = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    query = dataset.add_sample(time_series=(_series(),))
+    match = dataset.add_sample(time_series=(_series(),))
+    other = dataset.add_sample(time_series=(_series(),))
     dataset.add_task(
         query,
         TSCorrespondenceTask(
@@ -224,8 +223,8 @@ def test_editing_and_generation_sample_ids_round_trip(tmp_path):
             license=License.MIT,
         )
     )
-    source = dataset.add_sample(time_series=(_series(),), view=View.FULL)
-    edited = dataset.add_sample(time_series=(_series(),), view=View.FULL)
+    source = dataset.add_sample(time_series=(_series(),))
+    edited = dataset.add_sample(time_series=(_series(),))
     dataset.add_task(
         source,
         TSEditingTask(

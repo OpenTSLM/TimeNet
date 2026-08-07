@@ -13,7 +13,6 @@ from timenet.types import (
     License,
     TimeSeriesSpec,
     Version,
-    View,
     ureg,
 )
 from timenet.writer import TimeFWriter
@@ -44,7 +43,7 @@ def _ecg_dataset() -> TimeFDataset:
         time_series_id="ecg-ts-0",
         n_values=16,
     )
-    sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ecg-sample-0")
+    sample = dataset.add_sample(time_series=(series,), sample_id="ecg-sample-0")
     sample.add_annotation(Annotation(key="age", value=70, unit="years", id="ecg-age-0"))
     dataset.add_task(sample, ClassificationTask(target="afib", id="ecg-task-0"))
     return dataset

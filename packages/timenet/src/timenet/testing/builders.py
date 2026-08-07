@@ -22,7 +22,6 @@ from timenet.types import (
     TemporalLocalizationTask,
     TimeSeriesSpec,
     Version,
-    View,
     ureg,
 )
 
@@ -123,7 +122,6 @@ def make_dataset() -> TimeFDataset:
 
     sample0 = dataset.add_sample(
         time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
-        view=View.FULL,
         subject_ids=("subj-0",),
         sample_id="sample-0",
         start_time=9_007_199_254_740_993,  # anchored sample; the other samples stay unanchored
@@ -167,14 +165,13 @@ def make_dataset() -> TimeFDataset:
 
     sample1 = dataset.add_sample(
         time_series=(shared, _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0)),
-        view=View.FULL,
         subject_ids=("subj-1",),
         sample_id="sample-1",
     )
     sample1.add_annotation(cohort)  # same instance/id => shared across samples
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
-    sample2 = dataset.add_sample(time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2")
+    sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
     dataset.add_task(
         sample2,
         ClassificationTask(target="onset", id="task-cls-2"),
@@ -201,7 +198,6 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_samples.keys() == act_samples.keys(), "sample ids differ"
     for sample_id, exp in exp_samples.items():
         act = act_samples[sample_id]
-        assert exp.view == act.view, f"view differs for {sample_id}"
         assert exp.start_time == act.start_time, f"start_time differs for {sample_id}"
         assert exp.subject_ids == act.subject_ids, f"subject_ids differ for {sample_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {sample_id}"

@@ -415,7 +415,6 @@ class TimeFWriter:
             rows.append(
                 {
                     "sample_id": codec.encode("sample_id", sample.sample_id),
-                    "view": str(sample.view),
                     "start_time_us": sample.start_time,
                     "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
                     "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],

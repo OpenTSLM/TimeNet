@@ -9,7 +9,6 @@ from timenet.types import (
     License,
     TimeSeriesSpec,
     Version,
-    View,
     ureg,
 )
 from timenet.writer import TimeFWriter
@@ -38,7 +37,7 @@ def _namespaced_dataset() -> TimeFDataset:
         time_series_id="ns-ts-0",
         n_values=8,
     )
-    sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ns-sample-0")
+    sample = dataset.add_sample(time_series=(series,), sample_id="ns-sample-0")
     dataset.add_task(sample, ClassificationTask(target="x", id="ns-task-0"))
     return dataset
 

@@ -97,8 +97,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
-- `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. `view` defaults to
-  `View.FULL`; pass `view=View.WINDOW` for a windowed view.
+- `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. A windowed sample
+  says so through its axis: `RegularAxis.at_index(...)` moves the origin into the recording.
 - `sample.add_annotation(Annotation(key=..., value=..., id=...))`. One class: its shape comes from its
   `span`. No span means whole-sample; `span=PointSpan.seconds(...)` a time offset; `span=IntervalSpan.seconds(...)`
   a region.

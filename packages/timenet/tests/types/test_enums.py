@@ -1,11 +1,4 @@
-from timenet.types import Domain, License, View
-
-
-def test_view_values():
-    assert View.FULL == "full"
-    assert View.SINGLE_CHANNEL == "single_channel"
-    assert View.SUBSET == "subset"
-    assert View.WINDOW == "window"
+from timenet.types import Domain, License
 
 
 def test_domain_values():
@@ -22,6 +15,5 @@ def test_license_values_are_spdx_style():
 
 
 def test_enums_are_str():
-    assert isinstance(View.FULL, str)
     assert isinstance(License.MIT, str)
     assert isinstance(Domain.HEALTH, str)

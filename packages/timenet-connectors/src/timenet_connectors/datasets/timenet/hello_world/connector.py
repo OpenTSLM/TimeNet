@@ -29,7 +29,6 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeSeriesSpec,
-    View,
     ureg,
 )
 
@@ -205,9 +204,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             source_id="rec-0",
             time_series_id="ts-window-2",
         )
-        sample2 = dataset.add_sample(
-            time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2"
-        )
+        sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
         dataset.add_task(
             sample2,
             ClassificationTask(target="onset", id="task-cls-2"),

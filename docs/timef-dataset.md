@@ -73,7 +73,6 @@ via `TimeFDataset.add_sample`.
 | --- | --- | --- |
 | `sample_id` | `str` | Auto uuid7 (or explicit, for deterministic output). |
 | `time_series` | `tuple[TimeSeries, ...]` | The sample's logical streams. |
-| `view` | `View` | Which slice of the source this sample represents. |
 | `subject_ids` | `tuple[str, ...]` | Subjects (empty for subject-less domains). |
 | `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |
 | `annotations` | `tuple[Annotation, ...]` | Attached via `add_annotation`. |
@@ -99,7 +98,6 @@ then).
 from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
-# view defaults to View.FULL
 sample = dataset.add_sample(time_series=(...), subject_ids=("p1",))
 dataset.add_task(sample, ClassificationTask(target="faulty"))
 dataset.derive_schema()
@@ -109,16 +107,15 @@ dataset.derive_schema()
 
 ```python
 add_sample(
-    *, time_series, view=View.FULL, subject_ids=(),
+    *, time_series, subject_ids=(),
     sample_id=None, start_time=None,
 ) -> Sample
 ```
 
-Creates a sample, registers it, returns it. `view` defaults to `View.FULL`; pass `view=View.WINDOW` for
-a windowed sample. Raises `TimeFValidationError` if `time_series` is empty. Pass `sample_id` for
-deterministic output (e.g. golden fixtures), and `start_time` to anchor the sample's relative timeline
-to wall-clock time (Unix epoch, UTC, integer microseconds) so samples can be synchronized across
-datasets and devices.
+Creates a sample, registers it, returns it. Raises `TimeFValidationError` if `time_series` is empty.
+Pass `sample_id` for deterministic output (e.g. golden fixtures), and `start_time` to anchor the
+sample's relative timeline to wall-clock time so samples can be synchronized across datasets and
+devices.
 
 ### `add_task()`
 
@@ -211,8 +208,8 @@ specs
   tsqa_series  TSQA Series  dimensionless  float
 
 samples (first 5 of 48000)
-  sample_id  view  channels  length  tasks  annotations
-  row-0      full  1         64      1      1
+  sample_id  channels  length  tasks  annotations
+  row-0      1         64      1      1
 ```
 
 ---

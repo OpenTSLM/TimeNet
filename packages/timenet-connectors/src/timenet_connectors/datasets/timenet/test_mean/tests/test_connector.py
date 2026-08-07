@@ -4,7 +4,7 @@ from pathlib import Path
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask, View
+from timenet.types import ClassificationTask
 from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 
@@ -47,11 +47,10 @@ def test_target_has_no_schema():
     assert all(task.target_schema is None for task in _convert().tasks_of(ClassificationTask))
 
 
-def test_every_sample_is_a_single_channel_full_view():
+def test_every_sample_is_a_single_channel():
     dataset = _convert()
     assert len(dataset.samples) == 1000
     for sample in dataset.samples:
-        assert sample.view is View.FULL
         assert len(sample.time_series) == 1
 
 
