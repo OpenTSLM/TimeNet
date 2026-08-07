@@ -217,12 +217,21 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
 
 
 def test_corrupt_index_locator_has_series_context(tmp_path):
+    # Corrupt the artifact rather than the reader's internals: the locator is read from the index on
+    # each lookup now, so an in-memory poke would not survive to the read.
     version_dir = _write(tmp_path)
+    index_path = version_dir / "time_series_index.parquet"
+    table = pq.read_table(index_path)
+    bogus = pa.array(["time_series/does-not-exist.parquet"] * table.num_rows)
+    pq.write_table(table.set_column(table.schema.get_field_index("chunk_file"), "chunk_file", bogus), index_path)
+
     with TimeFReader(version_dir) as reader:
-        key = next(iter(reader._index))
-        del reader._index[key][0]["chunk_file"]
-        with pytest.raises(TimeFFormatError, match=f"failed to read series {key[1]!r} for sample {key[0]!r}"):
-            reader._load_values(*key)
+        sample = next(iter(reader.iter_samples()))
+        series_id = sample.time_series[0].time_series_id
+        with pytest.raises(
+            TimeFFormatError, match=f"failed to read series {series_id!r} for sample {sample.sample_id!r}"
+        ):
+            reader._load_values(sample.sample_id, series_id)
 
 
 def test_missing_listed_file_raises(tmp_path):

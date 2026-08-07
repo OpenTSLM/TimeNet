@@ -30,6 +30,10 @@ and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples w
 pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called. `iter_samples()`
 streams samples one at a time without building a `TimeFDataset`.
 
+The index is held as Arrow and searched per lookup, rather than expanded into one Python object per
+row. That keeps opening a large dataset proportional to the index file rather than to a multiple of
+it: roughly 180 bytes of memory per index row, where a row is one `(sample, series, chunk)`.
+
 ## Type reconstruction
 
 Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors.
