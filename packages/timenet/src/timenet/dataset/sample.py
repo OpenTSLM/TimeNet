@@ -1,5 +1,6 @@
 """The :class:`Sample` type: one logical unit of time-series data."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -271,6 +272,44 @@ class Sample:
                 scoped span names a timeless series, or the span falls outside the window its scope
                 selects (the intersection of named series, the sample's ``time_span``, or the union of
                 the series' windows).
+        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        self._validate_annotation(annotation)
+        self.annotations = (*self.annotations, annotation)
+        return annotation
+
+    def add_annotations(self, annotations: Iterable[Annotation]) -> tuple[Annotation, ...]:
+        """Attach several annotations to the sample, all together or not at all.
+
+        The whole batch is validated before any of it is attached: if one annotation fails a check, the
+        call raises and leaves the sample unchanged. To keep the annotations before a failure attached,
+        loop :meth:`add_annotation` instead.
+
+        Args:
+            annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
+
+        Returns:
+            The attached annotations (the same instances), in the order given.
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_annotation`.
+        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        batch = tuple(annotations)
+        for annotation in batch:
+            self._validate_annotation(annotation)
+        self.annotations = (*self.annotations, *batch)
+        return batch
+
+    def _validate_annotation(self, annotation: Annotation) -> None:
+        """Run :meth:`add_annotation`'s checks without attaching it.
+
+        Split out so :meth:`add_annotations` can validate a whole batch before committing it in one tuple
+        concatenation.
+
+        Args:
+            annotation: The annotation to check.
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_annotation`.
         """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
@@ -280,8 +319,6 @@ class Sample:
                 self.sample_id,
                 self.time_span,
             )
-        self.annotations = (*self.annotations, annotation)
-        return annotation
 
     def to_arrow(self) -> pa.Array:
         """Read the sole channel's values as an Arrow array, for the common single-channel sample.
