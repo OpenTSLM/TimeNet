@@ -99,8 +99,6 @@ def _scalar_series(
     spec = TimeSeriesSpec(
         spec_type=scenario.name,
         name=scenario.name.replace("-", " ").title(),
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.Unit(scenario.unit),
         data_source=_SOURCE,
     )
@@ -297,8 +295,6 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
         spec = cast("Any", TimeSeriesSpec)(
             spec_type=name,
             name=name.replace("-", " ").title(),
-            unit_sampling_rate=ureg.hertz,
-            unit_timestamp=ureg.second,
             unit_value=ureg.dimensionless,
             data_source=_SOURCE,
             dtype=values.dtype.name,

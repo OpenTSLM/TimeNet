@@ -131,8 +131,6 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="camera",
         name="RGB camera",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
         dtype="uint8",
         value_shape=(4, 5, 3),
@@ -183,8 +181,6 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     nd_spec = TimeSeriesSpec(
         spec_type="camera",
         name="cam",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
         dtype="uint8",
         value_shape=(2, 3),
@@ -193,8 +189,6 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     scalar_spec = TimeSeriesSpec(
         spec_type="sine",
         name="sine",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
     )
     dataset = TimeFDataset(

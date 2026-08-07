@@ -19,16 +19,16 @@ Reference to one logical stream of time-series data, with optional windowing and
 
 ```python
 from timenet.dataset import TimeSeries
+from timenet.dataset.axis import RegularAxis
 
 TimeSeries(
     spec=vibration,           # a TimeSeriesSpec (the modality)
     channel="axial",          # the channel this series carries
-    sampling_rate_hz=500.0,
+    time_axis=RegularAxis.from_rate_hz(500),
     # Callable[[], pa.Array] matching the spec's dtype and value_shape
     loader=load_axial,
     source_id="rec_001",      # optional
-    t_start_s=0.0,
-    t_end_s=None,             # None = to end of source
+    n_values=5000,            # how many values the loader will return
 )
 ```
 
@@ -36,12 +36,12 @@ TimeSeries(
 | --- | --- | --- | --- |
 | `spec` | `TimeSeriesSpec` | yes | The modality (shared across channels). |
 | `channel` | `str` | yes | The logical stream name (e.g. `"axial"` or `"rgb_frames"`). |
-| `sampling_rate_hz` | `float` | yes | Sampling rate in canonical Hz; positive and finite. |
+| `time_axis` | `TimeAxis` | yes | Where the values sit in time: `RegularAxis`, `IrregularAxis`, or `OrdinalAxis`. |
+| `n_values` | `int` | yes | How many values the series holds; the writer checks the loader against it. |
 | `loader` | `Callable[[], pa.Array]` | yes | Lazy loader returning scalar values or an Arrow fixed-shape tensor array. |
 | `source_id` | `str \| None` | no | Identifier of the raw recording this series came from. |
 | `time_series_id` | `str` | no | Persistent handle (auto uuid7). The writer dedupes by it. |
-| `t_start_s` | `float` | no | Window start in the source timeline (default `0.0`). |
-| `t_end_s` | `float \| None` | no | Window end, or `None` for end of source. Must exceed `t_start_s`. |
+| `time_offsets_loader` | `Callable[[], pa.Array] \| None` | no | One int64 microsecond time offset per value; required for `IrregularAxis` and rejected otherwise. |
 
 `TimeSeries` is frozen with identity equality (`eq=False`): the writer dedupes by `time_series_id`, so
 reusing one instance (or giving two instances the same explicit id) collapses to one chunk on disk.
@@ -56,9 +56,11 @@ the defaults `float32`, `()`, and `()`. For an RGB camera, for example, use `dty
 always `(n_steps, *value_shape)`.
 
 When a connector already holds the values in memory, use the classmethod
-`TimeSeries.from_values(values, *, spec, channel, sampling_rate_hz, source_id=None, time_series_id=None,
-t_start_s=0.0, t_end_s=None)`: it wraps them in a `float32` loader and derives `t_end_s` from the length.
-Reach for the `loader=` constructor above only for genuinely lazy sources (files, remote shards).
+`TimeSeries.from_values(values, *, spec, channel, time_axis, source_id=None, time_series_id=None)`: it
+wraps them in a `float32` loader and takes `n_values` from the array's own length. For a series whose
+time offsets are stored rather than computed, use `TimeSeries.from_irregular(values, *, time_offsets_us, ...)`,
+which derives the axis from the stream so the two cannot disagree. Reach for the `loader=` constructor
+above only for genuinely lazy sources (files, remote shards).
 
 ---
 
@@ -82,8 +84,8 @@ Use `sample.has_absolute_time` to check whether the anchor is known.
 
 `add_annotation(annotation)` attaches and returns it, validating that a temporal annotation's
 `time_series_ids` resolve to series on the sample, and that a trial-level annotation (an interval
-span covering the sample rather than named channels) is only
-added when the sample's series share a common `(t_start_s, t_end_s)` span.
+span covering the sample rather than named channels) is only added when the sample's series share a
+common window, which each derives from its own axis.
 
 `to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common
 single-channel sample, raising `ValueError` for a multi-channel sample (index `time_series` yourself
@@ -205,8 +207,8 @@ counts
   tasks        answer=48000
 
 specs
-  spec         name         value          rate   dtype
-  tsqa_series  TSQA Series  dimensionless  hertz  float
+  spec         name         value          dtype
+  tsqa_series  TSQA Series  dimensionless  float
 
 samples (first 5 of 48000)
   sample_id  view  channels  length  tasks  annotations

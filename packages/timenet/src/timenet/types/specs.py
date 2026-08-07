@@ -1,6 +1,6 @@
 """Modality and data-source descriptors.
 
-A :class:`TimeSeriesSpec` describes one measurement *modality* (its tag, units, dtype, and value shape)
+A :class:`TimeSeriesSpec` describes one measurement *modality* (its tag, unit, dtype, and value shape)
 and a :class:`DataSource` the origin that produced it. Both are flat frozen dataclasses: connectors
 build them directly (or subclass with field defaults for reuse), and :class:`~timenet.reader.TimeFReader`
 reconstructs the identical instances from the manifest, so they round-trip and pickle without any
@@ -37,16 +37,17 @@ class DataSource:
 
 @dataclass(frozen=True)
 class TimeSeriesSpec:
-    """The contract for a measurement modality: identity, units, dtype, and per-timestep shape."""
+    """The contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.
+
+    It carries no unit for time or for a sampling rate. Both were fixed by construction rather than
+    declared: time offsets are integer microseconds and a cadence is a Fraction of them, so neither field
+    could ever hold anything but ``second`` and ``hertz``, and neither was read.
+    """
 
     spec_type: str
     """Type tag identifying the modality; used to filter datasets by spec type."""
     name: str
     """Human-readable display name of the modality."""
-    unit_sampling_rate: pint.Unit
-    """Unit of the sampling rate; must have frequency dimensionality."""
-    unit_timestamp: pint.Unit
-    """Unit the time axis is measured in; must have time dimensionality."""
     unit_value: pint.Unit
     """Unit of the measured values."""
     data_source: DataSource | None = None
@@ -59,27 +60,17 @@ class TimeSeriesSpec:
     """Optional names for the dimensions in :attr:`value_shape`."""
 
     def __post_init__(self) -> None:
-        """Validate units plus the per-timestep dtype and shape contract.
+        """Validate the spec type tag plus the per-timestep dtype and shape contract.
 
         Raises:
-            TimeFValidationError: If the units, dtype, shape, or dimension names are invalid.
+            TimeFValidationError: If the spec type, dtype, shape, or dimension names are invalid.
         """
-        hertz = ureg.hertz.dimensionality
-        second = ureg.second.dimensionality
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.spec_type in {".", ".."}:
             # The Zarr backend derives a per-spec_type array path from spec_type; "." and ".." would be
             # filesystem-special path segments that percent-encoding leaves untouched.
             raise TimeFValidationError(f"TimeSeriesSpec.spec_type must not be '.' or '..', got {self.spec_type!r}")
-        if self.unit_sampling_rate.dimensionality != hertz:
-            raise TimeFValidationError(
-                f"unit_sampling_rate must be a frequency (dimensionality {hertz}), got {self.unit_sampling_rate!r}"
-            )
-        if self.unit_timestamp.dimensionality != second:
-            raise TimeFValidationError(
-                f"unit_timestamp must be a time (dimensionality {second}), got {self.unit_timestamp!r}"
-            )
         try:
             normalized_dtype = np.dtype(self.dtype).name
         except TypeError as exc:
@@ -107,7 +98,7 @@ class TimeSeriesSpec:
         the other units only :data:`~timenet.types.units.ureg` defines. Storing names keeps a pickled
         spec self-describing, which is what multiprocessing DataLoaders need.
 
-        Every ``pint.Unit`` attribute is converted, not a fixed list of three: connectors are
+        Every ``pint.Unit`` attribute is converted rather than a fixed list: connectors are
         encouraged to subclass this with field defaults, and a subclass that adds its own unit field
         would otherwise pickle it registry-bound and fail on a custom unit. The converted names are
         recorded in the state so :meth:`__setstate__` knows which strings to rebuild.

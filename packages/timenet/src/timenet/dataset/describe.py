@@ -86,13 +86,12 @@ def _specs(unique_series: dict[str, TimeSeries]) -> str:
     representative: dict[str, TimeSeries] = {}
     for series in unique_series.values():
         representative.setdefault(series.spec.spec_type, series)
-    header = ("spec", "name", "value", "rate", "dtype")
+    header = ("spec", "name", "value", "dtype")
     table_rows = [
         (
             spec_type,
             series.spec.name,
             str(series.spec.unit_value),
-            str(series.spec.unit_sampling_rate),
             str(series.to_arrow().type),  # one bounded load per spec, for the value dtype
         )
         for spec_type, series in sorted(representative.items())

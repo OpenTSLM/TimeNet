@@ -33,7 +33,7 @@ concrete types.
 ## The Span primitive
 
 A `Span` is a point or a half-open interval `[start, end)` in whole microseconds, optionally scoped to particular series.
-Times are in the **source recording timeline**, the same frame as `TimeSeries.t_start_s`, so a span stays
+Times are in the **source recording timeline**, the same frame a series' `time_axis` places its values in, so a span stays
 meaningful on a windowed sample that starts partway into the recording. Build a `PointSpan` and the span is an
 time offset.
 

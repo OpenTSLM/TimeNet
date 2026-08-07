@@ -28,8 +28,6 @@ def _namespaced_dataset() -> TimeFDataset:
     spec = TimeSeriesSpec(
         spec_type="tsqa_series",
         name="Series",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
     series = TimeSeries(

@@ -13,8 +13,6 @@ def _spec():
     return TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.millivolt,
     )
 

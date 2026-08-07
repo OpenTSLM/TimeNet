@@ -17,8 +17,6 @@ from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 _SPEC = TimeSeriesSpec(
     spec_type="tsqa_series",
     name="TSQA Series",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
 )
 

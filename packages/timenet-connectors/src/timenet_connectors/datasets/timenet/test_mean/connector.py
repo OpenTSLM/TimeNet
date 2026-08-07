@@ -27,8 +27,6 @@ _SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", p
 _SIGNAL = TimeSeriesSpec(
     spec_type="signal",
     name="Signal",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
     data_source=_SOURCE,
 )

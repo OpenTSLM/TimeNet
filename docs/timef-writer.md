@@ -122,8 +122,8 @@ The writer adds two checks, raising `TimeFValidationError`:
 
 - Cross-sample (before any I/O): annotations sharing an `id` across samples must be field-equal.
 - Per-series (as each loader runs): values are non-empty, match the spec's `dtype` and `value_shape`,
-  and are finite when their dtype supports non-finite values. When `t_end_s` is set,
-  `len(values) == round((t_end_s - t_start_s) * sampling_rate_hz)`.
+  and are finite when their dtype supports non-finite values, and `len(values) == n_values`, which
+  every series must declare.
 
 ## Commit protocol
 

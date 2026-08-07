@@ -25,7 +25,7 @@ Example status:
 - [x] PyTorch: `load_torch` plus a `DataLoader`
 - [ ] Spark: planned
 
-Each series carries its own `channel`, `sampling_rate_hz`, and `t_start_s`, and reads its values
+Each series carries its own `channel` and `time_axis`, and reads its values
 lazily through `to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded
 sample.
 
@@ -41,8 +41,9 @@ sample.
     series = dataset.samples[0].time_series[0]
 
     values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
-    t_s = series.t_start_s + np.arange(len(values)) / series.sampling_rate_hz
-    frame = pd.DataFrame({"t_s": t_s, series.channel: values})
+    # tsqa is an ordinal series: it has an order and no timeline, so there is no time
+    # column to build. A regularly sampled series would use series.time_axis.time_offset_us(i).
+    frame = pd.DataFrame({series.channel: values})
     ```
 
 === "polars"

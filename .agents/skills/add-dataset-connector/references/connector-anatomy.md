@@ -87,12 +87,14 @@ import `wfdb`/`requests` behind the `physionet` extra):
 
 Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
 
-- `TimeSeries.from_values(values, *, spec, channel, sampling_rate_hz, source_id=None, time_series_id=None, t_start_s=0.0, t_end_s=None)`
+- `TimeSeries.from_values(values, *, spec, channel, time_axis, source_id=None, time_series_id=None)`
   is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
-  derives `t_end_s` from the length. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
+  takes `n_values` from the array's own length. When the source has one arbitrary time offset per point,
+  use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, channel, ...)` instead, which derives
+  the axis from the stream. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
   constructor only for genuinely lazy sources (files, remote shards). `time_series_id` is the dedupe key:
   reuse the same id (and the same `TimeSeries`) to share one series across samples.
-- `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_sampling_rate=ureg.hertz, unit_timestamp=ureg.second, unit_value=ureg.<unit>, data_source=...)`.
+- `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. `view` defaults to
@@ -135,14 +137,13 @@ import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 _SPEC = TimeSeriesSpec(
     spec_type="tsqa_series",
     name="TSQA Series",
-    unit_sampling_rate=ureg.hertz,
-    unit_timestamp=ureg.second,
     unit_value=ureg.dimensionless,
 )
 
@@ -161,7 +162,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
                     values,
                     spec=_SPEC,
                     channel=f"c{channel}",
-                    sampling_rate_hz=1.0,
+                    time_axis=OrdinalAxis(),
                     time_series_id=f"row-{index}-c{channel}",
                 )
                 for channel, values in enumerate(channels)
