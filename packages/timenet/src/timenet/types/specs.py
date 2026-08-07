@@ -28,11 +28,22 @@ class DataSource:
     """The origin that produced a modality: a device, an API feed, a model, an institution."""
 
     data_source_type: str
-    """Type tag identifying the kind of source; keys the spec-to-source link in the manifest."""
+    """Type tag identifying the kind of source."""
     name: str
     """Human-readable display name of the source."""
     provider: str | None = None
     """Organization or platform behind the source, if any."""
+
+    def __post_init__(self) -> None:
+        """Reject a non-string or empty identifier.
+
+        Raises:
+            TimeFValidationError: If ``data_source_type`` or ``name`` is not a non-empty string.
+        """
+        for field_name in ("data_source_type", "name"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise TimeFValidationError(f"DataSource.{field_name} must be a non-empty string, got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -63,10 +74,15 @@ class TimeSeriesSpec:
         """Validate the spec type tag plus the per-timestep dtype and shape contract.
 
         Raises:
-            TimeFValidationError: If the spec type, dtype, shape, or dimension names are invalid.
+            TimeFValidationError: If the spec type, data source, dtype, shape, or dimension names are
+                invalid.
         """
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
+        if self.data_source is not None and not isinstance(self.data_source, DataSource):
+            raise TimeFValidationError(
+                f"TimeSeriesSpec.data_source must be a DataSource or None, got {type(self.data_source).__name__}"
+            )
         if self.spec_type in {".", ".."}:
             # The Zarr backend derives a per-spec_type array path from spec_type; "." and ".." would be
             # filesystem-special path segments that percent-encoding leaves untouched.

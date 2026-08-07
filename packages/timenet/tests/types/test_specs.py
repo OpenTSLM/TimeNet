@@ -4,6 +4,7 @@ import pickle
 import pint
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import DataSource, TimeSeriesSpec, ureg
 
 
@@ -19,6 +20,7 @@ def _ecg_spec(**overrides):
 def test_data_source_construction():
     ds = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
     assert ds.data_source_type == "holter_x"
+    assert ds.name == "Holter Monitor X"
     assert ds.provider == "Acme"
 
 
@@ -123,3 +125,14 @@ def test_spec_nd_value_contract():
 def test_spec_rejects_invalid_nd_contract(overrides, message):
     with pytest.raises(ValueError, match=message):
         _ecg_spec(**overrides)
+
+
+@pytest.mark.parametrize(("dst", "name"), [("", "X"), ("t", ""), ("t", 0)])
+def test_data_source_rejects_empty_or_non_string_identifiers(dst, name):
+    with pytest.raises(TimeFValidationError, match="non-empty string"):
+        DataSource(data_source_type=dst, name=name)
+
+
+def test_spec_rejects_a_non_data_source_data_source():
+    with pytest.raises(TimeFValidationError, match="must be a DataSource or None"):
+        TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless, data_source="acme")  # ty: ignore[invalid-argument-type]

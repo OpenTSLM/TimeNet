@@ -111,7 +111,6 @@
       "description": "A faithful serialization of DatasetSchema (flat descriptors), derived from the data.",
       "properties": {
         "time_series_specs": { "type": "array", "items": { "$ref": "#/$defs/timeSeriesSpec" } },
-        "data_sources": { "type": "array", "items": { "$ref": "#/$defs/dataSource" } },
         "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
         "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
       }
@@ -123,7 +122,7 @@
         "spec_type": { "type": "string", "minLength": 1 },
         "name": { "type": "string" },
         "unit_value": { "type": "string", "minLength": 1, "description": "A pint unit name (dimensionality is unconstrained)." },
-        "data_source": { "type": ["string", "null"], "description": "The data_source_type tag of an entry in data_sources, or null." },
+        "data_source": { "oneOf": [{ "$ref": "#/$defs/dataSource" }, { "type": "null" }] },
         "dtype": { "type": "string", "enum": ["bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32"], "default": "float32" },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }

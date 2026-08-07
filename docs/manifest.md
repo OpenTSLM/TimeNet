@@ -70,8 +70,7 @@ Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_ver
 
 - Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`) and back via the
   shared registry.
-- A spec references its data source by `data_source_type`; the full record lives once in
-  `schema.data_sources` and is resolved back on read.
+- A spec carries its data source inline, so nothing is resolved against a side table on read.
 - Tasks serialize as `{"task_type": ...}` and resolve on read against the built-in `TASKS` registry
   (an unknown `task_type` raises `InvalidManifestError`); annotation `value_type` round-trips as a
   string and is used by the reader to decode values.

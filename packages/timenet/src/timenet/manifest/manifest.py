@@ -44,7 +44,7 @@ class Manifest:
     files: ManifestFiles
     """Relative paths to every data artifact, grouped by kind."""
     schema: DatasetSchema = field(default_factory=DatasetSchema)
-    """Structural schema: time-series specs, data sources, annotations, and tasks."""
+    """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
     checksums: dict[str, str] = field(default_factory=dict)
@@ -243,16 +243,20 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "spec_type": spec.spec_type,
                 "name": spec.name,
                 "unit_value": str(spec.unit_value),
-                "data_source": spec.data_source.data_source_type if spec.data_source else None,
+                "data_source": (
+                    {
+                        "data_source_type": spec.data_source.data_source_type,
+                        "name": spec.data_source.name,
+                        "provider": spec.data_source.provider,
+                    }
+                    if spec.data_source is not None
+                    else None
+                ),
                 "dtype": spec.dtype,
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
             }
             for spec in schema.time_series_specs
-        ],
-        "data_sources": [
-            {"data_source_type": ds.data_source_type, "name": ds.name, "provider": ds.provider}
-            for ds in schema.data_sources
         ],
         "annotations": [
             {
@@ -270,21 +274,12 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
 
 def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
     try:
-        data_sources = tuple(
-            DataSource(
-                data_source_type=entry["data_source_type"],
-                name=entry["name"],
-                provider=entry.get("provider"),
-            )
-            for entry in data.get("data_sources", ())
-        )
-        by_type = {ds.data_source_type: ds for ds in data_sources}
         specs = tuple(
             TimeSeriesSpec(
                 spec_type=entry["spec_type"],
                 name=entry["name"],
                 unit_value=ureg.Unit(entry["unit_value"]),
-                data_source=_resolve_data_source(entry.get("data_source"), by_type),
+                data_source=_data_source(entry.get("data_source")),
                 dtype=entry.get("dtype", "float32"),
                 value_shape=tuple(entry.get("value_shape", ())),
                 dimension_names=tuple(entry.get("dimension_names", ())),
@@ -304,7 +299,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
         tasks = tuple(_resolve_task(entry["task_type"]) for entry in data.get("tasks", ()))
         return DatasetSchema(
             time_series_specs=specs,
-            data_sources=data_sources,
             annotations=annotations,
             tasks=tasks,
         )
@@ -312,12 +306,18 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
         raise InvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
 
 
-def _resolve_data_source(data_source_type: str | None, by_type: dict[str, DataSource]) -> DataSource | None:
-    if data_source_type is None:
+def _data_source(entry: dict[str, Any] | None) -> DataSource | None:
+    """Rebuild a spec's data source from the record stored beside it.
+
+    Args:
+        entry: The stored ``data_source`` object, or ``None``.
+
+    Returns:
+        The data source, or ``None`` if the spec declares none.
+    """
+    if entry is None:
         return None
-    if data_source_type not in by_type:
-        raise ValueError(f"spec references unknown data_source {data_source_type!r}")
-    return by_type[data_source_type]
+    return DataSource(data_source_type=entry["data_source_type"], name=entry["name"], provider=entry.get("provider"))
 
 
 def _resolve_task(task_type: str) -> type[Task]:

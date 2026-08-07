@@ -158,7 +158,7 @@ class TimeFDataset:
     def derive_schema(self) -> DatasetSchema:
         """Walk the dataset's instances and build its :class:`DatasetSchema`.
 
-        Collects the distinct spec, data-source, annotation, and task types, stores the result on the
+        Collects the distinct spec, annotation, and task types, stores the result on the
         dataset, and returns it.
 
         Returns:
@@ -177,7 +177,6 @@ class TimeFDataset:
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
-        data_sources = self._ordered_unique(spec.data_source for spec in specs if spec.data_source is not None)
         annotations = self._ordered_unique(
             AnnotationDescriptor(
                 key=annotation.key,
@@ -202,7 +201,6 @@ class TimeFDataset:
         tasks = self._ordered_unique(type(task) for task in self._tasks)
         self._schema = DatasetSchema(
             time_series_specs=tuple(specs),
-            data_sources=tuple(data_sources),
             annotations=tuple(annotations),
             tasks=tuple(tasks),
         )

@@ -7,6 +7,7 @@ from timenet.types import (
     AnnotationType,
     AnswerTask,
     ClassificationTask,
+    DataSource,
     ScalarPredictionTask,
     TemporalLocalizationTask,
     View,
@@ -39,7 +40,10 @@ def test_convert_is_deterministic():
 def test_schema_covers_every_feature():
     schema = _convert().derive_schema()
     assert len(schema.time_series_specs) == 2  # sine + cosine
-    assert len(schema.data_sources) == 1
+    # one source, carried on each spec rather than registered once in a side table
+    assert {s.data_source for s in schema.time_series_specs} == {
+        DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
+    }
     annotation_types = {a.annotation_type for a in schema.annotations}
     assert annotation_types == {AnnotationType.STATIC, AnnotationType.POINT, AnnotationType.INTERVAL}
     assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}

@@ -29,7 +29,6 @@ def _manifest() -> Manifest:
     )
     schema = DatasetSchema(
         time_series_specs=(spec,),
-        data_sources=(source,),
         annotations=(
             AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int", unit="years"),
             AnnotationDescriptor(key="artifact", annotation_type=AnnotationType.INTERVAL),
