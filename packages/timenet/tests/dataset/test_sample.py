@@ -1,8 +1,11 @@
 from datetime import UTC, datetime
+from fractions import Fraction
 
 import pytest
 
-from timenet.dataset import Sample
+from timenet.dataset import Sample, TimeSeries
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, IntervalSpan, PointSpan, View
 
 
@@ -23,7 +26,9 @@ def test_add_multiple_annotations_preserves_order(make_series):
 def test_channel_level_point_resolves_series_id(make_series):
     ts = make_series()
     sample = Sample(time_series=(ts,), view=View.FULL)
-    sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0, time_series_ids=(ts.time_series_id,))))
+    sample.add_annotation(
+        Annotation(key="stimulus", span=PointSpan.seconds(0.002, time_series_ids=(ts.time_series_id,)))
+    )
 
 
 def test_channel_level_annotation_unknown_id_rejected(make_series):
@@ -33,16 +38,16 @@ def test_channel_level_annotation_unknown_id_rejected(make_series):
 
 
 def test_trial_level_interval_requires_common_span(make_series):
-    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
-    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 10000)
+    a = make_series(channel="I", values=(0.0,) * 5000)
+    b = make_series(channel="II", values=(0.0,) * 10000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     with pytest.raises(ValueError, match="common"):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
 
 def test_trial_level_interval_common_span_ok(make_series):
-    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
-    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 5000)
+    a = make_series(channel="I", values=(0.0,) * 5000)
+    b = make_series(channel="II", values=(0.0,) * 5000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
@@ -54,8 +59,8 @@ def test_empty_time_series_ids_rejected():
 
 
 def test_trial_level_point_needs_no_common_span(make_series):
-    a = make_series(channel="I", t_start_s=0.0, values=(0.0,) * 5000)
-    b = make_series(channel="II", t_start_s=0.0, values=(0.0,) * 10000)
+    a = make_series(channel="I", values=(0.0,) * 5000)
+    b = make_series(channel="II", values=(0.0,) * 10000)
     sample = Sample(time_series=(a, b), view=View.SUBSET)
     # A point marker imposes no common-span requirement.
     sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0)))
@@ -111,3 +116,32 @@ def test_start_time_rejects_a_naive_datetime(make_series):
 def test_has_absolute_time(make_series):
     assert not Sample(time_series=(make_series(),)).has_absolute_time
     assert Sample(time_series=(make_series(),), start_time=0).has_absolute_time
+
+
+def test_a_trial_interval_is_refused_on_a_timeless_sample(make_series):
+    # add_task refuses this span; add_annotation must not accept it. An ordinal series reports
+    # span_us None, so an all-ordinal sample collapses to a single distinct "window" of None, which
+    # the common-window rule would otherwise read as agreement.
+    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, channel="c", time_axis=OrdinalAxis())
+    sample = Sample(time_series=(ordinal,))
+    with pytest.raises(ValueError, match="no timeline at all"):
+        sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
+
+
+def test_annotation_span_outside_the_window_is_rejected(make_series):
+    # 5000 values at 500 Hz is a 10 s window [0, 10); an interval past it means nothing on the data.
+    sample = Sample(time_series=(make_series(values=(0.0,) * 5000),), view=View.FULL)
+    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+        sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(5.0, 20.0)))
+
+
+def test_annotation_in_a_gap_between_disjoint_windows_is_accepted(make_series):
+    # The bounds check uses the sample's overall span, so an event logged between two sensor windows
+    # (one sensor off, another not yet on) is a valid annotation rather than an error.
+    early = make_series(channel="early", values=(0.0,) * 5000)  # [0, 10) s
+    late = make_series(
+        channel="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
+    )  # [20, 30) s
+    sample = Sample(time_series=(early, late))
+    # 15 s falls in the [10, 20) s gap, inside neither series but within the sample's overall span.
+    sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))

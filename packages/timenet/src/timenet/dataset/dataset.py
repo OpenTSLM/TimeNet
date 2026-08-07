@@ -9,7 +9,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
-from timenet.dataset.sample import Sample
+from timenet.dataset.sample import Sample, check_span_within_window
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
@@ -22,7 +22,6 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
-from timenet.types.clock import seconds_to_us
 
 
 T = TypeVar("T")
@@ -145,7 +144,7 @@ class TimeFDataset:
         self._check_sample_refs(task)
         for sample in targets:
             for span in task.spans():
-                self._check_span_within_sample(type(task).__name__, span, sample)
+                check_span_within_window(f"{type(task).__name__} span", span, sample.time_series, sample.sample_id)
         self._check_annotation_refs(task, targets)
 
         if from_tasks:
@@ -255,55 +254,6 @@ class TimeFDataset:
         if not type(task).answer_is_sample and task.target is None and not task.target_annotation_ids:
             raise TimeFValidationError(
                 f"{name} needs an answer: pass target=, or target_annotation_ids= to point at stored annotations"
-            )
-
-    @staticmethod
-    def _check_span_within_sample(task_name: str, span: Span, sample: Sample) -> None:
-        """Reject a span whose series do not resolve on the sample, or that falls outside its span.
-
-        A span's times are in the source recording timeline, the same frame as ``TimeSeries.t_start_s``,
-        so it is checked against the union of the targeted series' spans. A series with an open
-        ``t_end_s`` imposes no upper bound.
-
-        Args:
-            task_name: The task class name, for the error message.
-            span: The span to check.
-            sample: The sample the task is being attached to.
-
-        Raises:
-            TimeFValidationError: If a series id is unknown on the sample, or the span lies outside the
-                covered span.
-        """
-        series_ids = {ts.time_series_id for ts in sample.time_series}
-        for series_id in span.time_series_ids or ():
-            if series_id not in series_ids:
-                raise TimeFValidationError(
-                    f"{task_name} span references unknown time_series_id {series_id!r} on sample {sample.sample_id!r}"
-                )
-        covered = [
-            ts for ts in sample.time_series if span.time_series_ids is None or ts.time_series_id in span.time_series_ids
-        ]
-        if not covered:
-            return
-        # The series window is still recording seconds; the span is microseconds. Compare in
-        # microseconds so the span's own resolution decides the boundary rather than a float.
-        start = seconds_to_us(min(ts.t_start_s for ts in covered))
-        ends = [ts.t_end_s for ts in covered]
-        end = None if any(e is None for e in ends) else seconds_to_us(max(e for e in ends if e is not None))
-        # The window is half-open [start, end): a point at exactly `end` is outside, and so is an
-        # interval whose exclusive end runs past it. The two shapes need different upper tests.
-        below_start = span.start < start
-        above_end = False
-        if end is not None:
-            if span.is_point:
-                above_end = span.start >= end
-            elif span.end is not None:
-                above_end = span.end > end
-        if below_start or above_end:
-            raise TimeFValidationError(
-                f"{task_name} span ({span.start}, {span.end}) us falls outside sample "
-                f"{sample.sample_id!r} span ({start}, {end}) us; span times are in the source "
-                f"recording timeline"
             )
 
     @staticmethod

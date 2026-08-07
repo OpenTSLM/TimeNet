@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (
     Annotation,
@@ -40,10 +41,9 @@ def _ecg_dataset() -> TimeFDataset:
     series = TimeSeries(
         spec=spec,
         channel="II",
-        sampling_rate_hz=16.0,
+        time_axis=RegularAxis.from_rate_hz(16),
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
         time_series_id="ecg-ts-0",
-        t_start_s=0.0,
         n_values=16,
     )
     sample = dataset.add_sample(time_series=(series,), view=View.FULL, sample_id="ecg-sample-0")

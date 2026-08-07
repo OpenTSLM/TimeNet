@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import pickle
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -302,3 +303,28 @@ def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
     pq.write_table(table.drop_columns(["start_time_us"]), samples_path)
     with TimeFReader(version_dir) as reader:
         assert all(s.start_time is None for s in reader.iter_samples())
+
+
+def _corrupt_first_series(version_dir, field, value):
+    """Set a field on the first series' struct in samples.parquet, simulating on-disk corruption."""
+    samples_path = version_dir / "samples.parquet"
+    table = pq.read_table(samples_path)
+    rows = table.to_pylist()
+    rows[0]["time_series"][0][field] = value
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), samples_path)
+
+
+def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
+    # The tag and the columns disagree: an ordinal series must have no period or start index.
+    version_dir = _write(tmp_path)
+    _corrupt_first_series(version_dir, "axis_type", "ordinal")
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="carries regular-axis columns"):
+        list(reader.iter_samples())
+
+
+def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
+    # A zero denominator would raise a raw ZeroDivisionError from Fraction; it must surface as format error.
+    version_dir = _write(tmp_path)
+    _corrupt_first_series(version_dir, "period_denominator", 0)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="unbuildable regular axis"):
+        list(reader.iter_samples())

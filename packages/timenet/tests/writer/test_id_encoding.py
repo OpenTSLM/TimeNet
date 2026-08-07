@@ -6,6 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal
@@ -43,7 +44,7 @@ def _series():
     return TimeSeries(
         spec=_spec(),
         channel="c",
-        sampling_rate_hz=1.0,
+        time_axis=RegularAxis.from_rate_hz(1),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )

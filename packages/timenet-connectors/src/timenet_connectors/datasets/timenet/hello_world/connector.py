@@ -17,6 +17,7 @@ import pyarrow as pa
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -34,6 +35,7 @@ from timenet.types import (
 
 
 _SAMPLING_RATE_HZ = 16.0
+_AXIS = RegularAxis.from_rate_hz(16)
 _SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SINE = TimeSeriesSpec(
     spec_type="sine",
@@ -125,7 +127,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             _wave_values(np.sin, short.n_values, phase=0.0),
             spec=_SINE,
             channel="a",
-            sampling_rate_hz=_SAMPLING_RATE_HZ,
+            time_axis=_AXIS,
             source_id="rec-0",
             time_series_id="ts-shared",
         )
@@ -137,7 +139,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             _wave_values(np.cos, short.n_values, phase=0.0),
             spec=_COSINE,
             channel="b",
-            sampling_rate_hz=_SAMPLING_RATE_HZ,
+            time_axis=_AXIS,
             source_id="rec-0",
             time_series_id="ts-cos-0",
         )
@@ -186,11 +188,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         long_series = TimeSeries(
             spec=_SINE,
             channel="a",
-            sampling_rate_hz=_SAMPLING_RATE_HZ,
+            time_axis=_AXIS,
             loader=_wave(np.sin, long.n_values, phase=1.0),
             source_id="rec-1",
             time_series_id="ts-long-1",
-            t_start_s=0.0,
             n_values=long.n_values,
         )
         sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
@@ -198,16 +199,15 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
 
         # Sample 2: a windowed slice with a scoped classification task. It covers the *second* half of
         # rec-0, so it is a genuine offset window rather than a byte-identical prefix of `ts-shared`. The
-        # phase offset continues the same wave, so the values match rec-0 over [t_start_s, t_end_s).
+        # phase offset continues the same wave, so the values match rec-0 over the window.
         window_start = short.n_values // 2
         window = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
             spec=_SINE,
             channel="a",
-            sampling_rate_hz=_SAMPLING_RATE_HZ,
+            time_axis=_AXIS.at_index(window_start),
             source_id="rec-0",
             time_series_id="ts-window-2",
-            t_start_s=window_start / _SAMPLING_RATE_HZ,
         )
         sample2 = dataset.add_sample(
             time_series=(window,), view=View.WINDOW, subject_ids=("subj-0",), sample_id="sample-2"

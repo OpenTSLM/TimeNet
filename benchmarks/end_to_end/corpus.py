@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -107,7 +109,7 @@ def _scalar_series(
         loader=lambda: values,
         spec=spec,
         channel=channel,
-        sampling_rate_hz=scenario.sampling_rate_hz,
+        time_axis=RegularAxis.from_rate_hz(Fraction(scenario.sampling_rate_hz)),
         source_id=f"{scenario.name}-recording",
         time_series_id=f"{scenario.name}-{channel}",
         n_values=len(values),
@@ -228,7 +230,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
                 loader=_loader(_values(4, channel, length, 1)),
                 spec=finance_spec,
                 channel=f"c{channel}",
-                sampling_rate_hz=1.0,
+                time_axis=OrdinalAxis(),
                 source_id=f"tsqa-row-{index:04d}",
                 time_series_id=f"tsqa-row-{index:04d}-c{channel}",
                 n_values=length,
@@ -254,7 +256,7 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             loader=_loader(values),
             spec=vibration_spec,
             channel="signal",
-            sampling_rate_hz=16.0,
+            time_axis=RegularAxis.from_rate_hz(16),
             source_id=f"mean-recording-{index:04d}",
             time_series_id=f"mean-series-{index:04d}",
             n_values=len(values),
@@ -279,7 +281,7 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
         return TimeSeries(
             spec=spec,
             channel=channel,
-            sampling_rate_hz=50.0,
+            time_axis=RegularAxis.from_rate_hz(50),
             loader=lambda: array,
             time_series_id=f"rich-{channel}",
             n_values=len(values),

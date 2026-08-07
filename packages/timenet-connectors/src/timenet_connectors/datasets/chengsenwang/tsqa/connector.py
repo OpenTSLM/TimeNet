@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
@@ -45,7 +46,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
                     values,
                     spec=_SPEC,
                     channel=f"c{channel}",
-                    sampling_rate_hz=1.0,
+                    time_axis=OrdinalAxis(),
                     time_series_id=f"row-{index}-c{channel}",
                 )
                 for channel, values in enumerate(channels)

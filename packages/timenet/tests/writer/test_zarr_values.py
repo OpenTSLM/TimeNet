@@ -7,6 +7,7 @@ import pytest
 import zarr
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -152,7 +153,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
             TimeSeries(
                 spec=spec,
                 channel="rgb",
-                sampling_rate_hz=30.0,
+                time_axis=RegularAxis.from_rate_hz(30),
                 n_values=len(frames),
                 loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
                 time_series_id="camera-1",
@@ -211,7 +212,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
             TimeSeries(
                 spec=nd_spec,
                 channel="rgb",
-                sampling_rate_hz=10.0,
+                time_axis=RegularAxis.from_rate_hz(10),
                 time_series_id="cam-1",
                 n_values=len(frames),
                 loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=nd_spec.dimension_names),
@@ -219,7 +220,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
             TimeSeries(
                 spec=scalar_spec,
                 channel="i",
-                sampling_rate_hz=10.0,
+                time_axis=RegularAxis.from_rate_hz(10),
                 time_series_id="sig-1",
                 n_values=6,
                 loader=lambda: pa.array(np.arange(6, dtype=np.float32)),

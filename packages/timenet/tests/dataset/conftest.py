@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from timenet.dataset import TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.types import TimeSeriesSpec, ureg
 
 
@@ -24,7 +25,7 @@ def make_series(spec):
         base = TimeSeries(
             spec=spec,
             channel=channel,
-            sampling_rate_hz=500.0,
+            time_axis=RegularAxis.from_rate_hz(500),
             n_values=len(values),
             loader=lambda v=tuple(values): pa.array(list(v), type=pa.float32()),
         )

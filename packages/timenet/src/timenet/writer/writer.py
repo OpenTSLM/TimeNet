@@ -19,6 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -568,7 +569,7 @@ def _series_identity(ts: TimeSeries) -> tuple:
     Returns:
         The identifying fields, suitable for equality comparison and for error messages.
     """
-    return (ts.spec.spec_type, ts.channel, ts.sampling_rate_hz, ts.source_id, ts.t_start_s, ts.n_values)
+    return (ts.spec.spec_type, ts.channel, ts.time_axis, ts.source_id, ts.n_values)
 
 
 def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
@@ -577,8 +578,10 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
         "channel": ts.channel,
         "source_id": codec.encode("source_id", ts.source_id),
         "time_series_id": codec.encode("time_series_id", ts.time_series_id),
-        "sampling_rate_hz": ts.sampling_rate_hz,
-        "t_start_s": ts.t_start_s,
+        "axis_type": str(ts.time_axis.axis_type),
+        "period_numerator_us": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.period_us.numerator,
+        "period_denominator": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.period_us.denominator,
+        "start_index": None if isinstance(ts.time_axis, OrdinalAxis) else ts.time_axis.start_index,
         "n_values": ts.n_values,
     }
 
