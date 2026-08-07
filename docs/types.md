@@ -352,13 +352,16 @@ The derived task records the chain it was built from, which is how a handful of 
 into many higher-level training samples:
 
 ```python
-base = dataset.add_task(sample, ClassificationTask(target="faulty"))
-dataset.add_task(sample, AnswerTask(
-    prompt="Is this machine healthy?",
-    rationale="The trace is classified faulty: a bearing fault is present.",
-    target="No.",
-    from_tasks=(base,),
-))
+base = ClassificationTask(target="faulty")
+dataset.add_tasks(sample, [
+    base,
+    AnswerTask(
+        prompt="Is this machine healthy?",
+        rationale="The trace is classified faulty: a bearing fault is present.",
+        target="No.",
+        from_tasks=(base,),
+    ),
+])
 ```
 
 ### Annotations vs tasks
