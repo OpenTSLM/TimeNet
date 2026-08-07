@@ -230,7 +230,7 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 | `AnswerTask` | `answer` | `target: str` (free text) | — |
 | `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
 | `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[Span, ...]` | `mode` |
-| `ForecastingTask` | `forecasting` | a produced series | `context_sample_ids`, `target_sample_id` |
+| `ForecastingTask` | `forecasting` | a produced series | `context_sample_ids`, `target_sample_id`, `target_span` |
 | `TSEditingTask` | `ts_editing` | a produced series | `source_sample_id`, `target_sample_id` |
 | `TSGenerationTask` | `ts_generation` | a produced series | `target_sample_id` |
 | `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (sample ids) | `candidate_sample_ids` |
@@ -314,8 +314,9 @@ IntervalSpan.micros(5_000_000, 8_000_000)
       ),
   ))
   ```
-- `ForecastingTask`: predict a sample's future values from context samples. Its answer is that future
-  series, referenced by `target_sample_id`.
+- `ForecastingTask`: predict a series' future values. The future is a whole separate sample
+  (`target_sample_id`) or a region of the attached sample (`target_span`, an interval with an explicit
+  `scope` for the context) — exactly one.
   ```python
   dataset.add_task(future, ForecastingTask(
       context_sample_ids=("rec_001::history",),

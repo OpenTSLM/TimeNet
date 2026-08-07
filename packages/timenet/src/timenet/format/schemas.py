@@ -233,6 +233,7 @@ def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataTy
         TaskType.FORECASTING: [
             ("context_sample_ids", pa.list_(id_types["sample_id"])),
             ("target_sample_id", id_types["sample_id"]),
+            ("target_span", span_struct(id_types)),
         ],
         TaskType.TS_EDITING: [
             ("source_sample_id", id_types["sample_id"]),

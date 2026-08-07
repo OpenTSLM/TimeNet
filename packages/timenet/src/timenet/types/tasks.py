@@ -229,19 +229,69 @@ class TemporalLocalizationTask(Task):
 
 @dataclass(kw_only=True)
 class ForecastingTask(Task):
-    """A series out: continue the context samples into the target sample.
+    """A series out: continue the context into the future.
 
-    References sample ids rather than raw arrays, so both the context and the horizon stay traceable to
-    their dataset version.
+    The future is either a whole separate sample (``target_sample_id``) or a region of the sample the
+    task is attached to (``target_span``): exactly one, never both and never neither. The second shape
+    lets a single unsplit series carry a horizon, so the dataset can ship the raw recording rather than a
+    context/target pair. When ``target_span`` is used, ``scope`` must be set too: the base ``Task.scope``
+    default of ``None`` means the whole sample, which would include the region ``target_span`` predicts.
     """
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
-    refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("context_sample_ids", "target_sample_id"))
+    refs: ClassVar[TaskRefs] = TaskRefs(
+        sample_id_fields=("context_sample_ids", "target_sample_id"),
+        span_fields=("target_span",),
+    )
     answer_is_sample: ClassVar[bool] = True
-    context_sample_ids: tuple[str, ...]
+    context_sample_ids: tuple[str, ...] = ()
     """Ids of the samples that provide forecasting context."""
-    target_sample_id: str
-    """Id of the sample whose future values are predicted."""
+    target_sample_id: str | None = None
+    """Id of the sample whose future values are predicted; ``None`` when ``target_span`` names the region
+    to predict within the attached sample instead."""
+    target_span: Span | None = None
+    """The region to predict, within the sample the task is attached to, in microseconds on the **source
+    recording timeline** (the same frame as a span's bounds and a series' time offsets). Must be an
+    interval, not a point, and is exclusive with ``target_sample_id``. That it falls inside the sample is
+    checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample to check against.
+    Requires an explicit ``scope`` naming the context region, since the base ``scope=None`` default of
+    "the whole sample" would otherwise include the region to predict."""
+
+    def __post_init__(self) -> None:
+        """Reject a point ``target_span``, one paired with ``target_sample_id``, neither set, or no ``scope``.
+
+        Raises:
+            TimeFValidationError: If ``target_span`` is a point rather than an interval, if it is set
+                alongside ``target_sample_id``, if neither ``target_span`` nor ``target_sample_id`` is
+                set, or if ``target_span`` is set without ``scope``.
+        """
+        if self.target_span is None:
+            if self.target_sample_id is None:
+                raise TimeFValidationError(
+                    "ForecastingTask requires either target_sample_id or target_span to name the future "
+                    "to predict; got neither"
+                )
+            return
+        if self.target_span.is_point:
+            raise TimeFValidationError(
+                f"ForecastingTask target_span must be an interval, not a point: a point has no duration "
+                f"and so names no values to predict. A one-step horizon is the interval covering that one "
+                f"step, e.g. IntervalSpan.seconds(t, t + step_seconds); a point cannot express it, because "
+                f"how much time one step spans depends on the series' axis and a sample may hold several "
+                f"at different rates. Got {self.target_span!r}"
+            )
+        if self.target_sample_id is not None:
+            raise TimeFValidationError(
+                f"ForecastingTask target_span names a region of the attached sample, so it cannot be "
+                f"combined with target_sample_id={self.target_sample_id!r}; use one or the other"
+            )
+        if self.scope is None:
+            raise TimeFValidationError(
+                "ForecastingTask target_span needs an explicit scope naming the context region; "
+                "scope=None would mean the whole sample (see Task.scope), which would include the region "
+                "target_span names to predict. Pass scope= to this constructor; add_task's scope= is "
+                "stamped on after this check runs and so cannot satisfy it"
+            )
 
 
 @dataclass(kw_only=True)
