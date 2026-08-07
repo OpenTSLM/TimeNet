@@ -27,7 +27,7 @@ class Span:
     """
 
     start_s: float
-    """Start of the interval, or the instant itself, in recording seconds."""
+    """Start of the interval, or the time offset itself, in recording seconds."""
     end_s: float | None = None
     """End of the interval in recording seconds, exclusive; ``None`` makes the span a point."""
     time_series_ids: tuple[str, ...] | None = None
@@ -52,10 +52,10 @@ class Span:
         *,
         time_series_ids: tuple[str, ...] | None = None,
     ) -> Self:
-        """Construct a span marking one instant.
+        """Construct a span marking one time offset.
 
         Args:
-            start_s: The instant in recording seconds.
+            start_s: The time offset in recording seconds.
             time_series_ids: Series the point is scoped to; ``None`` covers every series.
 
         Returns:
@@ -85,5 +85,5 @@ class Span:
 
     @property
     def is_point(self) -> bool:
-        """Whether the span marks an instant rather than a bounded interval."""
+        """Whether the span marks a time offset rather than a bounded interval."""
         return self.end_s is None

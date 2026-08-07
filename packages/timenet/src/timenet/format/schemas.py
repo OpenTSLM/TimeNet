@@ -139,9 +139,7 @@ def shard_schema(id_types: IdTypes) -> pa.Schema:
             ("spec_type", pa.string()),
             ("channel", pa.string()),
             ("chunk_idx", pa.int32()),
-            ("t_start_s", pa.float64()),
             ("n_values", pa.int32()),
-            ("sampling_rate_hz", pa.float64()),
             ("values", pa.list_(pa.float32())),
         ]
     )
@@ -168,8 +166,6 @@ def index_schema(id_types: IdTypes) -> pa.Schema:
             ("chunk_file", pa.string()),
             ("chunk_major_idx", pa.int64()),
             ("chunk_minor_idx", pa.int64()),
-            ("t_start_s", pa.float64()),
-            ("t_end_s", pa.float64()),
             ("n_values", pa.int32()),
         ]
     )

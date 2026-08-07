@@ -9,7 +9,7 @@ from timenet.types import Span
 def test_interval_and_point():
     interval = Span(start_s=5.0, end_s=8.0)
     assert not interval.is_point
-    assert Span(start_s=5.0).is_point  # no end => an instant at start_s
+    assert Span(start_s=5.0).is_point  # no end => a time offset at start_s
 
 
 def test_named_constructors_match_direct_construction():

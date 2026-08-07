@@ -153,9 +153,7 @@ class ZarrValuesBackend(BaseValuesBackend):
                     data_index=ChunkDataIndex(major_idx=base + start, minor_idx=None),
                     spec_type=spec_type,
                     channel=ts.channel,
-                    t_start_s=ts.t_start_s + start / ts.sampling_rate_hz,
                     n_values=n,
-                    sampling_rate_hz=ts.sampling_rate_hz,
                 )
             on_series_done(completed, total)
         if active is not None:

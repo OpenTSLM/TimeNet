@@ -285,7 +285,7 @@ class TimeFDataset:
         start = min(ts.t_start_s for ts in covered)
         ends = [ts.t_end_s for ts in covered]
         end = None if any(e is None for e in ends) else max(e for e in ends if e is not None)
-        # A point span (end_s is None) is bounded by its own instant; `or` would misread an end_s of 0.0.
+        # A point span (end_s is None) is bounded by its own time offset; `or` would misread an end_s of 0.0.
         span_end = span.start_s if span.end_s is None else span.end_s
         if span.start_s < start or (end is not None and span_end > end):
             raise TimeFValidationError(

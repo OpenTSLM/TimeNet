@@ -132,9 +132,7 @@ class _Chunk:
     spec_type: str
     channel: str
     chunk_idx: int
-    t_start_s: float
     n_values: int
-    sampling_rate_hz: float
     values: pa.Array
 
 
@@ -205,9 +203,7 @@ class _ShardStream:
                 data_index=ChunkDataIndex(major_idx=self._row_group, minor_idx=offset),
                 spec_type=chunk.spec_type,
                 channel=chunk.channel,
-                t_start_s=chunk.t_start_s,
                 n_values=chunk.n_values,
-                sampling_rate_hz=chunk.sampling_rate_hz,
             )
         self._row_group += 1
         self._shard_bytes += self._buffer_bytes
@@ -230,9 +226,7 @@ def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.
             "spec_type": [c.spec_type for c in buffer],
             "channel": [c.channel for c in buffer],
             "chunk_idx": [c.chunk_idx for c in buffer],
-            "t_start_s": [c.t_start_s for c in buffer],
             "n_values": [c.n_values for c in buffer],
-            "sampling_rate_hz": [c.sampling_rate_hz for c in buffer],
             "values": _values_column([c.values for c in buffer]),
         },
         schema=schema,
@@ -260,9 +254,7 @@ def _plan_chunks(ts: TimeSeries, values: pa.Array, chunk_max_bytes: int) -> list
                 spec_type=ts.spec.spec_type,
                 channel=ts.channel,
                 chunk_idx=chunk_idx,
-                t_start_s=ts.t_start_s + start / ts.sampling_rate_hz,
                 n_values=len(sub),
-                sampling_rate_hz=ts.sampling_rate_hz,
                 values=sub,
             )
         )

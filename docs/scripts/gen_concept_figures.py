@@ -172,13 +172,13 @@ def fig_annotation_static():
 
 
 def fig_annotation_point():
-    """PointAnnotation: one instant in time."""
+    """PointAnnotation: one time offset in time."""
 
     def draw(ax):
         ax.axvline(3.4, color=POINT, lw=1.6, zorder=3)
         ax.plot(3.4, ax.get_ylim()[1] * 0.92, marker="v", color=POINT, ms=7, zorder=4)
 
-    _annotation_fig("annotation-point", "one instant in time", draw, seed=11)
+    _annotation_fig("annotation-point", "one time offset in time", draw, seed=11)
 
 
 def fig_annotation_interval():

@@ -1,6 +1,6 @@
 // Custom behavior for the TimeNet docs: the "Copy page" dropdown and the datasets catalog.
 // Loaded after the Zensical theme bundle, so window.document$ is available and re-emits on
-// instant navigation; both initializers are idempotent via a data-ready guard.
+// time offset navigation; both initializers are idempotent via a data-ready guard.
 
 function initCopyPage() {
   document.querySelectorAll(".copy-page:not([data-ready])").forEach((root) => {
