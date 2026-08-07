@@ -24,6 +24,34 @@ from timenet.values_backends.reader import BaseValuesReader
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
+#: Mirrors the writer's group names; see timenet.values_backends.zarr.writer.
+_IRREGULAR_GROUP = "_irregular"
+_TIME_OFFSETS_GROUP = "_time_offsets"
+
+
+def _time_offsets_path(values_rel_path: str) -> str:
+    """Return the time offsets array path parallel to a values array path.
+
+    Substitutes the ``_irregular`` path *segment*, never a substring: a spec type may legitimately
+    contain that text (``foo_irregular_bar``), and a plain replace would resolve it to the wrong array
+    rather than failing.
+
+    Args:
+        values_rel_path: The values array's path relative to the version directory.
+
+    Returns:
+        The parallel time offsets array's path.
+
+    Raises:
+        TimeFFormatError: If the path does not sit under the irregular group.
+    """
+    parts = values_rel_path.split("/")
+    if len(parts) < 3 or parts[1] != _IRREGULAR_GROUP:  # noqa: PLR2004 - store dir, group, array name
+        raise TimeFFormatError(
+            f"expected an irregular series' values under {_IRREGULAR_GROUP!r}, got {values_rel_path!r}; "
+            f"the row is tagged irregular but was written without a parallel time offsets array"
+        )
+    return "/".join([parts[0], _TIME_OFFSETS_GROUP, *parts[2:]])
 
 
 class ZarrValuesReader(BaseValuesReader):
@@ -74,20 +102,22 @@ class ZarrValuesReader(BaseValuesReader):
         return _to_arrow(combined, spec)
 
     def load_time_offsets(self, root: Path, rows: list[dict]) -> pa.Array:
-        """Refuse: this backend cannot store per-value time offsets yet, so it can never have written any.
+        """Read an irregular series' time offsets from the array parallel to its values.
 
         Args:
             root: The version directory.
-            rows: The series' index rows.
+            rows: The series' index rows, sorted by ``chunk_idx``.
 
-        Raises:
-            TimeFFormatError: Always.
+        Returns:
+            One int64 microsecond time offset per value. :func:`_time_offsets_path` raises if a row's values do
+            not sit under the irregular group, which means it was tagged irregular but written without
+            a parallel time offsets array.
         """
-        del self, root, rows
-        raise TimeFFormatError(
-            "the Zarr values backend cannot store per-value time offsets, so this artifact should not "
-            "contain an irregular series; it was written by a different or newer writer"
-        )
+        parts = [
+            self._read_range(root, _time_offsets_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
+        ]
+        combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        return pa.array(combined.astype(np.int64, copy=False))
 
     def close(self) -> None:
         """Drop cached arrays and decoded chunks (Zarr arrays hold no OS file handles to close)."""
