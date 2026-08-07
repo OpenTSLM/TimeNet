@@ -110,19 +110,20 @@ class TimeFDataset:
             samples: The sample, or samples, the task is attached to.
             task: The task instance (payload already set by the caller).
             scope: The input region the task is about, stamped onto ``task.scope``. A convenience for
-                passing the window at registration time; equivalent to constructing the task with it.
-            from_tasks: Source tasks this task derives from. Overrides the task's own ``from_tasks``
-                only when non-empty, so a task constructed with ``from_tasks=`` is not clobbered.
+                passing the window at registration time. Pass it here or on the constructor, not both.
+            from_tasks: Source tasks this task derives from, applied the same way. Pass them here or on
+                the constructor, not both.
 
         Returns:
             The registered task (same instance, with ``sample_ids`` populated).
 
         Raises:
-            TimeFValidationError: If ``samples`` is empty; if ``scope`` is passed and the task already
-                carries one; if the task sets both ``target`` and ``target_annotation_ids`` or, when its
-                answer is not a produced series, neither; if a span's ``time_series_ids`` does not resolve
-                to a series on every target sample or the span falls outside a sample's covered span; or
-                if a referenced sample or annotation is not registered in this dataset.
+            TimeFValidationError: If ``samples`` is empty; if ``scope`` or ``from_tasks`` is passed and
+                the task already carries one; if the task sets both ``target`` and
+                ``target_annotation_ids`` or, when its answer is not a produced series, neither; if a
+                span's ``time_series_ids`` does not resolve to a series on every target sample or the span
+                falls outside a sample's covered span; or if a referenced sample or annotation is not
+                registered in this dataset.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
@@ -145,9 +146,11 @@ class TimeFDataset:
         Args:
             samples: The sample, or samples, the tasks are attached to.
             tasks: The task instances to register. Pass a single one to :meth:`add_task`.
-            scope: The input region the tasks are about, stamped onto every task's ``scope``. Register
-                the tasks separately when they need different scopes.
-            from_tasks: Source tasks these derive from, applied to every task in the call.
+            scope: The input region the tasks are about, stamped onto every task in the call. Rejected
+                if any of them already carries one, so register a task needing a different scope in its
+                own call.
+            from_tasks: Source tasks these derive from, applied to every task in the call and rejected
+                the same way.
 
         Returns:
             The registered tasks (the same instances, with ``sample_ids`` populated), in the order given.
@@ -182,13 +185,22 @@ class TimeFDataset:
         Raises:
             TimeFValidationError: as documented on :meth:`add_task`.
         """
+        # Both conflicts are checked before anything is stamped, so a rejected pairing leaves the task
+        # exactly as it arrived and there is nothing to undo.
+        if scope is not None and task.scope is not None:
+            raise TimeFValidationError(
+                f"add_task got scope= for a {type(task).__name__} that already has scope={task.scope!r}; "
+                f"pass it once, either on the task or here"
+            )
+        if from_tasks and task.from_tasks:
+            raise TimeFValidationError(
+                f"add_task got from_tasks= for a {type(task).__name__} that already has "
+                f"from_tasks={list(task.from_task_ids)}; pass it once, either on the task or here"
+            )
         if scope is not None:
-            if task.scope is not None:
-                raise TimeFValidationError(
-                    f"add_task got scope= for a {type(task).__name__} that already has scope={task.scope!r}; "
-                    f"pass it once, either on the task or here"
-                )
             task.scope = scope
+        if from_tasks:
+            task.from_tasks = tuple(from_tasks)
 
         self._check_task_answer(task)
         self._check_sample_refs(task)
@@ -197,8 +209,6 @@ class TimeFDataset:
                 check_span_within_window(f"{type(task).__name__} span", span, sample.time_series, sample.sample_id)
         self._check_annotation_refs(task, targets)
 
-        if from_tasks:
-            task.from_tasks = tuple(from_tasks)
         task.sample_ids = tuple(sample.sample_id for sample in targets)
         for sample in targets:
             sample.task_ids = (*sample.task_ids, task.id)

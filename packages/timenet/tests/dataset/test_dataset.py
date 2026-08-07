@@ -533,3 +533,26 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 
     (task,) = ds.add_tasks(sample, gen())
     assert task.input_annotation_ids == (sample.annotations[0].id,)
+
+
+def test_add_task_rejects_a_second_from_tasks(make_series):
+    # Mirrors the scope guard: silently replacing the task's own provenance would lose it.
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    base = ds.add_task(sample, ClassificationTask(target="a"))
+    other = ds.add_task(sample, ClassificationTask(target="b"))
+    qa = AnswerTask(prompt="q", target="a", from_tasks=(base,))
+    with pytest.raises(TimeFValidationError, match="pass it once"):
+        ds.add_task(sample, qa, from_tasks=(other,))
+    assert qa.from_tasks == (base,)  # rejected, so it comes out as it went in
+
+
+def test_add_tasks_rejects_a_task_that_already_carries_a_scope(make_series):
+    # A batch shares one scope; a task needing its own belongs in its own call, not a silent override.
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    own = IntervalSpan.micros(500, 1000)
+    exempt = ClassificationTask(target="b", scope=own)
+    with pytest.raises(TimeFValidationError, match="pass it once"):
+        ds.add_tasks(sample, [ClassificationTask(target="a"), exempt], scope=IntervalSpan.micros(1000, 2000))
+    assert exempt.scope == own  # the rejected task is untouched

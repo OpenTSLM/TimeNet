@@ -125,8 +125,8 @@ add_task(samples, task, *, scope=None, from_tasks=()) -> Task
 
 Registers a task and links it to its samples: populates `task.sample_ids` and appends `task.id` to each
 sample's `task_ids`. `scope`, when passed, is stamped onto `task.scope` (equivalent to constructing the
-task with it, and rejected if the task already has one). `from_tasks` overrides the task's own value only
-when non-empty, so a task built with `from_tasks=` is never clobbered.
+task with it, and rejected if the task already has one). `from_tasks` works the same way: pass it here
+or on the constructor, not both, and it is rejected if the task already carries one.
 
 This is where a task is checked against the samples it is attached to, since this is the first point that
 has both. Raises `ValueError` on empty `samples`; on a task that sets both `target` and
