@@ -190,14 +190,31 @@ TemporalLocalizationTask(
 
 ## ForecastingTask
 
-Context samples predict a target sample: a future series out, no text. It references sample ids rather
-than raw arrays, so both the context and the horizon stay traceable to their dataset versions.
+Continue the context into the future. The future is either a whole separate sample
+(`target_sample_id`) or a region of the sample the task is attached to (`target_span`): exactly one,
+never both and never neither. The sample-id form references ids rather than raw arrays, so context and
+horizon stay traceable to their dataset versions.
 
 ```python
 from timenet.types import ForecastingTask
 
 ForecastingTask(
     context_sample_ids=("2024-01-01",), target_sample_id="2024-01-02"
+)
+```
+
+`target_span` lets a single unsplit series carry a horizon, so a dataset can ship the raw recording
+rather than a context/target pair. It is the region to predict on the source recording timeline, must
+be an interval (a point has no duration, so it names no values), and needs an explicit `scope` for the
+context — the default `scope=None` means the whole sample, which would include the region to predict.
+
+```python
+from timenet.types import ForecastingTask, IntervalSpan
+
+# forecast the last 12 s of a 144 s recording, given the first 132 s as context
+ForecastingTask(
+    scope=IntervalSpan.seconds(0.0, 132.0),
+    target_span=IntervalSpan.seconds(132.0, 144.0),
 )
 ```
 
