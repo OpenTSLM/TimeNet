@@ -25,12 +25,15 @@ from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     ANNOTATIONS_FILE,
+    ANNOTATIONS_SORT_KEY,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_COMPRESSION_LEVEL,
+    DEFAULT_CONTROL_PLANE_BATCH_ROWS,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     INDEX_FILE,
+    INDEX_SORT_KEY,
     MANIFEST_FILE,
     SAMPLES_FILE,
     TASK_PART_TEMPLATE,
@@ -442,7 +445,9 @@ class TimeFWriter:
                     },
                 )
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
-        rows = sorted(by_id.values(), key=lambda r: (r["key"], r["id"]))
+        # Sorted by the id the reader resolves an annotation by (not by key), so a lookup can prune row
+        # groups on that column's statistics. Ids are unique per row here, so this is a total order.
+        rows = sorted(by_id.values(), key=lambda r: r[ANNOTATIONS_SORT_KEY])
         self._write_table(
             rows,
             annotations_schema(self._id_types),
@@ -483,7 +488,9 @@ class TimeFWriter:
                         "n_values": placement.n_values,
                     }
                 )
-        rows.sort(key=lambda r: (r["sample_id"], r["time_series_id"], r["chunk_idx"]))
+        # The leading sort column is the one the reader prunes on; the shared constant is the single
+        # place that names it, so the writer's sort and the reader's bisect cannot drift apart.
+        rows.sort(key=lambda r: (r[INDEX_SORT_KEY], r["time_series_id"], r["chunk_idx"]))
         self._index_rows = len(rows)
         self._write_table(
             rows,
@@ -578,17 +585,30 @@ class TimeFWriter:
         dictionary_columns: list[str],
         column_encoding: dict[str, str] | None = None,
     ) -> None:
-        table = pa.Table.from_pylist(rows, schema=schema)
-        pq.write_table(
-            table,
-            self._staging_dir / rel_path,
-            **encodings.parquet_kwargs(
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
+        """Write one control-plane table, streaming it in fixed-size row batches.
+
+        Materializing every row as one ``pa.Table.from_pylist`` peaks at the whole table in Arrow on top
+        of the Python rows that built it, which is what makes a large index or annotation table
+        expensive to write. Batching also gives the file more than one row group, which is what lets the
+        reader prune on a sorted key column.
+
+        Args:
+            rows: The already-ordered rows to write.
+            schema: The table's Arrow schema.
+            rel_path: The staging-relative output path.
+            dictionary_columns: Columns to dictionary-encode.
+            column_encoding: Explicit per-column encodings.
+        """
+        kwargs = encodings.parquet_kwargs(
+            dictionary_columns=dictionary_columns,
+            column_encoding=column_encoding,
+            compression=self._compression,
+            compression_level=self._compression_level,
         )
+        with pq.ParquetWriter(self._staging_dir / rel_path, schema, **kwargs) as writer:
+            for start in range(0, len(rows), DEFAULT_CONTROL_PLANE_BATCH_ROWS):
+                batch = rows[start : start + DEFAULT_CONTROL_PLANE_BATCH_ROWS]
+                writer.write_table(pa.Table.from_pylist(batch, schema=schema))
 
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:

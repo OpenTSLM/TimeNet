@@ -23,7 +23,7 @@ from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAx
 from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
-from timenet.format.constants import MANIFEST_FILE
+from timenet.format.constants import INDEX_SORT_KEY, MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
 from timenet.types import (
@@ -290,9 +290,10 @@ class TimeFReader:
         parts = [pq.read_table(self._root / rel) for rel in self._manifest.files.time_series_index]
         table = parts[0] if len(parts) == 1 else pa.concat_tables(parts)
         self._index_table = table
+        key_column = INDEX_SORT_KEY
         self._index_keys: list[tuple] = list(
             zip(
-                table.column("sample_id").to_pylist(),
+                table.column(key_column).to_pylist(),
                 table.column("time_series_id").to_pylist(),
                 strict=True,
             )
@@ -309,7 +310,7 @@ class TimeFReader:
             The series' index rows, empty if it has none.
         """
         probe = (
-            self._codec.encode("sample_id", sample_id),
+            self._codec.encode(INDEX_SORT_KEY, sample_id),
             self._codec.encode("time_series_id", time_series_id),
         )
         lo = bisect.bisect_left(self._index_keys, probe)

@@ -26,7 +26,7 @@ from timenet.types import (
     Version,
     ureg,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import TimeFWriter, writer as writer_module
 
 
 def _spec():
@@ -107,6 +107,20 @@ def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
     sid = restored.samples[0].sample_id
     assert str(uuid.UUID(sid)) == sid
     assert uuid.UUID(sid).version == 7
+
+
+def test_binary16_index_lookups_span_row_groups(tmp_path, monkeypatch):
+    # Index pruning compares stored ids against Parquet row-group statistics. For a uuid16 column those
+    # are raw bytes, so this checks the byte-ordered comparison across several row groups.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    dataset = _uuid_dataset()
+    for _ in range(5):
+        dataset.add_sample(time_series=(_series(),))
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        assert pq.ParquetFile(version_dir / "time_series_index.parquet").metadata.num_row_groups > 1
+        assert_datasets_equal(dataset, reader.read())
 
 
 def test_forecasting_scalar_id_round_trips(tmp_path):
