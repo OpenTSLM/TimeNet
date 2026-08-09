@@ -5,8 +5,9 @@ import pyarrow as pa
 import pytest
 
 from timenet.dataset import TimeSeries
-from timenet.dataset.axis import RegularAxis
-from timenet.types import TimeSeriesSpec, ureg
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.errors import TimeFValidationError
+from timenet.types import IntervalSpan, PointSpan, TimeSeriesSpec, ureg
 
 
 def _spec():
@@ -121,3 +122,59 @@ def test_from_values_generates_unique_id_unless_given():
         [1.0], spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(1), time_series_id="x"
     )
     assert fixed.time_series_id == "x"
+
+
+def _counting(n, tsid="s", axis=None):
+    return _series(
+        n_values=n,
+        time_series_id=tsid,
+        time_axis=axis or RegularAxis.from_rate_hz(500),
+        loader=lambda: pa.array([float(i) for i in range(n)], type=pa.float32()),
+    )
+
+
+def test_step_range_of_a_steps_span_is_the_span():
+    ts = _counting(6)
+    assert ts.step_range(IntervalSpan.steps(2, 5, time_series_ids=("s",))) == (2, 5)
+
+
+def test_step_range_of_a_seconds_span_on_a_regular_axis():
+    # 1 Hz: value k sits at k seconds, so [2 s, 5 s) is steps 2..5.
+    ts = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    assert ts.step_range(IntervalSpan.seconds(2.0, 5.0)) == (2, 5)
+
+
+def test_step_range_of_a_seconds_span_on_an_irregular_axis():
+    ts = TimeSeries.from_irregular(
+        [0.0, 1.0, 2.0, 3.0], time_offsets_us=[0, 1_000_000, 2_000_000, 5_000_000], spec=_spec(), channel="c"
+    )
+    # [1 s, 5 s) picks the values at 1 s and 2 s, not the one at 5 s (exclusive end).
+    assert ts.step_range(IntervalSpan.seconds(1.0, 5.0)) == (1, 3)
+
+
+def test_step_range_horizon_matches_n_steps():
+    ts = _counting(12)
+    span = IntervalSpan.steps(0, 12, time_series_ids=("s",))
+    start, stop = ts.step_range(span)
+    assert stop - start == span.n_steps
+
+
+def test_step_range_rejects_a_point():
+    with pytest.raises(TimeFValidationError, match="not a point"):
+        _counting(3).step_range(PointSpan.steps(1, time_series_ids=("s",)))
+
+
+def test_step_range_rejects_a_steps_span_naming_another_series():
+    with pytest.raises(TimeFValidationError, match="not this series"):
+        _counting(6).step_range(IntervalSpan.steps(0, 3, time_series_ids=("other",)))
+
+
+def test_step_range_rejects_a_steps_span_past_the_series():
+    with pytest.raises(TimeFValidationError, match="runs past"):
+        _counting(3).step_range(IntervalSpan.steps(0, 4, time_series_ids=("s",)))
+
+
+def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():
+    ts = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), channel="c", time_axis=OrdinalAxis())
+    with pytest.raises(TimeFValidationError, match="no timeline"):
+        ts.step_range(IntervalSpan.seconds(0.0, 1.0))

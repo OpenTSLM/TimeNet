@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
-from timenet.types import TimeSeriesSpec, new_id
+from timenet.types import Span, SpanFrame, TimeSeriesSpec, new_id
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -247,3 +247,52 @@ class TimeSeries:
         if read_steps is not None:
             return read_steps(start, stop)
         return self.to_arrow().slice(start, stop - start)
+
+    def step_range(self, span: Span) -> tuple[int, int]:
+        """Return the half-open step range of this series that ``span`` covers.
+
+        The bridge to step-based forecasting libraries: ``stop - start`` is the horizon ``h`` that
+        GluonTS, Nixtla and fev speak in, and the pair feeds :meth:`read_steps` to read the ground truth.
+
+        A steps span already counts in this series' own steps, so the range is the span, checked against
+        its length. A seconds span is located on the axis instead: the steps whose instants fall in
+        ``[start, end)``, each end rounded up to the next step. An ordinal series has no timeline, so a
+        seconds span has no answer on it.
+
+        Args:
+            span: The interval to locate. A steps span must name this series.
+
+        Returns:
+            ``(start, stop)`` step indices, half-open, from this series' first step.
+
+        Raises:
+            TimeFValidationError: If ``span`` is a point; if a steps span does not name this series or
+                runs past its length; or if a seconds span is used on an ordinal series.
+        """
+        if span.end is None:
+            raise TimeFValidationError(f"step_range needs an interval span, not a point, got {span!r}")
+        if span.frame is SpanFrame.STEPS:
+            if span.time_series_ids is None or self.time_series_id not in span.time_series_ids:
+                raise TimeFValidationError(
+                    f"a steps span counts on {span.time_series_ids}, not this series {self.time_series_id!r}"
+                )
+            if span.end > self.n_values:
+                raise TimeFValidationError(
+                    f"steps span ({span.start}, {span.end}) runs past this series' {self.n_values} steps"
+                )
+            return (span.start, span.end)
+        axis = self.time_axis
+        if isinstance(axis, RegularAxis):
+            return (axis.index_at_or_after(span.start), axis.index_at_or_after(span.end))
+        if isinstance(axis, IrregularAxis):
+            offsets = self.time_offsets_us()
+            return (
+                int(np.searchsorted(offsets, span.start, side="left")),
+                int(np.searchsorted(offsets, span.end, side="left")),
+            )
+        if isinstance(axis, OrdinalAxis):
+            raise TimeFValidationError(
+                f"a seconds span has no step range on ordinal series {self.time_series_id!r}, which has "
+                f"no timeline; name the horizon in steps instead"
+            )
+        assert_never(axis)
