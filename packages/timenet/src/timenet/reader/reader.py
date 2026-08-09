@@ -51,7 +51,6 @@ _SAMPLE_BATCH_ROWS = 4096
 #: keeps a dataset with millions of them from re-growing the eager dict this replaced.
 _ANNOTATION_CACHE_SIZE = 4096
 
-#: Index row groups kept decoded. Samples and the index are both sorted by ``sample_id``, so an
 #: Byte budget for decoded index row groups, mirroring the zarr reader's chunk cache. Bounded by size
 #: rather than by count because the two access patterns differ sharply: a sample-ordered scan reuses one
 #: group thousands of times, while shuffled reads (the sleep-staging pattern) touch groups at random and
@@ -134,7 +133,7 @@ class TimeFReader:
         self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
         self._samples_data: pads.Dataset | None = None
         self._index_directory: list[_IndexRowGroup] | None = None
-        self._index_maxima: list[_StoredId] | None = None
+        self._index_bisectable = False
         self._index_files: dict[str, pq.ParquetFile] = {}
         self._index_cache: OrderedDict[tuple[str, int], tuple[pa.Table, dict[tuple, tuple[int, int]]]] = OrderedDict()
         self._index_cache_bytes = 0
@@ -161,7 +160,7 @@ class TimeFReader:
         state["_annotation_cache"] = OrderedDict()
         state["_samples_data"] = None
         state["_index_directory"] = None
-        state["_index_maxima"] = None
+        state["_index_bisectable"] = False
         state["_index_files"] = {}
         state["_index_cache"] = OrderedDict()
         state["_index_cache_bytes"] = 0
@@ -191,7 +190,7 @@ class TimeFReader:
             handle.close()
         self._index_files.clear()
         self._index_directory = None
-        self._index_maxima = None
+        self._index_bisectable = False
         self._index_cache.clear()
         self._index_cache_bytes = 0
 
@@ -289,7 +288,7 @@ class TimeFReader:
             yield
         except TimeFFormatError:
             raise
-        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
     def _iter_sample_rows(self, sample_ids: Iterable[str] | None) -> Iterator[dict]:
@@ -302,7 +301,9 @@ class TimeFReader:
             Each sample row as a dict.
 
         Raises:
-            TimeFValidationError: If ``sample_ids`` names an id the dataset does not contain.
+            TimeFValidationError: If ``sample_ids`` names an id the dataset does not contain, raised
+                once the iterator is fully consumed rather than on the offending id: a lazy reader
+                cannot know an id is absent until it has read every part.
         """
         if self._samples_data is None:
             parts = [str(self._root / rel) for rel in self._manifest.files.samples]
@@ -313,17 +314,19 @@ class TimeFReader:
                 yield from batch.to_pylist()
             return
         wanted = list(dict.fromkeys(sample_ids))
-        found: set[object] = set()
         stored_type = data.schema.field("sample_id").type
-        encoded = pa.array([self._codec.encode("sample_id", sid) for sid in wanted], type=stored_type)
-        expression = pads.field("sample_id").isin(encoded)
+        stored = {self._codec.encode("sample_id", sid): sid for sid in wanted}
+        expression = pads.field("sample_id").isin(pa.array(list(stored), type=stored_type))
         for batch in data.to_batches(filter=expression, batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
             for row in batch.to_pylist():
-                found.add(row["sample_id"])
+                stored.pop(row["sample_id"], None)
                 yield row
-        missing = [sid for sid in wanted if self._codec.encode("sample_id", sid) not in found]
-        if missing:
-            raise TimeFValidationError(f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(missing)}")
+        # Enforced only once the caller drains the iterator: a lazy reader cannot know an id is absent
+        # until it has looked everywhere, and an early-stopping consumer never asks it to.
+        if stored:
+            raise TimeFValidationError(
+                f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
+            )
 
     def _check_files_exist(self) -> None:
         for rel in self._manifest.files.all_parts():
@@ -437,8 +440,9 @@ class TimeFReader:
         index is a few thousand entries here whatever its row count. This is what a lookup prunes
         against, and the reason the reader never holds the index itself.
 
-        The parallel list of group maxima is what a lookup bisects, and is left unset when any group
-        lacks statistics, since then the maxima are not a sorted key and every group must be considered.
+        A lookup bisects the directory on each group's maximum id. That is a sorted key only when every
+        group carries statistics, so ``_index_bisectable`` records whether it does; when it does not,
+        every group must be considered.
 
         Returns:
             One entry per row group, in file order.
@@ -460,8 +464,7 @@ class TimeFReader:
                         )
                     )
             self._index_directory = directory
-            maxima = [group.max_sample_id for group in directory]
-            self._index_maxima = None if any(m is None for m in maxima) else cast("list[_StoredId]", maxima)
+            self._index_bisectable = all(group.max_sample_id is not None for group in directory)
         return self._index_directory
 
     def _index_file(self, rel: str) -> pq.ParquetFile:
@@ -538,7 +541,11 @@ class TimeFReader:
             stored_sample_id = cast(_StoredId, self._codec.encode("sample_id", sample_id))
             probe = (stored_sample_id, self._codec.encode("time_series_id", time_series_id))
             groups = self._index_groups()
-            first = 0 if self._index_maxima is None else bisect.bisect_left(self._index_maxima, stored_sample_id)
+            first = (
+                bisect.bisect_left(groups, stored_sample_id, key=lambda group: group.max_sample_id)
+                if self._index_bisectable
+                else 0
+            )
             rows: list[dict] = []
             for position in range(first, len(groups)):
                 group = groups[position]

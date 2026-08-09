@@ -286,7 +286,7 @@ def test_getstate_drops_every_control_plane_cache(tmp_path):
     assert state["_annotation_rows"] is None
     assert state["_annotation_cache"] == {}
     assert state["_index_directory"] is None
-    assert state["_index_maxima"] is None
+    assert state["_index_bisectable"] is False
     assert state["_index_files"] == {}
     assert state["_index_cache"] == {}
     assert state["_samples_data"] is None
@@ -525,3 +525,29 @@ def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path, monkey
                 assert reader._index_rows(sample_id, series_id)
         # every decoded group is still resident: nothing was evicted to serve the pass
         assert len(reader._index_cache) == len(reader._index_groups())
+
+
+def test_corrupt_index_data_page_raises_format_error(tmp_path):
+    # A footer that parses but a garbage data page: the lazy index decode must surface as
+    # TimeFFormatError, not a raw OSError from pyarrow, or a caller catching corruption misses it.
+    version_dir = _write(tmp_path)
+    idx = version_dir / "time_series_index.parquet"
+    raw = bytearray(idx.read_bytes())
+    for i in range(4, min(64, len(raw) - 8)):
+        raw[i] = 0
+    idx.write_bytes(raw)
+    with TimeFReader(version_dir) as reader:
+        sample = next(iter(reader.iter_samples()))
+        with pytest.raises(TimeFFormatError):
+            sample.time_series[0].to_arrow()
+
+
+def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
+    # The guarantee holds when the iterator is drained; an early-stopping consumer is served what
+    # exists and never reaches the check, which the docstring now states explicitly.
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        got = next(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
+        assert got.sample_id == "sample-0"  # early stop: no raise
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFValidationError, match="no-such-sample"):
+        list(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
