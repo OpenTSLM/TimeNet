@@ -9,7 +9,7 @@ import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Span, new_id
+from timenet.types import Annotation, IntervalSpan, Span, new_id
 from timenet.types.clock import check_int64, unix_us
 
 
@@ -18,18 +18,21 @@ def check_span_within_window(
     span: Span,
     time_series: tuple[TimeSeries, ...],
     sample_id: str,
+    time_span: IntervalSpan | None = None,
 ) -> None:
-    """Reject a span its targeted series cannot place, by the scoping rule.
+    """Reject a span its targeted series cannot place, by the three-part scoping rule.
 
     A span's bounds are in the source recording timeline, the same frame as each series' axis. Where it
     is allowed to fall depends on what it is scoped to:
 
     - **Scoped** to named ``time_series_ids``: it claims to apply to every one of them, so it must lie
       inside the *intersection* of their windows. Falling outside even one would be misleading.
-    - **Unscoped** (``time_series_ids`` is ``None``): checked against the *union* of the timed series'
-      windows. An event landing in an unrecorded gap is rejected rather than silently accepted, so a
-      convex hull of the series never masks a hole in the data. Timeless (ordinal) series carry no
-      window and drop out.
+    - **Unscoped** (``time_series_ids`` is ``None``) on a sample that declares a ``time_span``: checked
+      against that session span. This is how a recording spanning a sensor gap says so, letting an event
+      fall in the gap on purpose (a note taken while every sensor was briefly off).
+    - **Unscoped** with no ``time_span``: checked against the *union* of the timed series' windows. An
+      event landing in an unrecorded gap is rejected rather than silently accepted, so a convex hull of
+      the series never masks a hole in the data. Timeless (ordinal) series carry no window and drop out.
 
     Shared by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
 
@@ -38,6 +41,7 @@ def check_span_within_window(
         span: The span to check.
         time_series: The series the span is checked against.
         sample_id: The owning sample's id, for the error message.
+        time_span: The sample's declared session span, if any; consulted only for an unscoped span.
 
     Raises:
         TimeFValidationError: If a series id is unknown, a scoped span names a timeless series or ones
@@ -70,11 +74,15 @@ def check_span_within_window(
         _reject_outside(label, span, start, end, sample_id)
         return
 
+    if time_span is not None:
+        _reject_outside(label, span, time_span.start, time_span.end, sample_id)
+        return
+
     windows = sorted(window for window in covered.values() if window is not None)
     if not windows:
         raise TimeFValidationError(
             f"{label} is a time-valued region, but sample {sample_id!r} has no timeline to place it against: "
-            f"no timed series. Use a static annotation instead"
+            f"no timed series and no time_span. Use a static annotation, or declare a time_span"
         )
     _reject_outside_union(label, span, windows, sample_id)
 
@@ -122,7 +130,7 @@ def _reject_outside_union(label: str, span: Span, windows: list[tuple[int, int]]
     if not any(start <= span.start and _exclusive_end(span) <= end for start, end in merged):
         raise TimeFValidationError(
             f"{label} ({span.start}, {span.end}) us falls in a gap between the recorded windows of sample "
-            f"{sample_id!r} {merged}"
+            f"{sample_id!r} {merged}. Declare a time_span if the session spans the gap"
         )
 
 
@@ -157,19 +165,44 @@ class Sample:
         start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
         start_time=1_000_000                                   # the same moment, written directly
     """
+    time_span: IntervalSpan | None = None
+    """The session's overall span on the source recording timeline: an :class:`~timenet.types.IntervalSpan`
+    covering the whole sample, or ``None``. Declare it when the series have gaps and an event may fall in
+    one (a note taken while every sensor was briefly off); an unscoped span is then checked against it
+    rather than against the union of the series' windows. Its ``time_series_ids`` must be ``None``, and
+    it must contain every series' window."""
 
     def __post_init__(self) -> None:
-        """Normalize ``start_time`` to whole Unix microseconds and range-check it.
+        """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
 
-        Both steps delegate their contract: ``unix_us`` rejects a naive datetime or a bare float, and
-        ``check_int64`` rejects an anchor past the int64 microsecond column, each raising
-        :class:`~timenet.errors.TimeFValidationError`.
+        ``start_time`` delegates its contract: ``unix_us`` rejects a naive datetime or a bare float, and
+        ``check_int64`` rejects an anchor past the int64 microsecond column. ``time_span``, when set,
+        must be a whole-sample :class:`~timenet.types.IntervalSpan` that contains every series' window.
+
+        Raises:
+            TimeFValidationError: If ``time_span`` is not a whole-sample ``IntervalSpan`` or does not
+                contain some series' window.
         """
-        if self.start_time is None:
-            return
-        anchor = unix_us(self.start_time)
-        check_int64("Sample.start_time", anchor)
-        self.start_time = anchor
+        if self.start_time is not None:
+            anchor = unix_us(self.start_time)
+            check_int64("Sample.start_time", anchor)
+            self.start_time = anchor
+        if self.time_span is not None:
+            if not isinstance(self.time_span, IntervalSpan):
+                raise TimeFValidationError(
+                    f"Sample.time_span must be an IntervalSpan covering the whole sample, got {self.time_span!r}"
+                )
+            if self.time_span.time_series_ids is not None:
+                raise TimeFValidationError(
+                    "Sample.time_span covers the whole sample, so its time_series_ids must be None"
+                )
+            for ts in self.time_series:
+                window = ts.span_us
+                if window is not None and (window[0] < self.time_span.start or window[1] > self.time_span.end):
+                    raise TimeFValidationError(
+                        f"Sample.time_span ({self.time_span.start}, {self.time_span.end}) us must contain every "
+                        f"series' window, but {ts.time_series_id!r} covers {window} us"
+                    )
 
     @property
     def has_absolute_time(self) -> bool:
@@ -188,7 +221,8 @@ class Sample:
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this sample, a
                 scoped span names a timeless series, or the span falls outside the window its scope
-                selects (the intersection of named series, or the union of the series' windows).
+                selects (the intersection of named series, the sample's ``time_span``, or the union of
+                the series' windows).
         """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
@@ -196,6 +230,7 @@ class Sample:
                 annotation.span,
                 self.time_series,
                 self.sample_id,
+                self.time_span,
             )
         self.annotations = (*self.annotations, annotation)
         return annotation

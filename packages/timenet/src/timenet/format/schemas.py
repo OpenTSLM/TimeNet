@@ -95,6 +95,7 @@ def samples_schema(id_types: IdTypes) -> pa.Schema:
         [
             ("sample_id", id_types["sample_id"]),
             ("start_time_us", pa.int64()),
+            ("time_span", span_struct(id_types)),  # null unless the sample declares an explicit session span
             ("subject_ids", pa.list_(id_types["subject_id"])),
             ("time_series", pa.list_(time_series_struct(id_types))),
             ("task_ids", pa.list_(id_types["task_id"])),

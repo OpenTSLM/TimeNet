@@ -416,6 +416,7 @@ class TimeFWriter:
                 {
                     "sample_id": codec.encode("sample_id", sample.sample_id),
                     "start_time_us": sample.start_time,
+                    "time_span": codec.encode_span(sample.time_span),
                     "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
                     "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
                     "task_ids": codec.encode_list("task_id", sample.task_ids),

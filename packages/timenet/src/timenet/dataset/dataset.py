@@ -16,6 +16,7 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
+    IntervalSpan,
     Span,
     Task,
     annotation_type_of,
@@ -48,6 +49,7 @@ class TimeFDataset:
         subject_ids: tuple[str, ...] = (),
         sample_id: str | None = None,
         start_time: datetime | int | None = None,
+        time_span: IntervalSpan | None = None,
     ) -> Sample:
         """Create a sample, register it, and return it.
 
@@ -59,6 +61,9 @@ class TimeFDataset:
             start_time: Wall-clock timestamp that the sample's relative zero refers to: a
                 timezone-aware datetime or whole Unix microseconds, or ``None`` when no wall-clock
                 reference exists.
+            time_span: The session's overall span, if the series have gaps an unscoped span may fall in
+                (see :attr:`Sample.time_span`). Must be a whole-sample :class:`~timenet.types.IntervalSpan`
+                containing every series' window.
 
         Returns:
             The newly created :class:`Sample`.
@@ -80,6 +85,7 @@ class TimeFDataset:
                 time_series=tuple(time_series),
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
+                time_span=time_span,
             )
         else:
             sample = Sample(
@@ -87,6 +93,7 @@ class TimeFDataset:
                 time_series=tuple(time_series),
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
+                time_span=time_span,
             )
         self._samples.append(sample)
         return sample
@@ -139,7 +146,9 @@ class TimeFDataset:
         self._check_sample_refs(task)
         for sample in targets:
             for span in task.spans():
-                check_span_within_window(f"{type(task).__name__} span", span, sample.time_series, sample.sample_id)
+                check_span_within_window(
+                    f"{type(task).__name__} span", span, sample.time_series, sample.sample_id, sample.time_span
+                )
         self._check_annotation_refs(task, targets)
 
         if from_tasks:

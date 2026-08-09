@@ -245,3 +245,23 @@ def test_editing_and_generation_sample_ids_round_trip(tmp_path):
     generation = tasks[TSGenerationTask]
     assert isinstance(generation, TSGenerationTask)
     assert generation.target_sample_id == edited.sample_id
+
+
+def test_time_span_round_trips(tmp_path):
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    time_span = IntervalSpan.seconds(0.0, 5.0)  # contains the series' [0, 3) s window
+    dataset.add_sample(time_series=(_series(),), time_span=time_span)
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        sample = next(reader.iter_samples())
+    assert sample.time_span == time_span
+    assert isinstance(sample.time_span, IntervalSpan)
