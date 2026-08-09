@@ -5,6 +5,7 @@ import pytest
 
 from timenet.dataset import Sample, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, IntervalSpan, PointSpan
 
@@ -145,3 +146,46 @@ def test_annotation_in_a_gap_between_disjoint_windows_is_accepted(make_series):
     sample = Sample(time_series=(early, late))
     # 15 s falls in the [10, 20) s gap, inside neither series but within the sample's overall span.
     sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))
+
+
+def _ordinal(spec, n, tsid):
+    return TimeSeries.from_values(
+        [float(i) for i in range(n)], spec=spec, channel="c", time_axis=OrdinalAxis(), time_series_id=tsid
+    )
+
+
+def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):
+    # An ordinal series has no timeline, so a steps span is the only way to name a region of it.
+    ts = _ordinal(make_series().spec, 3, "ord")
+    check_span_within_window("scope", IntervalSpan.steps(0, 3, time_series_ids=("ord",)), (ts,), "s")
+
+
+def test_a_steps_interval_past_the_series_length_is_rejected(make_series):
+    ts = _ordinal(make_series().spec, 3, "ord")
+    with pytest.raises(TimeFValidationError, match="runs past"):
+        check_span_within_window("scope", IntervalSpan.steps(0, 4, time_series_ids=("ord",)), (ts,), "s")
+
+
+def test_a_steps_point_on_the_last_step_is_accepted(make_series):
+    ts = _ordinal(make_series().spec, 3, "ord")
+    check_span_within_window("scope", PointSpan.steps(2, time_series_ids=("ord",)), (ts,), "s")
+
+
+def test_a_steps_point_past_the_last_step_is_rejected(make_series):
+    ts = _ordinal(make_series().spec, 3, "ord")
+    with pytest.raises(TimeFValidationError, match="runs past"):
+        check_span_within_window("scope", PointSpan.steps(3, time_series_ids=("ord",)), (ts,), "s")
+
+
+def test_a_steps_span_on_an_unknown_series_is_rejected(make_series):
+    ts = _ordinal(make_series().spec, 3, "ord")
+    with pytest.raises(TimeFValidationError, match="unknown"):
+        check_span_within_window("scope", IntervalSpan.steps(0, 2, time_series_ids=("nope",)), (ts,), "s")
+
+
+def test_a_steps_span_on_a_timeline_series_is_bounded_by_count_not_window(make_series):
+    # 5000 steps sit inside a 5000-value series; a window check would read 5001 as 5001 us, far inside
+    # the 10 s window, and wrongly accept it. Steps bound by length.
+    ts = make_series(values=(0.0,) * 5000)
+    with pytest.raises(TimeFValidationError, match="runs past"):
+        check_span_within_window("scope", IntervalSpan.steps(0, 5001, time_series_ids=(ts.time_series_id,)), (ts,), "s")

@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Span, new_id
+from timenet.types import Annotation, Span, SpanFrame, new_id
 from timenet.types.clock import unix_us
 
 
@@ -19,12 +19,16 @@ _INT64_MAX = 2**63 - 1
 def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeries, ...], sample_id: str) -> None:
     """Reject a span whose series are unknown, timeless, or that falls outside the sample's span.
 
-    A span's bounds are in the source recording timeline, the same frame as each series' axis, so the
-    span is checked against the sample's overall span: the bounding interval from the earliest start
+    A seconds span's bounds are in the source recording timeline, the same frame as each series' axis,
+    so it is checked against the sample's overall span: the bounding interval from the earliest start
     to the latest end of the targeted series. This is deliberately the bounding interval, not a
     per-series or gap-free rule, so an annotation can mark a time offset that falls in a gap between two
     series' windows (a note logged between one sensor coming off and another going on, say). Shared
     by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
+
+    A steps span instead counts in each named series' own steps, so it is bounded by their length
+    rather than any timeline. This is the only span that resolves on an ordinal series, which reports
+    no window at all.
 
     Args:
         label: Human-readable label for the span, used in the error message.
@@ -33,8 +37,9 @@ def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeri
         sample_id: The owning sample's id, for the error message.
 
     Raises:
-        TimeFValidationError: If a series id is unknown, a targeted series has no timeline, or the
-            span falls outside the covered window.
+        TimeFValidationError: If a series id is unknown; if a steps span runs past a named series'
+            steps; or, for a seconds span, if a targeted series has no timeline or the span falls
+            outside the covered window.
     """
     scope = span.time_series_ids
     # A span with no time_series_ids covers every series on the sample.
@@ -46,6 +51,18 @@ def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeri
                 f"{label} references unknown time_series_id {series_id!r} on sample {sample_id!r}"
             )
     if not covered:
+        return
+    if span.frame is SpanFrame.STEPS:
+        # A steps span always names its series (the span validates that), so every one is in_scope. Its
+        # exclusive end must fit each series' step count; n_values is that count, and is what an ordinal
+        # series has in place of a window.
+        last = span.start + 1 if span.is_point else span.end
+        for ts in in_scope:
+            if last is not None and last > ts.n_values:
+                raise TimeFValidationError(
+                    f"{label} ({span.start}, {span.end}) runs past the {ts.n_values} steps of series "
+                    f"{ts.time_series_id!r} on sample {sample_id!r}"
+                )
         return
     windows = [w for w in covered.values() if w is not None]
     if len(windows) < len(covered):
