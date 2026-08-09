@@ -52,8 +52,12 @@ _SAMPLE_BATCH_ROWS = 4096
 _ANNOTATION_CACHE_SIZE = 4096
 
 #: Index row groups kept decoded. Samples and the index are both sorted by ``sample_id``, so an
-#: in-order read serves every series of a sample, and the samples after it, from the same row group.
-_INDEX_GROUP_CACHE_SIZE = 2
+#: Byte budget for decoded index row groups, mirroring the zarr reader's chunk cache. Bounded by size
+#: rather than by count because the two access patterns differ sharply: a sample-ordered scan reuses one
+#: group thousands of times, while shuffled reads (the sleep-staging pattern) touch groups at random and
+#: thrash any small count. Measured at 24 row groups, a 2-entry cache made shuffled access 6.1x slower
+#: than in-order; a byte budget keeps both within noise of each other.
+_INDEX_CACHE_MAX_BYTES = 64 * 2**20
 
 #: An id in its stored form: the id string, or the 16 raw bytes of a ``uuid16`` column.
 _StoredId = str | bytes
@@ -133,6 +137,7 @@ class TimeFReader:
         self._index_maxima: list[_StoredId] | None = None
         self._index_files: dict[str, pq.ParquetFile] = {}
         self._index_cache: OrderedDict[tuple[str, int], tuple[pa.Table, dict[tuple, tuple[int, int]]]] = OrderedDict()
+        self._index_cache_bytes = 0
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -159,6 +164,7 @@ class TimeFReader:
         state["_index_maxima"] = None
         state["_index_files"] = {}
         state["_index_cache"] = OrderedDict()
+        state["_index_cache_bytes"] = 0
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -187,6 +193,7 @@ class TimeFReader:
         self._index_directory = None
         self._index_maxima = None
         self._index_cache.clear()
+        self._index_cache_bytes = 0
 
     # ---- public API ----------------------------------------------------------------------------
 
@@ -497,9 +504,13 @@ class TimeFReader:
             offset, count = offsets.get(series_key, (row, 0))
             offsets[series_key] = (offset, count + 1)
         entry = (table, offsets)
+        if table.nbytes > _INDEX_CACHE_MAX_BYTES:
+            return entry  # a single group over budget is served without displacing the whole cache
         self._index_cache[key] = entry
-        if len(self._index_cache) > _INDEX_GROUP_CACHE_SIZE:
-            self._index_cache.popitem(last=False)
+        self._index_cache_bytes += table.nbytes
+        while self._index_cache_bytes > _INDEX_CACHE_MAX_BYTES:
+            _, evicted = self._index_cache.popitem(last=False)
+            self._index_cache_bytes -= evicted[0].nbytes
         return entry
 
     def _index_rows(self, sample_id: str, time_series_id: str) -> list[dict]:

@@ -20,7 +20,8 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
 )
-from timenet.writer import TimeFWriter, writer as writer_module
+from timenet.writer import TimeFWriter
+import timenet.writer.writer as writer_module
 
 
 def _write(tmp_path, dataset=None, **kwargs) -> Path:
@@ -505,3 +506,22 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
         list(reader.iter_samples())
+
+
+def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path, monkeypatch):
+    # TNET-84 names shuffled-epoch reads as the standard sleep-staging pattern. A count-bounded index
+    # cache made them 6.1x slower than in-order at 24 row groups, because each lookup evicted, decoded
+    # a whole row group and rebuilt its offset map. The cache is bounded by bytes so both patterns hold
+    # the same working set. This asserts the cache retains groups rather than timing anything.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 4)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        sample_ids = [s.sample_id for s in reader.iter_samples()]
+        series = {s.sample_id: [ts.time_series_id for ts in s.time_series] for s in reader.iter_samples()}
+        assert len(reader._index_groups()) > 1  # the batch size really did split the index
+
+        for sample_id in reversed(sample_ids):  # reverse order is the cheapest stand-in for shuffled
+            for series_id in series[sample_id]:
+                assert reader._index_rows(sample_id, series_id)
+        # every decoded group is still resident: nothing was evicted to serve the pass
+        assert len(reader._index_cache) == len(reader._index_groups())
