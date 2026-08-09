@@ -322,7 +322,7 @@ IntervalSpan.steps(0, 12, time_series_ids=("passengers",))
   ```
 - `ForecastingTask`: predict a series' future values. The future is a whole separate sample
   (`target_sample_id`) or a region of the attached sample (`target_span`, an interval with an explicit
-  `scope` for the context) — exactly one.
+  `scope` for the context, both in seconds or both in steps) — exactly one.
   ```python
   dataset.add_task(future, ForecastingTask(
       context_sample_ids=("rec_001::history",),

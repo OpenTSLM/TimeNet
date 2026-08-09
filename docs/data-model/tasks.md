@@ -208,17 +208,20 @@ ForecastingTask(
 ```
 
 `target_span` lets a single unsplit series carry a horizon, so a dataset can ship the raw recording
-rather than a context/target pair. It is the region to predict on the source recording timeline, must
-be an interval (a point has no duration, so it names no values), and needs an explicit `scope` for the
-context — the default `scope=None` means the whole sample, which would include the region to predict.
+rather than a context/target pair. It is the region to predict, must be an interval (a point has no
+extent, so it names no values), and needs an explicit `scope` for the context in the same frame: the
+default `scope=None` means the whole sample, which would include the region to predict. Give both in
+seconds on a series with a timeline, or both in steps on one that counts in steps, which is the only
+frame an ordinal series can carry.
 
 ```python
 from timenet.types import ForecastingTask, IntervalSpan
 
-# forecast the last 12 s of a 144 s recording, given the first 132 s as context
+# AirPassengers: 144 monthly points, no fixed second per step. Forecast the last
+# 12 steps, given the first 132 as context.
 ForecastingTask(
-    scope=IntervalSpan.seconds(0.0, 132.0),
-    target_span=IntervalSpan.seconds(132.0, 144.0),
+    scope=IntervalSpan.steps(0, 132, time_series_ids=("passengers",)),
+    target_span=IntervalSpan.steps(132, 144, time_series_ids=("passengers",)),
 )
 ```
 

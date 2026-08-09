@@ -190,3 +190,24 @@ def test_forecasting_requires_a_target_sample_id_or_a_target_span():
 def test_forecasting_target_span_requires_an_explicit_scope():
     with pytest.raises(TimeFValidationError, match="needs an explicit scope"):
         ForecastingTask(target_span=IntervalSpan.seconds(132.0, 144.0))
+
+
+def test_forecasting_names_a_step_horizon_on_a_series_that_has_no_seconds():
+    # AirPassengers is 144 monthly points with no fixed second per step; the horizon is the last 12
+    # steps, and steps are the only frame a series with no timeline can carry.
+    horizon = IntervalSpan.steps(132, 144, time_series_ids=("passengers",))
+    task = ForecastingTask(
+        scope=IntervalSpan.steps(0, 132, time_series_ids=("passengers",)),
+        target_span=horizon,
+    )
+    assert task.target_span == horizon
+    assert horizon.n_steps == 12
+
+
+def test_forecasting_scope_and_target_span_must_share_a_frame():
+    # A context read in seconds and a horizon counted in steps do not lie on one axis.
+    with pytest.raises(TimeFValidationError, match="share a frame"):
+        ForecastingTask(
+            scope=IntervalSpan.seconds(0.0, 132.0),
+            target_span=IntervalSpan.steps(132, 144, time_series_ids=("passengers",)),
+        )

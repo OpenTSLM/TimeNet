@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal
@@ -158,6 +158,32 @@ def test_forecasting_target_span_round_trips(tmp_path):
     assert isinstance(task, ForecastingTask)
     assert task.target_span == span
     assert task.target_sample_id is None
+    assert task.scope == scope
+
+
+def test_forecasting_step_horizon_round_trips(tmp_path):
+    """A steps target_span carries its frame and bounds through the writer and reader."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), channel="c", time_axis=OrdinalAxis())
+    sample = dataset.add_sample(time_series=(ordinal,))
+    series_id = sample.time_series[0].time_series_id
+    span = IntervalSpan.steps(4, 6, time_series_ids=(series_id,))
+    scope = IntervalSpan.steps(0, 4, time_series_ids=(series_id,))
+    dataset.add_task(sample, ForecastingTask(target_span=span, scope=scope))
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        task = reader.tasks[0]
+    assert isinstance(task, ForecastingTask)
+    assert task.target_span == span
     assert task.scope == scope
 
 
