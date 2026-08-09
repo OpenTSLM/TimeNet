@@ -21,23 +21,43 @@ builds itself from what a source actually has::
 The shape is named at the call site rather than inferred from how many bounds were passed, so
 ``IntervalSpan.seconds(5.0)`` is a type error rather than a point that quietly claims to be an
 interval.
+
+A span's numbers are read in one of two frames, named by :class:`SpanFrame` and stored beside them.
+Seconds is the common case: microseconds on a recording timeline every series shares. Steps exists
+because a series need not have a cadence at all: an ordinal sequence has positions but no timeline, so
+``IntervalSpan.steps(0, 12, time_series_ids=(...))`` is the only way to name a region of one. The frame
+is stored because a span is read back without the series it came from, so a bare pair of numbers would
+otherwise compare equal whether it meant 8 microseconds of a recording or 8 steps of an ordinal series.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum, unique
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import offset_us, seconds_to_us
 
 
+@unique
+class SpanFrame(StrEnum):
+    """Which frame a span's numbers are read in. Stored on disk beside them."""
+
+    SECONDS = "seconds"
+    """Microseconds on the source recording timeline, the frame a series' axis places its values in."""
+    STEPS = "steps"
+    """Step ordinals on the step axis of ``time_series_ids``, counting from their first stored step."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class Span:
-    """A point (``end is None``) or half-open interval ``[start, end)``, optionally per-channel.
+    """A point (``end is None``) or half-open interval ``[start, end)``, in one :class:`SpanFrame`.
 
-    Bounds are microseconds on the **source recording timeline**, the same frame as
-    the frame a series' axis places its values in, so a span stays meaningful on a windowed sample
-    that starts partway into the recording. That a span actually falls inside the sample it is
-    attached to is checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample.
+    In :attr:`SpanFrame.SECONDS` the bounds are microseconds on the **source recording timeline**, the
+    same frame a series' axis places its values in, so a span stays meaningful on a windowed sample that
+    starts partway into the recording. In :attr:`SpanFrame.STEPS` they are step ordinals on the series
+    named by ``time_series_ids``, which is why that field stops being optional there. That a span
+    actually falls inside the sample it is attached to is checked by
+    :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample.
 
     Annotate with ``Span`` where either shape fits, and with :class:`PointSpan` or
     :class:`IntervalSpan` where only one does. Build with the builders on those two; the base is not
@@ -45,47 +65,77 @@ class Span:
     """
 
     start: int
-    """Start of the interval, or the time offset itself, in microseconds."""
+    """Start of the interval, or the position itself: microseconds in :attr:`SpanFrame.SECONDS`, a step
+    ordinal in :attr:`SpanFrame.STEPS`."""
     end: int | None = None
-    """End of the interval in microseconds, exclusive; ``None`` makes the span a point."""
+    """End of the interval, exclusive, in this span's frame; ``None`` makes the span a point."""
     time_series_ids: tuple[str, ...] | None = None
-    """Series the span is scoped to; ``None`` covers every series in the sample."""
+    """Series the span is scoped to; ``None`` covers every series in the sample, and is rejected in
+    :attr:`SpanFrame.STEPS`, where a step ordinal means nothing without a series to count on."""
+    frame: SpanFrame = SpanFrame.SECONDS
+    """Which frame ``start`` and ``end`` are read in."""
 
     def __post_init__(self) -> None:
-        """Reject a missing or fractional bound, a non-positive interval, or an empty ``time_series_ids``.
+        """Coerce ``frame`` and reject a missing or fractional bound, a bad interval, or a bad scope.
 
         Raises:
-            TimeFValidationError: If the base class is constructed directly, if ``start`` is missing,
-                if a bound is not whole microseconds, if ``end`` is not strictly greater than
-                ``start``, or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+            TimeFValidationError: If the base class is constructed directly; if ``frame`` is unknown;
+                if ``start`` is missing; if a bound is not whole in this frame; if ``end`` is not
+                strictly greater than ``start``; if ``time_series_ids`` is ``()`` rather than ``None``
+                or non-empty; or, in :attr:`SpanFrame.STEPS`, if no series is named or the start is
+                negative.
         """
         if type(self) is Span:
             raise TimeFValidationError(
                 "Span is the shared base, not a shape; build a PointSpan or an IntervalSpan so the "
                 "span says which one it is"
             )
+        try:
+            object.__setattr__(self, "frame", SpanFrame(self.frame))
+        except ValueError as exc:
+            raise TimeFValidationError(
+                f"unknown span frame {self.frame!r}; expected one of {[f.value for f in SpanFrame]}"
+            ) from exc
+        unit = "whole microseconds" if self.frame is SpanFrame.SECONDS else "a whole step"
         # The field annotations are not enforced at runtime, so a None start would otherwise slip
         # past the loop below (which skips None) and construct a span with no position.
         if self.start is None:
-            raise TimeFValidationError("Span start must be whole microseconds, got None; a span always has a start")
+            raise TimeFValidationError(f"Span start must be {unit}, got None; a span always has a start")
         for name in ("start", "end"):
             value = getattr(self, name)
             if value is None:
                 continue
             if isinstance(value, bool) or not isinstance(value, int):
-                raise TimeFValidationError(
-                    f"Span {name} must be whole microseconds, got {value!r}. Use seconds() to convert "
-                    f"from recording seconds"
-                )
+                hint = " Use seconds() to convert from recording seconds" if self.frame is SpanFrame.SECONDS else ""
+                raise TimeFValidationError(f"Span {name} must be {unit}, got {value!r}.{hint}")
         if self.end is not None and self.end <= self.start:
             raise TimeFValidationError(f"Span end ({self.end}) must be > start ({self.start})")
         if self.time_series_ids is not None and not self.time_series_ids:
             raise TimeFValidationError("Span time_series_ids must be None (whole sample) or non-empty, got ()")
+        if self.frame is SpanFrame.STEPS:
+            if self.time_series_ids is None:
+                raise TimeFValidationError(
+                    "a steps span must name time_series_ids: step 5 is a different region on every "
+                    "series with a different rate, offset or length. Use a seconds span to cover the sample"
+                )
+            if self.start < 0:
+                raise TimeFValidationError(f"steps span start must be >= 0, got {self.start}")
 
     @property
     def is_point(self) -> bool:
-        """Whether the span marks a time offset rather than a bounded interval."""
+        """Whether the span marks a single position rather than a bounded interval."""
         return self.end is None
+
+    @property
+    def n_steps(self) -> int | None:
+        """How many steps a :attr:`SpanFrame.STEPS` interval covers; ``None`` for any other span.
+
+        This is the horizon ``h`` step-based forecasting libraries speak in, readable off the span
+        alone because a steps span already counts in the series it names.
+        """
+        if self.frame is not SpanFrame.STEPS or self.end is None:
+            return None
+        return int(self.end - self.start)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -157,6 +207,20 @@ class PointSpan(Span):
             The point.
         """
         return cls(start=offset_us(at, start_time), time_series_ids=time_series_ids)
+
+    @classmethod
+    def steps(cls, at: int, *, time_series_ids: tuple[str, ...]) -> "PointSpan":
+        """Construct a point at one step ordinal on the named series.
+
+        Args:
+            at: The step ordinal, counting from the series' first stored step.
+            time_series_ids: Series the ordinal counts on; required, since a step ordinal names no
+                position without one.
+
+        Returns:
+            The point, in :attr:`SpanFrame.STEPS`.
+        """
+        return cls(start=at, frame=SpanFrame.STEPS, time_series_ids=time_series_ids)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -236,3 +300,17 @@ class IntervalSpan(Span):
             end=offset_us(end, start_time),
             time_series_ids=time_series_ids,
         )
+
+    @classmethod
+    def steps(cls, start: int, end: int, *, time_series_ids: tuple[str, ...]) -> "IntervalSpan":
+        """Construct a half-open interval of step ordinals on the named series.
+
+        Args:
+            start: First step ordinal, inclusive, counting from the series' first stored step.
+            end: Last step ordinal, exclusive.
+            time_series_ids: Series the ordinals count on; required, and they must share a step axis.
+
+        Returns:
+            The interval, in :attr:`SpanFrame.STEPS`.
+        """
+        return cls(start=start, end=end, frame=SpanFrame.STEPS, time_series_ids=time_series_ids)

@@ -248,14 +248,17 @@ of type. The three series-output types are the exception: their answer is a *ser
 
 `Span` is the geometry primitive shared by a task's `scope` and a localization target: a point
 (`end=None`) or a half-open interval `[start, end)`, optionally scoped to `time_series_ids`
-(`None` = every series). Times are in the **source recording timeline**, the same frame as
-a series' `time_axis`, and bounds are whole microseconds so two equal regions compare equal.
+(`None` = every series). A span carries a `frame`. In the default `SpanFrame.SECONDS` its bounds are
+whole microseconds on the **source recording timeline**, the same frame as a series' `time_axis`, so
+two equal regions compare equal. In `SpanFrame.STEPS` they are step ordinals on the named series, the
+only way to name a region of an ordinal series that has no timeline; `time_series_ids` is required
+there, since step 5 is a different region on every series.
 
 Build one on the shape you mean: `IntervalSpan` or `PointSpan`, each with `.seconds()` for the seconds
-a recording documents itself in, `.micros()` when the source already has integers, and
-`.from_datetime()` for wall-clock moments. The shape is named at the call site rather than inferred
-from how many bounds you passed, so `IntervalSpan.seconds(5.0)` is an error instead of a point that
-quietly claims to be an interval.
+a recording documents itself in, `.micros()` when the source already has integers, `.from_datetime()`
+for wall-clock moments, and `.steps()` for a series that counts in steps rather than time. The shape
+is named at the call site rather than inferred from how many bounds you passed, so
+`IntervalSpan.seconds(5.0)` is an error instead of a point that quietly claims to be an interval.
 
 ```python
 # an interval on one series; start is stored as 5_000_000
@@ -266,6 +269,9 @@ PointSpan.seconds(1.2)
 
 # the same interval, written directly in microseconds
 IntervalSpan.micros(5_000_000, 8_000_000)
+
+# steps 0..12 on one ordinal series, which has no seconds to name
+IntervalSpan.steps(0, 12, time_series_ids=("passengers",))
 ```
 
 ### Per-type payloads

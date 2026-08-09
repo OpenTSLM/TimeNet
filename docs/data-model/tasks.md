@@ -32,10 +32,11 @@ concrete types.
 
 ## The Span primitive
 
-A `Span` is a point or a half-open interval `[start, end)` in whole microseconds, optionally scoped to particular series.
-Times are in the **source recording timeline**, the same frame a series' `time_axis` places its values in, so a span stays
-meaningful on a windowed sample that starts partway into the recording. Build a `PointSpan` and the span is an
-time offset.
+A `Span` is a point or a half-open interval `[start, end)`, optionally scoped to particular series, read in one of
+two frames. In the default seconds frame its bounds are whole microseconds on the **source recording timeline**, the
+same frame a series' `time_axis` places its values in, so a span stays meaningful on a windowed sample that starts
+partway into the recording. In the steps frame they are step ordinals on the named series, which is the only way to
+name a region of an ordinal series that has no timeline. Build a `PointSpan` and the span is a single position.
 
 ```python
 from timenet.types import IntervalSpan, PointSpan
@@ -45,6 +46,9 @@ IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",))
 
 # a point, every channel
 PointSpan.seconds(1.2)
+
+# steps on an ordinal series, which has no seconds to name
+IntervalSpan.steps(0, 12, time_series_ids=("passengers",))
 ```
 
 One primitive covers both directions of time localization: a `scope` is a region **given** to the model,

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import IntervalSpan, PointSpan, Span
+from timenet.types import IntervalSpan, PointSpan, Span, SpanFrame
 
 
 def test_interval_and_point():
@@ -107,3 +107,52 @@ def test_an_interval_with_no_end_is_rejected():
 def test_a_span_with_no_start_is_rejected():
     with pytest.raises(TimeFValidationError, match="start must be whole microseconds"):
         PointSpan(start=None)  # ty: ignore[invalid-argument-type]
+
+
+def test_seconds_and_micros_are_in_the_seconds_frame():
+    assert IntervalSpan.seconds(5.0, 8.0).frame is SpanFrame.SECONDS
+    assert PointSpan.micros(5_000_000).frame is SpanFrame.SECONDS
+
+
+def test_steps_builds_a_span_in_the_steps_frame():
+    interval = IntervalSpan.steps(0, 12, time_series_ids=("s",))
+    assert interval.frame is SpanFrame.STEPS
+    assert (interval.start, interval.end) == (0, 12)
+    assert PointSpan.steps(5, time_series_ids=("s",)).frame is SpanFrame.STEPS
+
+
+def test_n_steps_is_the_horizon_of_a_steps_interval():
+    assert IntervalSpan.steps(132, 144, time_series_ids=("s",)).n_steps == 12
+
+
+def test_n_steps_is_none_off_a_steps_interval():
+    assert IntervalSpan.seconds(0.0, 12.0).n_steps is None  # a seconds interval counts no steps
+    assert PointSpan.steps(5, time_series_ids=("s",)).n_steps is None  # a point spans no steps
+
+
+def test_a_steps_span_must_name_the_series_it_counts_on():
+    # Step 5 is a different region on every series with a different rate, offset or length.
+    with pytest.raises(TimeFValidationError, match="must name time_series_ids"):
+        IntervalSpan.steps(0, 12, time_series_ids=None)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_steps_span_rejects_a_negative_start():
+    with pytest.raises(TimeFValidationError, match="steps span start"):
+        IntervalSpan.steps(-1, 12, time_series_ids=("s",))
+
+
+def test_a_steps_span_rejects_a_fractional_step():
+    with pytest.raises(TimeFValidationError, match="whole step"):
+        IntervalSpan.steps(0, 5.5, time_series_ids=("s",))  # ty: ignore[invalid-argument-type]
+
+
+def test_a_steps_span_and_a_seconds_span_never_compare_equal():
+    # The frame is what keeps 8 steps from colliding with 8 microseconds read back off disk.
+    steps = IntervalSpan.steps(0, 8, time_series_ids=("s",))
+    micros = IntervalSpan.micros(0, 8, time_series_ids=("s",))
+    assert steps != micros
+
+
+def test_an_unknown_frame_is_rejected():
+    with pytest.raises(TimeFValidationError, match="unknown span frame"):
+        IntervalSpan(start=0, end=8, frame="furlongs", time_series_ids=("s",))  # ty: ignore[invalid-argument-type]

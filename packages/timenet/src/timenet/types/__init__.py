@@ -12,7 +12,7 @@ from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema, validate_dataset_id
-from timenet.types.spans import IntervalSpan, PointSpan, Span
+from timenet.types.spans import IntervalSpan, PointSpan, Span, SpanFrame
 from timenet.types.specs import DataSource, TimeSeriesSpec
 from timenet.types.tasks import (
     TASKS,
@@ -52,6 +52,7 @@ __all__ = [
     "PointSpan",
     "ScalarPredictionTask",
     "Span",
+    "SpanFrame",
     "TSCorrespondenceTask",
     "TSEditingTask",
     "TSGenerationTask",

@@ -14,7 +14,7 @@ from typing import cast
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
-from timenet.types import TASKS, IntervalSpan, PointSpan, Span, TaskRefs, TaskType
+from timenet.types import TASKS, IntervalSpan, PointSpan, Span, SpanFrame, TaskRefs, TaskType
 from timenet.types.ids import id_from_bytes, id_to_bytes
 
 
@@ -185,6 +185,9 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
             ("start_us", pa.int64()),
             ("end_us", pa.int64()),  # null => the span is a point at start_s
             ("time_series_ids", pa.list_(id_types["time_series_id"])),
+            # Which frame start/end are read in. Null on a partition written before steps existed,
+            # which decode_span reads as SpanFrame.SECONDS, the only frame there was.
+            ("frame", pa.string()),
         ]
     )
 
@@ -370,6 +373,7 @@ class IdCodec:
             "time_series_ids": (
                 None if span.time_series_ids is None else self.encode_list("time_series_id", span.time_series_ids)
             ),
+            "frame": span.frame.value,
         }
 
     def encode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
@@ -447,10 +451,14 @@ class IdCodec:
         # A round-tripped span must come back as the class its bounds describe, or it stops
         # comparing equal to the one that was written.
         shape: type[Span] = PointSpan if struct["end_us"] is None else IntervalSpan
+        # A partition written before the frame column existed has no "frame"; it predates steps, so
+        # the only frame it could mean is seconds.
+        frame = struct.get("frame") or SpanFrame.SECONDS
         return shape(
             start=struct["start_us"],
             end=struct["end_us"],
             time_series_ids=None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids)),
+            frame=SpanFrame(frame),
         )
 
     def decode_payload(self, refs: TaskRefs, name: str, value: object) -> object:

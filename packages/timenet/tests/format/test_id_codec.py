@@ -2,6 +2,7 @@ import pytest
 
 from timenet.errors import TimeFValidationError
 from timenet.format.schemas import IdCodec
+from timenet.types import IntervalSpan, SpanFrame
 from timenet.types.ids import new_id
 
 
@@ -35,3 +36,25 @@ def test_none_passes_through_on_both_sides():
     codec = IdCodec.from_uuid16({"source_id"})
     assert codec.encode("source_id", None) is None
     assert codec.decode_opt("source_id", None) is None
+
+
+def test_a_steps_span_round_trips_through_the_codec():
+    codec = IdCodec.from_uuid16(())
+    span = IntervalSpan.steps(0, 12, time_series_ids=("s",))
+    assert codec.decode_span(codec.encode_span(span)) == span
+
+
+def test_a_seconds_span_keeps_its_frame_through_the_codec():
+    codec = IdCodec.from_uuid16(())
+    span = IntervalSpan.seconds(1.0, 3.0, time_series_ids=("s",))
+    restored = codec.decode_span(codec.encode_span(span))
+    assert restored == span
+    assert restored is not None and restored.frame is SpanFrame.SECONDS
+
+
+def test_a_span_row_written_before_the_frame_column_reads_as_seconds():
+    # A partition written before the frame column existed carries no "frame" key; it predates steps.
+    codec = IdCodec.from_uuid16(())
+    row = {"start_us": 1, "end_us": 3, "time_series_ids": None}
+    restored = codec.decode_span(row)
+    assert restored is not None and restored.frame is SpanFrame.SECONDS
