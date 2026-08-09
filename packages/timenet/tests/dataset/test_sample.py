@@ -37,12 +37,14 @@ def test_channel_level_annotation_unknown_id_rejected(make_series):
         sample.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(1.0, time_series_ids=("nope",))))
 
 
-def test_trial_level_interval_requires_common_span(make_series):
-    a = make_series(channel="I", values=(0.0,) * 5000)
-    b = make_series(channel="II", values=(0.0,) * 10000)
+def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
+    # No common-window requirement anymore: an unscoped interval only has to be covered by the union of
+    # the series' windows, which here is the contiguous [0, 20) s, so differing lengths do not reject it.
+    a = make_series(channel="I", values=(0.0,) * 5000)  # [0, 10) s
+    b = make_series(channel="II", values=(0.0,) * 10000)  # [0, 20) s
     sample = Sample(time_series=(a, b))
-    with pytest.raises(ValueError, match="common"):
-        sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
+    sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
+    assert sample.annotations[0].key == "artifact"
 
 
 def test_trial_level_interval_common_span_ok(make_series):
@@ -119,12 +121,11 @@ def test_has_absolute_time(make_series):
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_sample(make_series):
-    # add_task refuses this span; add_annotation must not accept it. An ordinal series reports
-    # span_us None, so an all-ordinal sample collapses to a single distinct "window" of None, which
-    # the common-window rule would otherwise read as agreement.
+    # An unscoped span needs a timeline to be placed against. An all-ordinal sample has no timed series,
+    # so there is nothing to check it against and it is refused.
     ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, channel="c", time_axis=OrdinalAxis())
     sample = Sample(time_series=(ordinal,))
-    with pytest.raises(ValueError, match="no timeline at all"):
+    with pytest.raises(ValueError, match="no timeline to place it"):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0)))
 
 
@@ -135,13 +136,40 @@ def test_annotation_span_outside_the_window_is_rejected(make_series):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(5.0, 20.0)))
 
 
-def test_annotation_in_a_gap_between_disjoint_windows_is_accepted(make_series):
-    # The bounds check uses the sample's overall span, so an event logged between two sensor windows
-    # (one sensor off, another not yet on) is a valid annotation rather than an error.
+def test_annotation_in_a_gap_is_rejected(make_series):
+    # An event logged between two sensor windows (one sensor off, another not yet on) is rejected: the
+    # union of the series' windows has a real gap, and a span landing in it sits inside neither series.
     early = make_series(channel="early", values=(0.0,) * 5000)  # [0, 10) s
     late = make_series(
         channel="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
     sample = Sample(time_series=(early, late))
-    # 15 s falls in the [10, 20) s gap, inside neither series but within the sample's overall span.
-    sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))
+    # 15 s falls in the [10, 20) s gap, inside neither series.
+    with pytest.raises(TimeFValidationError, match="falls in a gap"):
+        sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))
+
+
+def test_a_scoped_span_must_lie_within_the_intersection(make_series):
+    # A span scoped to two series claims to apply to both, so it must fall where both recorded: their
+    # intersection. [0, 10) s and [5, 15) s intersect on [5, 10) s.
+    early = make_series(channel="a", values=(0.0,) * 5000)  # [0, 10) s
+    late = make_series(
+        channel="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=2_500)
+    )  # [5, 15) s
+    sample = Sample(time_series=(early, late))
+    ids = (early.time_series_id, late.time_series_id)
+    sample.add_annotation(Annotation(key="ok", span=IntervalSpan.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
+    # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
+    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+        sample.add_annotation(Annotation(key="bad", span=PointSpan.seconds(3.0, time_series_ids=ids)))
+
+
+def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
+    early = make_series(channel="a", values=(0.0,) * 5000)  # [0, 10) s
+    late = make_series(
+        channel="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
+    )  # [20, 30) s
+    sample = Sample(time_series=(early, late))
+    ids = (early.time_series_id, late.time_series_id)
+    with pytest.raises(TimeFValidationError, match="do not overlap"):
+        sample.add_annotation(Annotation(key="bad", span=PointSpan.seconds(5.0, time_series_ids=ids)))
