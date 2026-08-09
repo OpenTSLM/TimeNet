@@ -160,6 +160,26 @@ def test_iter_samples_matches_read(tmp_path):
 # ---- laziness ---------------------------------------------------------------------------------
 
 
+def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    reads: list[str] = []
+    original_read_table = pq.read_table
+
+    def counting_read_table(source, *args, **kwargs):
+        reads.append(str(source))
+        return original_read_table(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    with TimeFReader(version_dir) as reader:
+        assert reader._tasks is None
+        assert not [p for p in reads if "/tasks/" in p]  # construction did not decode any task partition
+        first = reader.tasks
+        opened = [p for p in reads if "/tasks/" in p]
+        assert opened  # first access decodes the task partitions
+        assert reader.tasks is first  # second access re-uses the cached tuple
+        assert [p for p in reads if "/tasks/" in p] == opened
+
+
 def test_values_are_lazy(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
@@ -268,9 +288,10 @@ def test_verify_detects_a_deleted_file(tmp_path):
         TimeFReader(version_dir)
 
 
-def test_corrupt_task_partition_raises_format_error(tmp_path):
+def test_corrupt_task_partition_raises_format_error_on_first_task_access(tmp_path):
     # An unknown task partition name is corrupt on-disk data, so it must surface as TimeFFormatError
-    # rather than the bare ValueError that TaskType() happens to raise.
+    # rather than the bare ValueError that TaskType() happens to raise. Tasks are decoded on first
+    # access, so that is where it surfaces — construction no longer touches the partition.
     version_dir = _write(tmp_path)
     tasks_dir = next((version_dir / "tasks").iterdir())
     tasks_dir.rename(tasks_dir.parent / "task=not_a_real_task_type")
@@ -283,8 +304,9 @@ def test_corrupt_task_partition_raises_format_error(tmp_path):
         k.replace(tasks_dir.name, "task=not_a_real_task_type"): v for k, v in manifest["checksums"].items()
     }
     manifest_path.write_text(json.dumps(manifest))
+    reader = TimeFReader(version_dir)  # construction is happy: it does not touch the task partition
     with pytest.raises(TimeFFormatError):
-        TimeFReader(version_dir)
+        _ = reader.tasks
 
 
 def test_start_time_round_trips_exactly(tmp_path):

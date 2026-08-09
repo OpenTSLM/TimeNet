@@ -1,13 +1,14 @@
 """``TimeFReader``: deserialize a TimeF version directory back into a :class:`TimeFDataset`.
 
 Driven entirely by ``manifest.json`` — the reader never runs connector code. It loads the manifest,
-tasks, annotations, and the time-series index eagerly, but keeps per-series values and sample
-construction lazy. Types are reconstructed from the manifest's flat descriptors (no runtime class
-synthesis), so read-back objects pickle and match the originals field-for-field.
+annotations, and the time-series index up front and decodes tasks on first access; per-series values and
+sample construction stay lazy. Types are reconstructed from the manifest's flat descriptors (no runtime
+class synthesis), so read-back objects pickle and match the originals field-for-field.
 """
 
 import bisect
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 import json
@@ -43,10 +44,12 @@ class TimeFReader:
     """Reads a committed TimeF version directory. Use as a context manager to close shard handles."""
 
     def __init__(self, root: Path) -> None:
-        """Open a dataset version directory and load its manifest, tasks, annotations, and index.
+        """Open a dataset version directory and load its manifest, annotations, and index.
 
-        A malformed or unsupported-version manifest raises ``InvalidManifestError`` (a
-        ``TimeFFormatError``) while parsing.
+        Tasks are decoded on first ``.tasks`` access, not here, so a structurally corrupt but
+        checksum-valid task partition now fails on that access rather than at construction. A malformed
+        or unsupported-version manifest raises ``InvalidManifestError`` (a ``TimeFFormatError``) while
+        parsing.
 
         Args:
             root: The version directory written by :class:`~timenet.writer.TimeFWriter`.
@@ -54,10 +57,10 @@ class TimeFReader:
         Raises:
             FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
                 missing.
-            TimeFFormatError: If a listed control-plane file is unreadable or disagrees with the manifest
-                (an unknown task partition, a column the schema does not declare, a dangling
-                reference). Corrupt bytes on disk are a format failure, not a caller error, so they
-                do not surface as the raw ``ValueError`` / ``KeyError`` the parsing happens to raise.
+            TimeFFormatError: If the annotations table or the time-series index is unreadable or
+                disagrees with the manifest. Corrupt bytes on disk are a format failure, not a caller
+                error, so they do not surface as the raw ``ValueError`` / ``KeyError`` the parsing
+                happens to raise.
         """
         self._root = Path(root)
         if not self._root.exists():
@@ -71,11 +74,11 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        # The eager loaders parse on-disk control tables against the manifest's schema. Anything they raise means
-        # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
-        # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
+        self._tasks: tuple[Task, ...] | None = None  # decoded on first .tasks access, then cached
+        # The eager loaders parse the annotations table and the index against the manifest's schema.
+        # Anything they raise means the artifact is corrupt or disagrees with its manifest, which is a
+        # TimeFFormatError; letting a bare ValueError from pyarrow escape would contradict the contract.
         try:
-            self._tasks = self._load_tasks()
             self._annotations = self._load_annotations()
             self._load_index()
         except TimeFFormatError:
@@ -87,17 +90,14 @@ class TimeFReader:
     # ---- pickling ------------------------------------------------------------------------------
 
     def __getstate__(self) -> dict:
-        """Drop the values backend (open handles/caches) so the reader (and its loaders) pickle.
-
-        The lazy loaders returned by :meth:`read` reference this reader, so a read-back dataset is
-        only picklable (e.g. for a multi-worker torch ``DataLoader``) if the reader is. The values
-        backend holds per-process scratch (file handles, decode caches), rebuilt lazily after unpickling.
+        """Drop the values backend and the decoded tasks so the reader (and its loaders) pickle small.
 
         Returns:
-            The reader's state without its values backend.
+            The reader's state without its values backend or decoded tasks.
         """
         state = self.__dict__.copy()
         state["_values"] = None
+        state["_tasks"] = None
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -153,7 +153,10 @@ class TimeFReader:
 
     @property
     def tasks(self) -> tuple[Task, ...]:
-        """All tasks, with ``from_tasks`` resolved."""
+        """All tasks, with ``from_tasks`` resolved. Decoded on first access and cached."""
+        if self._tasks is None:
+            with self._as_format_error():
+                self._tasks = self._load_tasks()
         return self._tasks
 
     @property
@@ -170,7 +173,7 @@ class TimeFReader:
         return TimeFDataset.from_parts(
             metadata=self._manifest.metadata,
             samples=list(self.iter_samples()),
-            tasks=self._tasks,
+            tasks=self.tasks,
             schema=self._manifest.schema,
         )
 
@@ -184,6 +187,23 @@ class TimeFReader:
             yield self._build_sample(row)
 
     # ---- loading -------------------------------------------------------------------------------
+
+    @contextmanager
+    def _as_format_error(self) -> Iterator[None]:
+        """Re-raise a decode failure against the manifest's schema as a :class:`TimeFFormatError`.
+
+        Yields:
+            Nothing; this only rewrites the exception type.
+
+        Raises:
+            TimeFFormatError: If the wrapped code fails to decode what the manifest describes.
+        """
+        try:
+            yield
+        except TimeFFormatError:
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
+            raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
     def _read_rows(self, parts: tuple[str, ...]) -> Iterator[dict]:
         """Yield every row across a multi-part artifact, in part order.
