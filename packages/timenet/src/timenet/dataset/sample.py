@@ -9,11 +9,7 @@ import pyarrow as pa
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, Span, new_id
-from timenet.types.clock import unix_us
-
-
-_INT64_MIN = -(2**63)
-_INT64_MAX = 2**63 - 1
+from timenet.types.clock import check_int64, unix_us
 
 
 def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeries, ...], sample_id: str) -> None:
@@ -100,17 +96,16 @@ class Sample:
     """
 
     def __post_init__(self) -> None:
-        """Validate the intrinsic per-sample invariants.
+        """Normalize ``start_time`` to whole Unix microseconds and range-check it.
 
-        Raises:
-            TimeFValidationError: If ``start_time`` is neither a timezone-aware datetime nor whole
-                Unix microseconds, or does not fit int64.
+        Both steps delegate their contract: ``unix_us`` rejects a naive datetime or a bare float, and
+        ``check_int64`` rejects an anchor past the int64 microsecond column, each raising
+        :class:`~timenet.errors.TimeFValidationError`.
         """
         if self.start_time is None:
             return
         anchor = unix_us(self.start_time)
-        if not (_INT64_MIN <= anchor <= _INT64_MAX):
-            raise TimeFValidationError(f"Sample.start_time must fit int64 microseconds, got {anchor}")
+        check_int64("Sample.start_time", anchor)
         self.start_time = anchor
 
     @property

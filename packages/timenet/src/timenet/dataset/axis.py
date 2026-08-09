@@ -40,11 +40,7 @@ from typing import ClassVar, Self
 import numpy as np
 
 from timenet.errors import TimeFValidationError
-from timenet.types.clock import US_PER_S, offset_us
-
-
-_INT64_MIN = -(2**63)
-_INT64_MAX = 2**63 - 1
+from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
 
 
 @unique
@@ -87,8 +83,9 @@ class RegularAxis:
         """Reject a period of the wrong type or too fine, or a non-integer or negative origin.
 
         Raises:
-            TimeFValidationError: If ``period_us`` is not a :class:`~fractions.Fraction` or is under
-                one microsecond, or ``start_index`` is not a non-negative integer.
+            TimeFValidationError: If ``period_us`` is not a :class:`~fractions.Fraction`, is under one
+                microsecond, or has a term past int64; or ``start_index`` is not a non-negative
+                integer that fits int64.
         """
         if not isinstance(self.period_us, Fraction):
             raise TimeFValidationError(
@@ -100,10 +97,14 @@ class RegularAxis:
                 f"RegularAxis.period_us is {self.period_us} us, finer than the one microsecond the "
                 f"format can address. The highest rate it can carry is 1 MHz"
             )
+        # The period is stored as a numerator/denominator pair of int64 columns. Since it is >= 1 the
+        # reduced numerator is the larger term, so range-checking it covers the denominator too.
+        check_int64("RegularAxis.period_us", self.period_us.numerator)
         if isinstance(self.start_index, bool) or not isinstance(self.start_index, int):
             raise TimeFValidationError(f"RegularAxis.start_index must be an integer, got {self.start_index!r}")
         if self.start_index < 0:
             raise TimeFValidationError(f"RegularAxis.start_index must be >= 0, got {self.start_index}")
+        check_int64("RegularAxis.start_index", self.start_index)
 
     @classmethod
     def from_rate_hz(cls, rate_hz: int | Fraction) -> Self:
@@ -217,9 +218,9 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
         raise TimeFValidationError(f"time offsets must be whole microseconds, got dtype {array.dtype}")
     # A uint64 value at or past 2**63 wraps to a negative int64 on the cast below, so range-check the
     # unsigned case first. Signed numpy ints are all int64 or narrower, so they cannot overflow it.
-    if array.dtype.kind == "u" and array.size and int(array.max()) > _INT64_MAX:
+    if array.dtype.kind == "u" and array.size and int(array.max()) > INT64_MAX:
         raise TimeFValidationError(
-            f"time offsets must fit int64 microseconds, got a value past {_INT64_MAX}; a uint64 at or "
+            f"time offsets must fit int64 microseconds, got a value past {INT64_MAX}; a uint64 at or "
             f"above 2**63 would wrap to a negative int64"
         )
     time_offsets = np.ascontiguousarray(array, dtype=np.int64)
@@ -292,8 +293,7 @@ class IrregularAxis:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TimeFValidationError(f"IrregularAxis.{name} must be whole microseconds, got {value!r}")
-            if not (_INT64_MIN <= value <= _INT64_MAX):
-                raise TimeFValidationError(f"IrregularAxis.{name} must fit int64 microseconds, got {value}")
+            check_int64(f"IrregularAxis.{name}", value)
         if self.first_us < 0:
             raise TimeFValidationError(
                 f"IrregularAxis.first_us must be >= 0, got {self.first_us}; a time offset is measured "

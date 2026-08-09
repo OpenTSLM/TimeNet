@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from timenet.errors import TimeFValidationError
-from timenet.types.clock import offset_us, seconds_to_us
+from timenet.types.clock import check_int64, offset_us, seconds_to_us
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -56,8 +56,9 @@ class Span:
 
         Raises:
             TimeFValidationError: If the base class is constructed directly, if ``start`` is missing,
-                if a bound is not whole microseconds, if ``end`` is not strictly greater than
-                ``start``, or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+                if a bound is not whole microseconds or does not fit int64, if ``end`` is not strictly
+                greater than ``start``, or if ``time_series_ids`` is ``()`` rather than ``None`` or
+                non-empty.
         """
         if type(self) is Span:
             raise TimeFValidationError(
@@ -77,6 +78,7 @@ class Span:
                     f"Span {name} must be whole microseconds, got {value!r}. Use seconds() to convert "
                     f"from recording seconds"
                 )
+            check_int64(f"Span {name}", value)
         if self.end is not None and self.end <= self.start:
             raise TimeFValidationError(f"Span end ({self.end}) must be > start ({self.start})")
         if self.time_series_ids is not None and not self.time_series_ids:
