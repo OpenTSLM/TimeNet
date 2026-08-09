@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-import zipfile
 
 import boto3
 from botocore import UNSIGNED
@@ -17,15 +16,6 @@ class _Conn(BasePhysioNetConnector[str]):
 
     def convert(self, raw_refs: list[str]):
         raise NotImplementedError
-
-
-def _zip_bytes(name: str, content: str) -> bytes:
-    from io import BytesIO  # noqa: PLC0415
-
-    buffer = BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(name, content)
-    return buffer.getvalue()
 
 
 # ---- the reusable S3 helper -------------------------------------------------------------------
@@ -74,35 +64,33 @@ def test_missing_boto3_raises_helpful_error(monkeypatch):
         download_s3_object("s3://bucket/key.zip", Path("dest"))
 
 
-# ---- _ensure_archive scheme routing ----------------------------------------------------------
+# ---- archive caching delegates to bases/http.py ----------------------------------------------
+# The download/extract/sentinel behaviour lives in bases/http.py and is covered by test_http.py;
+# here we only pin that the PhysioNet base forwards to it (so subclasses keep calling self._*).
 
 
-def test_ensure_archive_routes_s3_and_marks_sentinel(monkeypatch, tmp_path):
-    payload = _zip_bytes("hello.txt", "hi")
-    monkeypatch.setattr(physionet, "download_s3_object", lambda url, dest: dest.write_bytes(payload))
+def test_ensure_archive_delegates_to_http(monkeypatch, tmp_path):
+    captured: dict = {}
 
+    def fake_ensure_archive(url, cache_dir, sentinel, *, filename=None):
+        captured.update(url=url, cache_dir=cache_dir, sentinel=sentinel, filename=filename)
+        return cache_dir
+
+    monkeypatch.setattr(physionet.http, "ensure_archive", fake_ensure_archive)
     cache = tmp_path / "cache"
-    _Conn()._ensure_archive("s3://bucket/data.zip", cache, "marker")
-    assert (cache / "hello.txt").read_text() == "hi"
-    assert (cache / "marker").exists()  # sentinel created after extraction
-
-    # Idempotent: a second call short-circuits on the sentinel and never re-downloads.
-    def _boom(url, dest):
-        raise AssertionError("should not re-download when the sentinel exists")
-
-    monkeypatch.setattr(physionet, "download_s3_object", _boom)
-    _Conn()._ensure_archive("s3://bucket/data.zip", cache, "marker")
+    result = _Conn()._ensure_archive("https://example.com/data.zip", cache, "marker", filename="d.zip")
+    assert result == cache
+    assert captured == {
+        "url": "https://example.com/data.zip",
+        "cache_dir": cache,
+        "sentinel": "marker",
+        "filename": "d.zip",
+    }
 
 
-def test_ensure_archive_routes_http(monkeypatch, tmp_path):
-    payload = _zip_bytes("hello.txt", "hi")
-    monkeypatch.setattr(
-        BasePhysioNetConnector, "_stream_download", staticmethod(lambda url, dest: dest.write_bytes(payload))
-    )
-    monkeypatch.setattr(
-        physionet, "download_s3_object", lambda url, dest: (_ for _ in ()).throw(AssertionError("http must not use s3"))
-    )
-
-    cache = tmp_path / "cache"
-    _Conn()._ensure_archive("https://example.com/data.zip", cache, "marker")
-    assert (cache / "hello.txt").read_text() == "hi"
+def test_stream_download_delegates_to_http(monkeypatch, tmp_path):
+    captured: dict = {}
+    monkeypatch.setattr(physionet.http, "download_file", lambda url, dest: captured.update(url=url, dest=dest))
+    dest = tmp_path / "f.zip"
+    BasePhysioNetConnector._stream_download("https://example.com/f.zip", dest)
+    assert captured == {"url": "https://example.com/f.zip", "dest": dest}

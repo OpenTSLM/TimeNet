@@ -10,74 +10,51 @@ from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
-import zipfile
 
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet_connectors.bases.s3 import download_s3_object
+from timenet_connectors.bases import http
 
 
 TRaw = TypeVar("TRaw")
-
-_DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB streamed per write when fetching an archive
 
 
 class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
     """Base class for PhysioNet-backed connectors: WFDB record I/O plus archive caching."""
 
-    def _ensure_archive(self, url: str, cache_dir: Path, sentinel: str) -> Path:
+    @staticmethod
+    def _ensure_archive(url: str, cache_dir: Path, sentinel: str, *, filename: str | None = None) -> Path:
         """Download and extract a zip archive into ``cache_dir`` once.
 
-        Idempotent: if ``cache_dir / sentinel`` already exists the download and extraction are skipped,
-        so re-running a build reuses the cache. The sentinel is created after a successful extraction.
-        ``s3://`` URLs are fetched via :func:`~timenet_connectors.bases.s3.download_s3_object` (boto3);
-        any other URL is streamed over HTTP.
+        Thin delegate to :func:`timenet_connectors.bases.http.ensure_archive`, kept as a method so
+        subclasses call it as ``self._ensure_archive(...)``. See that function for the caching and
+        atomic-download semantics; ``s3://`` URLs are routed to the S3 helper, any other URL is
+        streamed over HTTP.
 
         Args:
             url: The archive URL — an ``s3://bucket/key`` object or an ``http(s)://`` URL.
             cache_dir: Directory the archive is downloaded and extracted into.
             sentinel: A path relative to ``cache_dir`` marking extraction as complete.
+            filename: Overrides the cached archive name for URLs whose path has no usable filename.
 
         Returns:
             ``cache_dir`` (the extraction root).
         """
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        if (cache_dir / sentinel).exists():
-            return cache_dir
-        zip_path = cache_dir / url.rsplit("/", 1)[-1]
-        if not zip_path.exists():
-            if url.startswith("s3://"):
-                download_s3_object(url, zip_path)
-            else:
-                self._stream_download(url, zip_path)
-        with zipfile.ZipFile(zip_path) as archive:
-            archive.extractall(cache_dir)
-        (cache_dir / sentinel).touch()
-        return cache_dir
+        return http.ensure_archive(url, cache_dir, sentinel, filename=filename)
 
     @staticmethod
     def _stream_download(url: str, dest: Path) -> None:
-        """Stream a URL to ``dest`` in chunks (kept out of memory for multi-GB archives).
+        """Stream a URL to ``dest`` atomically.
+
+        Thin delegate to :func:`timenet_connectors.bases.http.download_file`, kept for subclasses
+        that call it directly.
 
         Args:
             url: The source URL.
             dest: The destination file path.
-
-        Raises:
-            ImportError: If ``requests`` (pulled by the ``physionet`` extra) is not installed.
         """
-        try:
-            import requests  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover - exercised via the wfdb-missing path
-            raise ImportError(
-                "downloading from PhysioNet needs the physionet extra: pip install 'timenet-connectors[physionet]'"
-            ) from exc
-        with requests.get(url, stream=True, timeout=60) as response:
-            response.raise_for_status()
-            with dest.open("wb") as handle:
-                for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
-                    handle.write(chunk)
+        http.download_file(url, dest)
 
     @staticmethod
     def _wfdb() -> Any:
