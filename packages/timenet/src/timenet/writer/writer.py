@@ -28,6 +28,7 @@ from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_COMPRESSION_LEVEL,
+    DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     INDEX_FILE,
@@ -69,6 +70,7 @@ class TimeFWriter:
         dataset: TimeFDataset,
         *,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
+        control_shard_target_bytes: int = DEFAULT_CONTROL_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
@@ -83,6 +85,8 @@ class TimeFWriter:
             root: Parent directory; the writer creates ``<root>/<dataset_id>/<version>/``.
             dataset: The populated dataset (its ``schema`` must be derived before writing).
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
+            control_shard_target_bytes: Split a control table (samples, annotations, index, tasks) into
+                a new part once the in-memory Arrow size of the emitted rows exceeds this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
@@ -106,6 +110,7 @@ class TimeFWriter:
         self._dataset = dataset
         self._derived_from = derived_from
         self._shard_target_bytes = shard_target_bytes
+        self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -569,16 +574,14 @@ class TimeFWriter:
             checksums[rel] = file_checksum(path)
         return checksums
 
-    def _write_table(
+    def _write_arrow_table(
         self,
-        rows: list[dict],
-        schema: pa.Schema,
+        table: pa.Table,
         rel_path: str,
         *,
         dictionary_columns: list[str],
         column_encoding: dict[str, str] | None = None,
     ) -> None:
-        table = pa.Table.from_pylist(rows, schema=schema)
         pq.write_table(
             table,
             self._staging_dir / rel_path,
@@ -589,6 +592,64 @@ class TimeFWriter:
                 compression_level=self._compression_level,
             ),
         )
+
+    def _write_table(
+        self,
+        rows: list[dict],
+        schema: pa.Schema,
+        rel_path: str,
+        *,
+        dictionary_columns: list[str],
+        column_encoding: dict[str, str] | None = None,
+    ) -> None:
+        self._write_arrow_table(
+            pa.Table.from_pylist(rows, schema=schema),
+            rel_path,
+            dictionary_columns=dictionary_columns,
+            column_encoding=column_encoding,
+        )
+
+    def _write_sharded_table(
+        self,
+        rows: list[dict],
+        schema: pa.Schema,
+        part_path: Callable[[int], str],
+        *,
+        dictionary_columns: list[str],
+        column_encoding: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Write ``rows`` as one or more parquet parts, splitting on the control-table byte target.
+
+        The table is built once and each part is a zero-copy ``slice`` view of it, so peak memory is one
+        full table and row order is preserved across parts. An empty table still writes exactly one
+        (empty) part, keeping the schema on disk. Part boundaries are sized from the in-memory Arrow
+        ``nbytes`` and are not a stable contract across pyarrow versions; the reader is boundary-agnostic.
+
+        Args:
+            rows: The already-encoded payload rows.
+            schema: The Arrow schema for the table.
+            part_path: Maps a part index to its relative path (each caller supplies its own template).
+            dictionary_columns: Columns to dictionary-encode, applied to every part.
+            column_encoding: Optional per-column encoding overrides, applied to every part.
+
+        Returns:
+            The relative paths of the parts written, in order.
+        """
+        table = pa.Table.from_pylist(rows, schema=schema)
+        n = len(table)
+        rows_per_part = max(1, n * self._control_shard_target_bytes // max(1, table.nbytes))
+        parts: list[str] = []
+        for index, start in enumerate(range(0, n, rows_per_part) if n else [0]):
+            rel = part_path(index)
+            (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            self._write_arrow_table(
+                table.slice(start, rows_per_part),
+                rel,
+                dictionary_columns=dictionary_columns,
+                column_encoding=column_encoding,
+            )
+            parts.append(rel)
+        return parts
 
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:

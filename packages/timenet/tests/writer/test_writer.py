@@ -353,3 +353,33 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
     # the shared series is written once, though two samples reference it
     assert manifest.counts.time_series_chunks == 1
     assert manifest.counts.samples == 2
+
+
+# ---- _write_sharded_table helper --------------------------------------------------------------
+
+
+def _sharding_writer(tmp_path):
+    dataset = make_dataset()
+    dataset.derive_schema()
+    writer = TimeFWriter(tmp_path, dataset, control_shard_target_bytes=1)
+    writer._staging_dir.mkdir(parents=True)
+    return writer
+
+
+def test_write_sharded_table_splits_and_preserves_order(tmp_path):
+    writer = _sharding_writer(tmp_path)
+    schema = pa.schema([("k", pa.int64())])
+    rows = [{"k": i} for i in range(10)]
+    parts = writer._write_sharded_table(rows, schema, lambda i: f"t/part-{i:08d}.parquet", dictionary_columns=[])
+    assert len(parts) > 1  # a 1-byte target splits every row into its own part
+    assert parts == sorted(parts)  # emitted in order
+    read = pa.concat_tables([pq.read_table(writer._staging_dir / p) for p in parts])
+    assert read.column("k").to_pylist() == list(range(10))  # order and completeness preserved
+
+
+def test_write_sharded_table_empty_writes_one_part(tmp_path):
+    writer = _sharding_writer(tmp_path)
+    schema = pa.schema([("k", pa.int64())])
+    parts = writer._write_sharded_table([], schema, lambda i: f"t/part-{i:08d}.parquet", dictionary_columns=[])
+    assert parts == ["t/part-00000000.parquet"]
+    assert pq.read_table(writer._staging_dir / parts[0]).num_rows == 0
