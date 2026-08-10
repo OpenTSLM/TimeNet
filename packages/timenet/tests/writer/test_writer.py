@@ -38,8 +38,8 @@ def test_writes_expected_layout(tmp_path):
     assert (version_dir / "samples.parquet").exists()
     assert (version_dir / "annotations.parquet").exists()
     assert (version_dir / "time_series_index.parquet").exists()
-    assert list(version_dir.glob("time_series/shard-*.parquet"))
-    assert list(version_dir.glob("tasks/task=*/part-0.parquet"))
+    assert (version_dir / "time_series/shard-00000000.parquet").exists()
+    assert list(version_dir.glob("tasks/task=*/part-00000000.parquet"))
 
 
 def test_manifest_is_valid_and_matches_dataset(tmp_path):
@@ -270,7 +270,7 @@ def test_shared_series_stored_once(tmp_path):
 
 def test_tasks_partitioned_by_type(tmp_path):
     version_dir = _written(tmp_path)
-    parts = {p.parent.name for p in version_dir.glob("tasks/task=*/part-0.parquet")}
+    parts = {p.parent.name for p in version_dir.glob("tasks/task=*/part-*.parquet")}
     assert parts == {"task=classification", "task=answer", "task=scalar_prediction", "task=temporal_localization"}
 
 
