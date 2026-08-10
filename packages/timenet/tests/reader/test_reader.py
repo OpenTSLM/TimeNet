@@ -3,6 +3,7 @@ from pathlib import Path
 import pickle
 
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import pytest
 
@@ -215,19 +216,72 @@ def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
         assert [p for p in reads if "/tasks/" in p] == opened
 
 
-def test_index_is_not_decoded_on_open(tmp_path, monkeypatch):
-    version_dir = _write(tmp_path)
-    opened: list[str] = []
-    original_file = pq.ParquetFile
+def _count_control_plane_reads(monkeypatch) -> list[str]:
+    """Record every file the reader opens or decodes, whole-table, filtered, or by handle."""
+    read: list[str] = []
+    original_read_table, original_dataset, original_file = pq.read_table, pads.dataset, pq.ParquetFile
+
+    def counting_read_table(source, *args, **kwargs):
+        read.append(str(source))
+        return original_read_table(source, *args, **kwargs)
+
+    def counting_dataset(source, *args, **kwargs):
+        read.extend(str(p) for p in source) if isinstance(source, list) else read.append(str(source))
+        return original_dataset(source, *args, **kwargs)
 
     def counting_file(source, *args, **kwargs):
-        opened.append(str(source))
+        read.append(str(source))
         return original_file(source, *args, **kwargs)
 
+    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    monkeypatch.setattr(pads, "dataset", counting_dataset)
     monkeypatch.setattr(pq, "ParquetFile", counting_file)
+    return read
+
+
+def test_open_decodes_no_control_plane_table(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
     reader = TimeFReader(version_dir)
+    assert read == []  # only manifest.json, which is plain JSON
+    assert reader._tasks is None
+    assert reader._annotations is None
     assert reader._index is None
-    assert not [p for p in opened if p.endswith("time_series_index.parquet")]  # index untouched at open
+    assert reader.metadata.dataset_id  # metadata comes from the manifest, still free
+
+
+def test_annotations_are_decoded_only_when_a_sample_resolves_them(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    with TimeFReader(version_dir) as reader:
+        assert not [p for p in read if p.endswith("annotations.parquet")]
+        sample = next(iter(reader.iter_samples()))
+        assert sample.annotations
+        assert [p for p in read if p.endswith("annotations.parquet")]
+
+
+def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path, monkeypatch):
+    # One row group per two annotation rows, so the id statistics have something to rule out. Resolving
+    # a single annotation id must decode only the group that can hold it, not the whole file.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        annotations = reader._annotations_table()
+        total = len(annotations.groups())
+        assert total > 1, "the fixture must span several annotation row groups for this to mean anything"
+        assert reader._resolve_annotation("sample-0", "age-0").value == 64  # one id, one row group decoded
+        assert len(annotations._cache) < total
+
+
+def test_annotation_resolution_builds_no_per_row_id_map(tmp_path):
+    # Improvement B: annotations resolve through the pruned mechanism, holding only the decoded row
+    # group plus its sorted id list to bisect — never the whole table or an all-annotations id map.
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        assert reader._resolve_annotation("sample-0", "age-0").value == 64
+        ((table, keys),) = reader._annotations_table()._cache.values()
+        # the cache holds one decoded group's rows, not the whole table materialized per id
+        assert len(keys) == table.num_rows
 
 
 def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path, monkeypatch):
@@ -254,13 +308,15 @@ def test_index_row_groups_are_pruned_by_their_statistics(tmp_path, monkeypatch):
         assert [g.may_hold("sample-0") for g in groups].count(False) > 0
 
 
-def test_getstate_drops_the_index_and_samples_caches(tmp_path):
+def test_getstate_drops_every_control_plane_cache(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
         next(iter(reader.iter_samples())).time_series[0].to_arrow()
         _ = reader.tasks
         state = reader.__getstate__()
     assert state["_tasks"] is None
+    assert state["_annotations"] is None
+    assert state["_annotation_cache"] == {}
     assert state["_index"] is None
     assert state["_samples_data"] is None
     assert state["_values"] is None
@@ -471,18 +527,19 @@ def _corrupt_descriptor(version_dir, key, field, value):
 
 def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
+    # Annotations decode when a sample resolves them, so that is where the disagreement surfaces.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
-    with pytest.raises(TimeFFormatError, match="decodes to shape"):
-        TimeFReader(version_dir)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="decodes to shape"):
+        list(reader.iter_samples())
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "age" is an int; a descriptor that calls it a str no longer matches the decoded value.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "age", "value_type", "str")
-    with pytest.raises(TimeFFormatError, match="value type"):
-        TimeFReader(version_dir)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="value type"):
+        list(reader.iter_samples())
 
 
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):

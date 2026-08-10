@@ -1,10 +1,9 @@
 """``TimeFReader``: deserialize a TimeF version directory back into a :class:`TimeFDataset`.
 
-Driven entirely by ``manifest.json`` — the reader never runs connector code. It loads the manifest and
-the annotations table up front, decodes tasks on first access, and resolves the time-series index a row
-group at a time; per-series values and sample construction stay lazy. Types are reconstructed from the
-manifest's flat descriptors (no runtime class synthesis), so read-back objects pickle and match the
-originals field-for-field.
+Driven entirely by ``manifest.json`` — the reader never runs connector code. Opening a version reads
+only the manifest; tasks, annotations, the time-series index, and per-series values are all resolved on
+first use. Types are reconstructed from the manifest's flat descriptors (no runtime class synthesis), so
+read-back objects pickle and match the originals field-for-field.
 """
 
 import bisect
@@ -28,7 +27,7 @@ from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAx
 from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
-from timenet.format.constants import INDEX_SORT_KEY, MANIFEST_FILE
+from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY, MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
 from timenet.manifest import Manifest
 from timenet.types import (
@@ -46,6 +45,9 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 #: Rows per batch when streaming ``samples.parquet``.
 _SAMPLE_BATCH_ROWS = 4096
+
+#: Decoded annotations kept for reuse, so an annotation shared across samples is decoded once.
+_ANNOTATION_CACHE_SIZE = 4096
 
 #: Byte budget for decoded control-table row groups. Sized by total bytes, not group count, so shuffled
 #: reads do not thrash a small cache.
@@ -98,7 +100,6 @@ class _PrunedControlTable:
         lookup_columns: tuple[str, ...],
         *,
         columns: list[str] | None = None,
-        cache_max_bytes: int = _CONTROL_TABLE_CACHE_MAX_BYTES,
     ) -> None:
         """Configure a pruned view over a sorted control table.
 
@@ -108,14 +109,13 @@ class _PrunedControlTable:
             lookup_columns: The columns whose stored values a lookup matches on, as a tuple; the first is
                 the sorted key column the footer statistics prune on.
             columns: The columns to decode per row group, or ``None`` for all of them.
-            cache_max_bytes: Byte budget for the decoded-row-group LRU.
+
         """
         self._root = root
         self._parts = parts
         self._lookup_columns = lookup_columns
         self._key_column = lookup_columns[0]
         self._columns = columns
-        self._cache_max_bytes = cache_max_bytes
         self._files: dict[str, pq.ParquetFile] = {}
         self._directory: list[_RowGroupStats] | None = None
         self._cache: OrderedDict[tuple[str, int], tuple[pa.Table, list[tuple]]] = OrderedDict()
@@ -216,11 +216,11 @@ class _PrunedControlTable:
         columns = [table.column(name).to_pylist() for name in self._lookup_columns]
         keys = list(zip(*columns, strict=True))
         entry = (table, keys)
-        if table.nbytes > self._cache_max_bytes:
+        if table.nbytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
             return entry  # a single group over budget is served without displacing the whole cache
         self._cache[key] = entry
         self._cache_bytes += table.nbytes
-        while self._cache_bytes > self._cache_max_bytes:
+        while self._cache_bytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
             _, evicted = self._cache.popitem(last=False)
             self._cache_bytes -= evicted[0].nbytes
         return entry
@@ -230,13 +230,17 @@ class TimeFReader:
     """Reads a committed TimeF version directory. Use as a context manager to close shard handles."""
 
     def __init__(self, root: Path) -> None:
-        """Open a dataset version directory and load its manifest and annotations.
+        """Open a dataset version directory and load its manifest.
 
-        Tasks are decoded on first ``.tasks`` access and the time-series index is resolved a row group
-        at a time on first value read, not here, so a structurally corrupt but checksum-valid task
-        partition or index now fails on that access rather than at construction. A malformed or
-        unsupported-version manifest raises ``InvalidManifestError`` (a ``TimeFFormatError``) while
-        parsing.
+        Only the manifest is read here. Tasks, annotations, the time-series index, and per-series values
+        are resolved on first use, so opening a version costs the same whether it has three samples or
+        three million. A malformed or unsupported-version manifest raises ``InvalidManifestError`` (a
+        ``TimeFFormatError``) while parsing.
+
+        Because the control plane is no longer decoded up front, a structurally corrupt but
+        checksum-valid control-plane file now fails on the first access that needs it (``.tasks``, the
+        first annotation, the first value read) rather than here. Call :meth:`verify` when you want
+        construction-time integrity checking.
 
         Args:
             root: The version directory written by :class:`~timenet.writer.TimeFWriter`.
@@ -244,9 +248,6 @@ class TimeFReader:
         Raises:
             FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
                 missing.
-            TimeFFormatError: If the annotations table is unreadable or disagrees with the manifest.
-                Corrupt bytes on disk are a format failure, not a caller error, so they do not surface
-                as the raw ``ValueError`` / ``KeyError`` the parsing happens to raise.
         """
         self._root = Path(root)
         if not self._root.exists():
@@ -260,20 +261,13 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        self._tasks: tuple[Task, ...] | None = None  # decoded on first .tasks access, then cached
-        # The eager loader parses the annotations table against the manifest's schema. Anything it
-        # raises means the artifact is corrupt or disagrees with its manifest, which is a
-        # TimeFFormatError; letting a bare ValueError from pyarrow escape would contradict the contract.
-        try:
-            self._annotations = self._load_annotations()
-        except TimeFFormatError:
-            raise
-        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
-            raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
         # Per-process scratch, built on demand and dropped on pickle; __getstate__ must stay in step.
+        self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._samples_data: pads.Dataset | None = None
         self._index: _PrunedControlTable | None = None
+        self._annotations: _PrunedControlTable | None = None
+        self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -288,6 +282,8 @@ class TimeFReader:
         state["_tasks"] = None
         state["_samples_data"] = None
         state["_index"] = None
+        state["_annotations"] = None
+        state["_annotation_cache"] = OrderedDict()
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -306,13 +302,17 @@ class TimeFReader:
         self.close()
 
     def close(self) -> None:
-        """Close the values backend and the index handles, releasing their decoded caches."""
+        """Close the values backend and the control-table handles, releasing their decoded caches."""
         if self._values is not None:
             self._values.close()
             self._values = None
         if self._index is not None:
             self._index.close()
             self._index = None
+        if self._annotations is not None:
+            self._annotations.close()
+            self._annotations = None
+        self._annotation_cache.clear()
 
     # ---- public API ----------------------------------------------------------------------------
 
@@ -393,6 +393,11 @@ class TimeFReader:
     def _as_format_error(self) -> Iterator[None]:
         """Re-raise a decode failure against the manifest's schema as a :class:`TimeFFormatError`.
 
+        The loaders parse on-disk control tables against the manifest's schema. Anything they raise
+        means the artifact is corrupt or disagrees with its manifest, which is a format failure; letting
+        a bare ``ValueError`` from ``TaskType()`` or an ``OSError`` from a corrupt data page escape would
+        contradict the reader's contract.
+
         Yields:
             Nothing; this only rewrites the exception type.
 
@@ -440,18 +445,6 @@ class TimeFReader:
                 f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
             )
 
-    def _read_rows(self, parts: tuple[str, ...]) -> Iterator[dict]:
-        """Yield every row across a multi-part artifact, in part order.
-
-        Args:
-            parts: The artifact's relative part paths from the manifest.
-
-        Yields:
-            Each row as a dict, concatenated across parts.
-        """
-        for rel in parts:
-            yield from pq.read_table(self._root / rel).to_pylist()
-
     def _check_files_exist(self) -> None:
         for rel in self._manifest.files.all_parts():
             if not (self._root / rel).exists():
@@ -490,42 +483,67 @@ class TimeFReader:
             by_id[task_id].from_tasks = tuple(resolved)
         return tuple(by_id.values())
 
-    def _load_annotations(self) -> dict[str, Annotation]:
-        annotations: dict[str, Annotation] = {}
-        for row in self._read_rows(self._manifest.files.annotations):
-            key = row["key"]
-            if key not in self._annotation_descriptors:
-                raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
-            descriptor = self._annotation_descriptors[key]
-            value = None if row["value"] is None else json.loads(row["value"])
-            annotation_id = self._codec.decode("annotation_id", row["id"])
-            fields: dict = {
-                "id": annotation_id,
-                "key": key,
-                "value": value,
-                "unit": descriptor.unit,
-                "description": descriptor.description,
-            }
-            span = self._codec.decode_span(row["span"])
-            if span is not None:
-                fields["span"] = span
-            annotation = Annotation(**fields)
-            # The descriptor is what a registry query filters on, so a decoded annotation whose shape
-            # or value type disagrees with it would answer those queries wrongly. That is corruption.
-            derived_type = annotation_type_of(annotation)
-            if derived_type != descriptor.annotation_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
-                    f"says {descriptor.annotation_type.value!r}"
-                )
-            derived_value_type = value_type_of(annotation.value)
-            if derived_value_type != descriptor.value_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
-                    f"descriptor says {descriptor.value_type!r}"
-                )
-            annotations[annotation_id] = annotation
-        return annotations
+    def _annotations_table(self) -> _PrunedControlTable:
+        """Return the pruned view over the annotations table, built on first annotation access.
+
+        Only the four columns a decode reads are pulled; ``sample_ids``, the widest column, is skipped.
+
+        Returns:
+            The cached pruned annotations view.
+        """
+        if self._annotations is None:
+            key_column = ANNOTATIONS_SORT_KEY
+            self._annotations = _PrunedControlTable(
+                self._root,
+                self._manifest.files.annotations,
+                lookup_columns=(key_column,),
+                columns=["id", "key", "value", "span"],
+            )
+        return self._annotations
+
+    def _decode_annotation(self, row: dict) -> Annotation:
+        """Rebuild one annotation from its stored row, checked against its manifest descriptor.
+
+        Args:
+            row: The stored annotation row (``id``, ``key``, ``value``, ``span``).
+
+        Returns:
+            The rebuilt annotation.
+
+        Raises:
+            TimeFFormatError: If the row's key is not in the schema, or the decoded annotation's shape
+                or value type disagrees with its descriptor.
+        """
+        key = row["key"]
+        if key not in self._annotation_descriptors:
+            raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
+        descriptor = self._annotation_descriptors[key]
+        fields: dict = {
+            "id": self._codec.decode("annotation_id", row["id"]),
+            "key": key,
+            "value": None if row["value"] is None else json.loads(row["value"]),
+            "unit": descriptor.unit,
+            "description": descriptor.description,
+        }
+        span = self._codec.decode_span(row["span"])
+        if span is not None:
+            fields["span"] = span
+        annotation = Annotation(**fields)
+        # The descriptor is what a registry query filters on, so a decoded annotation whose shape
+        # or value type disagrees with it would answer those queries wrongly. That is corruption.
+        derived_type = annotation_type_of(annotation)
+        if derived_type != descriptor.annotation_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
+                f"says {descriptor.annotation_type.value!r}"
+            )
+        derived_value_type = value_type_of(annotation.value)
+        if derived_value_type != descriptor.value_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
+                f"descriptor says {descriptor.value_type!r}"
+            )
+        return annotation
 
     def _index_table(self) -> _PrunedControlTable:
         """Return the pruned view over the time-series index, built on first lookup.
@@ -708,9 +726,35 @@ class TimeFReader:
             ) from exc
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
-        if annotation_id not in self._annotations:
-            raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
-        return self._annotations[annotation_id]
+        """Return one annotation, decoding it on first use and caching it in a bounded LRU.
+
+        The id is looked up through the pruned annotations table, so only the row group that can hold it
+        is decoded; a shared annotation is decoded once and served from the LRU thereafter.
+
+        Args:
+            sample_id: The referencing sample, for the error message.
+            annotation_id: The annotation to resolve.
+
+        Returns:
+            The decoded annotation.
+
+        Raises:
+            TimeFFormatError: If the dataset has no annotation with that id.
+        """
+        cached = self._annotation_cache.get(annotation_id)
+        if cached is not None:
+            self._annotation_cache.move_to_end(annotation_id)
+            return cached
+        with self._as_format_error():
+            probe = cast(_StoredId, self._codec.encode("annotation_id", annotation_id))
+            rows = self._annotations_table().rows_for((probe,))
+            if not rows:
+                raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
+            annotation = self._decode_annotation(rows[0])
+        self._annotation_cache[annotation_id] = annotation
+        if len(self._annotation_cache) > _ANNOTATION_CACHE_SIZE:
+            self._annotation_cache.popitem(last=False)
+        return annotation
 
     # ---- id decoding ---------------------------------------------------------------------------
 
