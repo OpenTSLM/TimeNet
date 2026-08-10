@@ -170,7 +170,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
-    partition = version_dir / "tasks/task=classification/part-0.parquet"
+    partition = version_dir / "tasks/task=classification/part-00000000.parquet"
     scope_type = pq.read_table(partition).schema.field("scope").type
     assert scope_type.field("time_series_ids").type == pa.list_(pa.binary(16))
 
