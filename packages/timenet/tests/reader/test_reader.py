@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -20,6 +20,7 @@ from timenet.types import (
     TemporalLocalizationTask,
 )
 from timenet.writer import TimeFWriter
+import timenet.writer.writer as writer_module
 
 
 def _write(tmp_path, dataset=None, **kwargs) -> Path:
@@ -157,6 +158,40 @@ def test_iter_samples_matches_read(tmp_path):
     assert streamed == read_ids
 
 
+# ---- filtered sample reads --------------------------------------------------------------------
+
+
+def test_iter_samples_returns_only_the_requested_ids(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        selected = list(reader.iter_samples(sample_ids=["sample-2", "sample-0"]))
+    assert [s.sample_id for s in selected] == ["sample-0", "sample-2"]  # stored order, not asked order
+    assert selected[0].time_series[0].to_arrow() is not None
+
+
+def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_samples())).time_series}
+    with TimeFReader(version_dir) as reader:
+        (only,) = reader.iter_samples(sample_ids=["sample-0"])
+        assert {ts.time_series_id: ts.to_arrow() for ts in only.time_series}.keys() == expected.keys()
+        for ts in only.time_series:
+            assert ts.to_arrow().equals(expected[ts.time_series_id])
+
+
+def test_iter_samples_with_an_unknown_id_raises(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFValidationError, match="no such sample"):
+        list(reader.iter_samples(sample_ids=["sample-0", "sample-nope"]))
+
+
+def test_iter_samples_with_an_empty_id_list_yields_nothing(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        assert list(reader.iter_samples(sample_ids=[])) == []
+
+
 # ---- laziness ---------------------------------------------------------------------------------
 
 
@@ -178,6 +213,77 @@ def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
         assert opened  # first access decodes the task partitions
         assert reader.tasks is first  # second access re-uses the cached tuple
         assert [p for p in reads if "/tasks/" in p] == opened
+
+
+def test_index_is_not_decoded_on_open(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    opened: list[str] = []
+    original_file = pq.ParquetFile
+
+    def counting_file(source, *args, **kwargs):
+        opened.append(str(source))
+        return original_file(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "ParquetFile", counting_file)
+    reader = TimeFReader(version_dir)
+    assert reader._index is None
+    assert not [p for p in opened if p.endswith("time_series_index.parquet")]  # index untouched at open
+
+
+def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path, monkeypatch):
+    # One row group per two index rows, so the statistics on the sample_id column have something to
+    # rule out. Without pruning, one lookup would decode every row group in the file.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        sample = next(iter(reader.iter_samples()))
+        for series in sample.time_series:
+            series.to_arrow()
+        index = reader._index_table()
+        total = len(index.groups())
+        assert total > 1, "the fixture must span several row groups for this to mean anything"
+        assert len(index._cache) < total
+
+
+def test_index_row_groups_are_pruned_by_their_statistics(tmp_path, monkeypatch):
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 2)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        groups = reader._index_table().groups()
+        assert all(g.min_key is not None for g in groups), "the index must carry sample_id statistics"
+        assert [g.may_hold("sample-0") for g in groups].count(False) > 0
+
+
+def test_getstate_drops_the_index_and_samples_caches(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        next(iter(reader.iter_samples())).time_series[0].to_arrow()
+        _ = reader.tasks
+        state = reader.__getstate__()
+    assert state["_tasks"] is None
+    assert state["_index"] is None
+    assert state["_samples_data"] is None
+    assert state["_values"] is None
+
+
+def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path, monkeypatch):
+    # TNET-84 names shuffled-epoch reads as the standard sleep-staging pattern. A count-bounded index
+    # cache made them 6.1x slower than in-order at 24 row groups, because each lookup evicted, decoded
+    # a whole row group and rebuilt its offset map. The cache is bounded by bytes so both patterns hold
+    # the same working set. This asserts the cache retains groups rather than timing anything.
+    monkeypatch.setattr(writer_module, "DEFAULT_CONTROL_PLANE_BATCH_ROWS", 4)
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        sample_ids = [s.sample_id for s in reader.iter_samples()]
+        series = {s.sample_id: [ts.time_series_id for ts in s.time_series] for s in reader.iter_samples()}
+        index = reader._index_table()
+        assert len(index.groups()) > 1  # the batch size really did split the index
+
+        for sample_id in reversed(sample_ids):  # reverse order is the cheapest stand-in for shuffled
+            for series_id in series[sample_id]:
+                assert reader._index_rows(sample_id, series_id)
+        # every decoded group is still resident: nothing was evicted to serve the pass
+        assert len(index._cache) == len(index.groups())
 
 
 def test_values_are_lazy(tmp_path, monkeypatch):
@@ -392,3 +498,29 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
         list(reader.iter_samples())
+
+
+def test_corrupt_index_data_page_raises_format_error(tmp_path):
+    # A footer that parses but a garbage data page: the lazy index decode must surface as
+    # TimeFFormatError, not a raw OSError from pyarrow, or a caller catching corruption misses it.
+    version_dir = _write(tmp_path)
+    idx = version_dir / "time_series_index.parquet"
+    raw = bytearray(idx.read_bytes())
+    for i in range(4, min(64, len(raw) - 8)):
+        raw[i] = 0
+    idx.write_bytes(raw)
+    with TimeFReader(version_dir) as reader:
+        sample = next(iter(reader.iter_samples()))
+        with pytest.raises(TimeFFormatError):
+            sample.time_series[0].to_arrow()
+
+
+def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
+    # The guarantee holds when the iterator is drained; an early-stopping consumer is served what
+    # exists and never reaches the check, which the docstring now states explicitly.
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        got = next(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
+        assert got.sample_id == "sample-0"  # early stop: no raise
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFValidationError, match="no-such-sample"):
+        list(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))

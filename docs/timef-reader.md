@@ -25,14 +25,29 @@ open handles and decoded-chunk caches.
 
 ## What is eager vs lazy
 
-`__init__` reads the manifest, tasks, annotations, and the time-series index up front. Per-series values
-and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with loader closures that
-pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called. `iter_samples()`
-streams samples one at a time without building a `TimeFDataset`.
+`__init__` reads `manifest.json` and the annotations table. Tasks decode on first `.tasks` access, and
+the time-series index resolves a row group at a time on the first value read, so opening a version never
+scans the index whether it holds three samples or three million. Per-series values and `Sample`
+construction stay lazy: `read()` / `iter_samples()` build samples with loader objects that pull from
+storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called, and `iter_samples()` streams
+`samples.parquet` in batches rather than materializing it.
 
-The index is held as Arrow and searched per lookup, rather than expanded into one Python object per
-row. That keeps opening a large dataset proportional to the index file rather than to a multiple of
-it: roughly 180 bytes of memory per index row, where a row is one `(sample, series, chunk)`.
+| Part | When it loads | What is kept |
+| --- | --- | --- |
+| Manifest | `__init__` | metadata, schema, file list, checksums |
+| Annotations | `__init__` | the decoded annotations, keyed by id |
+| `tasks` | first `.tasks` access | the decoded tasks, cached for the reader's lifetime |
+| Time-series index | first value read | a row-group directory (one entry per row group, not per row) and the last few decoded row groups |
+| Series values | `to_arrow()` / `to_numpy()` / `read_steps()` | the values backend's handles and chunk caches |
+
+An index lookup is a filtered read: the index is sorted by `sample_id`, so a row group whose recorded
+id range excludes the sample is skipped without being read. Nothing about the index is held per row.
+A sample-ordered read walks the file in order, so the small row-group cache serves a whole scan from a
+handful of decodes; a shuffled read pays one row-group decode per miss instead.
+
+Laziness moves when corruption surfaces. A structurally corrupt but checksum-valid task partition or
+index fails on the first access that needs it (`.tasks`, the first value read), not at
+`TimeFReader(root)`. Call `verify()` if you want an integrity check at a point you choose.
 
 ## Type reconstruction
 
@@ -58,17 +73,20 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 | Member | Description |
 | --- | --- |
 | `read()` | Materialize the full `TimeFDataset`. |
-| `iter_samples()` | Yield each `Sample` lazily. |
+| `iter_samples(sample_ids=None)` | Yield each `Sample` lazily, or only the named ones. |
 | `verify()` | Hash every manifest-listed artifact and reject missing or mismatched content. |
 | `metadata` / `schema` / `tasks` / `values_backend` | Reconstructed metadata, schema, tasks, and selected values backend. |
 
 ## Errors
 
 `__init__` raises `FileNotFoundError` if `root`, its `manifest.json`, or any file the manifest lists is
-missing. A malformed or unsupported manifest, unreadable table, or disagreement between stored data
-and its manifest raises `TimeFFormatError` (with `InvalidManifestError` for manifest parsing itself).
-Lazy value-read failures retain their series context. `verify()` raises `TimeFFormatError` when a
-checksummed artifact is missing or its content does not match the manifest.
+missing, `TimeFFormatError` (as `InvalidManifestError`) for a malformed or unsupported manifest, and
+`TimeFFormatError` if the annotations table is unreadable or disagrees with the manifest. A corrupt task
+partition or index surfaces where it is read: an unreadable table raises `TimeFFormatError` from the
+access that touched it, and lazy value-read failures retain their series context.
+`iter_samples(sample_ids=...)` raises `TimeFValidationError` for an id the dataset does not contain.
+`verify()` raises `TimeFFormatError` when a checksummed artifact is missing or its content does not
+match the manifest.
 
 ## Round-trip guarantee
 
