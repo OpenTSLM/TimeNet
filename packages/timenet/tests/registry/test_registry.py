@@ -6,6 +6,7 @@ from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError
 from timenet.manifest import Manifest
 from timenet.registry import (
     BaseRegistry,
+    DatasetVersion,
     LocalRegistry,
     RemoteRegistry,
     S3Registry,
@@ -166,6 +167,22 @@ def test_open_file_rejects_path_traversal(registry_root):
         registry.open_file("demo/ecg", "2.0.0", "../../../../etc/passwd")
 
 
+# ---- open_version (storage seam) --------------------------------------------------------------
+
+
+def test_open_version_returns_a_handle(registry_root):
+    version = LocalRegistry(registry_root).open_version("demo/ecg")
+    assert isinstance(version, DatasetVersion)
+    assert version.manifest.metadata.dataset_version.major == 2  # latest resolved
+    assert version.root.endswith("demo/ecg/2.0.0")
+    assert version.path("manifest.json").endswith("demo/ecg/2.0.0/manifest.json")
+
+
+def test_open_version_unknown_raises(registry_root):
+    with pytest.raises(DatasetNotFoundError):
+        LocalRegistry(registry_root).open_version("does/not-exist")
+
+
 # ---- search -----------------------------------------------------------------------------------
 
 
@@ -281,6 +298,8 @@ def test_remote_registry_is_deferred():
         remote.list_datasets()
     with pytest.raises(NotImplementedError):
         remote.store(make_dataset())
+    with pytest.raises(NotImplementedError):
+        remote.open_version("demo/ecg")
 
 
 def test_s3_registry_is_deferred():
@@ -289,3 +308,5 @@ def test_s3_registry_is_deferred():
         s3.list_datasets()
     with pytest.raises(NotImplementedError):
         s3.store(make_dataset())
+    with pytest.raises(NotImplementedError, match="later change"):
+        s3.open_version("demo/ecg")

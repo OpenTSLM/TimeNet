@@ -11,6 +11,7 @@ from typing import BinaryIO
 
 from timenet.dataset import TimeFDataset
 from timenet.manifest import Manifest
+from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
 from timenet.writer import WriteProgressEvent
@@ -50,6 +51,16 @@ class S3Registry(WritableRegistry):
             NotImplementedError: Always.
         """
         raise NotImplementedError("S3Registry is not yet implemented")
+
+    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
+        """Not yet implemented.
+
+        The signature fixes the storage seam's contract; the body lands with the S3 reads.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError("S3 storage seam lands in a later change")
 
     def store(
         self,
