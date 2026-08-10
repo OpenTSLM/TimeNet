@@ -10,6 +10,7 @@ from typing import BinaryIO
 
 from timenet.dataset import TimeFDataset
 from timenet.manifest import Manifest
+from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
 from timenet.writer import WriteProgressEvent
@@ -43,6 +44,14 @@ class RemoteRegistry(WritableRegistry):
         raise NotImplementedError("RemoteRegistry is not yet implemented")
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
+        """Not yet implemented.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError("RemoteRegistry is not yet implemented")
+
+    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Not yet implemented.
 
         Raises:

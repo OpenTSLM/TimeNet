@@ -9,6 +9,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     Annotation,
@@ -101,7 +102,7 @@ def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
 def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
     dataset = _uuid_dataset()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(dataset, restored)
     sid = restored.samples[0].sample_id
@@ -118,7 +119,7 @@ def test_binary16_index_lookups_span_row_groups(tmp_path, monkeypatch):
         dataset.add_sample(time_series=(_series(),))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert pq.ParquetFile(version_dir / "time_series_index.parquet").metadata.num_row_groups > 1
         assert_datasets_equal(dataset, reader.read())
 
@@ -142,7 +143,7 @@ def test_forecasting_scalar_id_round_trips(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
     assert task.target_sample_id == target.sample_id
@@ -188,7 +189,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     scope_type = pq.read_table(partition).schema.field("scope").type
     assert scope_type.field("time_series_ids").type == pa.list_(pa.binary(16))
 
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
     assert tasks[ClassificationTask].scope == scope
     localization = tasks[TemporalLocalizationTask]
@@ -220,7 +221,7 @@ def test_correspondence_target_ids_round_trip(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
     assert task.target == (match.sample_id,)
@@ -250,7 +251,7 @@ def test_editing_and_generation_sample_ids_round_trip(tmp_path):
     dataset.add_task(edited, TSGenerationTask(prompt="10 s of sinus rhythm.", target_sample_id=edited.sample_id))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)

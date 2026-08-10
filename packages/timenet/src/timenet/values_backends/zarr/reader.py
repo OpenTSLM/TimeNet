@@ -10,17 +10,22 @@ reader caches decoded row groups). Opened arrays are cached for the reader's lif
 Requires the ``zarr`` extra (``pip install 'timenet[zarr]'``); imported lazily.
 """
 
+from __future__ import annotations
+
 from collections import OrderedDict
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
 from timenet.errors import TimeFFormatError
-from timenet.types import TimeSeriesSpec
 from timenet.values_backends.reader import BaseValuesReader
+
+
+if TYPE_CHECKING:
+    from timenet.registry.version import DatasetVersion
+    from timenet.types import TimeSeriesSpec
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
@@ -63,21 +68,23 @@ class ZarrValuesReader(BaseValuesReader):
         self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
-    def load(self, root: Path, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values (``chunk_major_idx`` = element start; length is ``n_values``).
 
         Args:
-            root: The version directory.
+            version: The opened version handle.
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
             The series' canonical scalar or fixed-shape tensor Arrow array.
         """
-        parts = [self._read_range(root, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
+        parts = [self._read_range(version, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return _to_arrow(combined, spec)
 
-    def load_range(self, root: Path, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec) -> pa.Array:
+    def load_range(
+        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+    ) -> pa.Array:
         """Read only the storage chunks intersecting a temporal step range.
 
         Returns:
@@ -96,16 +103,16 @@ class ZarrValuesReader(BaseValuesReader):
             if cursor + run_len > start and cursor < bounded_stop:
                 lo = max(start - cursor, 0)
                 hi = min(bounded_stop - cursor, run_len)
-                parts.append(self._read_range(root, rel, run_start + lo, run_start + hi))
+                parts.append(self._read_range(version, rel, run_start + lo, run_start + hi))
             cursor += run_len
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
         return _to_arrow(combined, spec)
 
-    def load_time_offsets(self, root: Path, rows: list[dict]) -> pa.Array:
+    def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
         """Read an irregular series' time offsets from the array parallel to its values.
 
         Args:
-            root: The version directory.
+            version: The opened version handle.
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
@@ -114,7 +121,7 @@ class ZarrValuesReader(BaseValuesReader):
             a parallel time offsets array.
         """
         parts = [
-            self._read_range(root, _time_offsets_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
+            self._read_range(version, _time_offsets_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
         ]
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return pa.array(combined.astype(np.int64, copy=False))
@@ -125,11 +132,13 @@ class ZarrValuesReader(BaseValuesReader):
         self._chunk_cache.clear()
         self._chunk_cache_bytes = 0
 
-    def _read_range(self, root: Path, rel_path: str, start: int, stop: int) -> Shaped[np.ndarray, " time *value"]:
+    def _read_range(
+        self, version: DatasetVersion, rel_path: str, start: int, stop: int
+    ) -> Shaped[np.ndarray, " time *value"]:
         """Assemble ``array[start:stop]`` from cached decoded storage chunks.
 
         Args:
-            root: The version directory.
+            version: The opened version handle.
             rel_path: The array's path relative to the version directory.
             start: First element of the range.
             stop: One past the last element of the range.
@@ -137,7 +146,7 @@ class ZarrValuesReader(BaseValuesReader):
         Returns:
             The range's values with their per-step dimensions preserved.
         """
-        array = self._array(root, rel_path)
+        array = self._array(version, rel_path)
         chunk_len = array.chunks[0]
         segments = []
         for chunk_idx in range(start // chunk_len, (stop - 1) // chunk_len + 1):
@@ -175,11 +184,11 @@ class ZarrValuesReader(BaseValuesReader):
             self._chunk_cache_bytes -= evicted.nbytes
         return data
 
-    def _array(self, root: Path, rel_path: str) -> Any:
-        """Open (and cache) the Zarr array at ``root/rel_path``.
+    def _array(self, version: DatasetVersion, rel_path: str) -> Any:
+        """Open (and cache) the Zarr array for ``rel_path`` through the version's store.
 
         Args:
-            root: The version directory.
+            version: The opened version handle.
             rel_path: The array's path relative to the version directory.
 
         Returns:
@@ -196,7 +205,7 @@ class ZarrValuesReader(BaseValuesReader):
                     "this dataset version stores values in Zarr; install the extra: pip install 'timenet[zarr]'"
                 ) from exc
 
-            self._array_cache[rel_path] = zarr.open_array(store=root / rel_path, mode="r")
+            self._array_cache[rel_path] = zarr.open_array(store=version.store_uri(rel_path), mode="r")
         return self._array_cache[rel_path]
 
 

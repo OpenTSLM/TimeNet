@@ -1,9 +1,10 @@
 """Tests for reader-side values backends."""
 
-from pathlib import Path
+import dataclasses
 
 import pyarrow as pa
 
+from timenet.registry import LocalRegistry
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 
@@ -25,11 +26,16 @@ class _Shard:
         )
 
 
-def test_row_group_cache_includes_dataset_root(monkeypatch):
+def test_row_group_cache_includes_dataset_root(tmp_path, monkeypatch):
+    # The decoded-row-group cache keys on the version root, so the same shard/row-group under two
+    # different roots does not collide (it did when the key ignored the root).
     reader = ParquetValuesReader()
-    monkeypatch.setattr(reader, "_shard", lambda root, rel_path: _Shard(1.0 if root == Path("a") else 2.0))
+    monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
     rows = [{"chunk_file": "time_series/shard-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
+    registry = LocalRegistry(tmp_path)
+    registry.store(make_dataset())
+    base = registry.open_version("timenet/hello-world")  # a real handle; only its root varies below
     spec = make_dataset().samples[0].time_series[0].spec
 
-    assert reader.load(Path("a"), rows, spec).to_pylist() == [1.0]
-    assert reader.load(Path("b"), rows, spec).to_pylist() == [2.0]
+    assert reader.load(dataclasses.replace(base, root="a"), rows, spec).to_pylist() == [1.0]
+    assert reader.load(dataclasses.replace(base, root="b"), rows, spec).to_pylist() == [2.0]

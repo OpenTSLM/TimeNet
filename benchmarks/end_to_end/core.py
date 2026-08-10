@@ -17,6 +17,7 @@ import numpy as np
 
 from benchmarks.end_to_end.corpus import build_corpus
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.writer import TimeFWriter
 
 
@@ -100,7 +101,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
 
     digest = hashlib.sha256()
     started = time.perf_counter_ns()
-    with TimeFReader(_dataset_dir(root)) as reader:
+    with TimeFReader(DatasetVersion.open_local(_dataset_dir(root))) as reader:
         digest.update(
             json.dumps(
                 {
