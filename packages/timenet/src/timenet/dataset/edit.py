@@ -15,6 +15,7 @@ from pathlib import Path
 from timenet.dataset.dataset import TimeFDataset
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
+from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
 
@@ -224,7 +225,7 @@ def edit_version(
     # loaders that pull values from the base version's shards, and those are consumed during
     # writer.write(); letting the reader's `with` exit first meant writing through a closed reader,
     # which only worked because close() silently reopened the shards and leaked the handles.
-    with TimeFReader(base_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(base_dir)) as reader:
         base_version = str(reader.metadata.dataset_version)
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")

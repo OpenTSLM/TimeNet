@@ -4,6 +4,7 @@ import pytest
 
 from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
 from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
 from timenet.registry import (
     BaseRegistry,
     DatasetVersion,
@@ -15,7 +16,7 @@ from timenet.registry import (
     open_registry,
     open_writable_registry,
 )
-from timenet.testing import make_dataset
+from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import AnswerTask, Domain, License
 
 
@@ -176,6 +177,11 @@ def test_open_version_returns_a_handle(registry_root):
     assert version.manifest.metadata.dataset_version.major == 2  # latest resolved
     assert version.root.endswith("demo/ecg/2.0.0")
     assert version.path("manifest.json").endswith("demo/ecg/2.0.0/manifest.json")
+
+
+def test_open_version_round_trips_through_the_reader(registry_root):
+    with TimeFReader(LocalRegistry(registry_root).open_version("timenet/hello-world")) as reader:
+        assert_datasets_equal(make_dataset(), reader.read())
 
 
 def test_open_version_unknown_raises(registry_root):

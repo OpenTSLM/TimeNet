@@ -8,14 +8,23 @@ tags:
 
 # TimeFReader
 
-Deserializes a TimeF version directory into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
+Deserializes a committed TimeF version into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
 of [`TimeFWriter`](timef-writer.md), driven entirely by `manifest.json`: it never runs connector code.
 Lives in `timenet.reader`.
 
+It reads through a `DatasetVersion` storage handle rather than a bare path, so the same reader serves a
+local directory today and an object store later. Build the handle from a [registry](registry.md) with
+`open_version`, or from a directory on disk with `DatasetVersion.open_local`:
+
 ```python
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion, open_registry
 
-with TimeFReader(version_dir) as reader:
+version = open_registry("~/timenet/registry").open_version("timenet/hello-world")
+# or, for a version directory already on disk:
+version = DatasetVersion.open_local(version_dir)
+
+with TimeFReader(version) as reader:
     dataset = reader.read()
     values = dataset.samples[0].time_series[0].to_arrow()
 ```
@@ -25,15 +34,16 @@ open handles and decoded-chunk caches.
 
 ## What is eager vs lazy
 
-`__init__` reads `manifest.json` and nothing else. Tasks, annotations, the time-series index, and
-per-series values all resolve on first use, so opening a version costs the same whether it holds three
-samples or three million. `read()` / `iter_samples()` build samples with loader objects that pull from
-storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called, and `iter_samples()` streams
-`samples.parquet` in batches rather than materializing it.
+`__init__` reads nothing: the handle already carries the parsed manifest, and no file is stat-swept on
+open. Tasks, annotations, the time-series index, and per-series values all resolve on first use, so
+opening a version costs the same whether it holds three samples or three million. `read()` /
+`iter_samples()` build samples with loader objects that pull from storage only when `to_arrow()` /
+`to_numpy()` / `read_steps()` is called, and `iter_samples()` streams `samples.parquet` in batches rather
+than materializing it.
 
 | Part | When it loads | What is kept |
 | --- | --- | --- |
-| Manifest | `__init__` | metadata, schema, file list, checksums |
+| Manifest | carried by the handle | metadata, schema, file list, checksums |
 | `tasks` | first `.tasks` access | the decoded tasks, cached for the reader's lifetime |
 | Annotations | first sample that references one | the row group that holds it, plus a bounded LRU of decoded `Annotation`s |
 | Time-series index | first value read | a row-group directory (one entry per row group, not per row) and the last few decoded row groups |
@@ -45,9 +55,10 @@ whose recorded key range excludes the probe, decoding only the survivors into a 
 Neither is held per row. A sample-ordered scan walks the index in order, so the cache serves the whole
 scan from a handful of decodes; a shuffled read pays one row-group decode per miss instead.
 
-Laziness moves when corruption surfaces. A structurally corrupt but checksum-valid control-plane file
-fails on the first access that needs it (`.tasks`, the first annotation, the first value read), not at
-`TimeFReader(root)`. Call `verify()` if you want an integrity check at a point you choose.
+Laziness moves when corruption surfaces. A structurally corrupt (or missing) file fails on the first
+access that needs it (`.tasks`, the first annotation, the first value read), not at `TimeFReader(version)`
+— `__init__` no longer stat-sweeps the file list, which on an object store would be an O(files) HEAD
+storm. Call `verify()` if you want an integrity check at a point you choose.
 
 ## Type reconstruction
 
@@ -79,13 +90,15 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 ## Errors
 
-`__init__` raises `FileNotFoundError` if `root`, its `manifest.json`, or any file the manifest lists is
-missing, and `TimeFFormatError` (as `InvalidManifestError`) for a malformed or unsupported manifest.
-Everything else surfaces where it is read: an unreadable table or a disagreement between stored data and
-its manifest raises `TimeFFormatError` from the access that touched it, and lazy value-read failures
-retain their series context. `iter_samples(sample_ids=...)` raises `TimeFValidationError` for an id the
-dataset does not contain. `verify()` raises `TimeFFormatError` when a checksummed artifact is missing or
-its content does not match the manifest.
+`__init__` does no I/O, so it raises nothing: a malformed or unsupported manifest was already rejected
+building the handle (`open_version` / `DatasetVersion.open_local`), which raises `TimeFFormatError` (as
+`InvalidManifestError`) for a bad manifest and `FileNotFoundError` for a missing directory or
+`manifest.json`. Everything else surfaces where it is read: a missing or unreadable file, or a
+disagreement between stored data and its manifest, raises from the access that touched it (a missing
+`samples.parquet` fails the first `iter_samples`; a corrupt table raises `TimeFFormatError` with its
+series context). `iter_samples(sample_ids=...)` raises `TimeFValidationError` for an id the dataset does
+not contain. `verify()` raises `TimeFFormatError` when a checksummed artifact is missing or its content
+does not match the manifest.
 
 ## Round-trip guarantee
 

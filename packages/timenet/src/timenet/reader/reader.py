@@ -6,6 +6,8 @@ first use. Types are reconstructed from the manifest's flat descriptors (no runt
 read-back objects pickle and match the originals field-for-field.
 """
 
+from __future__ import annotations
+
 import bisect
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
@@ -15,7 +17,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import types as _types
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pyarrow as pa
@@ -26,10 +28,9 @@ from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
 from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet.format.checksums import file_checksum
-from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY, MANIFEST_FILE
+from timenet.format.checksums import stream_checksum
+from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
-from timenet.manifest import Manifest
 from timenet.types import (
     TASKS,
     Annotation,
@@ -41,6 +42,12 @@ from timenet.types import (
     value_type_of,
 )
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
+
+
+if TYPE_CHECKING:
+    import pyarrow.fs as pafs
+
+    from timenet.registry.version import DatasetVersion
 
 
 #: Rows per batch when streaming ``samples.parquet``.
@@ -95,7 +102,8 @@ class _PrunedControlTable:
 
     def __init__(
         self,
-        root: Path,
+        filesystem: pafs.FileSystem,
+        root: str,
         parts: tuple[str, ...],
         lookup_columns: tuple[str, ...],
         *,
@@ -104,13 +112,15 @@ class _PrunedControlTable:
         """Configure a pruned view over a sorted control table.
 
         Args:
-            root: The version directory.
+            filesystem: The filesystem the version's files live on.
+            root: The version's root prefix on ``filesystem``.
             parts: The table's manifest-relative part paths.
             lookup_columns: The columns whose stored values a lookup matches on, as a tuple; the first is
                 the sorted key column the footer statistics prune on.
             columns: The columns to decode per row group, or ``None`` for all of them.
 
         """
+        self._fs = filesystem
         self._root = root
         self._parts = parts
         self._lookup_columns = lookup_columns
@@ -191,7 +201,7 @@ class _PrunedControlTable:
         """
         handle = self._files.get(rel)
         if handle is None:
-            handle = pq.ParquetFile(self._root / rel)
+            handle = pq.ParquetFile(f"{self._root}/{rel}", filesystem=self._fs)
             self._files[rel] = handle
         return handle
 
@@ -229,34 +239,30 @@ class _PrunedControlTable:
 class TimeFReader:
     """Reads a committed TimeF version directory. Use as a context manager to close shard handles."""
 
-    def __init__(self, root: Path) -> None:
-        """Open a dataset version directory and load its manifest.
+    def __init__(self, version: DatasetVersion) -> None:
+        """Open a committed dataset version through a storage handle.
 
-        Only the manifest is read here. Tasks, annotations, the time-series index, and per-series values
-        are resolved on first use, so opening a version costs the same whether it has three samples or
-        three million. A malformed or unsupported-version manifest raises ``InvalidManifestError`` (a
-        ``TimeFFormatError``) while parsing.
+        Nothing is read here: the handle already carries the parsed manifest, and the filesystem and root
+        it wraps are the seam every read flows through. Tasks, annotations, the time-series index, and
+        per-series values all resolve on first use, so opening a version costs the same whether it has
+        three samples or three million.
 
-        Because the control plane is no longer decoded up front, a structurally corrupt but
-        checksum-valid control-plane file now fails on the first access that needs it (``.tasks``, the
-        first annotation, the first value read) rather than here. Call :meth:`verify` when you want
-        construction-time integrity checking.
+        Because the control plane is no longer decoded up front, and no file is stat-swept on open, a
+        structurally corrupt (or missing) file now fails on the first access that needs it (``.tasks``,
+        the first annotation, the first value read) rather than here. Call :meth:`verify` when you want a
+        construction-time integrity check. Build the handle with
+        :meth:`~timenet.registry.BaseRegistry.open_version` or
+        :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
         Args:
-            root: The version directory written by :class:`~timenet.writer.TimeFWriter`.
-
-        Raises:
-            FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
-                missing.
+            version: The opened version handle: a manifest plus a filesystem-rooted view of its files.
         """
-        self._root = Path(root)
-        if not self._root.exists():
-            raise FileNotFoundError(f"dataset directory does not exist: {self._root}")
-        manifest_path = self._root / MANIFEST_FILE
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"no manifest at {manifest_path}")
-        self._manifest = Manifest.from_json(manifest_path.read_text())
-        self._check_files_exist()
+        self._version = version
+        # Aliases of the handle's fields for the read sites below; all three pickle, so a DataLoader
+        # worker rebuilds the reader (and its lazy loaders) from them without re-opening the registry.
+        self._fs = version.filesystem
+        self._root = version.root
+        self._manifest = version.manifest
 
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
@@ -288,7 +294,7 @@ class TimeFReader:
 
     # ---- context manager -----------------------------------------------------------------------
 
-    def __enter__(self) -> "TimeFReader":
+    def __enter__(self) -> TimeFReader:
         """Return this reader."""
         return self
 
@@ -321,16 +327,20 @@ class TimeFReader:
 
         Not done on open: hashing every shard would read the whole dataset and defeat the lazy read
         path this class exists to provide. Call it explicitly when integrity matters more than
-        latency (after a download, before a long training run, in a fsck-style command).
+        latency (after a download, before a long training run, in a fsck-style command). Each file is
+        reopened through the version's filesystem, so this is also where a missing file surfaces now that
+        ``__init__`` no longer stat-sweeps.
 
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
         """
         for rel, expected in sorted(self._manifest.checksums.items()):
-            path = self._root / rel
-            if not path.exists():
-                raise TimeFFormatError(f"manifest lists a missing file: {rel}")
-            actual = file_checksum(path)
+            try:
+                handle = self._fs.open_input_file(self._version.path(rel))
+            except FileNotFoundError as exc:
+                raise TimeFFormatError(f"manifest lists a missing file: {rel}") from exc
+            with handle:
+                actual = stream_checksum(handle)
             if actual != expected:
                 raise TimeFFormatError(f"checksum mismatch for {rel}: manifest says {expected}, file is {actual}")
 
@@ -426,8 +436,8 @@ class TimeFReader:
                 cannot know an id is absent until it has read every part.
         """
         if self._samples_data is None:
-            parts = [str(self._root / rel) for rel in self._manifest.files.samples]
-            self._samples_data = pads.dataset(parts, format="parquet")
+            parts = [self._version.path(rel) for rel in self._manifest.files.samples]
+            self._samples_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
         data = self._samples_data
         if sample_ids is None:
             for batch in data.to_batches(batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
@@ -445,11 +455,6 @@ class TimeFReader:
                 f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
             )
 
-    def _check_files_exist(self) -> None:
-        for rel in self._manifest.files.all_parts():
-            if not (self._root / rel).exists():
-                raise FileNotFoundError(f"manifest lists a missing file: {rel}")
-
     def _load_tasks(self) -> tuple[Task, ...]:
         by_id: dict[str, Task] = {}
         pending: dict[str, tuple[str, ...]] = {}
@@ -457,7 +462,7 @@ class TimeFReader:
             task_type = TaskType(Path(rel).parent.name.split("=", 1)[1])
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
-            for row in pq.read_table(self._root / rel).to_pylist():
+            for row in pq.read_table(self._version.path(rel), filesystem=self._fs).to_pylist():
                 payload = {
                     name: self._codec.decode_payload(cls.refs, name, _as_tuple_if_list(row[name]))
                     for name in payload_cols
@@ -494,6 +499,7 @@ class TimeFReader:
         if self._annotations is None:
             key_column = ANNOTATIONS_SORT_KEY
             self._annotations = _PrunedControlTable(
+                self._fs,
                 self._root,
                 self._manifest.files.annotations,
                 lookup_columns=(key_column,),
@@ -554,6 +560,7 @@ class TimeFReader:
         if self._index is None:
             key_column = INDEX_SORT_KEY
             self._index = _PrunedControlTable(
+                self._fs,
                 self._root,
                 self._manifest.files.time_series_index,
                 lookup_columns=(key_column, "time_series_id"),
@@ -719,7 +726,7 @@ class TimeFReader:
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
-            return self._values.load_time_offsets(self._root, rows)
+            return self._values.load_time_offsets(self._version, rows)
         except (KeyError, OSError, IndexError, ValueError) as exc:
             raise TimeFFormatError(
                 f"failed to read time offsets for series {time_series_id!r} for sample {sample_id!r}: {exc}"
@@ -778,7 +785,7 @@ class TimeFReader:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
             spec_type = rows[0]["spec_type"]
-            return self._values.load(self._root, rows, self._spec_by_type[spec_type])
+            return self._values.load(self._version, rows, self._spec_by_type[spec_type])
         except (KeyError, OSError, IndexError, ValueError) as exc:
             raise TimeFFormatError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
 
@@ -792,7 +799,7 @@ class _SeriesLoader:
     reads on call.
     """
 
-    reader: "TimeFReader"
+    reader: TimeFReader
     """The reader that reads and decodes the series' values."""
     sample_id: str
     """The owning sample's id."""
@@ -822,7 +829,7 @@ class _SeriesLoader:
         if self.reader._values is None:
             self.reader._values = make_values_reader(self.reader._manifest.values_backend)
         spec = self.reader._spec_by_type[rows[0]["spec_type"]]
-        return self.reader._values.load_range(self.reader._root, rows, start, stop, spec)
+        return self.reader._values.load_range(self.reader._version, rows, start, stop, spec)
 
 
 def _as_tuple_if_list(value: object) -> object:
@@ -853,7 +860,7 @@ class _TimeOffsetsLoader:
     own.
     """
 
-    reader: "TimeFReader"
+    reader: TimeFReader
     """The reader that reads and decodes the series' time offsets."""
     sample_id: str
     """The owning sample's id."""
