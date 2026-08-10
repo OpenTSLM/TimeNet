@@ -87,14 +87,14 @@ def test_uuid_ids_marked_uuid16_in_manifest(tmp_path):
 
 def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset())
-    samples = pq.read_table(version_dir / "samples.parquet").schema
+    samples = pq.read_table(version_dir / "samples/part-00000000.parquet").schema
     assert samples.field("sample_id").type == pa.binary(16)
-    index = pq.read_table(version_dir / "time_series_index.parquet").schema
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").schema
     assert index.field("sample_id").type == pa.binary(16)
     assert index.field("time_series_id").type == pa.binary(16)
     shard = next(version_dir.glob("time_series/shard-*.parquet"))
     assert pq.read_table(shard).schema.field("time_series_id").type == pa.binary(16)
-    annotations = pq.read_table(version_dir / "annotations.parquet").schema
+    annotations = pq.read_table(version_dir / "annotations/part-00000000.parquet").schema
     assert annotations.field("id").type == pa.binary(16)
 
 
@@ -139,7 +139,7 @@ def test_non_uuid_ids_stay_string(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset(sample_id="sample-0"))
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert "sample_id" not in manifest.id_encoding  # not all canonical UUIDs -> string
-    samples = pq.read_table(version_dir / "samples.parquet").schema
+    samples = pq.read_table(version_dir / "samples/part-00000000.parquet").schema
     assert samples.field("sample_id").type == pa.string()
     # a sibling id space that is all-uuid still packs to binary(16)
     assert manifest.id_encoding.get("time_series_id") == "uuid16"

@@ -53,7 +53,7 @@ def test_spec_types_encode_to_distinct_single_path_segments():
 
 def test_index_locator_resolves_to_values(tmp_path):
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     row = index[0]
     # Zarr locator: chunk_file=array path, chunk_major_idx=element start, chunk_minor_idx unused.
     assert row["chunk_minor_idx"] is None
@@ -66,7 +66,7 @@ def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (sample, series) pair gets exactly one placement spanning the series' full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     keys = [(row["sample_id"], row["time_series_id"]) for row in index]
     assert len(keys) == len(set(keys))
     long_series = next(row for row in index if row["time_series_id"] == "ts-long-1")

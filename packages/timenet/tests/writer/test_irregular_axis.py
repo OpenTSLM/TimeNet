@@ -238,7 +238,7 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     dataset.add_sample(time_series=(ts,))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    samples_path = version_dir / "samples.parquet"
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     rows = table.to_pylist()
     rows[0]["time_series"][0]["last_time_offset_us"] = _HATCH_US[-1] + 1_000  # axis now disagrees with the stream

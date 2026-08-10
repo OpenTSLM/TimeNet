@@ -27,14 +27,18 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
 
 ## Disk layout
 
+Every table shards into numbered parts under its own directory. Small tables emit a single
+`part-00000000.parquet`; large ones split once a part reaches `control_shard_target_bytes`. The
+manifest lists the parts, so the reader discovers them rather than assuming fixed names.
+
 ```
 <root>/<dataset_id>/<version>/
   manifest.json   # written last; its presence marks a committed version
-  samples.parquet
-  annotations.parquet
-  time_series_index.parquet
-  tasks/task=<task_type>/part-0.parquet
-  time_series/shard-00000.parquet ...   # values_backend="parquet" (default)
+  samples/part-00000000.parquet ...
+  annotations/part-00000000.parquet ...
+  time_series_index/part-00000000.parquet ...
+  tasks/task=<task_type>/part-00000000.parquet ...
+  time_series/shard-00000000.parquet ...   # values_backend="parquet" (default)
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
   time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
   time_series.zarr/_time_offsets/<spec_type>/...    # their int64 time offsets, one per value
@@ -45,6 +49,7 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `shard_target_bytes` | 128 MiB | Rotate to a new shard (Parquet) / Zarr shard size, once buffered values exceed this. |
+| `control_shard_target_bytes` | 128 MiB | Split a control table (samples, annotations, index, tasks) into a new part once its in-memory Arrow size exceeds this. |
 | `row_group_target_bytes` | 4 MiB | Flush a row group once buffered values exceed this (Parquet only). |
 | `chunk_max_bytes` | 1 MiB | Split a series into chunks no larger than this. |
 | `compression` | `"zstd"` | Values codec (Parquet codec / Zarr Blosc inner codec). |

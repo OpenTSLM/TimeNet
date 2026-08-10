@@ -8,6 +8,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -35,9 +36,9 @@ def _written(tmp_path, dataset=None, **kwargs):
 def test_writes_expected_layout(tmp_path):
     version_dir = _written(tmp_path)
     assert (version_dir / "manifest.json").exists()
-    assert (version_dir / "samples.parquet").exists()
-    assert (version_dir / "annotations.parquet").exists()
-    assert (version_dir / "time_series_index.parquet").exists()
+    assert (version_dir / "samples/part-00000000.parquet").exists()
+    assert (version_dir / "annotations/part-00000000.parquet").exists()
+    assert (version_dir / "time_series_index/part-00000000.parquet").exists()
     assert (version_dir / "time_series/shard-00000000.parquet").exists()
     assert list(version_dir.glob("tasks/task=*/part-00000000.parquet"))
 
@@ -106,7 +107,7 @@ def test_values_use_byte_stream_split(tmp_path):
 def test_long_series_splits_into_multiple_chunks(tmp_path):
     # Tiny chunk cap forces the long hello_world series to split.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     chunks_per_series: dict[str, set] = {}
     for row in index:
         chunks_per_series.setdefault(row["time_series_id"], set()).add(row["chunk_idx"])
@@ -115,7 +116,7 @@ def test_long_series_splits_into_multiple_chunks(tmp_path):
 
 def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     row = index[0]
     shard = pq.ParquetFile(version_dir / row["chunk_file"])
     table = shard.read_row_group(row["chunk_major_idx"])
@@ -242,7 +243,7 @@ def test_per_series_array_contract_enforced(tmp_path):
 
 def test_samples_parquet_content(tmp_path):
     version_dir = _written(tmp_path)
-    rows = {r["sample_id"]: r for r in pq.read_table(version_dir / "samples.parquet").to_pylist()}
+    rows = {r["sample_id"]: r for r in pq.read_table(version_dir / "samples/part-00000000.parquet").to_pylist()}
     assert set(rows) == {"sample-0", "sample-1", "sample-2"}
     # shared series appears in both sample-0 and sample-1
     ids0 = {ts["time_series_id"] for ts in rows["sample-0"]["time_series"]}
@@ -261,7 +262,7 @@ def test_shared_series_stored_once(tmp_path):
     ]
     index_rows = [
         r
-        for r in pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+        for r in pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
         if r["time_series_id"] == "ts-shared"
     ]
     assert len(shard_rows) == 1
@@ -383,3 +384,25 @@ def test_write_sharded_table_empty_writes_one_part(tmp_path):
     parts = writer._write_sharded_table([], schema, lambda i: f"t/part-{i:08d}.parquet", dictionary_columns=[])
     assert parts == ["t/part-00000000.parquet"]
     assert pq.read_table(writer._staging_dir / parts[0]).num_rows == 0
+
+
+def test_empty_control_tables_write_one_part_or_none(tmp_path):
+    # No annotations and no tasks: annotations still emit one empty part so the schema stays on disk;
+    # tasks emit none at all.
+    spec = TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless)
+    ts = TimeSeries.from_values([1.0, 2.0, 3.0], spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1))
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/empty", dataset_version=Version(1, 0, 0), name="E", description="d", license=License.MIT
+        )
+    )
+    dataset.add_sample(time_series=(ts,))
+    version_dir = _written(tmp_path, dataset=dataset)
+    files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
+    assert len(files.annotations) == 1
+    assert (version_dir / files.annotations[0]).exists()
+    assert files.tasks == ()
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert restored.tasks == ()
+    assert all(not s.annotations for s in restored.samples)

@@ -8,6 +8,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError
+from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -19,7 +20,9 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
 )
+import timenet.values_backends.parquet.writer as parquet_writer
 from timenet.writer import TimeFWriter
+import timenet.writer.writer as writer_mod
 
 
 def _write(tmp_path, dataset=None, **kwargs) -> Path:
@@ -49,6 +52,55 @@ def test_round_trip_with_chunk_splitting(tmp_path, backend):
     version_dir = _write(
         tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
     )
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)
+
+
+def test_round_trip_with_control_sharding(tmp_path):
+    # A 1-byte control target splits every control table into per-row parts under its own subdir.
+    original = make_dataset()
+    version_dir = _write(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1)
+    files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
+    assert len(files.samples) > 1
+    assert len(files.annotations) > 1
+    assert len(files.time_series_index) > 1
+    assert sum("task=classification" in f for f in files.tasks) > 1  # two classification tasks split
+    for rel in (*files.samples, *files.annotations, *files.time_series_index, *files.tasks):
+        assert (version_dir / rel).exists()
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)
+
+
+def test_index_resolves_when_a_series_straddles_parts(tmp_path):
+    # Small chunks give a series several index rows; a 1-byte control target puts them in separate
+    # parts. The reader concatenates parts in manifest order and bisects, so the series still resolves.
+    original = make_dataset()
+    version_dir = _write(
+        tmp_path, dataset=make_dataset(), control_shard_target_bytes=1, chunk_max_bytes=64, row_group_target_bytes=64
+    )
+    files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
+    assert len(files.time_series_index) > 1  # index rows spread across parts, some series straddling
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)
+
+
+def test_reads_a_legacy_flat_layout(tmp_path, monkeypatch):
+    # A dataset written before this change used flat single files, {:05d} shards and part-0 task files.
+    # The reader resolves the paths stored in the manifest, so it still reads them with no version gate.
+    monkeypatch.setattr(writer_mod, "SAMPLES_TEMPLATE", "samples.parquet")
+    monkeypatch.setattr(writer_mod, "ANNOTATIONS_TEMPLATE", "annotations.parquet")
+    monkeypatch.setattr(writer_mod, "INDEX_TEMPLATE", "time_series_index.parquet")
+    monkeypatch.setattr(writer_mod, "TASK_PART_TEMPLATE", "tasks/task={task_type}/part-0.parquet")
+    monkeypatch.setattr(parquet_writer, "SHARD_TEMPLATE", "time_series/shard-{:05d}.parquet")
+
+    original = make_dataset()
+    version_dir = _write(tmp_path, dataset=make_dataset())
+    assert (version_dir / "samples.parquet").exists()  # legacy flat names on disk
+    assert (version_dir / "time_series/shard-00000.parquet").exists()
+    assert (version_dir / "tasks/task=classification/part-0.parquet").exists()
     with TimeFReader(version_dir) as reader:
         restored = reader.read()
     assert_datasets_equal(original, restored)
@@ -220,7 +272,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     # Corrupt the artifact rather than the reader's internals: the locator is read from the index on
     # each lookup now, so an in-memory poke would not survive to the read.
     version_dir = _write(tmp_path)
-    index_path = version_dir / "time_series_index.parquet"
+    index_path = version_dir / "time_series_index/part-00000000.parquet"
     table = pq.read_table(index_path)
     bogus = pa.array(["time_series/does-not-exist.parquet"] * table.num_rows)
     pq.write_table(table.set_column(table.schema.get_field_index("chunk_file"), "chunk_file", bogus), index_path)
@@ -236,7 +288,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
 
 def test_missing_listed_file_raises(tmp_path):
     version_dir = _write(tmp_path)
-    (version_dir / "samples.parquet").unlink()
+    (version_dir / "samples/part-00000000.parquet").unlink()
     with pytest.raises(FileNotFoundError):
         TimeFReader(version_dir)
 
@@ -299,7 +351,7 @@ def test_start_time_round_trips_exactly(tmp_path):
 
 def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
     version_dir = _write(tmp_path)
-    samples_path = version_dir / "samples.parquet"
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     pq.write_table(table.drop_columns(["start_time_us"]), samples_path)
     with TimeFReader(version_dir) as reader:
@@ -307,8 +359,8 @@ def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
 
 
 def _corrupt_first_series(version_dir, field, value):
-    """Set a field on the first series' struct in samples.parquet, simulating on-disk corruption."""
-    samples_path = version_dir / "samples.parquet"
+    """Set a field on the first series' struct in samples/part-00000000.parquet, simulating on-disk corruption."""
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     rows = table.to_pylist()
     rows[0]["time_series"][0][field] = value
@@ -360,7 +412,7 @@ def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_err
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     # A stored span that no longer fits the series it resolves to is corruption, not a caller mistake.
     version_dir = _write(tmp_path)
-    ann_path = version_dir / "annotations.parquet"
+    ann_path = version_dir / "annotations/part-00000000.parquet"
     table = pq.read_table(ann_path)
     rows = table.to_pylist()
     for row in rows:

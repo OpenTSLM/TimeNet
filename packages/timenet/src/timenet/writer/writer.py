@@ -24,16 +24,16 @@ from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAx
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
-    ANNOTATIONS_FILE,
+    ANNOTATIONS_TEMPLATE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_COMPRESSION_LEVEL,
     DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
-    INDEX_FILE,
+    INDEX_TEMPLATE,
     MANIFEST_FILE,
-    SAMPLES_FILE,
+    SAMPLES_TEMPLATE,
     TASK_PART_TEMPLATE,
 )
 from timenet.format.schemas import (
@@ -427,8 +427,11 @@ class TimeFWriter:
                     "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
                 }
             )
-        self._write_table(
-            rows, samples_schema(self._id_types), SAMPLES_FILE, dictionary_columns=encodings.SAMPLES_DICTIONARY
+        self._sample_files = self._write_sharded_table(
+            rows,
+            samples_schema(self._id_types),
+            SAMPLES_TEMPLATE.format,
+            dictionary_columns=encodings.SAMPLES_DICTIONARY,
         )
 
     def _write_annotations(self) -> None:
@@ -448,10 +451,10 @@ class TimeFWriter:
                 )
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
         rows = sorted(by_id.values(), key=lambda r: (r["key"], r["id"]))
-        self._write_table(
+        self._annotation_files = self._write_sharded_table(
             rows,
             annotations_schema(self._id_types),
-            ANNOTATIONS_FILE,
+            ANNOTATIONS_TEMPLATE.format,
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
@@ -463,10 +466,13 @@ class TimeFWriter:
         for task_type_str, tasks in sorted(by_type.items()):
             schema = task_schema(tasks[0].task_type, self._id_types)
             rows = [_task_row(task, schema, self._codec) for task in tasks]
-            rel = TASK_PART_TEMPLATE.format(0, task_type=task_type_str)
-            (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-            self._write_table(rows, schema, rel, dictionary_columns=encodings.task_dictionary(schema))
-            self._task_files.append(rel)
+            parts = self._write_sharded_table(
+                rows,
+                schema,
+                lambda index, task_type_str=task_type_str: TASK_PART_TEMPLATE.format(index, task_type=task_type_str),
+                dictionary_columns=encodings.task_dictionary(schema),
+            )
+            self._task_files.extend(parts)
 
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
@@ -488,12 +494,14 @@ class TimeFWriter:
                         "n_values": placement.n_values,
                     }
                 )
+        # Global sort, then emit parts in that order: the reader concatenates the index parts in manifest
+        # order and bisects the result, so the parts must stay globally sorted across the split.
         rows.sort(key=lambda r: (r["sample_id"], r["time_series_id"], r["chunk_idx"]))
         self._index_rows = len(rows)
-        self._write_table(
+        self._index_files = self._write_sharded_table(
             rows,
             index_schema(self._id_types),
-            INDEX_FILE,
+            INDEX_TEMPLATE.format,
             dictionary_columns=encodings.INDEX_DICTIONARY,
             column_encoding=encodings.INDEX_ENCODING,
         )
@@ -509,9 +517,9 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=(SAMPLES_FILE,),
-                annotations=(ANNOTATIONS_FILE,),
-                time_series_index=(INDEX_FILE,),
+                samples=tuple(self._sample_files),
+                annotations=tuple(self._annotation_files),
+                time_series_index=tuple(self._index_files),
                 tasks=tuple(self._task_files),
                 time_series=tuple(self._value_files),
             ),
