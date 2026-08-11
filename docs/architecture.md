@@ -8,16 +8,16 @@ tags:
 
 # Architecture
 
-How TimeNet's packages, registries, and curation fit together. This page is the map; follow the links
+How TimeNet's packages, registries, and curation fit together. This page is the map. Follow the links
 for per-component detail.
 
 ---
 
 ## The big picture
 
-TimeNet splits into three parts. A **connector** curates a raw source into a TimeF version; the
-**client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet,
-while the values plane can be Parquet or Zarr. The client never runs connector code.
+TimeNet splits into three parts. A **connector** curates a raw source into a TimeF version. The
+**client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
+The values plane can be Parquet or Zarr. The client never runs connector code.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
@@ -102,10 +102,11 @@ flow reads it straight back.
 - Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
   and conversion.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a
-  single atomic rename. Once `manifest.json` is present, the version is committed.
-- Versions are immutable; edits are copy-on-write. Removing a row writes a new version through the
-  same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)); stable never-reused ids keep
-  references valid, and content-defined chunking keeps the rewrite cheap on a deduplicating backend.
+  single atomic rename. Once `manifest.json` is present, the writer commits the version.
+- Versions are immutable. Edits are copy-on-write. To remove a row, the writer writes a new version
+  through the same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)). Stable
+  never-reused ids keep references valid. Content-defined chunking keeps the rewrite cheap on a
+  deduplicating backend.
 
 ---
 
@@ -114,6 +115,6 @@ flow reads it straight back.
 1. **Author** a connector at `datasets/<org>/<name>/` (its `__init__.py` exposes `CONNECTOR`) with its
    `dataset.yaml` card beside it, in `timenet-connectors`.
 2. **Curate**: `timenet-curate build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
-3. **Verify** locally by pointing the SDK at the output directory (itself a valid local registry).
+3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: `timenet download <id>` reads the manifest and fetches every file it lists.

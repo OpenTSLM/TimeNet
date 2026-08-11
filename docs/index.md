@@ -7,14 +7,14 @@ tags:
 
 # TimeNet
 
-TimeNet is a Python library and CLI for registering, fetching, and exploring time-series
-datasets in a shared format called TimeF. It gives every dataset one on-disk shape and one way
-to load it, so a consumer reads ECGs, accelerometer traces, and market series through the same
+TimeNet is a Python library and CLI. You use it to register, fetch, and explore time-series
+datasets in a shared format called TimeF. TimeF gives every dataset one on-disk shape and one
+way to load it. A consumer reads ECGs, accelerometer traces, and market series through the same
 API.
 
 !!! info "Scope"
     TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation
-    metrics are out of scope. It stops at handing you the data.
+    metrics are out of scope. TimeNet only gives you the data.
 
 ## How it fits together
 
