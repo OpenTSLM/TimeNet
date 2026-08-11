@@ -14,8 +14,7 @@ one:
 - **plain** wins on nothing measured so far. It stays available as a manual override.
 
 The rule is cardinality on a sample: at most :data:`DICT_MAX_CARDINALITY` distinct values selects
-dictionary, more selects BYTE_STREAM_SPLIT. ``benchmarks/value_encoding/`` holds the sweep the
-constant comes from.
+dictionary, more selects BYTE_STREAM_SPLIT.
 
 Two known gaps, both covered by the ``value_encoding`` override rather than by more machinery:
 
@@ -62,7 +61,7 @@ SUPPORTED_VALUE_ENCODINGS: frozenset[ValueEncoding] = frozenset(ValueEncoding)
 DICT_MAX_CARDINALITY = 1 << 16
 """Distinct sampled values up to which dictionary encoding is selected.
 
-``benchmarks/value_encoding/`` measures the crossover at **72,600** sampled distinct values (bracket
+A sweep measures the crossover at **72,600** sampled distinct values (bracket
 66,174 to 79,620), so this constant is about 10% low. It stays where it is for two reasons. It is the
 point where a dictionary index stops fitting in 16 bits, which is a mechanism boundary rather than a
 round number. And the error is cheap in the direction it errs: over the band between the constant and

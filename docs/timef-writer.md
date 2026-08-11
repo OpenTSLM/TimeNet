@@ -130,8 +130,7 @@ The rule is cardinality on a sample: **at most 65,536 distinct values selects `d
 `byte_stream_split`.** `plain` is never selected automatically. The sample is the values already
 buffered for a modality's first row group, so the decision costs a distinct-value count and no extra
 reads. One decision per `spec_type`, taken before its first shard is opened, and deterministic in the
-data, so re-curating an unchanged source reaches the same encoding. `benchmarks/value_encoding/`
-holds the sweep behind the constant.
+data, so re-curating an unchanged source reaches the same encoding.
 
 The choice is recorded in the manifest as `value_encoding`, a `spec_type` -> encoding map. That is
 provenance, not contract: Parquet records the applied encoding in every file's footer, so a reader

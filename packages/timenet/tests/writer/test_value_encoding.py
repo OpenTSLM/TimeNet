@@ -135,7 +135,7 @@ def test_selection_is_deterministic():
 def test_default_row_group_holds_a_full_sample():
     # The rule decides from one buffered row group, so a row-group target below the sample size would
     # silently shrink the sample and invalidate the calibration behind DICT_MAX_CARDINALITY.
-    # Lowering DEFAULT_ROW_GROUP_TARGET_BYTES means re-running benchmarks/value_encoding/sweep.py.
+    # Lowering DEFAULT_ROW_GROUP_TARGET_BYTES means re-running the value-encoding sweep.
     assert DEFAULT_ROW_GROUP_TARGET_BYTES // 4 >= SAMPLE_MAX_VALUES
 
 
