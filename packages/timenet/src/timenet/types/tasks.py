@@ -1,19 +1,19 @@
 """Tasks: labeled training targets that reference one or more samples.
 
-Every task is the same shape — *inputs -> one typed answer* — so the shared frame lives on the
-:class:`Task` base: the samples it is about, an optional ``prompt``, an optional ``scope`` narrowing the
-input to a region, the annotations handed in as context, the answer (``target``, inline or by reference to
-stored annotations), and an optional ``rationale`` chain of thought. A subclass adds only what makes its
-answer a different *kind* of thing: a category, free text, a number, a set of regions, or a produced
-series. Because prompt and scope are on the base, a whole-recording category and a category over a given
-window are the same task type with ``scope`` unset or set, and a caption is an
-:class:`AnswerTask` with no prompt.
+Every task has the same shape: inputs give one typed answer. The shared frame lives on the
+:class:`Task` base. The base holds the samples the task is about, an optional ``prompt``, and an
+optional ``scope`` that narrows the input to a region. It also holds the annotations given as
+context, the answer (``target``, inline or by reference to stored annotations), and an optional
+``rationale`` chain of thought. A subclass adds only what makes its answer a different kind of
+thing. That is a category, free text, a number, a set of regions, or a produced series. Prompt and
+scope live on the base. So a whole-recording category and a category over a given window are the
+same task type, with ``scope`` unset or set. A caption is an :class:`AnswerTask` with no prompt.
 
-The class is the type tag (used as a filter, e.g. ``search(task=ClassificationTask)``) and the instance
-carries the payload. Unlike specs and annotations, task payload shapes are fixed in code, so tasks are
-resolved on read against the built-in :data:`TASKS` registry rather than reconstructed from the manifest.
-Tasks are mutable so :meth:`~timenet.dataset.TimeFDataset.add_task` can populate ``sample_ids`` after
-construction.
+The class is the type tag (for example, a filter such as ``search(task=ClassificationTask)``). The
+instance carries the payload. Task payload shapes are fixed in code, unlike specs and annotations.
+So the reader resolves tasks against the built-in :data:`TASKS` registry. It does not rebuild them
+from the manifest. Tasks are mutable, so :meth:`~timenet.dataset.TimeFDataset.add_task` can set
+``sample_ids`` after construction.
 """
 
 from collections.abc import Iterable
@@ -31,7 +31,7 @@ from timenet.types.units import normalize_unit
 
 @unique
 class TaskType(StrEnum):
-    """Stable type tags for the built-in task classes; also the on-disk task partition names."""
+    """Stable type tags for the built-in task classes. They are also the on-disk task partition names."""
 
     CLASSIFICATION = "classification"
     ANSWER = "answer"
@@ -45,39 +45,40 @@ class TaskType(StrEnum):
 
 @unique
 class LocalizationMode(StrEnum):
-    """Whether a localization target intends to cover the recording or may leave time unmarked."""
+    """Whether a localization target covers the whole recording or can leave some time unmarked."""
 
     SPARSE = "sparse"
-    """Only the marked spans are claimed; unmarked time is simply unlabeled (e.g. R-peaks)."""
+    """Only the marked spans are claimed. Unmarked time stays unlabeled (for example, R-peaks)."""
     EXHAUSTIVE = "exhaustive"
-    """Declares that spans intend to tile the region of interest (e.g. sleep staging)."""
+    """The spans intend to tile the whole region of interest (for example, sleep staging)."""
 
 
 @dataclass(frozen=True)
 class TaskRefs:
-    """Which of a task's *payload* fields hold references, declared beside the class that owns them.
+    """Which of a task's payload fields hold references. Each task declares this next to its class.
 
-    The writer, the reader, and the copy-on-write editor all have to know that
-    ``ForecastingTask.target_sample_id`` is a sample id while ``ScalarPredictionTask.target`` is a plain
-    number. Declaring it on the class keeps that knowledge next to the field instead of in a lookup table
-    in the format layer and an ``isinstance`` chain in the editor, which drift the moment a task is added.
+    The writer, the reader, and the copy-on-write editor must know that
+    ``ForecastingTask.target_sample_id`` is a sample id, and that ``ScalarPredictionTask.target`` is a
+    plain number. The declaration on the class keeps that knowledge next to the field. The other place
+    for it is a lookup table in the format layer and an ``isinstance`` chain in the editor. Those two
+    drift the moment someone adds a task.
 
-    The base fields (``sample_ids``, ``scope``, the annotation id tuples) are common to every task and are
-    handled directly; this covers only the type-specific payload.
+    The base fields (``sample_ids``, ``scope``, the annotation id tuples) are common to every task. The
+    format layer handles them directly. This declaration covers only the type-specific payload.
     """
 
     sample_id_fields: tuple[str, ...] = ()
-    """Payload fields holding a sample id or a tuple of them. Losing one invalidates the task."""
+    """Payload fields that hold a sample id or a tuple of them. If one id is lost, the task is not valid."""
     span_fields: tuple[str, ...] = ()
-    """Payload fields holding a :class:`~timenet.types.spans.Span` or a tuple of them."""
+    """Payload fields that hold a :class:`~timenet.types.spans.Span` or a tuple of them."""
 
 
 @dataclass(kw_only=True)
 class Task:
-    """Base for all tasks. Not instantiated directly; subclasses declare ``task_type`` and an answer type.
+    """Base for all tasks. You do not construct it directly. Each subclass declares ``task_type`` and an answer type.
 
-    Holds everything that is the same across task types, so generic code (training loops, the writer, the
-    editor) can read a task without knowing its concrete type.
+    It holds everything that is the same across task types. So generic code (training loops, the writer,
+    the editor) can read a task without its concrete type.
     """
 
     task_type: ClassVar[TaskType]
@@ -85,28 +86,28 @@ class Task:
     refs: ClassVar[TaskRefs] = TaskRefs()
     """Which payload fields hold sample ids or spans (see :class:`TaskRefs`)."""
     answer_is_sample: ClassVar[bool] = False
-    """True when the answer is a *produced series*, located by a payload sample id rather than ``target``."""
+    """True when the answer is a produced series, found by a payload sample id and not ``target``."""
     target_is_scalar: ClassVar[bool] = False
-    """True when ``target`` can be returned as a scalar by ``to_features_and_targets``."""
+    """True when ``to_features_and_targets`` can return ``target`` as a scalar."""
 
     id: str = field(default_factory=new_id)
     """Unique task identifier, a UUIDv7 string by default."""
     sample_ids: tuple[str, ...] = ()
-    """Ids of the samples this task is about, populated by ``add_task``."""
+    """Ids of the samples this task is about. ``add_task`` sets them."""
     prompt: str | None = None
-    """What the model is asked, when the task is prompted; ``None`` for an unprompted task."""
+    """What the model is asked, when the task is prompted. ``None`` for an unprompted task."""
     scope: Span | None = None
-    """The region of the input the task is about; ``None`` means the whole sample."""
+    """The region of the input the task is about. ``None`` means the whole sample."""
     input_annotation_ids: tuple[str, ...] = ()
-    """Annotations handed to the model as context, as opposed to ones it has to produce."""
+    """Annotations given to the model as context, not ones it must produce."""
     target: object | None = None
     """The answer, typed by the subclass. ``None`` when the answer is stored by reference, or produced
     as a series (see ``answer_is_sample``)."""
     target_annotation_ids: tuple[str, ...] = ()
-    """The answer *by reference*: it is these stored annotations rather than an inline copy of them.
-    Exclusive with ``target``; :meth:`~timenet.dataset.TimeFDataset.add_task` enforces that."""
+    """The answer by reference: it is these stored annotations, not an inline copy of them. It is
+    exclusive with ``target``. :meth:`~timenet.dataset.TimeFDataset.add_task` enforces that."""
     rationale: str | None = None
-    """Chain of thought to train on. Any task may carry one; ``None`` when the source stores none."""
+    """Chain of thought to train on. Any task can carry one. ``None`` when the source stores none."""
     from_tasks: tuple["Task", ...] = ()
     """Source tasks this one was derived from."""
 
@@ -120,10 +121,10 @@ class Task:
         return tuple(task.id for task in self.from_tasks)
 
     def spans(self) -> tuple[Span, ...]:
-        """Return every span the task carries: its ``scope`` plus any span-valued payload field.
+        """Return every span the task carries: its ``scope`` and any span-valued payload field.
 
-        Lets :meth:`~timenet.dataset.TimeFDataset.add_task` bounds-check a task's geometry without
-        knowing which concrete type it is looking at.
+        This lets :meth:`~timenet.dataset.TimeFDataset.add_task` check a task's spans without knowledge
+        of its concrete type.
 
         Returns:
             The task's spans, ``scope`` first.
@@ -142,8 +143,9 @@ class Task:
 class ClassificationTask(Task):
     """One categorical label: over the whole sample, or over ``scope`` when one is set.
 
-    A whole-recording class ("this ECG shows atrial fibrillation") and a label on a supplied region ("this
-    30 s epoch is sleep stage N2") differ only in whether the input is narrowed, so both are this type.
+    A whole-recording class ("this ECG shows atrial fibrillation") and a label on a given region ("this
+    30 s epoch is sleep stage N2") differ in only one way: whether ``scope`` narrows the input. So both
+    are this type.
     """
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
@@ -156,10 +158,10 @@ class ClassificationTask(Task):
 
 @dataclass(kw_only=True)
 class AnswerTask(Task):
-    """Free-form text out. Unprompted it is a caption; with a ``prompt`` it is a question answered.
+    """Free-form text out. With no prompt it is a caption. With a ``prompt`` it answers a question.
 
-    ``rationale`` (on the base) carries the chain of thought, so a plain answer and a reasoned answer are
-    the same type with the field unset or set.
+    ``rationale`` (on the base) carries the chain of thought. So a plain answer and a reasoned answer are
+    the same type, with the field unset or set.
     """
 
     task_type: ClassVar[TaskType] = TaskType.ANSWER
@@ -172,8 +174,8 @@ class AnswerTask(Task):
 class ScalarPredictionTask(Task):
     """One number out, with the quantity it measures and its physical unit kept as data.
 
-    Encoding a regression target as a string in an answer task loses its type. Keeping it a ``float``
-    with a ``unit`` makes regression metrics, batching, and unit-aware conversion straightforward.
+    An answer task stores a regression target as a string, which loses its type. A ``float`` with a
+    ``unit`` keeps the type. It makes regression metrics, batching, and unit-aware conversion simple.
     """
 
     task_type: ClassVar[TaskType] = TaskType.SCALAR_PREDICTION
@@ -181,10 +183,11 @@ class ScalarPredictionTask(Task):
     target: float | None = None
     """The predicted value."""
     unit: str | pint.Unit | None = None
-    """Optional physical unit of ``target`` — a unit string (e.g. ``"bpm"``) or a :class:`pint.Unit`.
-    Validated against the shared registry on construction; a ``pint.Unit`` is stored as its name."""
+    """Optional physical unit of ``target``. Give a unit string (for example, ``"bpm"``) or a
+    :class:`pint.Unit`. The constructor checks it against the shared registry. It stores a
+    ``pint.Unit`` as its name."""
     target_name: str | None = None
-    """Name of the quantity being predicted (e.g. ``"mean_heart_rate"``)."""
+    """Name of the quantity to predict (for example, ``"mean_heart_rate"``)."""
 
     def __post_init__(self) -> None:
         """Normalize ``unit`` against the shared registry so it is always a plain string or ``None``."""
@@ -193,12 +196,13 @@ class ScalarPredictionTask(Task):
 
 @dataclass(kw_only=True)
 class TemporalLocalizationTask(Task):
-    """Regions out: find where something happens, given a description of it.
+    """Regions out: find where something happens, from a description of it.
 
-    The inverse of a scoped :class:`ClassificationTask`, which supplies the region and asks for its label.
-    One type covers event detection, segmentation, and change-point detection because they share this
-    target: a point (a :class:`~timenet.types.spans.Span` with no ``end_s``) or an interval, each
-    optionally labeled by the annotation it references and scoped to particular series.
+    This is the inverse of a scoped :class:`ClassificationTask`, which gives the region and asks for its
+    label. One type covers event detection, segmentation, and change-point detection, because they share
+    one target. The target is a point (a :class:`~timenet.types.spans.Span` with no ``end_s``) or an
+    interval. An optional label from a referenced annotation marks each one, and each one is scoped to
+    particular series.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TEMPORAL_LOCALIZATION
@@ -219,7 +223,7 @@ class TemporalLocalizationTask(Task):
             self.mode = LocalizationMode(self.mode)
         except ValueError as exc:
             raise TimeFValidationError(
-                f"unknown localization mode {self.mode!r}; expected one of {[mode.value for mode in LocalizationMode]}"
+                f"unknown localization mode {self.mode!r}. Expected one of {[mode.value for mode in LocalizationMode]}"
             ) from exc
         if self.target is not None and not self.target:
             raise TimeFValidationError(
@@ -231,11 +235,12 @@ class TemporalLocalizationTask(Task):
 class ForecastingTask(Task):
     """A series out: continue the context into the future.
 
-    The future is either a whole separate sample (``target_sample_id``) or a region of the sample the
-    task is attached to (``target_span``): exactly one, never both and never neither. The second shape
-    lets a single unsplit series carry a horizon, so the dataset can ship the raw recording rather than a
-    context/target pair. When ``target_span`` is used, ``scope`` must be set too: the base ``Task.scope``
-    default of ``None`` means the whole sample, which would include the region ``target_span`` predicts.
+    The future is either a whole separate sample (``target_sample_id``) or a region of the attached
+    sample (``target_span``). Exactly one of the two is set, never both and never neither. The second
+    shape lets one unsplit series carry a horizon. So the dataset can ship the raw recording, not a
+    context/target pair. ``target_span`` also needs ``scope``. Without it, the base ``Task.scope``
+    default of ``None`` means the whole sample, which then covers the region that ``target_span``
+    predicts.
     """
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
@@ -247,50 +252,74 @@ class ForecastingTask(Task):
     context_sample_ids: tuple[str, ...] = ()
     """Ids of the samples that provide forecasting context."""
     target_sample_id: str | None = None
-    """Id of the sample whose future values are predicted; ``None`` when ``target_span`` names the region
-    to predict within the attached sample instead."""
+    """Id of the sample whose future values the task predicts. ``None`` when ``target_span`` names the
+    region to predict in the attached sample instead."""
     target_span: Span | None = None
-    """The region to predict, within the sample the task is attached to, in microseconds on the **source
-    recording timeline** (the same frame as a span's bounds and a series' time offsets). Must be an
-    interval, not a point, and is exclusive with ``target_sample_id``. That it falls inside the sample is
-    checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample to check against.
-    Requires an explicit ``scope`` naming the context region, since the base ``scope=None`` default of
-    "the whole sample" would otherwise include the region to predict."""
+    """The region to predict, inside the sample the task is attached to. It is in microseconds on the
+    source recording timeline, the same frame as a span's bounds and a series' time offsets. It must be
+    an interval, not a point, and it is exclusive with ``target_sample_id``.
+    :meth:`~timenet.dataset.TimeFDataset.add_task` checks that it falls inside the sample, because that
+    method has the sample. It needs an explicit ``scope`` for the context region. A ``scope`` of
+    ``None`` means the whole sample, which covers the region to predict."""
 
     def __post_init__(self) -> None:
-        """Reject a point ``target_span``, one paired with ``target_sample_id``, neither set, or no ``scope``.
+        """Reject a forecasting task with a bad target, an empty context, or a scope that leaks the target.
 
         Raises:
-            TimeFValidationError: If ``target_span`` is a point rather than an interval, if it is set
-                alongside ``target_sample_id``, if neither ``target_span`` nor ``target_sample_id`` is
-                set, or if ``target_span`` is set without ``scope``.
+            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``.
+                If it sets ``target_sample_id`` with an empty ``context_sample_ids`` (a forecast with
+                no input). If ``target_span`` is a point and not an interval. If ``target_span`` and
+                ``target_sample_id`` are both set. If ``target_span`` has no ``scope``. If ``scope``
+                reaches into or past ``target_span`` on a series that both spans share.
         """
         if self.target_span is None:
             if self.target_sample_id is None:
                 raise TimeFValidationError(
                     "ForecastingTask requires either target_sample_id or target_span to name the future "
-                    "to predict; got neither"
+                    "to predict. Got neither"
+                )
+            if not self.context_sample_ids:
+                raise TimeFValidationError(
+                    "ForecastingTask got a target_sample_id with an empty context_sample_ids, which is a "
+                    "forecast with no input. The separate-sample form forecasts from context_sample_ids, so "
+                    "give at least one id. The target_span form takes its context from scope instead"
                 )
             return
         if self.target_span.is_point:
             raise TimeFValidationError(
-                f"ForecastingTask target_span must be an interval, not a point: a point has no duration "
-                f"and so names no values to predict. A one-step horizon is the interval covering that one "
-                f"step, e.g. IntervalSpan.seconds(t, t + step_seconds); a point cannot express it, because "
-                f"how much time one step spans depends on the series' axis and a sample may hold several "
+                f"ForecastingTask target_span must be an interval, not a point. A point has no duration, so "
+                f"it names no values to predict. A one-step horizon is the interval that covers that one "
+                f"step, for example IntervalSpan.seconds(t, t + step_seconds). A point cannot express it. The "
+                f"time that one step covers depends on the series' axis, and one sample can hold several axes "
                 f"at different rates. Got {self.target_span!r}"
             )
         if self.target_sample_id is not None:
             raise TimeFValidationError(
                 f"ForecastingTask target_span names a region of the attached sample, so it cannot be "
-                f"combined with target_sample_id={self.target_sample_id!r}; use one or the other"
+                f"combined with target_sample_id={self.target_sample_id!r}. Use one or the other"
             )
         if self.scope is None:
             raise TimeFValidationError(
-                "ForecastingTask target_span needs an explicit scope naming the context region; "
-                "scope=None would mean the whole sample (see Task.scope), which would include the region "
-                "target_span names to predict. Pass scope= to this constructor; add_task's scope= is "
-                "stamped on after this check runs and so cannot satisfy it"
+                "ForecastingTask target_span needs an explicit scope for the context region. A scope of "
+                "None means the whole sample (see Task.scope), which covers the region that target_span "
+                "predicts. Pass scope= to this constructor. add_task sets its scope= after this check runs, "
+                "so that scope= cannot satisfy this check"
+            )
+        # A span with time_series_ids=None covers every series. A point context covers the single
+        # microsecond at its start, so its exclusive end is start + 1.
+        scope, target = self.scope, self.target_span
+        shared = (
+            scope.time_series_ids is None
+            or target.time_series_ids is None
+            or not set(scope.time_series_ids).isdisjoint(target.time_series_ids)
+        )
+        context_end = scope.start + 1 if scope.end is None else scope.end
+        if shared and context_end > target.start:
+            raise TimeFValidationError(
+                f"ForecastingTask context overlaps the region to predict. On a shared series, the context "
+                f"(scope={scope!r}) must end at or before the target_span={target!r} starts. Otherwise the "
+                f"target leaks into the input, or the forecast predicts the past from the future. If the "
+                f"context is a future-known covariate, put it on a different series with time_series_ids."
             )
 
 
@@ -298,17 +327,17 @@ class ForecastingTask(Task):
 class TSEditingTask(Task):
     """A series out: transform the source sample into the target sample, as the ``prompt`` instructs.
 
-    Covers denoising, filtering, and deliberate corruption ("add baseline wander"); the instruction is
-    the ``prompt`` and both sides of the edit are stored samples.
+    This covers denoising, filtering, and deliberate corruption ("add baseline wander"). The ``prompt``
+    is the instruction, and both sides of the edit are stored samples.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TS_EDITING
     refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("source_sample_id", "target_sample_id"))
     answer_is_sample: ClassVar[bool] = True
     source_sample_id: str
-    """Id of the sample to be edited."""
+    """Id of the sample to edit."""
     target_sample_id: str
-    """Id of the sample holding the edited result."""
+    """Id of the sample that holds the edited result."""
 
 
 @dataclass(kw_only=True)
@@ -319,50 +348,51 @@ class TSGenerationTask(Task):
     refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("target_sample_id",))
     answer_is_sample: ClassVar[bool] = True
     target_sample_id: str
-    """Id of the sample holding the series to generate."""
+    """Id of the sample that holds the series to generate."""
 
 
 @dataclass(kw_only=True)
 class TSCorrespondenceTask(Task):
-    """Relate one series to others: which candidate sample corresponds to the sample(s) in ``sample_ids``.
+    """Relate one series to others: which candidate sample corresponds to the samples in ``sample_ids``.
 
-    Covers retrieval, nearest-neighbour, and matching questions. The base ``sample_ids`` are the query;
-    ``candidate_sample_ids`` is the pool the answer is chosen from, and ``target`` names the correct
-    one(s). An empty pool leaves it open-ended (any sample in the dataset may be the answer).
+    This covers retrieval, nearest-neighbor, and match questions. The base ``sample_ids`` are the query.
+    ``candidate_sample_ids`` is the pool for the answer, and ``target`` names the correct one or ones. An
+    empty pool keeps the answer open. Then any sample in the dataset can be the answer.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
     refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("candidate_sample_ids", "target"))
     candidate_sample_ids: tuple[str, ...] = ()
-    """Ids of the samples the answer is chosen from; empty means the pool is unconstrained."""
+    """Ids of the samples that supply the answer. Empty means the pool has no limit."""
     target: tuple[str, ...] | None = None
-    """Ids of the corresponding sample(s), which must come from ``candidate_sample_ids`` when it is set."""
+    """Ids of the corresponding sample(s), which must be in ``candidate_sample_ids`` when it is set."""
 
     def __post_init__(self) -> None:
-        """Reject an empty ``target`` or one naming a sample outside the candidate pool.
+        """Reject an empty ``target``, or a ``target`` that names a sample outside the candidate pool.
 
         Raises:
-            TimeFValidationError: If ``target`` is ``()`` rather than ``None`` or non-empty, or if it
-                names a sample the (non-empty) candidate pool does not contain.
+            TimeFValidationError: If ``target`` is ``()`` rather than ``None`` or non-empty. Also if it
+                names a sample that the non-empty candidate pool does not contain.
         """
         if self.target is not None and not self.target:
             raise TimeFValidationError(
                 "TSCorrespondenceTask target must be None (answer stored by reference) or non-empty, got ()"
             )
-        if not self.candidate_sample_ids:  # an unconstrained pool: any sample may be the answer
+        if not self.candidate_sample_ids:  # no limit on the pool: any sample can be the answer
             return
         outside = tuple(sid for sid in self.target or () if sid not in self.candidate_sample_ids)
         if outside:
             raise TimeFValidationError(
                 f"TSCorrespondenceTask target {list(outside)} is not in candidate_sample_ids "
-                f"{list(self.candidate_sample_ids)}; the answer must be one of the candidates"
+                f"{list(self.candidate_sample_ids)}. The answer must be one of the candidates"
             )
 
 
 def _concrete_task_classes() -> list[type[Task]]:
-    """Collect every concrete task class (those declaring a ``task_type``) across the hierarchy.
+    """Collect every concrete task class across the hierarchy.
 
-    Walks the subclass tree so any intermediate base is skipped.
+    A concrete class declares a ``task_type``. This walks the subclass tree, so it skips any
+    intermediate base.
 
     Returns:
         The concrete task classes.
@@ -381,9 +411,10 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
     """Map each concrete task's ``task_type`` to its class.
 
     Args:
-        classes: The classes to register. Defaults to :func:`_concrete_task_classes`; overridable so
-            the collision check below is unit-testable without registering throwaway subclasses of
-            ``Task`` itself, which would leak into every other caller of ``__subclasses__()``.
+        classes: The classes to register. The default is :func:`_concrete_task_classes`. You can
+            override it, so the collision check in this function is testable without a throwaway subclass of
+            ``Task``. A throwaway subclass leaks into every other caller of ``__subclasses__()``, so
+            the override avoids one.
 
     Returns:
         Each class keyed by its ``task_type``.
@@ -405,7 +436,7 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
             raise TimeFValidationError(f"{cls.__name__}.refs.sample_id_fields omits sample-id fields {sorted(missing)}")
         if cls.task_type in registry:
             raise TimeFValidationError(
-                f"task_type {cls.task_type!r} is claimed by both {registry[cls.task_type].__name__} and {cls.__name__}"
+                f"both {registry[cls.task_type].__name__} and {cls.__name__} claim task_type {cls.task_type!r}"
             )
         registry[cls.task_type] = cls
     return registry
