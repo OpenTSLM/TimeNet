@@ -1,14 +1,14 @@
-"""Annotations: contextual metadata attached to a sample.
+"""Contextual metadata attached to a sample.
 
-One :class:`Annotation` class covers every case, and its optional ``span`` says how it sits in time:
-absent for sample-scoped, time-independent context such as demographics or a ticker symbol, a
-:class:`~timenet.types.spans.TimePoint` for one time offset, a
-:class:`~timenet.types.spans.TimeInterval` for a bounded region of the original recording timeline. It
-is a flat frozen dataclass carrying ``key`` / ``unit`` / ``description`` as
-instance fields so connectors can author it directly (or subclass with field defaults for reuse) and
-:class:`~timenet.reader.TimeFReader` can reconstruct the identical instances from the manifest without
-runtime class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema
-and manifest.
+One :class:`Annotation` class covers every case. Its optional ``span`` says how the annotation sits
+in time. An absent span marks sample-scoped context with no place in time, such as demographics or a
+ticker symbol. A :class:`~timenet.types.spans.TimePoint` marks one time offset. A
+:class:`~timenet.types.spans.TimeInterval` marks a bounded region of the original recording timeline.
+:class:`Annotation` is a flat frozen dataclass. It carries ``key``, ``unit``, and ``description`` as
+instance fields. A connector can author it directly, or subclass it with field defaults for reuse.
+:class:`~timenet.reader.TimeFReader` can rebuild identical instances from the manifest without runtime
+class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema and
+manifest.
 """
 
 from dataclasses import dataclass, field
@@ -25,7 +25,7 @@ from timenet.types.units import normalize_unit
 
 @unique
 class AnnotationType(StrEnum):
-    """The shape an annotation key takes across the dataset; a schema-level projection in the manifest."""
+    """Name the shape an annotation key takes across the dataset. It is a schema-level projection in the manifest."""
 
     STATIC = "static"
     POINT = "point"
@@ -36,10 +36,10 @@ class AnnotationType(StrEnum):
 class Annotation:
     """Contextual metadata attached to a sample, optionally anchored to a region of its timeline.
 
-    An annotation carries a ``value``, a ``span``, or both. With a span it says where on the
-    recording timeline it applies and which series it targets; without one it is sample-scoped
-    context that has no place in time, like a subject's age. The span's own shape says whether it
-    marks a time offset or covers a stretch, so there is one class here rather than one per shape::
+    An annotation carries a ``value``, a ``span``, or both. With a span, it says where on the
+    recording timeline it applies and which series it targets. Without a span, it is sample-scoped
+    context that has no place in time, like a subject's age. The span's own shape says whether the
+    annotation marks a time offset or covers a stretch. One class covers every shape::
 
         Annotation(key="age", value=64)
         Annotation(key="stimulus", span=TimePoint.seconds(0.5))
@@ -55,9 +55,9 @@ class Annotation:
     """Where on the recording timeline this annotation applies, and which series it targets.
     ``None`` means it is sample-scoped context with no place in time."""
     unit: str | pint.Unit | None = None
-    """Optional physical unit of ``value`` — a unit string (e.g. ``"years"``) or a :class:`pint.Unit`.
-    Validated against the shared registry on construction; an unrecognized string raises ``ValueError``,
-    and a ``pint.Unit`` is stored as its canonical name."""
+    """Optional physical unit of ``value``. Give a unit string (for example ``"years"``) or a
+    :class:`pint.Unit`. Construction validates the unit against the shared registry. An unrecognized
+    string raises ``ValueError``. A ``pint.Unit`` is stored as its canonical name."""
     description: str | None = None
     """Optional human-readable description of the annotation."""
     id: str = field(default_factory=new_id)
@@ -66,9 +66,10 @@ class Annotation:
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
 
-        ``value_type`` is ``"list"`` for any sequence and the manifest stores it as a JSON array,
-        which decodes back to a list. Normalizing a tuple here (and the unit to a string) keeps an
-        in-memory annotation equal to its read-back form (the reader's field-for-field guarantee).
+        ``value_type`` is ``"list"`` for any sequence, and the manifest stores it as a JSON array that
+        decodes back to a list. This method converts a tuple to a list and the unit to a string. That
+        keeps an in-memory annotation equal to its read-back form, the reader's field-for-field
+        guarantee.
 
         Raises:
             TimeFValidationError: If ``span`` is set to something that is not a span, or the

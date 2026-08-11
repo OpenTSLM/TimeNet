@@ -6,8 +6,8 @@ from enum import StrEnum
 class ValuesBackend(StrEnum):
     """Storage backend for the time-series values plane, recorded as the manifest ``values_backend`` tag.
 
-    The member *values* are the on-disk tags; being a :class:`~enum.StrEnum`, each member is also a
-    plain ``str``, so it compares and serializes exactly like the bare tag it replaces.
+    Each member value is the on-disk tag. This class is a :class:`~enum.StrEnum`, so each member is
+    also a plain ``str``. Each member compares and serializes like its bare tag.
     """
 
     PARQUET = "parquet"

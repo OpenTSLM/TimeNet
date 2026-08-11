@@ -1,15 +1,15 @@
 """The ECG-QA CoT connector: PTB-XL 12-lead ECGs with chain-of-thought question answering.
 
-Each sample is one PTB-XL recording (12 leads at 500 Hz, in millivolts) paired with a clinical
-question, a short ground-truth answer, and a chain-of-thought rationale. The rationale is the reasoning
-training target and the short answer is the evaluation label, so each sample carries a
+Each sample is one PTB-XL recording with 12 leads at 500 Hz in millivolts. Each sample also carries a
+clinical question, a short ground-truth answer, and a chain-of-thought rationale. The rationale is the
+reasoning training target. The short answer is the evaluation label. So each sample carries a
 :class:`~timenet.types.AnswerTask` whose ``prompt`` is the question, whose ``target`` is the label, and
 whose ``rationale`` is the CoT.
 
-Sources: signals from PhysioNet PTB-XL; the per-template answer options from the ``Jwoo5/ecg-qa``
-GitHub repo; the precomputed CoT rows (question / answer / rationale / template) from the OpenTSLM
-release (the only public source for the rationales). Real curation needs the network and a multi-GB
-PTB-XL download.
+Sources come from three places. The signals come from PhysioNet PTB-XL. The per-template answer options
+come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows (question, answer, rationale,
+template) come from the OpenTSLM release, the only public source for the rationales. Real curation needs
+the network and a multi-GB PTB-XL download.
 """
 
 import ast
@@ -33,15 +33,15 @@ from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.download import Artifact, ensure_archive, fetch_files
 
 
-# PTB-XL 500 Hz records from PhysioNet's open S3 bucket; ``_hr`` = high-rate (500 Hz) recordings.
-# Fetched via boto3 (unsigned for this public bucket, or signed if AWS creds are in the environment).
+# PTB-XL 500 Hz records from PhysioNet's open S3 bucket. ``_hr`` means high-rate (500 Hz) recordings.
+# Fetched with boto3. The bucket uses unsigned access, or signed access if AWS creds are in the environment.
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
 # The per-template answer options (the multiple-choice candidates), keyed by template_id.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
     "https://raw.githubusercontent.com/Jwoo5/ecg-qa/master/ecgqa/ptbxl/answers_for_each_template.csv"
 )
-# Precomputed CoT rows (question / answer / rationale / template). OpenTSLM's release is the only
-# public source; kept as a swappable constant so a mirror can replace it.
+# Precomputed CoT rows (question, answer, rationale, template). OpenTSLM's release is the only
+# public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
 _SOURCE = DataSource(data_source_type="physionet", name="PTB-XL", provider="PhysioNet")
@@ -71,7 +71,7 @@ class EcgQaCotRef:
 
 
 def _parse_ecg_id(raw: object) -> int:
-    """Parse a PTB-XL ecg_id that may arrive as ``123`` or ``"[123]"``.
+    """Parse a PTB-XL ecg_id that arrives as ``123`` or ``"[123]"``.
 
     Args:
         raw: The raw ecg_id value from a CoT row.
@@ -107,7 +107,7 @@ def _build_refs(  # noqa: PLR0913, PLR0917
     start_index: int,
     flat_records: bool,
 ) -> list[EcgQaCotRef]:
-    """Turn parsed CoT rows into :class:`EcgQaCotRef`s, resolving each row's ECG record path.
+    """Turn parsed CoT rows into :class:`EcgQaCotRef`s and resolve each row's ECG record path.
 
     Args:
         rows: Parsed CoT rows (dicts with the CoT fields).
@@ -203,7 +203,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         return refs
 
     def convert(self, raw_refs: list[EcgQaCotRef]) -> TimeFDataset:
-        """Build one sample per CoT row, sharing the 12-lead ECG across rows on the same recording.
+        """Build one sample per CoT row. Rows on the same recording share the 12-lead ECG.
 
         Args:
             raw_refs: The references from :meth:`download`.
@@ -243,7 +243,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
             ref: The reference whose record supplies the leads.
 
         Returns:
-            One :class:`TimeSeries` per lead, sharing the ECG spec and a stable per-recording id.
+            One :class:`TimeSeries` per lead. Each shares the ECG spec and a stable per-recording id.
         """
         header = self._read_header(ref.record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))

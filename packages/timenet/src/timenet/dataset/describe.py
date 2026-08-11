@@ -1,9 +1,9 @@
 """Plain-text summary of a :class:`~timenet.dataset.TimeFDataset` (the ``describe()`` implementation).
 
-Kept out of ``dataset.py`` to keep the model lean. Uses only the dataset's public surface and stdlib, so
-it pulls in no CLI/rich dependency. Counts are recomputed from the in-memory samples/tasks (a loaded
-dataset drops the manifest's counts block); the sample preview reads only span metadata, and value dtypes
-are sampled from one series per spec.
+This module lives outside ``dataset.py`` to keep the model small. It uses only the dataset's public
+surface and the standard library, so it needs no CLI or rich dependency. It recomputes counts from the
+in-memory samples and tasks, because a loaded dataset drops the manifest counts block. The sample preview
+reads only span metadata. The code samples value dtypes from one series per spec.
 """
 
 from __future__ import annotations

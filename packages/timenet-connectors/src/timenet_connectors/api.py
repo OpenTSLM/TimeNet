@@ -1,8 +1,8 @@
-"""Producer-side shortcuts for curating and consuming a dataset from local code.
+"""Producer-side shortcuts to curate and load a dataset from local code.
 
-:func:`build` runs a connector through the engine into the shared local registry; :func:`load` does
-that and reads the result back. Heavy dependencies (the writer/reader stacks) are imported lazily so
-importing :mod:`timenet_connectors` stays cheap.
+:func:`build` runs a connector through the engine into the shared local registry. :func:`load` runs
+build and reads the result back. The writer and reader stacks are heavy, so they load lazily. This
+keeps the import of :mod:`timenet_connectors` cheap.
 """
 
 from pathlib import Path
@@ -14,19 +14,19 @@ if TYPE_CHECKING:
 
 
 def build(dataset_id: str, *, version: str | None = None, out: str | Path | None = None, force: bool = False) -> Path:
-    """Curate a dataset into a local registry, resolving its connector by id.
+    """Curate a dataset into a local registry by connector id.
 
-    The producer-side one-liner over the engine. An already-curated version is reused unless ``force``
-    is set. The default output is the shared local registry
-    (:func:`timenet.registry.default_registry_path`), the very directory the SDK reads from, so a build
-    here is immediately loadable with ``TimeNet().load(dataset_id)``.
+    This is the producer-side one-liner over the engine. An already-curated version is reused unless
+    ``force`` is set. The default output is the shared local registry
+    (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
+    here loads at once with ``TimeNet().load(dataset_id)``.
 
     Args:
         dataset_id: The dataset id (``org/name``).
-        version: The expected dataset version. A connector only produces its own version, so this is a
-            guard: if it does not match the connector's metadata, the build is rejected before it runs.
-            ``None`` builds whatever version the connector declares.
-        out: Output registry directory; defaults to the shared local registry.
+        version: The expected dataset version. A connector produces only its own version, so this
+            value is a guard. If it does not match the connector's metadata, the build stops before it
+            runs. ``None`` builds the version that the connector declares.
+        out: Output registry directory. Defaults to the shared local registry.
         force: Rebuild even if the version is already curated.
 
     Returns:
@@ -54,13 +54,13 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
 def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
     """Curate a dataset if needed, then load it into memory.
 
-    The demo/one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a clear
-    producer/consumer split, call :func:`build` and ``TimeNet().load`` yourself.
+    This is the one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a
+    clear producer and consumer split, call :func:`build` and ``TimeNet().load`` yourself.
 
     Args:
         dataset_id: The dataset id (``org/name``).
-        version: The version string, or ``None`` for the latest. Reconciled against the connector's
-            declared version by :func:`build`, which rejects a mismatch.
+        version: The version string, or ``None`` for the latest. :func:`build` checks this value
+            against the connector's declared version and rejects a mismatch.
 
     Returns:
         The loaded dataset.

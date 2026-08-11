@@ -164,13 +164,13 @@ class Sample:
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the sample."""
     start_time: datetime | int | None = None
-    """Wall-clock timestamp that this sample's relative time zero refers to, for every series and
-    annotation on it. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix microseconds;
-    construction normalizes either one to microseconds, so a constructed sample holds an ``int``.
-    ``None`` means no wall-clock reference exists; never fabricate one.
+    """Wall-clock timestamp that this sample's relative time zero refers to. It applies to every series
+    and annotation on the sample. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
+    microseconds. Construction normalizes either one to microseconds, so a constructed sample holds an
+    ``int``. ``None`` means no wall-clock reference exists. Never fabricate one.
 
-    A bare float is refused, because seconds and microseconds are both plausible readings of it. When
-    the source really does hand over seconds, convert at the call site so the unit is visible::
+    A bare float is refused, because seconds and microseconds are both plausible readings of it. If the
+    source hands over seconds, convert at the call site so the unit is visible::
 
         start_time=datetime(2026, 8, 5, tzinfo=timezone.utc)   # 1_785_888_000_000_000
         start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch

@@ -1,8 +1,8 @@
 """TimeNet's exception hierarchy.
 
 Every TimeNet-raised error derives from :class:`TimeNetError`. Validation and manifest errors also
-derive from :class:`ValueError` so existing ``except ValueError`` handlers keep working. Builtin
-``FileNotFoundError`` / ``FileExistsError`` are still raised directly for user-supplied paths.
+derive from :class:`ValueError` so existing ``except ValueError`` handlers keep working. TimeNet raises
+the builtin ``FileNotFoundError`` and ``FileExistsError`` directly for user-supplied paths.
 """
 
 
@@ -23,7 +23,7 @@ class TimeFValidationError(TimeNetError, ValueError):
 
 
 class TimeFEditError(TimeFValidationError):
-    """An edit would leave a dataset referentially inconsistent (e.g. a dangling reference)."""
+    """An edit would leave a dataset referentially inconsistent (for example, a dangling reference)."""
 
 
 class InvalidCardError(TimeNetError, ValueError):

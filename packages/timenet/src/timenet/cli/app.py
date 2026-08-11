@@ -30,7 +30,7 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choices: Iterable[str]) -> list[T] | None:
-    """Parse a repeated string option into enum values, reporting a bad value as a clean CLI error.
+    """Parse a repeated string option into enum values. Report a bad value as a clean CLI error.
 
     Args:
         values: The raw strings passed for the option.
@@ -206,7 +206,7 @@ def cache_clear(
 def main() -> None:
     """Entry point for the ``timenet`` console script.
 
-    Expected failures (unknown dataset, unreachable registry) print a one-line message; only
-    unexpected errors surface a traceback.
+    Expected failures (unknown dataset, unreachable registry) print a one-line message. Only
+    unexpected errors show a traceback.
     """
     run_cli(app)

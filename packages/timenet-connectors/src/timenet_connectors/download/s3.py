@@ -1,9 +1,10 @@
-"""A small, reusable S3 download helper for connectors.
+"""Download an ``s3://bucket/key`` object for connectors.
 
-Downloads an ``s3://bucket/key`` object to a local path via boto3 (multipart/parallel). Credentials come
-from the environment / boto3's default chain when present, and fall back to anonymous (unsigned) requests
-otherwise, so public buckets such as PhysioNet's ``physionet-open`` work with no credentials. ``boto3`` is
-imported lazily so base users who only curate offline datasets don't need it.
+This helper downloads an ``s3://bucket/key`` object to a local path with boto3. boto3 runs the transfer
+in parallel with multipart downloads. If the environment provides credentials, the client uses them. If
+not, the client falls back to anonymous (unsigned) requests, so public buckets such as PhysioNet's
+``physionet-open`` work with no credentials. The code imports ``boto3`` lazily, so users who curate only
+offline datasets do not need it.
 """
 
 import os
@@ -16,12 +17,12 @@ from timenet_connectors.download.progress import DownloadProgress, ProgressCallb
 
 
 def _s3_client() -> Any:
-    """Build an S3 client: signed from environment credentials, else anonymous.
+    """Build a signed or anonymous S3 client.
 
-    Uses the ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` environment variables when both are set
-    (boto3 also picks up ``AWS_SESSION_TOKEN``); otherwise returns an unsigned client so public buckets
-    stay accessible with no credentials. Only the environment is consulted — ``~/.aws`` profiles and SSO
-    are deliberately not, so a misconfigured local profile never breaks anonymous access.
+    If both ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` are set, the client uses them. boto3 also
+    picks up ``AWS_SESSION_TOKEN``. If not, this function returns an unsigned client, so public buckets
+    stay accessible with no credentials. This function reads only the environment. It ignores ``~/.aws``
+    profiles and SSO, so a bad local profile cannot break anonymous access.
 
     Returns:
         A boto3 S3 client.

@@ -1,15 +1,15 @@
 """Writer-side values backend seam: the abstract contract plus its shared types and factory.
 
-The values plane (the float32 waveform of every series) is the one part of a TimeF version whose
-on-disk representation is swappable. Everything else — samples, annotations, tasks, and the
-time-series *index* that locates each chunk — is backend-agnostic. A :class:`BaseValuesBackend` takes
-the deduped, sorted series and writes their values however it likes, returning a generic
-:class:`ChunkPlacement` per chunk plus the list of value files to record in the manifest. The core
-writer stays ignorant of shards, row groups, or arrays.
+The values plane is the float32 waveform of every series. It is the one part of a TimeF version whose
+on-disk representation is swappable. Everything else is backend-agnostic: samples, annotations, tasks,
+and the time-series index that locates each chunk. A :class:`BaseValuesBackend` takes the deduped,
+sorted series and writes their values. It returns one :class:`ChunkPlacement` per chunk plus the list
+of value files to record in the manifest. The core writer does not know about shards, row groups, or
+arrays.
 
-Concrete backends live in their own modules — :mod:`timenet.values_backends.parquet.writer` (the
-default) and :mod:`timenet.values_backends.zarr.writer` — and are constructed via
-:func:`make_values_backend`.
+Concrete backends live in their own modules: :mod:`timenet.values_backends.parquet.writer` (the
+default) and :mod:`timenet.values_backends.zarr.writer`. The :func:`make_values_backend` factory
+constructs them.
 """
 
 from abc import ABC, abstractmethod
@@ -30,14 +30,13 @@ class ChunkDataIndex:
 
     Backends need a different number of coordinates, so ``minor_idx`` is optional:
 
-    - Parquet (two-level): ``major_idx`` is the row-group index within the shard, and ``minor_idx`` is
-      the chunk's row within that row group (its element in the ``values`` ``list<float32>`` column).
-    - Zarr (one-level): ``major_idx`` is the chunk's element-start index in the per-``spec_type`` array,
-      and ``minor_idx`` is ``None`` — the chunk is the contiguous range
-      ``[major_idx, major_idx + n_values)``.
+    - Parquet (two-level): ``major_idx`` is the row-group index within the shard. ``minor_idx`` is the
+      chunk's row within that row group. That row is its element in the ``values`` ``list<float32>``
+      column.
+    - Zarr (one-level): ``major_idx`` is the chunk's element-start index in the per-``spec_type`` array.
+      ``minor_idx`` is ``None``. The chunk is the contiguous range ``[major_idx, major_idx + n_values)``.
 
-    Persisted flat in the time-series index as the two integer columns ``chunk_major_idx`` and
-    ``chunk_minor_idx``.
+    The index persists these flat as the two integer columns ``chunk_major_idx`` and ``chunk_minor_idx``.
     """
 
     major_idx: int
@@ -81,10 +80,11 @@ ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig
 
 
 class BaseValuesBackend(ABC):
-    """Writes the values plane of a dataset and reports where each chunk landed.
+    """Write the values plane of a dataset and report where each chunk landed.
 
-    Concrete backends (e.g. :class:`~timenet.values_backends.parquet.writer.ParquetValuesBackend`) implement
-    :meth:`write_series`; the core writer stays ignorant of shards, row groups, or arrays.
+    Concrete backends implement :meth:`write_series`. One example is
+    :class:`~timenet.values_backends.parquet.writer.ParquetValuesBackend`. The core writer does not know
+    about shards, row groups, or arrays.
     """
 
     name: ClassVar[str]
@@ -105,9 +105,9 @@ class BaseValuesBackend(ABC):
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series against its spec's values contract.
-            read_time_offsets: Loads and validates an irregular series' per-value time offsets, or returns
-                ``None`` for a series that stores none. Kept separate from ``read_and_validate`` so the
-                values seam stays one array per series whatever the axis shape.
+            read_time_offsets: Loads and validates the per-value time offsets of an irregular series.
+                Returns ``None`` for a series that stores none. It stays separate from
+                ``read_and_validate`` so the values seam holds one array per series for any axis shape.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(files_finalized)`` after each value file closes.
 
@@ -119,9 +119,9 @@ class BaseValuesBackend(ABC):
 def make_values_backend(config: ValuesBackendConfig) -> BaseValuesBackend:
     """Construct the values backend described by ``config``.
 
-    Routes each backend the subset of the writer's value options it understands: Parquet takes all of
-    them; Zarr takes the chunk/shard byte targets and the codec (its store has no row groups or id
-    columns).
+    Each backend receives the subset of the writer's value options it understands. Parquet takes all of
+    them. Zarr takes the chunk and shard byte targets and the codec. The Zarr store has no row groups or
+    id columns.
 
     Args:
         config: Backend-specific typed construction options.

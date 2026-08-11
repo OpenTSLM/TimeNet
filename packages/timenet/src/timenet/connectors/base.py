@@ -2,7 +2,7 @@
 
 A connector fetches raw data and converts it into a :class:`~timenet.dataset.TimeFDataset`. It has no
 knowledge of the registry, engine, or any other connector. The engine drives it
-``download -> convert``, then stores the result itself; the consumer SDK never runs connector code.
+``download -> convert``, then stores the result itself. The consumer SDK never runs connector code.
 """
 
 from abc import ABC, abstractmethod
@@ -22,9 +22,9 @@ class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
     A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
-    card beside it (read by :meth:`metadata`); set :attr:`CARD` to point elsewhere. Subclasses
-    implement the two abstract stages, kept distinct: ``download`` is I/O-only and ``convert`` is
-    CPU-only. Connectors take no constructor arguments.
+    card beside it (read by :meth:`metadata`). Set :attr:`CARD` to point elsewhere. Subclasses
+    implement the two abstract stages. ``download`` is I/O-only and ``convert`` is CPU-only.
+    Connectors take no constructor arguments.
     """
 
     __test__ = False  # a connector named Test* (e.g. the test_mean dataset) is not a pytest test class

@@ -1,11 +1,11 @@
 """Modality and data-source descriptors.
 
-A :class:`TimeSeriesSpec` describes one measurement *modality* (its tag, unit, dtype, and value shape)
-and a :class:`DataSource` the origin that produced it. Both are flat frozen dataclasses: connectors
-build them directly (or subclass with field defaults for reuse), and :class:`~timenet.reader.TimeFReader`
-reconstructs the identical instances from the manifest, so they round-trip and pickle without any
-runtime class synthesis. The per-channel identifier lives on :class:`~timenet.dataset.TimeSeries`, not
-here, so one spec is shared across every channel of a modality.
+A :class:`TimeSeriesSpec` describes one measurement modality: its tag, unit, dtype, and value shape.
+A :class:`DataSource` describes the origin that produced it. Both are flat frozen dataclasses.
+Connectors build them directly or subclass them with field defaults for reuse.
+:class:`~timenet.reader.TimeFReader` rebuilds the identical instances from the manifest, so they
+round-trip and pickle without any runtime class synthesis. The per-channel identifier lives on
+:class:`~timenet.dataset.TimeSeries`, not here, so one spec is shared across every channel of a modality.
 """
 
 from dataclasses import dataclass
@@ -51,11 +51,10 @@ class DataSource:
 
 @dataclass(frozen=True)
 class TimeSeriesSpec:
-    """The contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.
+    """Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.
 
-    It carries no unit for time or for a sampling rate. Both were fixed by construction rather than
-    declared: time offsets are integer microseconds and a cadence is a Fraction of them, so neither field
-    could ever hold anything but ``second`` and ``hertz``, and neither was read.
+    The spec carries no unit for time or for a sampling rate. Time offsets are integer microseconds and
+    a cadence is a Fraction of them, so those units can only be ``second`` and ``hertz``.
     """
 
     spec_type: str
@@ -87,9 +86,9 @@ class TimeSeriesSpec:
                 f"TimeSeriesSpec.data_source must be a DataSource or None, got {type(self.data_source).__name__}"
             )
         if self.spec_type in _RESERVED_SPEC_TYPES:
-            # The Zarr backend derives a per-spec_type array path from spec_type, and percent-encoding
-            # leaves all of these untouched: "." and ".." are filesystem-special, and the two
-            # underscore names are the groups it puts irregular values and their time offsets under.
+            # The Zarr backend builds a per-spec_type array path from spec_type. Percent-encoding
+            # leaves all of these names untouched. "." and ".." are filesystem-special. The two
+            # underscore names are the groups that hold irregular values and their time offsets.
             raise TimeFValidationError(
                 f"TimeSeriesSpec.spec_type must not be one of {sorted(_RESERVED_SPEC_TYPES)}, got {self.spec_type!r}"
             )
@@ -115,15 +114,15 @@ class TimeSeriesSpec:
     def __getstate__(self) -> dict[str, object]:
         """Pickle every unit by name rather than as a registry-bound object.
 
-        A :class:`pint.Unit` unpickles against whatever registry is process-global at the time, so a
-        spec pickled as-is would come back bound to a foreign registry, or fail outright on ``bpm`` and
-        the other units only :data:`~timenet.types.units.ureg` defines. Storing names keeps a pickled
-        spec self-describing, which is what multiprocessing DataLoaders need.
+        A :class:`pint.Unit` unpickles against whatever registry is process-global at the time. A spec
+        pickled as-is can come back bound to a foreign registry. It can also fail on ``bpm`` and the
+        other units that only :data:`~timenet.types.units.ureg` defines. Storing names keeps a pickled
+        spec self-describing, which multiprocessing DataLoaders need.
 
-        Every ``pint.Unit`` attribute is converted rather than a fixed list: connectors are
-        encouraged to subclass this with field defaults, and a subclass that adds its own unit field
-        would otherwise pickle it registry-bound and fail on a custom unit. The converted names are
-        recorded in the state so :meth:`__setstate__` knows which strings to rebuild.
+        This method converts every ``pint.Unit`` attribute, not a fixed list. Connectors can subclass
+        this class with field defaults. A subclass that adds its own unit field otherwise pickles it
+        registry-bound and fails on a custom unit. The state records the converted names so
+        :meth:`__setstate__` knows which strings to rebuild.
 
         Returns:
             The instance state with every unit field replaced by its name.

@@ -1,9 +1,9 @@
-"""A registry backed by an S3 (or S3-compatible) bucket. Deferred; the contract is fixed here.
+"""Registry backed by an S3 (or S3-compatible) bucket.
 
-An ``s3://<bucket>/<prefix>`` root holds the same ``<dataset_id>/<version>/`` layout as a
-:class:`~timenet.registry.LocalRegistry`. Reads stream objects; :meth:`store` compiles a dataset to a
-local staging directory and uploads it. Implementation lands in a later change; for now the methods
-raise ``NotImplementedError``.
+This registry is deferred, but the contract is fixed here. An ``s3://<bucket>/<prefix>`` root holds the
+same ``<dataset_id>/<version>/`` layout as a :class:`~timenet.registry.LocalRegistry`. Reads stream
+objects. :meth:`store` compiles a dataset to a local staging directory and uploads it. The
+implementation lands in a later change. For now the methods raise ``NotImplementedError``.
 """
 
 from collections.abc import Callable
@@ -24,7 +24,7 @@ class S3Registry(WritableRegistry):
         """Store the S3 URI root of the registry.
 
         Args:
-            uri: The bucket/prefix root, e.g. ``s3://my-bucket/registry``.
+            uri: The bucket or prefix root, for example ``s3://my-bucket/registry``.
         """
         self._uri = uri
 

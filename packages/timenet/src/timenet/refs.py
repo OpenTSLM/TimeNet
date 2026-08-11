@@ -32,5 +32,5 @@ def split_ref(ref: str) -> tuple[str, str | None]:
         return dataset_id, None
     if not version:
         raise TimeFValidationError(f"dataset ref has an empty version: {ref!r}")
-    Version.parse(version)  # validate the pin; raises TimeFValidationError on a malformed version
+    Version.parse(version)  # Validate the pin. This raises TimeFValidationError on a malformed version.
     return dataset_id, version

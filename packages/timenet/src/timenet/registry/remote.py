@@ -1,8 +1,8 @@
-"""A registry backed by a remote HTTP(S) service. Deferred; the contract is fixed here.
+"""A registry backed by a remote HTTP(S) service, with a fixed contract but no implementation yet.
 
-The intended REST contract (versioned) is: ``GET /v1/datasets``, ``GET /v1/datasets/{id}``,
+The versioned REST contract has these routes: ``GET /v1/datasets``, ``GET /v1/datasets/{id}``,
 ``GET /v1/datasets/{id}/{version}/manifest``, and ``GET /v1/datasets/{id}/{version}/{relpath}``.
-Implementation lands in a later change; for now the methods raise ``NotImplementedError``.
+The implementation lands in a later change. For now the methods raise ``NotImplementedError``.
 """
 
 from collections.abc import Callable
@@ -23,7 +23,7 @@ class RemoteRegistry(WritableRegistry):
         """Store the base URL of the remote registry.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.timenet.ai``.
+            base_url: The service root, for example ``https://registry.timenet.ai``.
         """
         self._base_url = base_url
 

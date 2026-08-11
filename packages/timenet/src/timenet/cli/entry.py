@@ -1,7 +1,7 @@
 """Guarded console-script entry point for the ``timenet`` CLI.
 
-Imports nothing third-party at module load, so it stays importable in a base install; the Rich/Typer app
-is loaded lazily by :func:`main`.
+This module imports nothing third-party at load time, so it stays importable in a base install.
+:func:`main` loads the Rich/Typer app lazily.
 """
 
 
@@ -16,9 +16,9 @@ def main() -> None:
     try:
         from timenet.cli.app import main as run  # noqa: PLC0415
     except ModuleNotFoundError as exc:
-        # Only a genuinely missing cli extra (Typer/Rich) should trigger the install hint. A typo in an
-        # internal import raises ModuleNotFoundError too; that must surface as a real traceback rather
-        # than misleading the user into installing a package.
+        # Only a real missing cli extra (Typer/Rich) can trigger the install hint. A typo in an
+        # internal import raises ModuleNotFoundError too. That case must surface as a real
+        # traceback instead of a misleading install hint.
         if (exc.name or "").split(".")[0] not in {"typer", "rich"}:
             raise
         raise SystemExit("the timenet CLI needs the 'cli' extra: pip install 'timenet[cli]'") from exc

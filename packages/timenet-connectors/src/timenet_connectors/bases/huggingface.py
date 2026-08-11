@@ -1,10 +1,10 @@
 """A reusable base for connectors that pull rows from a HuggingFace Hub dataset.
 
-Subclasses set ``HF_REPO``, ship a ``dataset.yaml`` card beside the connector, and implement ``convert()``. Real
-downloads read the Hub's auto-generated parquet ref, which the Hub produces for public datasets (gated
-ones included). ``huggingface_hub`` is imported lazily so base users don't need it (install the
-``huggingface`` extra) and reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra
-wiring. Fully private datasets have no auto-parquet ref and aren't supported by this base.
+Subclasses set ``HF_REPO``, ship a ``dataset.yaml`` card beside the connector, and implement ``convert()``.
+Downloads read the Hub's auto-generated parquet ref. The Hub produces that ref for public and gated datasets.
+``huggingface_hub`` is imported lazily, so base users do not need it. Install the ``huggingface`` extra to get
+it. The base reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra wiring. Fully private
+datasets have no auto-parquet ref, and this base does not support them.
 """
 
 from abc import ABC
@@ -22,15 +22,15 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
     """Base class for HuggingFace-backed connectors. Rows are plain dicts (one per dataset row)."""
 
     HF_REPO: ClassVar[str]
-    # The Hub auto-converts every public dataset to parquet on this ref, regardless of its source format
+    # The Hub auto-converts every public dataset to parquet on this ref, whatever the source format
     # (CSV, JSON, ...). Reading it keeps this base format-agnostic and needs no heavy ``datasets`` dep.
     PARQUET_REVISION: ClassVar[str] = "refs/convert/parquet"
 
     def download(self, cache_dir: Path) -> list[dict[str, Any]]:
         """Download the repo's auto-converted parquet file(s) and return their rows.
 
-        Reads the Hub's ``refs/convert/parquet`` branch (see :attr:`PARQUET_REVISION`) so any source
-        format is handled uniformly. For very large datasets the Hub's conversion can be partial.
+        Reads the Hub's ``refs/convert/parquet`` branch (see :attr:`PARQUET_REVISION`), so it handles any
+        source format the same way. For very large datasets the Hub conversion can be partial.
 
         Args:
             cache_dir: Where Hub files are cached.

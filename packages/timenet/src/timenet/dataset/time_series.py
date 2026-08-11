@@ -17,11 +17,10 @@ from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_
 class TimeSeries:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
-    Identity-based equality (``eq=False``): the writer dedupes by ``time_series_id``, not by value, so
-    reusing one instance across samples (or giving two instances the same explicit id) shares one chunk
-    on disk. Consumers read values through :meth:`to_arrow` / :meth:`to_numpy`; ``loader`` is plumbing
-    supplied by the connector (raw source) at curation or by :class:`~timenet.reader.TimeFReader`
-    (the manifest-selected values backend) on read-back.
+    The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
+    across samples, or give two instances the same explicit id, they share one chunk on disk. Consumers
+    read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector supplies ``loader`` at
+    curation, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
     """
 
     spec: TimeSeriesSpec
@@ -37,17 +36,17 @@ class TimeSeries:
     time_offsets_loader: Callable[[], pa.Array] | None = None
     """Lazy callable returning one int64 microsecond time offset per value, for an irregular series only.
 
-    Required exactly when ``time_axis`` is an :class:`~timenet.dataset.axis.IrregularAxis`, and
-    rejected otherwise: a regular axis computes its time offsets and an ordinal one has none, so a stream
-    attached to either would be a second, unreconcilable answer to the same question."""
+    Required when ``time_axis`` is an :class:`~timenet.dataset.axis.IrregularAxis`, and rejected
+    otherwise. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
+    either gives a second, conflicting answer to the same question."""
     source_id: str | None = None
     """Optional identifier of the raw source recording."""
     time_series_id: str = field(default_factory=new_id)
     """Stable identity used to dedupe and share chunks; defaults to a UUIDv7."""
     n_values: int
-    """How many values the series holds, counting one per timestep. A series whose ``spec`` gives each
-    timestep a shape contributes one value per timestep, not one per scalar, which is the same count
-    a chunk's ``n_values`` reports.
+    """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
+    the series counts one value per timestep, not one per scalar. This matches the count a chunk's
+    ``n_values`` reports.
 
     """
 
@@ -79,9 +78,8 @@ class TimeSeries:
     def span_us(self) -> tuple[int, int] | None:
         """The half-open microsecond window this series covers, or ``None`` if it has no timeline.
 
-        Derived from the axis rather than stored, so the window and the axis cannot disagree. The
-        dispatch is positive and ends in :func:`~typing.assert_never`: a new axis shape breaks this
-        method at type-check time instead of falling into whichever branch happens to be last.
+        The axis derives this window, so the window and the axis cannot disagree. The dispatch ends in
+        :func:`~typing.assert_never`, so a new axis shape breaks this method at type-check time.
 
         Returns:
             ``(first time_offset, one past the last)`` in microseconds, or ``None`` for an ordinal series.
@@ -90,8 +88,8 @@ class TimeSeries:
         if isinstance(axis, RegularAxis):
             return (axis.time_offset_us(0), axis.time_offset_us(self.n_values))
         if isinstance(axis, IrregularAxis):
-            # One microsecond past the last stored time_offset: the axis states no cadence, so there is no
-            # next time offset to end on, and a microsecond is the finest the format addresses.
+            # One microsecond past the last stored time offset. The axis states no cadence, so there is
+            # no next time offset to end on. A microsecond is the finest unit the format addresses.
             return (axis.first_us, axis.last_us + 1)
         if isinstance(axis, OrdinalAxis):
             return None
@@ -108,12 +106,12 @@ class TimeSeries:
         source_id: str | None = None,
         time_series_id: str | None = None,
     ) -> "TimeSeries":
-        """Build a series from already-materialized values, wrapping them in a float32 loader.
+        """Build a series from already-materialized values and wrap them in a float32 loader.
 
-        The convenience path for connectors that hold an in-memory array: it caches ``values`` as a
-        float32 Arrow array behind the loader and takes ``n_values`` from the array's own length. Use the
-        ``loader=`` constructor directly for genuinely lazy sources (files, remote shards), where the
-        length has to be stated because nothing has read the values yet.
+        Use this path for connectors that hold an in-memory array. It caches ``values`` as a float32
+        Arrow array behind the loader and takes ``n_values`` from the array length. For lazy sources like
+        files or remote shards, use the ``loader=`` constructor directly and state the length, because
+        nothing has read the values yet.
 
         Args:
             values: The channel's values (cast to float32).
@@ -150,9 +148,9 @@ class TimeSeries:
     ) -> "TimeSeries":
         """Build an irregular series from materialized values and their time offsets.
 
-        The axis endpoints come from the stream itself, so the two cannot disagree: there is no way to
-        state a first or last time offset that the time offsets do not have. Convert wall-clock moments with
-        :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before calling.
+        The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
+        first or last time offset that the time offsets do not have. To convert wall-clock moments, use
+        :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
 
         Args:
             values: The channel's values (cast to float32).
@@ -190,8 +188,8 @@ class TimeSeries:
     def time_offsets_us(self) -> np.ndarray:
         """Read this series' per-value time offsets.
 
-        Available only on an irregular series. A regular axis computes its time offsets without a read and
-        an ordinal one has none, so neither has a stream to return.
+        Only an irregular series has this. A regular axis computes its time offsets without a read, and an
+        ordinal one has none. So neither has a stream to return.
 
         Returns:
             One int64 microsecond time offset per value.
@@ -228,8 +226,8 @@ class TimeSeries:
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
 
-        Range-aware storage loaders read only the intersecting chunks. Connector loaders that only
-        implement the original no-argument callable remain compatible through a full-read slice.
+        Range-aware storage loaders read only the intersecting chunks. A connector loader that implements
+        only the no-argument callable stays compatible through a full-read slice.
 
         Args:
             start: First temporal step, inclusive.

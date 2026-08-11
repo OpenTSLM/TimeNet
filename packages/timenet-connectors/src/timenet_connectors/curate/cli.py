@@ -1,9 +1,9 @@
 """``timenet-curate``: the producer CLI that runs connectors through the engine.
 
-Distinct from the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory (itself a
-valid local registry) that the SDK can then load. Connectors are resolved lazily by dataset id, so
-adding one is just dropping a ``datasets/<org>/<name>/`` package (a ``connector.py`` exposing
-``CONNECTOR`` plus a ``dataset.yaml`` card). No registration here.
+This is not the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory that the SDK
+can load. That directory is a valid local registry. The CLI resolves connectors by dataset id at run
+time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.py`` that exposes
+``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
 from collections.abc import Iterator
@@ -43,10 +43,10 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _default_root() -> Path:
-    """The registry directory a build writes to when ``--out`` is not given.
+    """Return the registry directory a build writes to when ``--out`` is not given.
 
-    Mirrors the consumer side's selection order, so the CLI that writes a dataset and the SDK that
-    reads it land on the same directory.
+    This uses the same selection order as the consumer side. The CLI that writes a dataset and the
+    SDK that reads it land on the same directory.
 
     Returns:
         ``$TIMENET_REGISTRY`` when it names a local directory, else ``<home>/registry``.
@@ -73,8 +73,8 @@ def build(
 ) -> None:
     """Run a connector through the engine and write its dataset.
 
-    Prints an emoji build summary to stderr and the version directory to stdout (for scripts to
-    capture). An already-curated version is reused unless ``--force`` is given.
+    This prints an emoji build summary to stderr and the version directory to stdout, so scripts can
+    capture it. If a version is already curated, the build reuses it unless you give ``--force``.
 
     Raises:
         BadParameter: If ``dataset_id`` has no known connector, or ``$TIMENET_REGISTRY`` is remote.
@@ -198,6 +198,6 @@ def _text_download_reporter() -> ProgressCallback:
 def main() -> None:
     """Entry point for the ``timenet-curate`` console script.
 
-    Expected failures print a one-line message; only unexpected errors surface a traceback.
+    Expected failures print a one-line message. Only unexpected errors surface a traceback.
     """
     run_cli(app)

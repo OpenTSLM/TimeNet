@@ -1,10 +1,10 @@
 """Arrow schemas for the TimeF on-disk files, parameterized by id storage type.
 
-The column layout is pinned; only the id columns vary. Every id column holds one of the six logical ids
-in :data:`LOGICAL_IDS`, and each is stored either as ``pa.string()`` or, when every value is a canonical
-UUID, as ``pa.binary(16)`` (16 raw bytes instead of a 36-char string). The writer picks the type per
-logical id, records the choice in the manifest's ``id_encoding``, and the reader decodes ``binary(16)``
-back to the canonical string, so callers always see string ids.
+The column layout is fixed. Only the id columns vary. Every id column holds one of the six logical ids
+in :data:`LOGICAL_IDS`. Each is stored as ``pa.string()``, or as ``pa.binary(16)`` when every value is a
+canonical UUID. ``pa.binary(16)`` uses 16 raw bytes instead of a 36-character string. The writer picks
+the type per logical id and records the choice in the manifest ``id_encoding``. The reader decodes
+``binary(16)`` back to the canonical string, so callers always see string ids.
 """
 
 from collections.abc import Iterable, Mapping
@@ -174,7 +174,7 @@ def index_schema(id_types: IdTypes) -> pa.Schema:
             ("channel", pa.string()),
             ("chunk_idx", pa.int32()),
             # Backend-neutral chunk locator (a ChunkDataIndex flattened). For Parquet, these are the
-            # shard path, row group, and row offset; other backends assign their own coordinate meanings.
+            # shard path, row group, and row offset. Other backends assign their own coordinate meanings.
             ("chunk_file", pa.string()),
             ("chunk_major_idx", pa.int64()),
             ("chunk_minor_idx", pa.int64()),
@@ -215,8 +215,8 @@ def _task_common(id_types: IdTypes) -> list[tuple[str, pa.DataType]]:
     ]
 
 
-# Names of the columns every task partition shares, regardless of task type. The single source the
-# writer's row builder and the reader's payload split both read, so the copies stay in lockstep.
+# Names of the columns every task partition shares, regardless of task type. The writer's row builder
+# and the reader's payload split both read this one source, so the two copies stay in lockstep.
 TASK_COMMON_NAMES: tuple[str, ...] = (
     "id",
     "sample_ids",
@@ -290,17 +290,15 @@ def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Sche
 
 @dataclass(frozen=True)
 class IdCodec:
-    """The single place that converts ids between their in-memory strings and their on-disk form.
+    """Convert ids between their in-memory strings and their on-disk form.
 
-    The writer and reader previously each carried their own copy of the per-column encode/decode logic,
-    threaded around as a bare ``uuid16`` set with the same ``"sample_id" in u`` membership check repeated
-    at every call site. Centralizing it means the logical-id-per-column mapping and the ``bytes <-> str``
-    conversion live in one spot that both sides build (:meth:`from_uuid16` / :meth:`from_encoding`) and
-    call, so the two halves of the format contract cannot drift apart.
+    This is the one place that holds the logical-id-per-column mapping and the ``bytes <-> str``
+    conversion. The writer and the reader both build a codec (:meth:`from_uuid16` /
+    :meth:`from_encoding`) and call it, so the two halves of the format contract cannot drift apart.
     """
 
     uuid16: frozenset[str]
-    """The logical ids whose columns are stored as ``binary(16)``; the rest are ``pa.string()``."""
+    """The logical ids whose columns are stored as ``binary(16)``. The rest are ``pa.string()``."""
 
     @classmethod
     def from_uuid16(cls, uuid16: Iterable[str]) -> "IdCodec":
@@ -329,13 +327,12 @@ class IdCodec:
     def encode(self, logical: str, value: object) -> object:
         """Encode one id to 16 raw bytes for a ``uuid16`` column, else pass it through unchanged.
 
-        A reference id outside the entity id space (e.g. a ``ForecastingTask.target_sample_id`` naming
-        no sample) used to surface as a bare ``ValueError: badly formed hexadecimal UUID string`` from
-        inside ``uuid``. It now raises a contextual :class:`TimeFValidationError` naming the column and
-        value, so even if referential validation is bypassed the writer fails legibly.
+        A reference id outside the entity id space (for example, a ``ForecastingTask.target_sample_id``
+        that names no sample) raises a contextual :class:`TimeFValidationError` naming the column and
+        value. This makes the writer fail legibly even if referential validation is bypassed.
 
         Args:
-            logical: The logical id the column holds (e.g. ``"sample_id"``).
+            logical: The logical id the column holds (for example, ``"sample_id"``).
             value: The id string, or ``None``.
 
         Returns:
@@ -433,7 +430,7 @@ class IdCodec:
         return cast(str, value)
 
     def decode_opt(self, logical: str, value: object) -> str | None:
-        """Decode an optional id (e.g. ``source_id``), passing ``None`` through.
+        """Decode an optional id (for example, ``source_id``), passing ``None`` through.
 
         Args:
             logical: The logical id the column holds.

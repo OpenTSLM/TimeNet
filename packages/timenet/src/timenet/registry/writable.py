@@ -1,9 +1,9 @@
-"""The writable-registry contract: a backend that curation can publish datasets into.
+"""Define the writable-registry contract for a backend that curation publishes datasets into.
 
-Extends the read-only :class:`~timenet.registry.BaseRegistry` with a single write primitive,
-:meth:`WritableRegistry.store`. Backends differ only in *where* a compiled dataset lands (a local
-directory, an S3 prefix, a remote service), so ``store`` is the one abstract method and :meth:`exists`
-is shared.
+This class extends the read-only :class:`~timenet.registry.BaseRegistry` with one write primitive,
+:meth:`WritableRegistry.store`. Backends differ only in where a compiled dataset lands, for example a
+local directory, an S3 prefix, or a remote service. So ``store`` is the one abstract method, and
+:meth:`exists` is shared.
 """
 
 from abc import ABC, abstractmethod
@@ -29,8 +29,8 @@ class WritableRegistry(BaseRegistry, ABC):
     ) -> str:
         """Compile a dataset and publish it to this registry.
 
-        Derives the dataset's schema first if it has none. An already-committed version is skipped
-        unless ``force`` is set.
+        If the dataset has no schema, this method derives one first. If a version is already
+        committed, this method skips it unless ``force`` is set.
 
         Args:
             dataset: The populated dataset to store.

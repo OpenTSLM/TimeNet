@@ -1,8 +1,9 @@
 """The TSQA connector: a time-series question-answering dataset from the HuggingFace Hub.
 
-Source: ``ChengsenWang/TSQA`` — each row has ``Task, Size, Question, Answer, Label, Series`` where
-``Series`` is a JSON float list (univariate, or a list-of-lists for multivariate). Each row becomes one
-sample carrying the series plus an :class:`~timenet.types.AnswerTask`.
+Source repo ``ChengsenWang/TSQA``. Each row has the columns ``Task, Size, Question, Answer, Label,
+Series``. ``Series`` is a JSON float list. A univariate series is a flat list. A multivariate series
+is a list of lists. Each row becomes one sample that carries the series and an
+:class:`~timenet.types.AnswerTask`.
 """
 
 import json

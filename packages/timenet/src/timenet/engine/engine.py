@@ -22,27 +22,27 @@ def run_pipeline(  # noqa: PLR0913
 ) -> Path:
     """Run one connector through the full curation pipeline and return the version directory.
 
-    Idempotent: if the target version is already committed, the expensive ``download`` / ``convert`` /
-    ``store`` stages are skipped and the existing directory is returned. Pass ``force`` to rebuild it.
-    Otherwise the stages are: create the cache directory, ``download`` raw references into it,
-    ``convert`` them into a dataset, ``derive_schema``, then ``store``. The engine only writes local
-    files; publishing to a remote registry is a separate step.
+    This function is idempotent. If the target version is already committed, it skips the expensive
+    ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
+    to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
+    references into it, ``convert`` them into a dataset, ``derive_schema``, then ``store``. The engine
+    only writes local files. Publishing to a remote registry is a separate step.
 
     Args:
         connector: The connector to curate.
-        root: Output root; the dataset is written to ``<root>/<dataset_id>/<version>/``.
+        root: Output root. The dataset is written to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory once the dataset is stored. The raw sources are only
-            needed during conversion, so this reclaims disk after a successful build (they re-download
-            on the next run).
+        clean_cache: Remove the cache directory after the dataset is stored. The raw sources are only
+            needed during conversion, so this frees disk after a successful build. The sources
+            re-download on the next run.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
     Returns:
         The committed version directory.
     """
-    # Reads the connector's dataset.yaml card only (a tiny local file), not the dataset itself, so we
-    # can resolve the version directory and skip the expensive download/convert when it already exists.
+    # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
+    # us resolve the version directory and skip the expensive download and convert when it exists.
     metadata = connector.metadata()
     version_dir = root / metadata.dataset_id / str(metadata.dataset_version)
     committed = (version_dir / MANIFEST_FILE).exists()
@@ -54,15 +54,15 @@ def run_pipeline(  # noqa: PLR0913
 
     raw_refs = connector.download(cache)
     dataset = connector.convert(raw_refs)
-    # Derived here, before the force-rebuild rmtree below, so a schema failure aborts while the old
-    # committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset, so this is not redundant with that guard.
+    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
+    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
+    # directly with an underived dataset. This call is not redundant with that guard.
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
     store_dataset(dataset, root, progress_cb=progress_cb)
-    # Only clean a cache we created ourselves; a caller-supplied cache_dir is user-owned, never ours to
-    # delete.
+    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
+    # delete it.
     if clean_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version_dir
@@ -76,10 +76,10 @@ def store_dataset(
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
-    Derives the schema first if the dataset has none, then streams it through a
-    :class:`~timenet.writer.TimeFWriter`. This lives on the engine rather than on
-    :class:`~timenet.connectors.BaseConnector` because it reads only ``dataset``: keeping it here
-    leaves the connector contract at fetch-and-convert and avoids a connector-to-writer dependency.
+    If the dataset has no schema, this function derives it first. It then streams the dataset through a
+    :class:`~timenet.writer.TimeFWriter`. This function lives on the engine, not on
+    :class:`~timenet.connectors.BaseConnector`, because it reads only ``dataset``. This keeps the
+    connector contract at fetch-and-convert and avoids a connector-to-writer dependency.
 
     Args:
         dataset: The populated dataset from ``convert``.

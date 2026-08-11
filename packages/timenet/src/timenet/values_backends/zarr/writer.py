@@ -1,28 +1,26 @@
 """Zarr values backend (writer side): one Zarr array per ``(spec_type, stores_time_offsets)`` partition.
 
-An alternative to the default Parquet shard store, laid out for Zarr's strengths rather than mirroring
-Parquet's:
+This backend is an alternative to the default Parquet shard store. It uses Zarr's own layout:
 
-- Every series of a modality is appended along time to one typed array inside a ``time_series.zarr``
-  group. Zarr chunks the storage itself, so a series is **one index row** (one placement spanning its
-  full length), not a run of ``chunk_max_bytes`` logical chunks.
+- The writer appends every series of a modality along time to one typed array in a ``time_series.zarr``
+  group. Zarr chunks the storage itself, so a series is one index row (one placement spanning its full
+  length), not a run of ``chunk_max_bytes`` logical chunks.
 - Arrays are partitioned by ``(spec_type, stores_time_offsets)``, not by ``spec_type`` alone. A series
-  whose time offsets are stored writes its values under ``_irregular/`` and its int64 time offsets under
-  ``_time_offsets/``, and the two advance in lockstep because every series in that partition contributes
-  to both. That is what lets the index's single ``chunk_major_idx`` element offset address either one.
-  Partitioning by ``spec_type`` alone would leave the time offsets array receiving only some of the
-  series, so the offsets would drift apart with nothing to notice.
-- Appends are buffered per partition and flushed at shard-aligned boundaries, so every Zarr shard
-  object is written exactly once — a naive ``resize()``-per-series append re-writes (read-modify-write)
-  the trailing shard for every series. The backend sorts series by partition, so only one partition is
-  open at a time. An irregular partition keeps its values and its time offsets appender open together, so
-  it buffers near two shards rather than one.
+  that stores time offsets writes its values under ``_irregular/`` and its int64 time offsets under
+  ``_time_offsets/``. The two arrays advance together because every series in that partition writes to
+  both. That is what lets the index's single ``chunk_major_idx`` element offset address either one.
+  Partitioning by ``spec_type`` alone gives the time offsets array only some of the series, so the two
+  arrays drift apart with nothing to notice.
+- Appends are buffered per partition and flushed at shard-aligned boundaries, so every Zarr shard object
+  is written exactly once. A ``resize()``-per-series append rewrites the trailing shard for every series.
+  The backend sorts series by partition, so only one partition is open at a time. An irregular partition
+  keeps its values appender and its time offsets appender open together, so it buffers near two shards.
 
-A chunk is located by ``(array path, element start)``; the shared index carries that in its
+A chunk is located by ``(array path, element start)``. The shared index carries that in its
 backend-agnostic ``chunk_file`` / ``chunk_major_idx`` locator (``chunk_minor_idx`` is unused).
 
-Requires the ``zarr`` extra (``pip install 'timenet[zarr]'``); imported lazily so the Parquet core never
-needs it.
+This backend needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). It is imported lazily, so the
+Parquet core never needs it.
 """
 
 from collections.abc import Callable
@@ -48,16 +46,16 @@ from timenet.values_backends.zarr.config import ZarrValuesConfig
 
 _STORE_DIR = "time_series.zarr"
 _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
-# One placement normally spans a whole series; split only to keep n_values inside int32 (the index
-# column type). 2^30 values = 4 GiB of float32 per placement.
+# One placement normally spans a whole series. The writer splits only to keep n_values inside int32 (the
+# index column type). 2^30 values is 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
 _BYTES_PER_TIME_OFFSET = 8
 
 
-#: Group holding the values of series that store per-value time offsets, kept apart from the regular
-#: arrays so a partition's values and time offsets advance together and one offset addresses both.
+#: Group that holds the values of series that store per-value time offsets. It is kept apart from the
+#: regular arrays so a partition's values and time offsets advance together and one offset addresses both.
 _IRREGULAR_GROUP = "_irregular"
-#: Group holding those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
+#: Group that holds those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
 _TIME_OFFSETS_GROUP = "_time_offsets"
 
 
@@ -90,10 +88,10 @@ def _time_offsets_array_path(spec_type: str) -> str:
 def _array_name(spec_type: str) -> str:
     """Encode a logical spec type as one filesystem-safe Zarr path segment.
 
-    Percent-encodes every character outside the URL-unreserved set, so path separators never leak into
-    the path and distinct spec types map to distinct single segments (the encoding is reversible, hence
-    injective). ``.`` and ``..`` are the only unreserved-yet-unsafe segments; :class:`TimeSeriesSpec`
-    rejects them.
+    This function percent-encodes every character outside the URL-unreserved set. Path separators never
+    leak into the path, and distinct spec types map to distinct single segments. The encoding is
+    reversible, so it is injective. ``.`` and ``..`` are the only unreserved but unsafe segments.
+    :class:`TimeSeriesSpec` rejects them.
 
     Returns:
         The percent-encoded physical array name.
@@ -157,8 +155,8 @@ class ZarrValuesBackend(BaseValuesBackend):
     def _time_offsets_appender(self, group: Any, spec_type: str, codec: Any, delta: Any) -> "_ArrayAppender":
         """Create the time offsets array parallel to a partition's values, and wrap it in an appender.
 
-        The Delta filter is what makes stored time offsets cheap: they are monotonic, so the deltas are
-        small and the Blosc bitshuffle then has little left to do. Measured at 15-17% over bitshuffle
+        The Delta filter makes stored time offsets cheap. Time offsets are monotonic, so the deltas are
+        small and the Blosc bitshuffle then has little left to do. This saves 15-17% over bitshuffle
         alone on realistic irregular spacing.
 
         Args:
@@ -171,9 +169,9 @@ class ZarrValuesBackend(BaseValuesBackend):
             The appender for that array.
         """
         chunk_len = max(1, self._chunk_max_bytes // _BYTES_PER_TIME_OFFSET)
-        # Rounded down to a whole number of chunks, exactly as the values array is: Zarr requires the
-        # shard shape to be a multiple of the chunk shape, and an unrounded value aborts create_array
-        # for any byte target where the two do not divide.
+        # Round down to a whole number of chunks, the same as the values array. Zarr requires the shard
+        # shape to be a multiple of the chunk shape. An unrounded value aborts create_array for any byte
+        # target where the two do not divide.
         shard_len = max(1, (self._shard_target_bytes // _BYTES_PER_TIME_OFFSET) // chunk_len) * chunk_len
         return _ArrayAppender(
             group.create_array(
@@ -229,10 +227,10 @@ class ZarrValuesBackend(BaseValuesBackend):
         closed = 0
         active: tuple[str, bool] | None = None  # one partition is open at a time, see the sort below
         total = len(unique_series)
-        # Stable, so the caller's (spec_type, channel, time_series_id) order survives within a
-        # partition. Grouping by whether a series stores time offsets is what keeps its values array and
-        # its time offsets array the same length: every series in an irregular partition contributes to
-        # both, so one element offset addresses either.
+        # The sort is stable, so the caller's (spec_type, channel, time_series_id) order survives within a
+        # partition. The group by whether a series stores time offsets keeps its values array and its time
+        # offsets array the same length. Every series in an irregular partition writes to both, so one
+        # element offset addresses either.
         ordered = sorted(unique_series, key=lambda ts: (ts.spec.spec_type, ts.time_offsets_loader is not None))
         for completed, ts in enumerate(ordered, start=1):
             arrow_values = read_and_validate(ts)
@@ -284,11 +282,11 @@ class ZarrValuesBackend(BaseValuesBackend):
 
 @dataclass
 class _Partition:
-    """One ``(spec_type, stores_time_offsets)`` partition: a values array and, when irregular, its time offsets.
+    """Hold one ``(spec_type, stores_time_offsets)`` partition: a values array and, when irregular, time offsets.
 
-    Holding the pair together is what keeps them the same length. Every series in an irregular
-    partition contributes to both, so one element offset addresses either, and a caller cannot append
-    to one and forget the other.
+    The pair is held together to keep the two arrays the same length. Every series in an irregular
+    partition writes to both, so one element offset addresses either. A caller cannot append to one and
+    forget the other.
     """
 
     values: "_ArrayAppender"
@@ -332,11 +330,11 @@ class _Partition:
 
 
 class _ArrayAppender:
-    """Buffers appends to one Zarr array and flushes at shard-aligned boundaries.
+    """Buffer appends to one Zarr array and flush at shard-aligned boundaries.
 
-    Writing only whole, aligned shards means each shard object is created exactly once; the single
-    trailing partial shard is written by :meth:`finish`. Without this, every per-series append would
-    re-write (read-modify-write) the trailing shard.
+    The appender writes only whole, aligned shards, so each shard object is created exactly once.
+    :meth:`finish` writes the single trailing partial shard. Without this buffer, every per-series append
+    rewrites the trailing shard.
     """
 
     def __init__(self, array: Any, shard_len: int) -> None:

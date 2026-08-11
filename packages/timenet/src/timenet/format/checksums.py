@@ -1,8 +1,7 @@
 """File checksums recorded in the manifest and verified on read.
 
-Part of the format contract rather than the writer: the reader has to hash files exactly the way the
-writer did for :meth:`~timenet.reader.TimeFReader.verify` to mean anything, so the algorithm and the
-block size live in one place both sides call.
+The reader must hash files the same way the writer did, or :meth:`~timenet.reader.TimeFReader.verify`
+means nothing. The algorithm and the block size live here so both sides call the same code.
 """
 
 import hashlib
