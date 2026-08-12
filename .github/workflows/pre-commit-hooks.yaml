@@ -13,8 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # torch-cpu and torch-gpu are declared conflicting extras, so --all-extras needs one excluded.
-  UV_SYNC_ARGS: --all-groups --all-extras --no-extra torch-gpu
+  UV_SYNC_ARGS: --all-groups --all-extras
 
 jobs:
   check:

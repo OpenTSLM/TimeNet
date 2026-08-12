@@ -94,7 +94,7 @@ item is a dict with the sample's `series` as dtype-preserving tensors with shape
 ```python
 from timenet.client import TimeNet
 
-# needs: pip install 'timenet[torch-gpu]'
+# needs: pip install 'timenet[torch]'
 ds = TimeNet().load_torch("chengsenwang/tsqa")
 item = ds[0]
 series, question = item["series"][0], item["tasks"][0].question

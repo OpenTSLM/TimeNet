@@ -1,6 +1,6 @@
 """A read-only PyTorch view over a :class:`~timenet.dataset.TimeFDataset`.
 
-Requires a torch extra (``pip install 'timenet[torch-gpu]'`` or ``timenet[torch-cpu]``). :meth:`timenet.client.TimeNet.load_torch`
+Requires the ``torch`` extra (``pip install 'timenet[torch]'``). :meth:`timenet.client.TimeNet.load_torch`
 imports this module lazily, so base users who never touch PyTorch don't need it installed.
 """
 

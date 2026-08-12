@@ -19,7 +19,7 @@ extras you opt into.
     ```bash
     uv add timenet                # core: TimeF format, reader/writer, registry
     uv add 'timenet[cli]'         # add the timenet console command
-    uv add 'timenet[torch-gpu]'   # load_torch; torch-cpu for a CPU-only build
+    uv add 'timenet[torch]'       # load_torch; reuses your torch, or pulls the default build
     ```
 
 === "pip"
@@ -27,7 +27,7 @@ extras you opt into.
     ```bash
     pip install timenet
     pip install 'timenet[cli]'
-    pip install 'timenet[torch-gpu]'
+    pip install 'timenet[torch]'
     ```
 
 === "Global CLI"
@@ -40,12 +40,19 @@ extras you opt into.
     # or, with pipx:  pipx install 'timenet[cli]'
     ```
 
+The `torch` extra accepts any torch build. If you already have a CUDA torch (say, for training), it
+is reused as-is. For a small CPU-only torch, install it from the PyTorch CPU index first:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
 To work on TimeNet or author connectors, clone the repo and sync with uv:
 
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-uv sync --all-groups --all-extras --no-extra torch-cpu
+uv sync --all-groups --all-extras
 ```
 
 ## Load a dataset
