@@ -10,6 +10,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+import timenet.reader.parts as parts_mod
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     AnswerTask,
@@ -422,3 +423,55 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
         list(reader.iter_samples())
+
+
+# ---- index part skip ---------------------------------------------------------------------------
+
+
+def test_index_skip_loads_only_covering_parts(tmp_path, monkeypatch):
+    version_dir = _write(
+        tmp_path, dataset=make_dataset(), control_shard_target_bytes=1, chunk_max_bytes=64, row_group_target_bytes=64
+    )
+    with TimeFReader(version_dir) as reader:
+        index_parts = {str(version_dir / rel) for rel in reader._manifest.files.time_series_index}
+        assert len(index_parts) > 1
+        seen: list[str] = []
+        original = parts_mod.pq.read_table
+        monkeypatch.setattr(parts_mod.pq, "read_table", lambda p, *a, **k: seen.append(str(p)) or original(p, *a, **k))
+        sample = next(reader.iter_samples())
+        values = sample.time_series[0].loader().to_numpy(zero_copy_only=False)
+        assert len(values) > 0
+    touched = [s for s in seen if s in index_parts]
+    assert 0 < len(touched) < len(index_parts)
+
+
+def test_index_straddle_still_resolves(tmp_path):
+    original = make_dataset()
+    version_dir = _write(
+        tmp_path, dataset=make_dataset(), control_shard_target_bytes=1, chunk_max_bytes=64, row_group_target_bytes=64
+    )
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)
+
+
+def test_missing_index_part_stats_raises(tmp_path):
+    version_dir = _write(tmp_path)
+    manifest_path = version_dir / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    data["part_stats"].pop("time_series_index")
+    manifest_path.write_text(json.dumps(data))
+    with pytest.raises(TimeFFormatError):
+        TimeFReader(version_dir)
+
+
+def test_overlapping_index_parts_raise(tmp_path):
+    version_dir = _write(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1, chunk_max_bytes=64)
+    manifest_path = version_dir / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    entries = data["part_stats"]["time_series_index"]
+    if len(entries) > 1:  # force a strict overlap: part 0 last key jumps past part 1 first key
+        entries[0]["last_key"] = entries[-1]["last_key"]
+        manifest_path.write_text(json.dumps(data))
+        with pytest.raises(TimeFFormatError):
+            TimeFReader(version_dir)

@@ -13,6 +13,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import types as _types
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
@@ -25,7 +26,8 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
-from timenet.manifest import Manifest
+from timenet.manifest import Manifest, PartStat
+from timenet.reader.parts import _PartCache
 from timenet.types import (
     TASKS,
     Annotation,
@@ -42,7 +44,7 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 class TimeFReader:
     """Reads a committed TimeF version directory. Use as a context manager to close shard handles."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, part_cache_size: int = 4) -> None:
         """Open a dataset version directory and load its manifest, tasks, annotations, and index.
 
         A malformed or unsupported-version manifest raises ``InvalidManifestError`` (a
@@ -50,6 +52,8 @@ class TimeFReader:
 
         Args:
             root: The version directory written by :class:`~timenet.writer.TimeFWriter`.
+            part_cache_size: The most control-table parts to keep resident per table. Sequential
+                access needs one; larger values trade memory for locality under random access.
 
         Raises:
             FileNotFoundError: If ``root``, its ``manifest.json``, or any file the manifest lists is
@@ -71,6 +75,8 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
+        self._part_cache_size = part_cache_size
+        self._index_cache = _PartCache(self._root, part_cache_size)
         # The eager loaders parse on-disk control tables against the manifest's schema. Anything they raise means
         # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
         # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
@@ -98,7 +104,17 @@ class TimeFReader:
         """
         state = self.__dict__.copy()
         state["_values"] = None
+        state.pop("_index_cache", None)
         return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore the reader and rebuild the per-table part caches dropped on pickle.
+
+        Args:
+            state: The pickled state, without the resident-part caches.
+        """
+        self.__dict__.update(state)
+        self._index_cache = _PartCache(self._root, self._part_cache_size)
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -273,33 +289,39 @@ class TimeFReader:
         return annotations
 
     def _load_index(self) -> None:
-        """Load the index as Arrow plus one sorted key column, without a Python object per row.
+        """Validate the index parts' key ranges from the manifest alone, reading no data.
 
-        The old shape built ``{(sample_id, time_series_id): [row dicts]}`` eagerly. That is O(rows) in
-        both time and memory whether a caller reads one sample or all of them, and a row dict costs far
-        more than the bytes it came from: measured at 936 MB and 32 s for a 1.2M-row index that is
-        4.6 MB on disk. Keeping the table in Arrow and bisecting a sorted key list is 83 MB and 2.9 s
-        for the same index, at a cost of about 19 us per lookup.
+        The parts are stored sorted by the encoded ``(sample_id, time_series_id, chunk_idx)`` tuple, so
+        each part's ``(sample_id, time_series_id)`` boundary keys must be non-decreasing across parts,
+        with ``last_key[i] <= first_key[i + 1]``. Touching is allowed: a series with many chunks can
+        straddle a part edge, so two adjacent parts may share a boundary key. :meth:`_index_rows`
+        relies on this order to skip to the covering parts.
 
-        The keys are the ids as stored, still encoded, and they are compared as tuples. Both details
-        matter: :meth:`TimeFWriter._write_index` sorts rows by the encoded ``(sample_id,
-        time_series_id, chunk_idx)`` tuple, so bisecting anything else would search an order the file
-        was not written in. ``binary(16)`` ids compare as bytes and string ids as text, and a tuple
-        gets both right without a separator that either could contain.
+        Raises:
+            TimeFFormatError: If the manifest lists no index part_stats, or a part's keys are inverted,
+                or the parts are not ordered.
         """
-        parts = [pq.read_table(self._root / rel) for rel in self._manifest.files.time_series_index]
-        table = parts[0] if len(parts) == 1 else pa.concat_tables(parts)
-        self._index_table = table
-        self._index_keys: list[tuple] = list(
-            zip(
-                table.column("sample_id").to_pylist(),
-                table.column("time_series_id").to_pylist(),
-                strict=True,
-            )
-        )
+        stats = self._manifest.part_stats.get("time_series_index")
+        if not stats:
+            raise TimeFFormatError(f"manifest for {self._root} has no time_series_index part_stats")
+        self._index_stats: tuple[PartStat, ...] = stats
+        previous: tuple[Any, ...] | None = None
+        for part in stats:
+            if part.first_key is None or part.last_key is None:  # an empty part has no range to order
+                continue
+            first = cast("tuple[Any, ...]", part.first_key)
+            last = cast("tuple[Any, ...]", part.last_key)
+            if first > last:
+                raise TimeFFormatError(f"index part {part.path} has first_key > last_key")
+            if previous is not None and previous > first:
+                raise TimeFFormatError(f"index parts out of order at {part.path}")
+            previous = last
 
     def _index_rows(self, sample_id: str, time_series_id: str) -> list[dict]:
         """Return one series' index rows, in ``chunk_idx`` order.
+
+        Loads only the parts whose key range covers the probe (one, or two adjacent when the series
+        straddles a part edge) through the LRU, and bisects within each.
 
         Args:
             sample_id: The owning sample's id.
@@ -308,14 +330,31 @@ class TimeFReader:
         Returns:
             The series' index rows, empty if it has none.
         """
-        probe = (
+        probe: tuple[Any, ...] = (
             self._codec.encode("sample_id", sample_id),
             self._codec.encode("time_series_id", time_series_id),
         )
-        lo = bisect.bisect_left(self._index_keys, probe)
-        hi = bisect.bisect_right(self._index_keys, probe)
-        # Already sorted by chunk_idx within the key: the writer's sort key ends with it.
-        return self._index_table.slice(lo, hi - lo).to_pylist()
+        collected: list[dict] = []
+        for part in self._index_stats:
+            if part.first_key is None or part.last_key is None:
+                continue
+            first = cast("tuple[Any, ...]", part.first_key)
+            last = cast("tuple[Any, ...]", part.last_key)
+            if not (first <= probe <= last):
+                continue
+            table = self._index_cache.get(part.path)
+            keys = list(
+                zip(
+                    table.column("sample_id").to_pylist(),
+                    table.column("time_series_id").to_pylist(),
+                    strict=True,
+                )
+            )
+            lo = bisect.bisect_left(keys, probe)
+            hi = bisect.bisect_right(keys, probe)
+            # Already sorted by chunk_idx within the key: the writer's sort key ends with it.
+            collected.extend(table.slice(lo, hi - lo).to_pylist())
+        return collected
 
     # ---- sample construction -------------------------------------------------------------------
 
