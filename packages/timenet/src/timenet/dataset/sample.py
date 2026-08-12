@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import cast
 
 import numpy as np
 import pyarrow as pa
@@ -12,15 +13,25 @@ from timenet.types import Annotation, Span, new_id
 from timenet.types.clock import check_int64, unix_us
 
 
-def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeries, ...], sample_id: str) -> None:
-    """Reject a span whose series are unknown, timeless, or that falls outside the sample's span.
+def check_span_within_window(
+    label: str,
+    span: Span,
+    time_series: tuple[TimeSeries, ...],
+    sample_id: str,
+) -> None:
+    """Reject a span its targeted series cannot place, by the scoping rule.
 
-    A span's bounds are in the source recording timeline, the same frame as each series' axis, so the
-    span is checked against the sample's overall span: the bounding interval from the earliest start
-    to the latest end of the targeted series. This is deliberately the bounding interval, not a
-    per-series or gap-free rule, so an annotation can mark a time offset that falls in a gap between two
-    series' windows (a note logged between one sensor coming off and another going on, say). Shared
-    by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
+    A span's bounds are in the source recording timeline, the same frame as each series' axis. Where it
+    is allowed to fall depends on what it is scoped to:
+
+    - **Scoped** to named ``time_series_ids``: it claims to apply to every one of them, so it must lie
+      inside the *intersection* of their windows. Falling outside even one would be misleading.
+    - **Unscoped** (``time_series_ids`` is ``None``): checked against the *union* of the timed series'
+      windows. An event landing in an unrecorded gap is rejected rather than silently accepted, so a
+      convex hull of the series never masks a hole in the data. Timeless (ordinal) series carry no
+      window and drop out.
+
+    Shared by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
 
     Args:
         label: Human-readable label for the span, used in the error message.
@@ -29,37 +40,89 @@ def check_span_within_window(label: str, span: Span, time_series: tuple[TimeSeri
         sample_id: The owning sample's id, for the error message.
 
     Raises:
-        TimeFValidationError: If a series id is unknown, a targeted series has no timeline, or the
-            span falls outside the covered window.
+        TimeFValidationError: If a series id is unknown, a scoped span names a timeless series or ones
+            whose windows do not overlap, the sample has no timeline for an unscoped span, or the span
+            falls outside the window the rule selects.
     """
     scope = span.time_series_ids
-    # A span with no time_series_ids covers every series on the sample.
-    in_scope = [ts for ts in time_series if scope is None or ts.time_series_id in scope]
-    covered = {ts.time_series_id: ts.span_us for ts in in_scope}
+    covered = {ts.time_series_id: ts.span_us for ts in time_series if scope is None or ts.time_series_id in scope}
     for series_id in scope or ():
         if series_id not in covered:
             raise TimeFValidationError(
                 f"{label} references unknown time_series_id {series_id!r} on sample {sample_id!r}"
             )
-    if not covered:
+
+    if scope is not None:
+        windows = [window for window in covered.values() if window is not None]
+        if len(windows) < len(covered):
+            timeless = sorted(sid for sid, window in covered.items() if window is None)
+            raise TimeFValidationError(
+                f"{label} is scoped to {timeless}, which have no timeline, so a time-valued region means "
+                f"nothing on them; scope it to the series that do"
+            )
+        start = max(window[0] for window in windows)
+        end = min(window[1] for window in windows)
+        if start >= end:
+            raise TimeFValidationError(
+                f"{label} is scoped to series whose windows do not overlap on sample {sample_id!r}, so no "
+                f"region lies inside all of them"
+            )
+        _reject_outside(label, span, start, end, sample_id)
         return
-    windows = [w for w in covered.values() if w is not None]
-    if len(windows) < len(covered):
-        timeless = sorted(sid for sid, w in covered.items() if w is None)
+
+    windows = sorted(window for window in covered.values() if window is not None)
+    if not windows:
         raise TimeFValidationError(
-            f"{label} covers {timeless}, which have no timeline at all, so a time-valued region "
-            f"means nothing on them. Scope it to the series that do"
+            f"{label} is a time-valued region, but sample {sample_id!r} has no timeline to place it against: "
+            f"no timed series. Use a static annotation instead"
         )
-    start = min(w[0] for w in windows)  # bounding span of the targeted series; gaps between them stay valid
-    end = max(w[1] for w in windows)
-    # The window is half-open [start, end). A point's own exclusive end is start + 1; an interval's
-    # is its end. Either is outside when it runs past the window, which catches a point sitting
-    # exactly on the excluded upper bound.
-    span_end = span.start + 1 if span.is_point else span.end
-    if span.start < start or (span_end is not None and span_end > end):
+    _reject_outside_union(label, span, windows, sample_id)
+
+
+def _exclusive_end(span: Span) -> int:
+    """Return the exclusive upper bound of ``span``: its ``end`` for an interval, ``start + 1`` for a point.
+
+    The window is half-open ``[start, end)``, so a point's exclusive end is ``start + 1`` and a point
+    sitting exactly on an excluded upper bound is caught.
+    """
+    return span.start + 1 if span.is_point else cast("int", span.end)
+
+
+def _reject_outside(label: str, span: Span, start: int, end: int, sample_id: str) -> None:
+    """Reject a span that runs past the half-open window ``[start, end)``.
+
+    Raises:
+        TimeFValidationError: If the span starts before ``start`` or ends after ``end``.
+    """
+    if span.start < start or _exclusive_end(span) > end:
         raise TimeFValidationError(
             f"{label} ({span.start}, {span.end}) us falls outside sample {sample_id!r} span "
             f"({start}, {end}) us; span times are in the source recording timeline"
+        )
+
+
+def _reject_outside_union(label: str, span: Span, windows: list[tuple[int, int]], sample_id: str) -> None:
+    """Reject a span not covered by the union of ``windows``.
+
+    With no gaps the union is one contiguous window, so this is the same bounds check as a scope. With
+    gaps the span must fall entirely within one of the merged windows; one landing in a gap is rejected.
+
+    Raises:
+        TimeFValidationError: If the span runs past the windows or falls in a gap between them.
+    """
+    merged: list[tuple[int, int]] = []
+    for start, end in windows:  # sorted by start; half-open, so windows that touch are contiguous
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    if len(merged) == 1:
+        _reject_outside(label, span, merged[0][0], merged[0][1], sample_id)
+        return
+    if not any(start <= span.start and _exclusive_end(span) <= end for start, end in merged):
+        raise TimeFValidationError(
+            f"{label} ({span.start}, {span.end}) us falls in a gap between the recorded windows of sample "
+            f"{sample_id!r} {merged}"
         )
 
 
@@ -124,24 +187,16 @@ class Sample:
 
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this sample, a
-                targeted series has no timeline, the span falls outside the covered window, or a
-                trial-level interval annotation is added when the sample's series do not share a
-                common window.
-        """
+                scoped span names a timeless series, or the span falls outside the window its scope
+                selects (the intersection of named series, or the union of the series' windows).
+        """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
-                f"annotation {annotation.key!r}", annotation.span, self.time_series, self.sample_id
+                f"annotation {annotation.key!r}",
+                annotation.span,
+                self.time_series,
+                self.sample_id,
             )
-            if not annotation.span.is_point and annotation.span.time_series_ids is None:
-                # A trial-level interval applies to every series at once, so they must agree on the
-                # window it is measured against. The shared check has already refused any timeless
-                # series, so every window here is a concrete pair.
-                windows = {ts.span_us for ts in self.time_series}
-                if len(windows) != 1:
-                    raise TimeFValidationError(
-                        f"trial-level interval annotation {annotation.key!r} requires a common "
-                        "window across the sample's time_series"
-                    )
         self.annotations = (*self.annotations, annotation)
         return annotation
 
