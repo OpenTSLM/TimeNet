@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 
 from timenet.writer.value_encoding import ValueEncoding
 
+
 VALUES_COLUMN = "values.list.element"
 """Parquet path of the shard values column; the nested element, not the list."""
 

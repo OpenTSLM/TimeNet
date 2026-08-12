@@ -7,11 +7,12 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_ROW_GROUP_TARGET_BYTES
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, View, ureg
+from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 from timenet.writer.encodings import applied_matches, shard_dictionary, shard_encoding, values_encoding_of
 from timenet.writer.value_encoding import (
@@ -25,7 +26,7 @@ from timenet.writer.value_encoding import (
 )
 
 
-_RATE_HZ = 100.0
+_RATE_HZ = 100
 _N = 20_000
 
 
@@ -33,8 +34,6 @@ def _spec(spec_type):
     return TimeSeriesSpec(
         spec_type=spec_type,
         name=spec_type.title(),
-        unit_sampling_rate=ureg.hertz,
-        unit_timestamp=ureg.second,
         unit_value=ureg.dimensionless,
     )
 
@@ -67,15 +66,14 @@ def _dataset(channels, dataset_id="timenet/encoding", **metadata_kwargs):
         TimeSeries(
             spec=_spec(spec_type),
             channel=channel,
-            sampling_rate_hz=_RATE_HZ,
+            time_axis=RegularAxis.from_rate_hz(_RATE_HZ),
             loader=(lambda captured=values: pa.array(captured, type=pa.float32())),
             time_series_id=f"ts-{spec_type}-{channel}",
-            t_start_s=0.0,
-            t_end_s=len(values) / _RATE_HZ,
+            n_values=len(values),
         )
         for (spec_type, channel), values in channels.items()
     ]
-    dataset.add_sample(time_series=tuple(series), view=View.FULL, sample_id="sample-0")
+    dataset.add_sample(time_series=tuple(series), sample_id="sample-0")
     dataset.derive_schema()
     return dataset
 
@@ -328,10 +326,9 @@ def test_a_wrong_column_path_is_caught(tmp_path):
             "spec_type": ["ecg"],
             "channel": ["I"],
             "chunk_idx": [0],
-            "t_start_s": [0.0],
             "n_values": [_N],
-            "sampling_rate_hz": [_RATE_HZ],
             "values": values,
+            "time_offsets_us": pa.array([None], type=pa.list_(pa.int64())),
         },
         schema=schema,
     )
