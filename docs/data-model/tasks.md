@@ -32,23 +32,48 @@ concrete types.
 
 ## The Span primitive
 
-A `Span` is a point or a half-open interval `[start, end)` in whole microseconds, optionally scoped to particular series.
-Times are in the **source recording timeline**, the same frame a series' `time_axis` places its values in, so a span stays
-meaningful on a windowed sample that starts partway into the recording. Build a `PointSpan` and the span is an
-time offset.
+A span is one region a task or annotation localizes. It has two independent traits: its shape (a point
+or a half-open interval `[start, stop)`) and its frame (time or steps). The frame changes what the
+numbers mean, so the frame is the type. The four concrete leaves are `TimePoint`, `TimeInterval`,
+`StepPoint`, and `StepInterval`. `Span`, `TimeSpan`, and `StepSpan` are abstract bases you annotate with
+(`Span` for any span), not construct.
+
+A **time span** reads its bounds as whole microseconds on the **source recording timeline**, the same
+frame a series' axis places its values in, so it stays meaningful on a windowed sample that starts
+partway into the recording. It covers the whole sample when `time_series_ids` is `None`, or a subset of
+series when it names them (a tuple of ids).
 
 ```python
-from timenet.types import IntervalSpan, PointSpan
+from timenet.types import TimeInterval, TimePoint
 
 # an interval on one channel
-IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",))
+TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",))
 
 # a point, every channel
-PointSpan.seconds(1.2)
+TimePoint.seconds(1.2)
 ```
 
-One primitive covers both directions of time localization: a `scope` is a region **given** to the model,
-and a `TemporalLocalizationTask` target is a region the model must **find**.
+Besides `seconds`, both build from `micros` (whole microseconds). For a wall-clock moment, use
+`sample.time_point(at)` / `sample.time_interval(start, end)`, which read the sample's own `start_time`.
+
+A **step span** reads its bounds as ordinal indices into one series' own array. A step index means
+nothing without a series to count on, so a step span names exactly one series via `time_series_id` (a
+single str) and takes no unit builders, so construct it plainly. Steps exist for a series that has no
+timeline at all: an ordinal sequence has positions but no clock. `TSQA` is such a series, an ordered
+sequence of values with no calendar time. Steps 132 to 143 of one are this step interval:
+
+```python
+from timenet.types import StepInterval
+
+StepInterval(time_series_id="tsqa", start=132, stop=144)
+```
+
+Which frame fits a series is decided by the series' **axis**, not by the caller: a timeline axis (regular
+or irregular) takes a time span, an ordinal axis takes a step span. `add_task` checks a span against the
+axis of every series it names and rejects a mismatch.
+
+Spans cover both directions of time localization: a `scope` is a region **given** to the model, and a
+`TemporalLocalizationTask` target is a region the model must **find**.
 
 ## ClassificationTask
 
@@ -57,14 +82,14 @@ are the same question asked of different amounts of input, so they are one type.
 the vocabulary the label belongs to.
 
 ```python
-from timenet.types import ClassificationTask, IntervalSpan
+from timenet.types import ClassificationTask, TimeInterval
 
 ClassificationTask(target="faulty", target_schema="condition")
 
 ClassificationTask(
     target="fault_episode",
     target_schema="condition",
-    scope=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),
+    scope=TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",)),
 )
 ```
 
@@ -136,13 +161,13 @@ string in an answer task loses its type; keeping it a `float` with a `unit` make
 batching, and unit-aware conversion straightforward.
 
 ```python
-from timenet.types import IntervalSpan, ScalarPredictionTask
+from timenet.types import ScalarPredictionTask, TimeInterval
 
 ScalarPredictionTask(
     target=62.0,
     unit="bpm",
     target_name="mean_heart_rate",
-    scope=IntervalSpan.seconds(0.0, 30.0),
+    scope=TimeInterval.seconds(0.0, 30.0),
 )
 ```
 
@@ -154,21 +179,22 @@ ScalarPredictionTask(
 
 Regions out: find where something happens, given a description of it. The inverse of a scoped
 `ClassificationTask`, which supplies the region and asks for its label. One type covers event detection,
-segmentation, and change-point detection, because they share this target: a tuple of `Span`s.
+segmentation, and change-point detection, because they share this target: a tuple of `TimePoint` or
+`TimeInterval` spans.
 
 `mode` says whether unmarked time is allowed. `SPARSE` means only the marked spans are claimed (R-peaks);
 `EXHAUSTIVE` means the spans are expected to tile the region of interest and a gap is an error (sleep
 staging).
 
 ```python
-from timenet.types import LocalizationMode, PointSpan, TemporalLocalizationTask
+from timenet.types import LocalizationMode, TemporalLocalizationTask, TimePoint
 
 TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
     target=(
-        PointSpan.seconds(1.20, time_series_ids=("II",)),
-        PointSpan.seconds(2.05, time_series_ids=("II",)),
+        TimePoint.seconds(1.20, time_series_ids=("II",)),
+        TimePoint.seconds(2.05, time_series_ids=("II",)),
     ),
 )
 
@@ -204,17 +230,30 @@ ForecastingTask(
 ```
 
 `target_span` lets a single unsplit series carry a horizon, so a dataset can ship the raw recording
-rather than a context/target pair. It is the region to predict on the source recording timeline, must
-be an interval (a point has no duration, so it names no values), and needs an explicit `scope` for the
-context — the default `scope=None` means the whole sample, which would include the region to predict.
+rather than a context/target pair. It is the region to predict, a `TimeInterval` on the recording
+timeline or a `StepInterval` on an ordinal series, and must be an interval, never a point (a point has
+no duration, so it names no values). It needs an explicit `scope` for the context, since the default
+`scope=None` means the whole sample, which would include the region to predict.
 
 ```python
-from timenet.types import ForecastingTask, IntervalSpan
+from timenet.types import ForecastingTask, TimeInterval
 
 # forecast the last 12 s of a 144 s recording, given the first 132 s as context
 ForecastingTask(
-    scope=IntervalSpan.seconds(0.0, 132.0),
-    target_span=IntervalSpan.seconds(132.0, 144.0),
+    scope=TimeInterval.seconds(0.0, 132.0),
+    target_span=TimeInterval.seconds(132.0, 144.0),
+)
+```
+
+An ordinal series has no clock, so its horizon is named in steps instead. A purely ordinal sequence —
+order only, no calendar time — takes its last 12 steps as the horizon, given the first 132 as context:
+
+```python
+from timenet.types import ForecastingTask, StepInterval
+
+ForecastingTask(
+    scope=StepInterval(time_series_id="sequence", start=0, stop=132),
+    target_span=StepInterval(time_series_id="sequence", start=132, stop=144),
 )
 ```
 

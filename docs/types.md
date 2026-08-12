@@ -144,7 +144,7 @@ can read as input, or that can itself become a task's question or answer. It is 
 levels, and the scopes combine:
 
 - sample: the whole sample (a static fact, or a trial-level temporal marker),
-- time range: a `Span` in the recording timeline,
+- time range: a time span (`TimePoint` or `TimeInterval`) in the recording timeline,
 - signal: one or more specific channels (`time_series_ids`).
 
 One flat frozen dataclass, and the optional `span` is what gives it a shape. `key` / `value` / `unit` / `description` / `id` are
@@ -154,8 +154,8 @@ reuse) and they round-trip without runtime class synthesis.
 | `span` | Extra fields | Scope |
 | --- | --- | --- |
 | absent | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `PointSpan` | — | One time offset, on specific signals or the whole sample. |
-| `IntervalSpan` | — | A bounded region, on specific signals or the whole sample. |
+| `TimePoint` | — | One time offset, on specific signals or the whole sample. |
+| `TimeInterval` | — | A bounded region, on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
 `description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
@@ -165,23 +165,23 @@ sample); a non-empty tuple restricts the annotation to those channels (each id m
 `TimeSeries.time_series_id` on the sample).
 
 ```python
-from timenet.types import Annotation, IntervalSpan, PointSpan
+from timenet.types import Annotation, TimeInterval, TimePoint
 
 # sample scope
 Annotation(key="operating_hours", value=1200, unit="hours")
 
 # time range on the whole sample (trial-level)
-Annotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
+Annotation(key="artifact", span=TimeInterval.seconds(10.0, 12.0))
 
 # signal + time range: the vibration and current channels, seconds 5 to 6
 Annotation(
     key="fault",
     value="bearing fault",
-    span=IntervalSpan.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
+    span=TimeInterval.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
 )
 
 # one time offset on a single channel
-Annotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
+Annotation(key="impact", span=TimePoint.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 A connector that emits the same key repeatedly can subclass with field defaults:
@@ -229,7 +229,7 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 | `ClassificationTask` | `classification` | `target: str` (a label) | `target_schema` |
 | `AnswerTask` | `answer` | `target: str` (free text) | — |
 | `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
-| `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[Span, ...]` | `mode` |
+| `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[TimePoint \| TimeInterval, ...]` | `mode` |
 | `ForecastingTask` | `forecasting` | a produced series | `context_sample_ids`, `target_sample_id`, `target_span` |
 | `TSEditingTask` | `ts_editing` | a produced series | `source_sample_id`, `target_sample_id` |
 | `TSGenerationTask` | `ts_generation` | a produced series | `target_sample_id` |
@@ -246,26 +246,42 @@ of type. The three series-output types are the exception: their answer is a *ser
 
 ### Span
 
-`Span` is the geometry primitive shared by a task's `scope` and a localization target: a point
-(`end=None`) or a half-open interval `[start, end)`, optionally scoped to `time_series_ids`
-(`None` = every series). Times are in the **source recording timeline**, the same frame as
-a series' `time_axis`, and bounds are whole microseconds so two equal regions compare equal.
+A task's `scope` and a localization target are **spans**: one region a task or annotation localizes. A
+span has a shape (a point, or a half-open interval) and a **frame**, and the frame is the type. The
+frame decides what the bounds mean. A **time** frame reads them as microseconds on the source recording
+timeline; a **step** frame reads them as ordinal indices into one series' own array. `Span` is the base
+you annotate with for any span; it and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
+always build a concrete leaf.
 
-Build one on the shape you mean: `IntervalSpan` or `PointSpan`, each with `.seconds()` for the seconds
-a recording documents itself in, `.micros()` when the source already has integers, and
-`.from_datetime()` for wall-clock moments. The shape is named at the call site rather than inferred
-from how many bounds you passed, so `IntervalSpan.seconds(5.0)` is an error instead of a point that
-quietly claims to be an interval.
+Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
+meaningful on a windowed sample that starts partway into the recording. `TimePoint(start_us=...)` is one
+point; `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
+covers the whole sample, or a subset of series named by `time_series_ids` (`None` = every series). Build
+with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
+has integers. For a wall-clock moment, build it from the sample (`sample.time_point(at)` /
+`sample.time_interval(start, end)`), which supplies its own `start_time` as the anchor. Bounds are stored
+as whole microseconds, so two equal regions compare equal.
+
+Step spans count a series' own ordinal positions, for a series that has no clock at all. A step index
+means nothing without a series to count on, so a step span names exactly one `time_series_id` (a single
+str). `StepPoint(time_series_id=..., start=...)` is one step;
+`StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
+are no unit builders; construct them directly.
+
+Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
+irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
+span against the axis of every series it names and rejects a mismatch.
 
 ```python
-# an interval on one series; start is stored as 5_000_000
-IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",))
+# a time interval on one series; start is stored as 5_000_000
+TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",))
 
-# a point, on every series in the sample
-PointSpan.seconds(1.2)
+# a time point, on every series in the sample
+TimePoint.seconds(1.2)
 
-# the same interval, written directly in microseconds
-IntervalSpan.micros(5_000_000, 8_000_000)
+# a region of an ordinal series (order only, no clock, like TSQA):
+# the interval covering steps 132 to 143
+StepInterval(time_series_id="tsqa", start=132, stop=144)
 ```
 
 ### Per-type payloads
@@ -279,7 +295,7 @@ IntervalSpan.micros(5_000_000, 8_000_000)
   dataset.add_task(
       sample,
       ClassificationTask(target="fault_episode", target_schema="condition"),
-      scope=IntervalSpan.seconds(
+      scope=TimeInterval.seconds(
           120.0, 480.0, time_series_ids=(vibration.time_series_id,)
       ),
   )
@@ -309,8 +325,8 @@ IntervalSpan.micros(5_000_000, 8_000_000)
   dataset.add_task(sample, TemporalLocalizationTask(
       prompt="Locate all R-peaks in lead II.",
       target=(
-          PointSpan.seconds(1.20, time_series_ids=("II",)),
-          PointSpan.seconds(2.05, time_series_ids=("II",)),
+          TimePoint.seconds(1.20, time_series_ids=("II",)),
+          TimePoint.seconds(2.05, time_series_ids=("II",)),
       ),
   ))
   ```

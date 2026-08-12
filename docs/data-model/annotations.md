@@ -11,7 +11,10 @@ tags:
 An annotation is side-information attached to a [sample](samples.md). Every annotation has two parts: a
 **scope** (which channels, and which point or window in time it refers to) and a free-text **content**
 that can be as short as a tag or as long as a paragraph of reasoning. One `Annotation` class covers
-every case; its optional `span` is what says how it sits in time. It is a keyword-only frozen
+every case; its optional `span` is what says how it sits in time. Annotations are timeline events, so
+that span is a `TimePoint` or a `TimeInterval`, both read as microseconds on the source recording
+timeline. (The step frame, `StepPoint` and `StepInterval` counted in a series' own ordinals, is for
+[tasks](tasks.md) on an ordinal series; annotations don't use it.) It is a keyword-only frozen
 dataclass with `key`, `value`, `unit` and `description` fields, so a connector authors it directly
 (or subclasses with field defaults for reuse).
 
@@ -34,15 +37,17 @@ Annotation(key="operating_hours", value=1200, unit="hours")
 
 ## One time offset
 
-An `Annotation` whose `span` is a `PointSpan` marks one time offset on one or more channels. It is the right shape for discrete
-events: a shock, a valve actuation, a detected spike. Points are cheap to store, are often produced in
-bulk by detectors, and then serve as anchors for downstream windowing. Pass `time_series_ids` to target
-specific channels, or leave it `None` for the whole sample.
+An `Annotation` whose `span` is a `TimePoint` marks one time offset on one or more channels. It is the
+right shape for discrete events: a shock, a valve actuation, a detected spike. Points are cheap to
+store, are often produced in bulk by detectors, and then serve as anchors for downstream windowing.
+Pass `time_series_ids` to target specific channels, or leave it `None` for the whole sample. A
+`TimePoint` reads its offset as microseconds on the source recording timeline; `seconds()` converts
+from recording seconds for you.
 
 ```python
-from timenet.types import Annotation
+from timenet.types import Annotation, TimePoint
 
-Annotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration",)))
+Annotation(key="impact", span=TimePoint.seconds(4.2, time_series_ids=("vibration",)))
 ```
 
 <figure markdown="span">
@@ -51,18 +56,19 @@ Annotation(key="impact", span=PointSpan.seconds(4.2, time_series_ids=("vibration
 
 ## A bounded window
 
-An `Annotation` whose `span` is an `IntervalSpan` covers a start-to-end window on one or more
-channels, and it is the workhorse. The interval's end must exceed its start. Everything expressive about the scoping grammar, which channels
-by which time range, lives here, and the `value` and free-text `description` can carry the full reading
-of what happens in that window.
+An `Annotation` whose `span` is a `TimeInterval` covers a start-to-end window on one or more
+channels, and it is the workhorse. The half-open range `[start, end)` must have an end that exceeds
+its start. Everything expressive about the scoping grammar, which channels by which time range, lives
+here, and the `value` and free-text `description` can carry the full reading of what happens in that
+window.
 
 ```python
-from timenet.types import Annotation
+from timenet.types import Annotation, TimeInterval
 
 Annotation(
     key="fault",
     value="bearing fault",
-    span=IntervalSpan.seconds(5.0, 8.0, time_series_ids=("vibration",)),
+    span=TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",)),
 )
 ```
 

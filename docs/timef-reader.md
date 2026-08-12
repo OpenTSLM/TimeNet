@@ -39,9 +39,9 @@ it: roughly 180 bytes of memory per index row, where a row is one `(sample, seri
 Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors.
 There is no runtime class synthesis. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor for its
 `spec_type`; annotations are rebuilt as real `Annotation` instances (values decoded from JSON, the
-span rebuilt as a `PointSpan` or `IntervalSpan`); tasks are resolved against the built-in
-`TASKS` registry with `from_tasks` linked. Everything pickles and compares equal to the originals
-field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
+span rebuilt as a `TimePoint`, `TimeInterval`, `StepPoint`, or `StepInterval`); tasks are resolved
+against the built-in `TASKS` registry with `from_tasks` linked. Everything pickles and compares equal
+to the originals field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
 
 ## Value reads
 
