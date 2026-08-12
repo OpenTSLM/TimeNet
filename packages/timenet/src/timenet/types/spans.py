@@ -1,188 +1,194 @@
-"""The span geometry primitives: one time offset or one interval on a recording timeline.
+"""Span types: one region a task or annotation localizes, in one of two frames.
 
-A span is the shape shared by every time-localized field a task carries: the ``scope`` a task is asked
-about and the target regions a :class:`~timenet.types.TemporalLocalizationTask` predicts are the same
-type run in opposite directions. :class:`Span` holds the fields and the checks, and is what a field
-annotates when either shape fits.
+A region has two independent traits: its shape (a point or a half-open interval) and its frame (time or
+steps). The frame changes what the numbers mean, so the frame is the type. Shape is the same trait run
+twice, so it is a subtype within each frame.
 
-Bounds are whole microseconds on the source recording timeline. Storing an integer is what makes two
-equal regions compare equal: a float's resolution changes with magnitude, so the same time offset derived
-two ways need not agree. Callers rarely have microseconds, so they rarely write them. Each shape
-builds itself from what a source actually has::
+A time span reads its bounds as microseconds on the **source recording timeline**, the frame a series'
+axis places its values in, so it stays meaningful on a windowed sample that starts partway into the
+recording. It covers the whole sample, or a subset of series named by ``time_series_ids``.
 
-    IntervalSpan.seconds(5.0, 8.0)  # recording seconds, rounded once
-    IntervalSpan.micros(5_000_000, 8_000_000)  # already integral
-    IntervalSpan.from_datetime(t1, t2, start_time=sample.start_time)
+A step span reads its bounds as ordinal indices into one series' own array. A step index means nothing
+without a series to count on, so a step span names exactly one ``time_series_id``. Steps exist for a
+series that has no timeline at all: an ordinal sequence has positions but no clock.
 
-    PointSpan.seconds(1.2)
-    PointSpan.micros(1_200_000)
-    PointSpan.from_datetime(t, start_time=sample.start_time)
+Which frame fits a series is decided by the series' axis, not by the caller. A timeline axis (regular or
+irregular) takes a time span; an ordinal axis takes a step span.
+:meth:`~timenet.dataset.TimeFDataset.add_task` checks a span against the axis of every series it names.
 
-The shape is named at the call site rather than inferred from how many bounds were passed, so
-``IntervalSpan.seconds(5.0)`` is a type error rather than a point that quietly claims to be an
-interval.
+Build a concrete leaf. The bases (:class:`Span`, :class:`TimeSpan`, :class:`StepSpan`) are abstract, so
+every span in circulation carries the shape and frame it means::
+
+    TimePoint.seconds(1.2)              TimeInterval.seconds(5.0, 8.0)
+    StepPoint(time_series_id="x", start=5)
+    StepInterval(time_series_id="x", start=0, stop=12)
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from typing import ClassVar
 
 from timenet.errors import TimeFValidationError
-from timenet.types.clock import check_int64, offset_us, seconds_to_us
+from timenet.types.clock import check_int64, seconds_to_us
+
+
+def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
+    """Reject a bound that is not a whole int inside the int64 range TimeF stores it in.
+
+    Args:
+        name: The field being checked, named in the error message.
+        value: The bound to check.
+        unit: How the bound reads when it is not whole (e.g. ``"whole microseconds"``).
+        hint: Extra guidance appended to the not-whole message.
+
+    Raises:
+        TimeFValidationError: If ``value`` is a bool, is not an ``int``, or falls outside int64.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        message = f"{name} must be {unit}, got {value!r}"
+        if hint:
+            message = f"{message}. {hint}"
+        raise TimeFValidationError(message)
+    check_int64(name, value)
 
 
 @dataclass(frozen=True, kw_only=True)
 class Span:
-    """A point (``end is None``) or half-open interval ``[start, end)``, optionally per-channel.
+    """Abstract base for every localized region. Not constructible; build a concrete leaf type.
 
-    Bounds are microseconds on the **source recording timeline**, the same frame as
-    the frame a series' axis places its values in, so a span stays meaningful on a windowed sample
-    that starts partway into the recording. That a span actually falls inside the sample it is
-    attached to is checked by :meth:`~timenet.dataset.TimeFDataset.add_task`, which has the sample.
-
-    Annotate with ``Span`` where either shape fits, and with :class:`PointSpan` or
-    :class:`IntervalSpan` where only one does. Build with the builders on those two; the base is not
-    constructible, so every span in circulation carries the shape it means.
+    The concrete spans are :class:`TimePoint`, :class:`TimeInterval`, :class:`StepPoint`, and
+    :class:`StepInterval`. Annotate with ``Span`` where any of them fits, and shared code reads them
+    through this base.
     """
 
-    start: int
-    """Start of the interval, or the time offset itself, in microseconds."""
-    end: int | None = None
-    """End of the interval in microseconds, exclusive; ``None`` makes the span a point."""
+    is_point: ClassVar[bool] = False
+    """Whether this span marks a single position rather than a bounded interval."""
+
+    def __post_init__(self) -> None:
+        """Reject construction of an abstract base.
+
+        Raises:
+            TimeFValidationError: If the constructed type is ``Span``, ``TimeSpan``, or ``StepSpan``,
+                none of which says which shape and frame it means.
+        """
+        if type(self) in {Span, TimeSpan, StepSpan}:
+            raise TimeFValidationError(
+                f"{type(self).__name__} is an abstract span base; build a TimePoint, TimeInterval, "
+                f"StepPoint, or StepInterval so the span says which shape and frame it is"
+            )
+
+    @property
+    def exclusive_end(self) -> int:
+        """The exclusive upper bound of the span, in its own frame.
+
+        The region is half-open, so a point ends one unit past its position and an interval ends at
+        its stored end. Each concrete leaf supplies this.
+        """
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, kw_only=True)
+class TimeSpan(Span):
+    """Abstract base for a region on the recording timeline. Bounds are microseconds.
+
+    Covers the whole sample when ``time_series_ids`` is ``None``, or a subset of series when it names
+    them. Valid only on a series whose axis is a timeline (regular or irregular).
+    """
+
+    frame: ClassVar[str] = "seconds"
+    """The frame its bounds read in, as stored on disk."""
+
+    start_us: int
+    """The position, or the start of the interval, in microseconds on the source recording timeline."""
     time_series_ids: tuple[str, ...] | None = None
     """Series the span is scoped to; ``None`` covers every series in the sample."""
 
     def __post_init__(self) -> None:
-        """Reject a missing or fractional bound, a non-positive interval, or an empty ``time_series_ids``.
+        """Validate the base, then the start bound and the series scope.
 
         Raises:
-            TimeFValidationError: If the base class is constructed directly, if ``start`` is missing,
-                if a bound is not whole microseconds or does not fit int64, if ``end`` is not strictly
-                greater than ``start``, or if ``time_series_ids`` is ``()`` rather than ``None`` or
-                non-empty.
+            TimeFValidationError: If an abstract base is constructed; if ``start_us`` is not whole
+                microseconds; or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
         """
-        if type(self) is Span:
-            raise TimeFValidationError(
-                "Span is the shared base, not a shape; build a PointSpan or an IntervalSpan so the "
-                "span says which one it is"
-            )
-        # The field annotations are not enforced at runtime, so a None start would otherwise slip
-        # past the loop below (which skips None) and construct a span with no position.
-        if self.start is None:
-            raise TimeFValidationError("Span start must be whole microseconds, got None; a span always has a start")
-        for name in ("start", "end"):
-            value = getattr(self, name)
-            if value is None:
-                continue
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TimeFValidationError(
-                    f"Span {name} must be whole microseconds, got {value!r}. Use seconds() to convert "
-                    f"from recording seconds"
-                )
-            check_int64(f"Span {name}", value)
-        if self.end is not None and self.end <= self.start:
-            raise TimeFValidationError(f"Span end ({self.end}) must be > start ({self.start})")
+        super().__post_init__()
+        _check_whole(
+            "TimeSpan start_us",
+            self.start_us,
+            unit="whole microseconds",
+            hint="Use seconds() to convert from recording seconds",
+        )
         if self.time_series_ids is not None and not self.time_series_ids:
-            raise TimeFValidationError("Span time_series_ids must be None (whole sample) or non-empty, got ()")
-
-    @property
-    def is_point(self) -> bool:
-        """Whether the span marks a time offset rather than a bounded interval."""
-        return self.end is None
+            raise TimeFValidationError("TimeSpan time_series_ids must be None (whole sample) or non-empty, got ()")
 
 
 @dataclass(frozen=True, kw_only=True)
-class PointSpan(Span):
-    """One time offset on the recording timeline."""
+class TimePoint(TimeSpan):
+    """One point on the recording timeline."""
 
-    end: None = None
-    """Always ``None``: a point has no second bound."""
+    is_point: ClassVar[bool] = True
 
-    def __post_init__(self) -> None:
-        """Validate the base invariants, then reject a point that carries an end.
-
-        Raises:
-            TimeFValidationError: If ``end`` is set; a point marks one time offset and has no second bound.
-        """
-        super().__post_init__()
-        if self.end is not None:
-            raise TimeFValidationError(
-                f"a PointSpan marks one time offset and has no end, got end={self.end!r}. Use "
-                f"IntervalSpan for a bounded region"
-            )
+    @property
+    def exclusive_end(self) -> int:
+        """One microsecond past the point, so the half-open window covering it is ``[start_us, +1)``."""
+        return self.start_us + 1
 
     @classmethod
-    def seconds(cls, at: float, *, time_series_ids: tuple[str, ...] | None = None) -> "PointSpan":
+    def seconds(cls, at: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
         """Construct a point from recording seconds, rounded to the nearest microsecond.
 
         Args:
-            at: The time offset, in recording seconds.
+            at: The position, in recording seconds.
             time_series_ids: Series the point is scoped to; ``None`` covers every series.
 
         Returns:
             The point.
         """
-        return cls(start=seconds_to_us(at), time_series_ids=time_series_ids)
+        return cls(start_us=seconds_to_us(at), time_series_ids=time_series_ids)
 
     @classmethod
-    def micros(cls, at: int, *, time_series_ids: tuple[str, ...] | None = None) -> "PointSpan":
+    def micros(cls, at: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
         """Construct a point from whole microseconds, for a source that already has them.
 
         Args:
-            at: The time offset, in microseconds.
+            at: The position, in microseconds.
             time_series_ids: Series the point is scoped to; ``None`` covers every series.
 
         Returns:
             The point.
         """
-        return cls(start=at, time_series_ids=time_series_ids)
-
-    @classmethod
-    def from_datetime(
-        cls,
-        at: datetime,
-        *,
-        start_time: datetime | int | None,
-        time_series_ids: tuple[str, ...] | None = None,
-    ) -> "PointSpan":
-        """Construct a point from a wall-clock moment, relative to the sample it is for.
-
-        A span's bounds are offsets on the recording timeline, so a calendar moment only names an
-        time offset once something says when that timeline began. ``start_time`` is that something, which
-        is why it is required rather than inferred.
-
-        Args:
-            at: The wall-clock moment, timezone-aware.
-            start_time: The target sample's ``start_time``.
-            time_series_ids: Series the point is scoped to; ``None`` covers every series.
-
-        Returns:
-            The point.
-        """
-        return cls(start=offset_us(at, start_time), time_series_ids=time_series_ids)
+        return cls(start_us=at, time_series_ids=time_series_ids)
 
 
 @dataclass(frozen=True, kw_only=True)
-class IntervalSpan(Span):
-    """The half-open range ``[start, end)`` on the recording timeline."""
+class TimeInterval(TimeSpan):
+    """The half-open range ``[start_us, end_us)`` on the recording timeline."""
 
-    # field() is what drops the base's None default; a bare redeclaration inherits it, and an
-    # interval with no end would then construct and type-check clean.
-    end: int = field()
-    """End of the interval in microseconds, exclusive."""
+    end_us: int
+    """End of the interval, exclusive, in microseconds."""
 
     def __post_init__(self) -> None:
-        """Validate the base invariants, then reject an interval with no end.
+        """Validate the time base, then the end bound.
 
         Raises:
-            TimeFValidationError: If ``end`` is ``None``; an interval needs a second bound. Use
-                ``PointSpan`` for a time offset.
+            TimeFValidationError: If ``end_us`` is not whole microseconds, or is not greater than
+                ``start_us``.
         """
         super().__post_init__()
-        if self.end is None:
-            raise TimeFValidationError("an IntervalSpan needs an end; use PointSpan for a time offset")
+        _check_whole(
+            "TimeInterval end_us",
+            self.end_us,
+            unit="whole microseconds",
+            hint="Use seconds() to convert from recording seconds",
+        )
+        if self.end_us <= self.start_us:
+            raise TimeFValidationError(f"TimeInterval end_us ({self.end_us}) must be > start_us ({self.start_us})")
+
+    @property
+    def exclusive_end(self) -> int:
+        """The interval's own exclusive end, ``end_us``."""
+        return self.end_us
 
     @classmethod
-    def seconds(cls, start: float, end: float, *, time_series_ids: tuple[str, ...] | None = None) -> "IntervalSpan":
+    def seconds(cls, start: float, end: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
         """Construct an interval from recording seconds, each bound rounded to the nearest microsecond.
 
         Args:
@@ -193,10 +199,10 @@ class IntervalSpan(Span):
         Returns:
             The interval.
         """
-        return cls(start=seconds_to_us(start), end=seconds_to_us(end), time_series_ids=time_series_ids)
+        return cls(start_us=seconds_to_us(start), end_us=seconds_to_us(end), time_series_ids=time_series_ids)
 
     @classmethod
-    def micros(cls, start: int, end: int, *, time_series_ids: tuple[str, ...] | None = None) -> "IntervalSpan":
+    def micros(cls, start: int, end: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
         """Construct an interval from whole microseconds, for a source that already has them.
 
         Args:
@@ -207,34 +213,76 @@ class IntervalSpan(Span):
         Returns:
             The interval.
         """
-        return cls(start=start, end=end, time_series_ids=time_series_ids)
+        return cls(start_us=start, end_us=end, time_series_ids=time_series_ids)
 
-    @classmethod
-    def from_datetime(
-        cls,
-        start: datetime,
-        end: datetime,
-        *,
-        start_time: datetime | int | None,
-        time_series_ids: tuple[str, ...] | None = None,
-    ) -> "IntervalSpan":
-        """Construct an interval from wall-clock moments, relative to the sample it is for.
 
-        A span's bounds are offsets on the recording timeline, so calendar moments only name a region
-        once something says when that timeline began. ``start_time`` is that something, which is why
-        it is required rather than inferred.
+@dataclass(frozen=True, kw_only=True)
+class StepSpan(Span):
+    """Abstract base for a region counted in the step ordinals of one series.
 
-        Args:
-            start: Wall-clock start, timezone-aware.
-            end: Wall-clock end, exclusive and timezone-aware.
-            start_time: The target sample's ``start_time``.
-            time_series_ids: Series the interval is scoped to; ``None`` covers every series.
+    A step index means nothing without a series to count on, so a step span names exactly one
+    ``time_series_id``. Valid only on a series whose axis is ordinal (no timeline).
+    """
 
-        Returns:
-            The interval.
+    frame: ClassVar[str] = "steps"
+    """The frame its bounds read in, as stored on disk."""
+
+    time_series_id: str
+    """The single series whose steps the span counts."""
+    start: int
+    """The position, or the start of the interval, as a step ordinal from the series' first stored step."""
+
+    def __post_init__(self) -> None:
+        """Validate the base, then the series id and the start ordinal.
+
+        Raises:
+            TimeFValidationError: If an abstract base is constructed; if ``time_series_id`` is empty;
+                or if ``start`` is not a whole ordinal ``>= 0``.
         """
-        return cls(
-            start=offset_us(start, start_time),
-            end=offset_us(end, start_time),
-            time_series_ids=time_series_ids,
-        )
+        super().__post_init__()
+        if not self.time_series_id:
+            raise TimeFValidationError("StepSpan time_series_id must name one series; got an empty id")
+        _check_whole("StepSpan start", self.start, unit="a whole step ordinal")
+        if self.start < 0:
+            raise TimeFValidationError(f"StepSpan start must be >= 0, got {self.start}")
+
+
+@dataclass(frozen=True, kw_only=True)
+class StepPoint(StepSpan):
+    """One step ordinal on the named series."""
+
+    is_point: ClassVar[bool] = True
+
+    @property
+    def exclusive_end(self) -> int:
+        """One step past the ordinal, so the half-open range covering it is ``[start, +1)``."""
+        return self.start + 1
+
+
+@dataclass(frozen=True, kw_only=True)
+class StepInterval(StepSpan):
+    """The half-open range ``[start, stop)`` of step ordinals on the named series."""
+
+    stop: int
+    """Last step ordinal, exclusive."""
+
+    def __post_init__(self) -> None:
+        """Validate the step base, then the stop ordinal.
+
+        Raises:
+            TimeFValidationError: If ``stop`` is not a whole ordinal, or is not greater than ``start``.
+        """
+        super().__post_init__()
+        _check_whole("StepInterval stop", self.stop, unit="a whole step ordinal")
+        if self.stop <= self.start:
+            raise TimeFValidationError(f"StepInterval stop ({self.stop}) must be > start ({self.start})")
+
+    @property
+    def exclusive_end(self) -> int:
+        """The range's own exclusive end, ``stop``."""
+        return self.stop
+
+    @property
+    def n_steps(self) -> int:
+        """How many steps the interval covers, the horizon ``h`` step-based forecasting libraries speak in."""
+        return self.stop - self.start

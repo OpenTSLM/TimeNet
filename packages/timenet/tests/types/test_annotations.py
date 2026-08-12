@@ -8,8 +8,8 @@ from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
-    IntervalSpan,
-    PointSpan,
+    TimeInterval,
+    TimePoint,
     annotation_type_of,
     ureg,
 )
@@ -23,7 +23,7 @@ def test_an_annotation_needs_a_value_or_a_span():
 
 def test_a_span_alone_is_enough():
     # A pure marker: no payload, but it marks a region, which is information.
-    assert Annotation(key="artifact", span=PointSpan.seconds(0.5)).value is None
+    assert Annotation(key="artifact", span=TimePoint.seconds(0.5)).value is None
 
 
 def test_static_with_value():
@@ -42,36 +42,36 @@ def test_unknown_unit_string_raises():
 
 
 def test_point_is_a_pure_marker_by_default():
-    ann = Annotation(key="stimulus", span=PointSpan.seconds(4.0))
+    ann = Annotation(key="stimulus", span=TimePoint.seconds(4.0))
     assert ann.value is None
     assert ann.span is not None
-    assert ann.span.start == 4_000_000
+    assert ann.span.start_us == 4_000_000
     assert ann.span is not None
     assert ann.span.time_series_ids is None
 
 
 def test_interval_requires_end_after_start():
     with pytest.raises(TimeFValidationError):
-        Annotation(key="artifact", span=IntervalSpan.seconds(10.0, 8.0))
-    ann = Annotation(key="artifact", span=IntervalSpan.seconds(10.0, 12.0))
-    assert ann.span is not None
-    assert ann.span.end == 12_000_000
+        Annotation(key="artifact", span=TimeInterval.seconds(10.0, 8.0))
+    ann = Annotation(key="artifact", span=TimeInterval.seconds(10.0, 12.0))
+    assert isinstance(ann.span, TimeInterval)
+    assert ann.span.end_us == 12_000_000
 
 
 def test_point_rejects_empty_time_series_ids():
     with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        Annotation(key="stimulus", span=PointSpan.seconds(4.0, time_series_ids=()))
+        Annotation(key="stimulus", span=TimePoint.seconds(4.0, time_series_ids=()))
 
 
 def test_interval_rejects_empty_time_series_ids():
     with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0, time_series_ids=()))
+        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=()))
 
 
 def test_annotation_type_of():
     assert annotation_type_of(Annotation(key="a", value=1)) is AnnotationType.STATIC
-    assert annotation_type_of(Annotation(key="a", span=PointSpan.seconds(1.0))) is AnnotationType.POINT
-    assert annotation_type_of(Annotation(key="a", span=IntervalSpan.seconds(1.0, 2.0))) is AnnotationType.INTERVAL
+    assert annotation_type_of(Annotation(key="a", span=TimePoint.seconds(1.0))) is AnnotationType.POINT
+    assert annotation_type_of(Annotation(key="a", span=TimeInterval.seconds(1.0, 2.0))) is AnnotationType.INTERVAL
 
 
 def test_auto_id_unique():
@@ -95,7 +95,7 @@ def test_frozen():
 
 
 def test_picklable():
-    ann = Annotation(key="artifact", span=IntervalSpan.seconds(1.0, 2.0, time_series_ids=("s1",)))
+    ann = Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=("s1",)))
     assert pickle.loads(pickle.dumps(ann)) == ann
 
 
@@ -131,5 +131,5 @@ def test_base_annotation_not_typeable():
 
 
 def test_span_must_be_a_span():
-    with pytest.raises(TimeFValidationError, match="must be a PointSpan or an IntervalSpan"):
+    with pytest.raises(TimeFValidationError, match="must be a TimePoint or a TimeInterval"):
         Annotation(key="bad", span="not-a-span")  # ty: ignore[invalid-argument-type]

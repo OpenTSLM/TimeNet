@@ -20,9 +20,9 @@ from timenet.types import (
     DataSource,
     Domain,
     ForecastingTask,
-    IntervalSpan,
     License,
-    PointSpan,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -145,7 +145,7 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
         ClassificationTask(
             target="N2",
             target_schema="sleep-stage",
-            scope=IntervalSpan.seconds(30.0, 60.0),
+            scope=TimeInterval.seconds(30.0, 60.0),
             id="task-sleep-label",
         ),
     )
@@ -173,11 +173,14 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
             id="task-workout-reasoning",
         ),
     )
+    # A single unsplit recording carrying its own horizon: predict the tail from the head. The energy
+    # scenario is 4096 steps at 0.25 Hz, a [0, 16384 s) window at the smallest scale, so this span is
+    # inside every scale.
     dataset.add_task(
         energy,
         ForecastingTask(
-            context_sample_ids=(energy.sample_id,),
-            target_sample_id=energy.sample_id,
+            scope=TimeInterval.seconds(0.0, 16000.0),
+            target_span=TimeInterval.seconds(16000.0, 16380.0),
             id="task-energy-forecast",
         ),
     )
@@ -351,13 +354,13 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
         )
         sample.add_annotation(
-            Annotation(key="event", span=PointSpan.seconds(1.0), id=f"annotation-{scenario.name}-event")
+            Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event")
         )
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             sample.add_annotation(
                 Annotation(
                     key="quality-window",
-                    span=IntervalSpan.seconds(1.0, 2.0),
+                    span=TimeInterval.seconds(1.0, 2.0),
                     id=f"annotation-{scenario.name}-window",
                 )
             )

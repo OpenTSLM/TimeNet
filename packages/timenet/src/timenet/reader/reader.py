@@ -32,9 +32,9 @@ from timenet.types import (
     Annotation,
     DatasetMetadata,
     DatasetSchema,
-    IntervalSpan,
     Task,
     TaskType,
+    TimeInterval,
     annotation_type_of,
     value_type_of,
 )
@@ -333,7 +333,7 @@ class TimeFReader:
         # sample inside the seam so a malformed time_span (bad bounds, or point-shaped) is rejected by
         # Sample.__post_init__ before it is used to re-check the stored annotation spans.
         try:
-            time_span = cast("IntervalSpan | None", self._codec.decode_span(row.get("time_span")))
+            time_span = cast("TimeInterval | None", self._codec.decode_span(row.get("time_span")))
             sample = Sample(
                 sample_id=sample_id,
                 time_series=series,

@@ -16,9 +16,9 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
-    IntervalSpan,
     Span,
     Task,
+    TimeInterval,
     annotation_type_of,
     value_type_of,
 )
@@ -49,7 +49,7 @@ class TimeFDataset:
         subject_ids: tuple[str, ...] = (),
         sample_id: str | None = None,
         start_time: datetime | int | None = None,
-        time_span: IntervalSpan | None = None,
+        time_span: TimeInterval | None = None,
     ) -> Sample:
         """Create a sample, register it, and return it.
 
@@ -62,7 +62,7 @@ class TimeFDataset:
                 timezone-aware datetime or whole Unix microseconds, or ``None`` when no wall-clock
                 reference exists.
             time_span: The session's overall span, if the series have gaps an unscoped span may fall in
-                (see :attr:`Sample.time_span`). Must be a whole-sample :class:`~timenet.types.IntervalSpan`
+                (see :attr:`Sample.time_span`). Must be a whole-sample :class:`~timenet.types.TimeInterval`
                 containing every series' window.
 
         Returns:
@@ -126,10 +126,13 @@ class TimeFDataset:
 
         Raises:
             TimeFValidationError: If ``samples`` is empty; if ``scope`` is passed and the task already
-                carries one; if the task sets both ``target`` and ``target_annotation_ids`` or, when its
-                answer is not a produced series, neither; if a span's ``time_series_ids`` does not resolve
-                to a series on every target sample or the span falls outside a sample's covered span; or
-                if a referenced sample or annotation is not registered in this dataset.
+                carries one; if a scope-dependent payload rule fails once the scope is final (a
+                :class:`~timenet.types.ForecastingTask` ``target_span`` with no scope, a frame mismatch,
+                or a context that leaks the target); if the task sets both ``target`` and
+                ``target_annotation_ids`` or, when its answer is not a produced series, neither; if a
+                span's ``time_series_ids`` does not resolve to a series on every target sample or the span
+                falls outside a sample's covered span; or if a referenced sample or annotation is not
+                registered in this dataset.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
@@ -142,6 +145,7 @@ class TimeFDataset:
                 )
             task.scope = scope
 
+        task.check_against_scope()
         self._check_task_answer(task)
         self._check_sample_refs(task)
         for sample in targets:

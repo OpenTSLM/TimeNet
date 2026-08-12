@@ -23,11 +23,11 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DataSource,
-    IntervalSpan,
     LocalizationMode,
-    PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     ureg,
 )
@@ -141,11 +141,11 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
         sample0.add_annotation(Annotation(key="age", value=64, unit="years", id="age-0"))
         sample0.add_annotation(cohort)
-        sample0.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
+        sample0.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"))
         sample0.add_annotation(
             Annotation(
                 key="artifact",
-                span=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
                 id="art-0",
             )
         )
@@ -211,7 +211,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             # A scope narrows the input to a region: same task type as the whole-sample label above, with
             # the window supplied. Span times are in the source recording timeline, so this sits inside
             # the window's span.
-            scope=IntervalSpan.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
+            scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
         )
         return dataset
 

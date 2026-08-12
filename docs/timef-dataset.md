@@ -62,6 +62,24 @@ time offsets are stored rather than computed, use `TimeSeries.from_irregular(val
 which derives the axis from the stream so the two cannot disagree. Reach for the `loader=` constructor
 above only for genuinely lazy sources (files, remote shards).
 
+An **ordinal** series has positions but no clock — an ordered sequence like `TSQA`, whose values carry
+an order but no calendar time. Build it with an `OrdinalAxis`: there is no rate and no timeline, so a
+task on it is scoped and forecast in steps rather than seconds (see [tasks](data-model/tasks.md)).
+
+```python
+from timenet.dataset import TimeSeries
+from timenet.dataset.axis import OrdinalAxis
+
+# TSQA: an ordered sequence of values with no wall clock
+series = TimeSeries.from_values(
+    values,                       # the ordered values
+    spec=tsqa_spec,
+    channel="series",
+    time_axis=OrdinalAxis(),
+    time_series_id="tsqa",
+)
+```
+
 ---
 
 ## Sample
@@ -77,7 +95,7 @@ via `TimeFDataset.add_sample`.
 | `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |
 | `annotations` | `tuple[Annotation, ...]` | Attached via `add_annotation`. |
 | `start_time` | `datetime \| int \| None` | Wall-clock anchor that relative time zero refers to, for every series and annotation on the sample. Pass a timezone-aware `datetime` or whole Unix microseconds; construction normalizes either one to microseconds. A bare float is refused, since seconds and microseconds are both plausible readings of it. `None` means no wall-clock reference exists (e.g. de-identified or synthetic data) — never fabricate one. |
-| `time_span` | `IntervalSpan \| None` | The session's overall span on the source recording timeline, for a recording whose series leave gaps an unscoped span may fall in (a note taken while every sensor was briefly off). Must carry no `time_series_ids` and must contain every series' window. When set, an unscoped span is checked against it instead of against the union of the series' windows. |
+| `time_span` | `TimeInterval \| None` | The session's overall span on the source recording timeline, for a recording whose series leave gaps an unscoped span may fall in (a note taken while every sensor was briefly off). Must carry no `time_series_ids` and must contain every series' window. When set, an unscoped span is checked against it instead of against the union of the series' windows. |
 
 All series and annotations in an anchored sample share this clock and relative-time coordinate system.
 Use `sample.has_absolute_time` to check whether the anchor is known.

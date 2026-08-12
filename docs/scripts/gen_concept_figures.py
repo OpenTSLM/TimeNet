@@ -172,7 +172,7 @@ def fig_annotation_static():
 
 
 def fig_annotation_point():
-    """An annotation with a PointSpan: one time offset in time."""
+    """An annotation with a TimePoint: one time offset in time."""
 
     def draw(ax):
         ax.axvline(3.4, color=POINT, lw=1.6, zorder=3)
@@ -182,7 +182,7 @@ def fig_annotation_point():
 
 
 def fig_annotation_interval():
-    """An annotation with an IntervalSpan: a region in time."""
+    """An annotation with a TimeInterval: a region in time."""
 
     def draw(ax):
         ax.axvspan(3.0, 5.2, color=SPAN_FACE, alpha=0.85, zorder=0)
