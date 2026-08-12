@@ -17,7 +17,6 @@ import uuid
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
@@ -440,22 +439,23 @@ class TimeFWriter:
 
     def _write_samples(self) -> None:
         codec = self._codec
-        rows = []
-        for sample in sorted(self._dataset.samples, key=lambda s: s.sample_id):
-            rows.append(
-                {
-                    "sample_id": codec.encode("sample_id", sample.sample_id),
-                    "start_time_us": sample.start_time,
-                    "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
-                    "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
-                    "task_ids": codec.encode_list("task_id", sample.task_ids),
-                    "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
-                }
-            )
-        self._sample_files = self._write_sharded_table(
-            rows,
+        rows: list[dict] = [
+            {
+                "sample_id": codec.encode("sample_id", sample.sample_id),
+                "start_time_us": sample.start_time,
+                "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
+                "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
+                "task_ids": codec.encode_list("task_id", sample.task_ids),
+                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
+            }
+            for sample in self._dataset.samples
+        ]
+        rows.sort(key=lambda r: r["sample_id"])
+        self._sample_parts = self._write_control_table(
+            iter(rows),
             samples_schema(self._id_types),
             SAMPLES_TEMPLATE.format,
+            key_of=lambda r: (r["sample_id"],),
             dictionary_columns=encodings.SAMPLES_DICTIONARY,
         )
 
@@ -475,11 +475,12 @@ class TimeFWriter:
                     },
                 )
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
-        rows = sorted(by_id.values(), key=lambda r: (r["key"], r["id"]))
-        self._annotation_files = self._write_sharded_table(
-            rows,
+        rows = sorted(by_id.values(), key=lambda r: r["id"])
+        self._annotation_parts = self._write_control_table(
+            iter(rows),
             annotations_schema(self._id_types),
             ANNOTATIONS_TEMPLATE.format,
+            key_of=lambda r: (r["id"],),
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
@@ -491,13 +492,14 @@ class TimeFWriter:
         for task_type_str, tasks in sorted(by_type.items()):
             schema = task_schema(tasks[0].task_type, self._id_types)
             rows = [_task_row(task, schema, self._codec) for task in tasks]
-            parts = self._write_sharded_table(
-                rows,
+            parts = self._write_control_table(
+                iter(rows),
                 schema,
                 lambda index, task_type_str=task_type_str: TASK_PART_TEMPLATE.format(index, task_type=task_type_str),
+                key_of=None,
                 dictionary_columns=encodings.task_dictionary(schema),
             )
-            self._task_files.extend(parts)
+            self._task_files.extend(part.path for part in parts)
 
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
@@ -558,13 +560,17 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=tuple(self._sample_files),
-                annotations=tuple(self._annotation_files),
+                samples=tuple(part.path for part in self._sample_parts),
+                annotations=tuple(part.path for part in self._annotation_parts),
                 time_series_index=tuple(part.path for part in self._index_parts),
                 tasks=tuple(self._task_files),
                 time_series=tuple(self._value_files),
             ),
-            part_stats={"time_series_index": tuple(self._index_parts)},
+            part_stats={
+                "samples": tuple(self._sample_parts),
+                "annotations": tuple(self._annotation_parts),
+                "time_series_index": tuple(self._index_parts),
+            },
             checksums=checksums,
             id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
@@ -623,83 +629,6 @@ class TimeFWriter:
             rel = path.relative_to(self._staging_dir).as_posix()
             checksums[rel] = file_checksum(path)
         return checksums
-
-    def _write_arrow_table(
-        self,
-        table: pa.Table,
-        rel_path: str,
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> None:
-        pq.write_table(
-            table,
-            self._staging_dir / rel_path,
-            **encodings.parquet_kwargs(
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
-        )
-
-    def _write_table(
-        self,
-        rows: list[dict],
-        schema: pa.Schema,
-        rel_path: str,
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> None:
-        self._write_arrow_table(
-            pa.Table.from_pylist(rows, schema=schema),
-            rel_path,
-            dictionary_columns=dictionary_columns,
-            column_encoding=column_encoding,
-        )
-
-    def _write_sharded_table(
-        self,
-        rows: list[dict],
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> list[str]:
-        """Write ``rows`` as one or more parquet parts, splitting on the control-table byte target.
-
-        The table is built once and each part is a zero-copy ``slice`` view of it, so peak memory is one
-        full table and row order is preserved across parts. An empty table still writes exactly one
-        (empty) part, keeping the schema on disk. Part boundaries are sized from the in-memory Arrow
-        ``nbytes`` and are not a stable contract across pyarrow versions; the reader is boundary-agnostic.
-
-        Args:
-            rows: The already-encoded payload rows.
-            schema: The Arrow schema for the table.
-            part_path: Maps a part index to its relative path (each caller supplies its own template).
-            dictionary_columns: Columns to dictionary-encode, applied to every part.
-            column_encoding: Optional per-column encoding overrides, applied to every part.
-
-        Returns:
-            The relative paths of the parts written, in order.
-        """
-        table = pa.Table.from_pylist(rows, schema=schema)
-        n = len(table)
-        rows_per_part = max(1, n * self._control_shard_target_bytes // max(1, table.nbytes))
-        parts: list[str] = []
-        for index, start in enumerate(range(0, n, rows_per_part) if n else [0]):
-            rel = part_path(index)
-            (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-            self._write_arrow_table(
-                table.slice(start, rows_per_part),
-                rel,
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-            )
-            parts.append(rel)
-        return parts
 
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:

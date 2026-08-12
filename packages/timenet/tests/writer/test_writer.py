@@ -76,6 +76,23 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
         assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
 
 
+def test_manifest_records_part_stats_for_control_tables(tmp_path):
+    version_dir = _written(tmp_path)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    assert set(manifest.part_stats) == {"samples", "annotations", "time_series_index"}
+    assert manifest.part_stats["samples"][0].path == manifest.files.samples[0]
+    # boundary keys agree with the on-disk first/last rows
+    first = pq.read_table(version_dir / manifest.files.samples[0]).to_pylist()
+    assert manifest.part_stats["samples"][0].first_key == (first[0]["sample_id"],)
+
+
+def test_annotations_written_sorted_by_id(tmp_path):
+    version_dir = _written(tmp_path)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    ids = [row["id"] for rel in manifest.files.annotations for row in pq.read_table(version_dir / rel).to_pylist()]
+    assert ids == sorted(ids)
+
+
 # ---- shard schema & encodings -----------------------------------------------------------------
 
 
@@ -367,34 +384,7 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
     assert manifest.counts.samples == 2
 
 
-# ---- _write_sharded_table helper --------------------------------------------------------------
-
-
-def _sharding_writer(tmp_path):
-    dataset = make_dataset()
-    dataset.derive_schema()
-    writer = TimeFWriter(tmp_path, dataset, control_shard_target_bytes=1)
-    writer._staging_dir.mkdir(parents=True)
-    return writer
-
-
-def test_write_sharded_table_splits_and_preserves_order(tmp_path):
-    writer = _sharding_writer(tmp_path)
-    schema = pa.schema([("k", pa.int64())])
-    rows = [{"k": i} for i in range(10)]
-    parts = writer._write_sharded_table(rows, schema, lambda i: f"t/part-{i:08d}.parquet", dictionary_columns=[])
-    assert len(parts) > 1  # a 1-byte target splits every row into its own part
-    assert parts == sorted(parts)  # emitted in order
-    read = pa.concat_tables([pq.read_table(writer._staging_dir / p) for p in parts])
-    assert read.column("k").to_pylist() == list(range(10))  # order and completeness preserved
-
-
-def test_write_sharded_table_empty_writes_one_part(tmp_path):
-    writer = _sharding_writer(tmp_path)
-    schema = pa.schema([("k", pa.int64())])
-    parts = writer._write_sharded_table([], schema, lambda i: f"t/part-{i:08d}.parquet", dictionary_columns=[])
-    assert parts == ["t/part-00000000.parquet"]
-    assert pq.read_table(writer._staging_dir / parts[0]).num_rows == 0
+# ---- empty control tables ---------------------------------------------------------------------
 
 
 def test_empty_control_tables_write_one_part_or_none(tmp_path):
