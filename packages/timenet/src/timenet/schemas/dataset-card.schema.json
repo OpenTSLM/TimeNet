@@ -21,8 +21,8 @@
     "tags": { "type": "array", "items": { "type": "string" } },
     "source_url": { "type": ["string", "null"] },
     "value_encoding": {
-      "anyOf": [{ "$ref": "#/$defs/valueEncoding" }, { "type": "null" }],
-      "description": "Force the values-column encoding for this dataset instead of letting the writer select one from the data. Omit unless a measurement shows the selection is wrong for this source."
+      "anyOf": [{ "const": "auto" }, { "$ref": "#/$defs/valueEncoding" }, { "type": "null" }],
+      "description": "Values-column encoding for this dataset. 'auto' (or omit the field) lets the writer measure the data and pick per modality; 'dictionary', 'byte_stream_split', or 'plain' forces one instead. Force one only when a measurement shows the selection is wrong for this source."
     }
   },
   "$defs": {

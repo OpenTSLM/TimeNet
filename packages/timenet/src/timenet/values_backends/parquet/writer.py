@@ -9,6 +9,7 @@ backend-neutral time-series index as a ``chunk_file`` plus a
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 
 import numpy as np
 import pyarrow as pa
@@ -27,12 +28,19 @@ from timenet.values_backends.writer import (
     ValuesWriteResult,
 )
 from timenet.writer import encodings
-from timenet.writer.value_encoding import ValueEncoding, select_value_encoding
+from timenet.writer.value_encoding import (
+    DICT_MAX_CARDINALITY,
+    ValueEncoding,
+    distinct_bit_patterns,
+    encoding_for_cardinality,
+    sample_values,
+)
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
 _BYTES_PER_FLOAT32 = 4
 _BYTES_PER_TIME_OFFSET = 8
+_LOG = logging.getLogger(__name__)
 
 
 def _step_bytes(stores_time_offsets: bool) -> int:
@@ -118,23 +126,38 @@ class ParquetValuesBackend(BaseValuesBackend):
             value_encoding={spec_type: str(encoding) for spec_type, encoding in stream.encodings.items()},
         )
 
-    def encoding_for(self, buffered: list[pa.Array]) -> ValueEncoding:
-        """Return the encoding to use for a modality, deciding it on first sight.
+    def encoding_for(self, spec_type: str, buffered: list[pa.Array]) -> ValueEncoding:
+        """Return the encoding to use for a modality, deciding it on first sight and logging the choice.
 
         The caller passes the values it has buffered for the modality's first row group, so the
         decision costs a distinct-value count over data already in memory: no second pass over the
-        series, no extra loader calls, and the buffer stays bounded by ``row_group_target_bytes``.
+        series, no extra loader calls, and the buffer stays bounded by ``row_group_target_bytes``. The
+        decision is logged at INFO under this module's logger, so a curator can see per ``spec_type``
+        what was chosen and, for the auto path, the cardinality that drove it.
 
         Args:
+            spec_type: The modality the decision is for, named in the log line.
             buffered: The buffered chunks' values, used only the first time a modality appears.
 
         Returns:
             The forced encoding when the caller set one, else the encoding selected from the sample.
         """
         if self._forced_encoding is not None:
+            _LOG.info("values encoding for %r: %s (forced)", spec_type, self._forced_encoding.value)
             return self._forced_encoding
         arrays = [np.asarray(values.to_numpy(zero_copy_only=False), dtype=np.float32) for values in buffered]
-        return select_value_encoding(arrays)
+        sample = sample_values(arrays)
+        distinct = distinct_bit_patterns(sample)
+        encoding = encoding_for_cardinality(distinct)
+        _LOG.info(
+            "values encoding for %r: %s (auto; %d distinct in %d sampled values, dictionary up to %d)",
+            spec_type,
+            encoding.value,
+            distinct,
+            sample.size,
+            DICT_MAX_CARDINALITY,
+        )
+        return encoding
 
     def _new_shard_writer(self, rel_path: str, value_encoding: ValueEncoding) -> pq.ParquetWriter:
         path = self._staging_dir / rel_path
@@ -285,7 +308,9 @@ class _ShardStream:
         if shard is None:
             spec_type = self._buffer[0].spec_type
             if spec_type not in self.encodings:
-                self.encodings[spec_type] = self._backend.encoding_for([chunk.values for chunk in self._buffer])
+                self.encodings[spec_type] = self._backend.encoding_for(
+                    spec_type, [chunk.values for chunk in self._buffer]
+                )
             self._shard_encoding = self.encodings[spec_type]
             rel = SHARD_TEMPLATE.format(self._shard_idx)
             self.shard_paths.append(rel)

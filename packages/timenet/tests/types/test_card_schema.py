@@ -58,6 +58,12 @@ def test_from_yaml_reads_the_value_encoding_override(tmp_path):
     assert DatasetMetadata.from_yaml(_write(tmp_path, card)).value_encoding == "plain"
 
 
+def test_from_yaml_reads_the_auto_value_encoding(tmp_path):
+    # "auto" names the writer's default explicitly; omitting the field means the same thing.
+    card = _MINIMAL_CARD + "value_encoding: auto\n"
+    assert DatasetMetadata.from_yaml(_write(tmp_path, card)).value_encoding == "auto"
+
+
 @pytest.mark.parametrize(
     "bad",
     [

@@ -1,4 +1,5 @@
 import json
+import logging
 
 import numpy as np
 import pyarrow as pa
@@ -222,6 +223,33 @@ def test_unknown_card_value_encoding_is_rejected(tmp_path):
     dataset = _dataset({("ecg", "I"): quantized()}, value_encoding="rle")
     with pytest.raises(TimeFValidationError, match="value_encoding"):
         TimeFWriter(tmp_path, dataset)
+
+
+def test_card_auto_selects_from_the_data(tmp_path):
+    # An explicit "auto" on the card is the writer's default: measure and pick per modality, not force.
+    dataset = _dataset({("ecg", "I"): quantized()}, value_encoding="auto")
+    assert _manifest(_write(tmp_path, dataset)).value_encoding == {"ecg": ValueEncoding.DICTIONARY.value}
+
+
+# ---- decision log ------------------------------------------------------------------------------
+
+_ENCODING_LOGGER = "timenet.values_backends.parquet.writer"
+
+
+def _encoding_logs(caplog):
+    return [record.getMessage() for record in caplog.records if record.name == _ENCODING_LOGGER]
+
+
+def test_auto_mode_logs_the_decision(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger=_ENCODING_LOGGER):
+        _write(tmp_path, _dataset({("ecg", "I"): quantized()}))
+    assert any("ecg" in m and "dictionary" in m and "auto" in m for m in _encoding_logs(caplog))
+
+
+def test_forced_mode_logs_the_encoding(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger=_ENCODING_LOGGER):
+        _write(tmp_path, _dataset({("ecg", "I"): quantized()}), value_encoding="plain")
+    assert any("ecg" in m and "plain" in m and "forced" in m for m in _encoding_logs(caplog))
 
 
 # ---- self-check and round-trip -------------------------------------------------------------------

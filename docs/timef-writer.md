@@ -136,15 +136,23 @@ The choice is recorded in the manifest as `value_encoding`, a `spec_type` -> enc
 provenance, not contract: Parquet records the applied encoding in every file's footer, so a reader
 resolves it without the manifest.
 
-To override, set `value_encoding` on the [dataset card](types.md#datasetmetadata) or pass
-`TimeFWriter(value_encoding=...)`; the argument wins over the card. The case that needs it is
-high-cardinality *quantized* data (say a 24-bit integer-scaled signal), which suits neither branch: too
-many distinct values for a dictionary, too much low-bit noise for a byte split.
+`value_encoding` controls this, on the [dataset card](types.md#datasetmetadata) or as the
+`TimeFWriter(value_encoding=...)` argument, which wins over the card. Both default to `auto`, the
+measured selection above, so naming `auto` on the card is the same as omitting the field. Set a
+concrete `dictionary`, `byte_stream_split`, or `plain` to force one encoding for every modality. The
+case that needs a force is high-cardinality *quantized* data (say a 24-bit integer-scaled signal),
+which suits neither branch: too many distinct values for a dictionary, too much low-bit noise for a
+byte split.
 
 ```python
 with TimeFWriter(root, dataset, value_encoding="plain") as writer:
     writer.write()
 ```
+
+The writer logs each modality's decision at `INFO` under the
+`timenet.values_backends.parquet.writer` logger: the chosen encoding, and for `auto` the sampled
+cardinality behind it. It is standard-library logging with no handler attached, so configure one to
+see it. The same decisions also land in the manifest.
 
 A read-back self-check verifies the selection actually landed on every shard, since pyarrow drops a
 column encoding silently when the column path does not match. Parquet's own dictionary-to-plain
