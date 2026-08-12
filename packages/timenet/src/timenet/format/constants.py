@@ -22,3 +22,11 @@ DEFAULT_ROW_GROUP_TARGET_BYTES = 4 * 2**20
 DEFAULT_CHUNK_MAX_BYTES = 1 * 2**20
 DEFAULT_COMPRESSION = "zstd"
 DEFAULT_COMPRESSION_LEVEL = 3
+
+# The logical id columns each control table's parts are ordered by, used to (de)serialize the
+# per-part boundary keys in the manifest's part_stats block.
+PART_STAT_KEYS = {
+    "samples": ("sample_id",),
+    "annotations": ("annotation_id",),
+    "time_series_index": ("sample_id", "time_series_id"),
+}

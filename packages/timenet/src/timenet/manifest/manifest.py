@@ -10,8 +10,10 @@ import json
 from typing import Any, ClassVar
 
 from timenet.errors import InvalidManifestError
+from timenet.format.constants import PART_STAT_KEYS
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
+from timenet.manifest.part_stats import PartStat
 from timenet.types import (
     TASKS,
     AnnotationDescriptor,
@@ -51,6 +53,8 @@ class Manifest:
     """Per-file checksums keyed by relative path, each ``sha256:`` prefixed."""
     id_encoding: dict[str, str] = field(default_factory=dict)
     """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
+    part_stats: dict[str, tuple[PartStat, ...]] = field(default_factory=dict)
+    """Per-part skip metadata for samples, annotations, and the index; keyed by table name."""
     values_backend: str = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
     derived_from: dict[str, str] | None = None
@@ -101,6 +105,7 @@ class Manifest:
             "files": _files_to_dict(self.files),
             "checksums": dict(self.checksums),
             "id_encoding": dict(self.id_encoding),
+            "part_stats": _part_stats_to_dict(self.part_stats),
             "values_backend": self.values_backend,
             "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
         }
@@ -132,14 +137,16 @@ class Manifest:
         checksums = _dict_block(data, "checksums")
         id_encoding = _dict_block(data, "id_encoding")
         derived_from = _optional_dict_block(data, "derived_from")
+        files = _files_from_dict(data["files"])
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
-            files=_files_from_dict(data["files"]),
+            files=files,
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
             checksums=checksums,
             id_encoding=id_encoding,
+            part_stats=_part_stats_from_dict(data.get("part_stats", {}), files, id_encoding),
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             derived_from=derived_from,
             timef_format_version=data["timef_format_version"],
@@ -392,3 +399,61 @@ def _parts(data: dict[str, Any], key: str) -> tuple[str, ...]:
     if isinstance(value, str):
         raise TypeError(f"'files.{key}' must be a list of parts, not a string")
     return tuple(value)
+
+
+def _part_stats_to_dict(part_stats: dict[str, tuple[PartStat, ...]]) -> dict[str, Any]:
+    return {
+        table: [
+            {
+                "path": part.path,
+                "n_rows": part.n_rows,
+                "first_key": _key_to_json(part.first_key),
+                "last_key": _key_to_json(part.last_key),
+            }
+            for part in parts
+        ]
+        for table, parts in part_stats.items()
+    }
+
+
+def _key_to_json(key: tuple[object, ...] | None) -> list[Any] | None:
+    if key is None:
+        return None
+    return [value.hex() if isinstance(value, bytes) else value for value in key]
+
+
+def _part_stats_from_dict(
+    data: dict[str, Any], files: ManifestFiles, id_encoding: dict[str, str]
+) -> dict[str, tuple[PartStat, ...]]:
+    uuid16 = {name for name, encoding in id_encoding.items() if encoding == "uuid16"}
+    result: dict[str, tuple[PartStat, ...]] = {}
+    for table, entries in data.items():
+        if table not in PART_STAT_KEYS:
+            raise InvalidManifestError(f"unknown part_stats table {table!r}")
+        logical = PART_STAT_KEYS[table]
+        try:
+            parts = tuple(
+                PartStat(
+                    path=entry["path"],
+                    n_rows=entry["n_rows"],
+                    first_key=_key_from_json(entry["first_key"], logical, uuid16),
+                    last_key=_key_from_json(entry["last_key"], logical, uuid16),
+                )
+                for entry in entries
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise InvalidManifestError(f"invalid manifest 'part_stats' block: {exc}") from exc
+        expected = getattr(files, table)
+        if tuple(part.path for part in parts) != expected:
+            raise InvalidManifestError(
+                f"part_stats[{table!r}] paths {[part.path for part in parts]} "
+                f"disagree with files.{table} {list(expected)}"
+            )
+        result[table] = parts
+    return result
+
+
+def _key_from_json(value: list[str] | None, logical: tuple[str, ...], uuid16: set[str]) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    return tuple(bytes.fromhex(item) if name in uuid16 else item for item, name in zip(value, logical, strict=True))
