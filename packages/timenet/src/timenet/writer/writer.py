@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import types as _types
-from typing import assert_never
+from typing import Any, assert_never
 import uuid
 
 import numpy as np
@@ -47,7 +47,7 @@ from timenet.format.schemas import (
     samples_schema,
     task_schema,
 )
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import Manifest, ManifestCounts, ManifestFiles, PartStat
 from timenet.types import Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -59,6 +59,7 @@ from timenet.values_backends.writer import (
 )
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
+from timenet.writer.sharded import write_sharded_table
 
 
 class TimeFWriter:
@@ -413,6 +414,30 @@ class TimeFWriter:
 
     # ---- metadata tables -----------------------------------------------------------------------
 
+    def _write_control_table(  # noqa: PLR0913
+        self,
+        rows: Iterable[dict],
+        schema: pa.Schema,
+        part_path: Callable[[int], str],
+        key_of: Callable[[dict], tuple] | None,
+        *,
+        dictionary_columns: list[str],
+        column_encoding: dict[str, str] | None = None,
+    ) -> list[PartStat]:
+        return write_sharded_table(
+            rows,
+            schema,
+            part_path,
+            key_of,
+            staging_dir=self._staging_dir,
+            control_target_bytes=self._control_shard_target_bytes,
+            row_group_target_bytes=self._row_group_target_bytes,
+            dictionary_columns=dictionary_columns,
+            column_encoding=column_encoding,
+            compression=self._compression,
+            compression_level=self._compression_level,
+        )
+
     def _write_samples(self) -> None:
         codec = self._codec
         rows = []
@@ -477,31 +502,47 @@ class TimeFWriter:
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
     ) -> None:
+        # Emit rows in encoded (sample_id, time_series_id, chunk_idx) order by nested iteration, so the
+        # parts stay globally sorted without ever materializing the whole index: the reader selects the
+        # parts a probe lands in and bisects each, which requires that global order across the split.
         codec = self._codec
-        rows = []
-        for (time_series_id, chunk_idx), placement in placements.items():
-            for sample_id in series_to_samples.get(time_series_id, ()):
-                rows.append(
-                    {
-                        "sample_id": codec.encode("sample_id", sample_id),
-                        "time_series_id": codec.encode("time_series_id", time_series_id),
-                        "spec_type": placement.spec_type,
-                        "channel": placement.channel,
-                        "chunk_idx": chunk_idx,
-                        "chunk_file": placement.chunk_file,
-                        "chunk_major_idx": placement.data_index.major_idx,
-                        "chunk_minor_idx": placement.data_index.minor_idx,
-                        "n_values": placement.n_values,
-                    }
-                )
-        # Global sort, then emit parts in that order: the reader concatenates the index parts in manifest
-        # order and bisects the result, so the parts must stay globally sorted across the split.
-        rows.sort(key=lambda r: (r["sample_id"], r["time_series_id"], r["chunk_idx"]))
-        self._index_rows = len(rows)
-        self._index_files = self._write_sharded_table(
-            rows,
+        sample_to_series: dict[str, list[str]] = {}
+        for time_series_id, sample_ids in series_to_samples.items():
+            for sample_id in sample_ids:
+                sample_to_series.setdefault(sample_id, []).append(time_series_id)
+        chunks_by_series: dict[str, list[int]] = {}
+        for time_series_id, chunk_idx in placements:  # noqa: PLE1141 - keys are (id, chunk) tuples
+            chunks_by_series.setdefault(time_series_id, []).append(chunk_idx)
+        for chunk_idxs in chunks_by_series.values():
+            chunk_idxs.sort()
+
+        enc_sid: dict[str, Any] = {sid: codec.encode("sample_id", sid) for sid in sample_to_series}
+
+        def rows() -> Iterable[dict]:
+            for sample_id in sorted(sample_to_series, key=lambda s: enc_sid[s]):
+                series = sample_to_series[sample_id]
+                enc_tid: dict[str, Any] = {tid: codec.encode("time_series_id", tid) for tid in series}
+                for time_series_id in sorted(series, key=lambda t: enc_tid[t]):
+                    for chunk_idx in chunks_by_series[time_series_id]:
+                        placement = placements[time_series_id, chunk_idx]
+                        yield {
+                            "sample_id": enc_sid[sample_id],
+                            "time_series_id": enc_tid[time_series_id],
+                            "spec_type": placement.spec_type,
+                            "channel": placement.channel,
+                            "chunk_idx": chunk_idx,
+                            "chunk_file": placement.chunk_file,
+                            "chunk_major_idx": placement.data_index.major_idx,
+                            "chunk_minor_idx": placement.data_index.minor_idx,
+                            "n_values": placement.n_values,
+                        }
+
+        self._index_rows = sum(len(chunks_by_series[t]) for series in sample_to_series.values() for t in series)
+        self._index_parts = self._write_control_table(
+            rows(),
             index_schema(self._id_types),
             INDEX_TEMPLATE.format,
+            key_of=lambda r: (r["sample_id"], r["time_series_id"]),
             dictionary_columns=encodings.INDEX_DICTIONARY,
             column_encoding=encodings.INDEX_ENCODING,
         )
@@ -519,10 +560,11 @@ class TimeFWriter:
             files=ManifestFiles(
                 samples=tuple(self._sample_files),
                 annotations=tuple(self._annotation_files),
-                time_series_index=tuple(self._index_files),
+                time_series_index=tuple(part.path for part in self._index_parts),
                 tasks=tuple(self._task_files),
                 time_series=tuple(self._value_files),
             ),
+            part_stats={"time_series_index": tuple(self._index_parts)},
             checksums=checksums,
             id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,

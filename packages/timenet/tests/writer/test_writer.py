@@ -133,6 +133,17 @@ def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
         assert pq.ParquetFile(version_dir / rel).metadata.num_rows > 0, f"empty shard {rel} was published"
 
 
+def test_index_rows_are_globally_sorted_and_complete(tmp_path):
+    # Tiny chunks multiply index rows; verify the streamed index is globally sorted by
+    # (sample_id, time_series_id, chunk_idx) and loses no rows versus a naive concat.
+    version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    rows = [row for rel in manifest.files.time_series_index for row in pq.read_table(version_dir / rel).to_pylist()]
+    keys = [(r["sample_id"], r["time_series_id"], r["chunk_idx"]) for r in rows]
+    assert keys == sorted(keys)
+    assert len(rows) == manifest.counts.time_series_index_rows
+
+
 # ---- validation & commit protocol -------------------------------------------------------------
 
 
