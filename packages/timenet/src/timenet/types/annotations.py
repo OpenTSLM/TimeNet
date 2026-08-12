@@ -2,8 +2,8 @@
 
 One :class:`Annotation` class covers every case, and its optional ``span`` says how it sits in time:
 absent for sample-scoped, time-independent context such as demographics or a ticker symbol, a
-:class:`~timenet.types.spans.PointSpan` for one time offset, an
-:class:`~timenet.types.spans.IntervalSpan` for a bounded region of the original recording timeline. It
+:class:`~timenet.types.spans.TimePoint` for one time offset, a
+:class:`~timenet.types.spans.TimeInterval` for a bounded region of the original recording timeline. It
 is a flat frozen dataclass carrying ``key`` / ``unit`` / ``description`` as
 instance fields so connectors can author it directly (or subclass with field defaults for reuse) and
 :class:`~timenet.reader.TimeFReader` can reconstruct the identical instances from the manifest without
@@ -19,7 +19,7 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
-from timenet.types.spans import Span
+from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 
 
@@ -42,8 +42,8 @@ class Annotation:
     marks a time offset or covers a stretch, so there is one class here rather than one per shape::
 
         Annotation(key="age", value=64)
-        Annotation(key="stimulus", span=PointSpan.seconds(0.5))
-        Annotation(key="artifact", value="motion", span=IntervalSpan.seconds(0.0, 0.25))
+        Annotation(key="stimulus", span=TimePoint.seconds(0.5))
+        Annotation(key="artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25))
     """
 
     key: str
@@ -51,7 +51,7 @@ class Annotation:
     value: Any = None
     """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
     mark something."""
-    span: Span | None = None
+    span: TimePoint | TimeInterval | None = None
     """Where on the recording timeline this annotation applies, and which series it targets.
     ``None`` means it is sample-scoped context with no place in time."""
     unit: str | pint.Unit | None = None
@@ -77,9 +77,9 @@ class Annotation:
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
-        if self.span is not None and not isinstance(self.span, Span):
+        if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
-                f"annotation {self.key!r} span must be a PointSpan or an IntervalSpan, got {type(self.span).__name__}"
+                f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
             )
         if self.value is None and self.span is None:
             raise TimeFValidationError(

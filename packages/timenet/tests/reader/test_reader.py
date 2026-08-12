@@ -16,12 +16,12 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
-    IntervalSpan,
     License,
     LocalizationMode,
-    PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -97,8 +97,8 @@ def test_annotation_value_types_round_trip(tmp_path):
     anns = {a.key: a for a in samples["sample-0"].annotations}
     assert anns["age"].span is None
     assert anns["age"].value == 64 and isinstance(anns["age"].value, int)
-    assert isinstance(anns["stimulus"].span, PointSpan)
-    assert isinstance(anns["artifact"].span, IntervalSpan)
+    assert isinstance(anns["stimulus"].span, TimePoint)
+    assert isinstance(anns["artifact"].span, TimeInterval)
     artifact_span = anns["artifact"].span
     assert artifact_span is not None
     assert artifact_span.time_series_ids == ("ts-shared",)
@@ -136,12 +136,12 @@ def test_scope_and_localization_spans_round_trip(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(version_dir) as reader:
         tasks = {t.id: t for t in reader.tasks}
-    assert tasks["task-cls-2"].scope == IntervalSpan.seconds(0.0, 0.25, time_series_ids=("ts-window-2",))
+    assert tasks["task-cls-2"].scope == TimeInterval.seconds(0.0, 0.25, time_series_ids=("ts-window-2",))
     localization = tasks["task-localize-0"]
     assert isinstance(localization, TemporalLocalizationTask)
     assert localization.target == (
-        PointSpan.seconds(0.5),  # a point: end_s stays None rather than becoming 0.0
-        IntervalSpan.seconds(0.0, 0.25, time_series_ids=("ts-shared",)),
+        TimePoint.seconds(0.5),  # a point: it decodes to a TimePoint, which has no end bound
+        TimeInterval.seconds(0.0, 0.25, time_series_ids=("ts-shared",)),
     )
     assert localization.mode is LocalizationMode.SPARSE
 
@@ -396,8 +396,8 @@ def _time_span_dataset(tmp_path) -> Path:
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
-    sample = dataset.add_sample(time_series=(series,), time_span=IntervalSpan.seconds(0.0, 5.0))
-    sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(2.0)))  # unscoped, inside [0, 5) s
+    sample = dataset.add_sample(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0))
+    sample.add_annotation(Annotation(key="note", span=TimePoint.seconds(2.0)))  # unscoped, inside [0, 5) s
     return _write(tmp_path, dataset)
 
 
@@ -424,5 +424,5 @@ def test_point_shaped_time_span_raises_format_error(tmp_path):
     # rejected as a format error, not left to reach the unscoped-span check and raise a bare TypeError.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_first_time_span(version_dir, {"start_us": 0, "end_us": None, "time_series_ids": None})
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be an IntervalSpan"):
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be a TimeInterval"):
         list(reader.iter_samples())

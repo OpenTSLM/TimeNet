@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal
@@ -15,10 +15,11 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
-    IntervalSpan,
     License,
-    PointSpan,
+    StepInterval,
     TemporalLocalizationTask,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
     TSEditingTask,
@@ -148,8 +149,8 @@ def test_forecasting_target_span_round_trips(tmp_path):
     )
     sample = dataset.add_sample(time_series=(_series(),))
     series_id = sample.time_series[0].time_series_id
-    span = IntervalSpan.seconds(1.0, 3.0, time_series_ids=(series_id,))
-    scope = IntervalSpan.seconds(0.0, 1.0, time_series_ids=(series_id,))
+    span = TimeInterval.seconds(1.0, 3.0, time_series_ids=(series_id,))
+    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
     dataset.add_task(sample, ForecastingTask(target_span=span, scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
@@ -158,6 +159,32 @@ def test_forecasting_target_span_round_trips(tmp_path):
     assert isinstance(task, ForecastingTask)
     assert task.target_span == span
     assert task.target_sample_id is None
+    assert task.scope == scope
+
+
+def test_forecasting_step_horizon_round_trips(tmp_path):
+    """A steps target_span carries its frame and bounds through the writer and reader."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), channel="c", time_axis=OrdinalAxis())
+    sample = dataset.add_sample(time_series=(ordinal,))
+    series_id = sample.time_series[0].time_series_id
+    span = StepInterval(time_series_id=series_id, start=4, stop=6)
+    scope = StepInterval(time_series_id=series_id, start=0, stop=4)
+    dataset.add_task(sample, ForecastingTask(target_span=span, scope=scope))
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        task = reader.tasks[0]
+    assert isinstance(task, ForecastingTask)
+    assert task.target_span == span
     assert task.scope == scope
 
 
@@ -184,13 +211,13 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     )
     series = _series()
     sample = dataset.add_sample(time_series=(series,))
-    scope = IntervalSpan.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
+    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
     dataset.add_task(sample, ClassificationTask(target="x"), scope=scope)
     dataset.add_task(
         sample,
         TemporalLocalizationTask(
             prompt="Locate the onsets.",
-            target=(PointSpan.seconds(1.0, time_series_ids=(series.time_series_id,)),),
+            target=(TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),),
         ),
     )
     dataset.derive_schema()
@@ -205,7 +232,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     assert tasks[ClassificationTask].scope == scope
     localization = tasks[TemporalLocalizationTask]
     assert isinstance(localization, TemporalLocalizationTask)
-    assert localization.target == (PointSpan.seconds(1.0, time_series_ids=(series.time_series_id,)),)
+    assert localization.target == (TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),)
 
 
 def test_correspondence_target_ids_round_trip(tmp_path):
@@ -283,11 +310,11 @@ def test_time_span_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    time_span = IntervalSpan.seconds(0.0, 5.0)  # contains the series' [0, 3) s window
+    time_span = TimeInterval.seconds(0.0, 5.0)  # contains the series' [0, 3) s window
     dataset.add_sample(time_series=(_series(),), time_span=time_span)
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(version_dir) as reader:
         sample = next(reader.iter_samples())
     assert sample.time_span == time_span
-    assert isinstance(sample.time_span, IntervalSpan)
+    assert isinstance(sample.time_span, TimeInterval)

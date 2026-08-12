@@ -14,12 +14,12 @@ from timenet.types import (
     DatasetMetadata,
     DataSource,
     Domain,
-    IntervalSpan,
     License,
     LocalizationMode,
-    PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -128,10 +128,10 @@ def make_dataset() -> TimeFDataset:
     )
     sample0.add_annotation(Annotation(key="age", value=64, unit="years", id="age-0"))
     sample0.add_annotation(cohort)
-    sample0.add_annotation(Annotation(key="stimulus", span=PointSpan.seconds(0.5), id="stim-0"))
+    sample0.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"))
     sample0.add_annotation(
         Annotation(
-            key="artifact", span=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)), id="art-0"
+            key="artifact", span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)), id="art-0"
         )
     )
     classification = dataset.add_task(sample0, ClassificationTask(target="normal", id="task-cls-0"))
@@ -156,8 +156,8 @@ def make_dataset() -> TimeFDataset:
             prompt="Locate the stimulus and the artifact.",
             mode=LocalizationMode.SPARSE,
             target=(
-                PointSpan.seconds(0.5),
-                IntervalSpan.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                TimePoint.seconds(0.5),
+                TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
             ),
             id="task-localize-0",
         ),
@@ -175,7 +175,7 @@ def make_dataset() -> TimeFDataset:
     dataset.add_task(
         sample2,
         ClassificationTask(target="onset", id="task-cls-2"),
-        scope=IntervalSpan.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
+        scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
     )
     return dataset
 

@@ -2,15 +2,14 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import cast
 
 import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, IntervalSpan, Span, new_id
-from timenet.types.clock import check_int64, unix_us
+from timenet.types import Annotation, Span, StepSpan, TimeInterval, TimePoint, TimeSpan, new_id
+from timenet.types.clock import check_int64, offset_us, unix_us
 
 
 def check_span_within_window(
@@ -18,7 +17,7 @@ def check_span_within_window(
     span: Span,
     time_series: tuple[TimeSeries, ...],
     sample_id: str,
-    time_span: IntervalSpan | None = None,
+    time_span: TimeInterval | None = None,
 ) -> None:
     """Reject a span its targeted series cannot place, by the three-part scoping rule.
 
@@ -46,8 +45,28 @@ def check_span_within_window(
     Raises:
         TimeFValidationError: If a series id is unknown, a scoped span names a timeless series or ones
             whose windows do not overlap, the sample has no timeline for an unscoped span, or the span
-            falls outside the window the rule selects.
+            falls outside the window the rule selects; or a step span names a series with a timeline or
+            runs past its steps.
     """
+    if isinstance(span, StepSpan):
+        ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
+        if ts is None:
+            raise TimeFValidationError(
+                f"{label} references unknown time_series_id {span.time_series_id!r} on sample {sample_id!r}"
+            )
+        if ts.span_us is not None:  # axis-fit: steps only on a series with no timeline
+            raise TimeFValidationError(
+                f"{label} counts in steps, but series {ts.time_series_id!r} on sample {sample_id!r} has a "
+                f"timeline; name the region in seconds instead"
+            )
+        if span.exclusive_end > ts.n_values:
+            raise TimeFValidationError(
+                f"{label} runs past the {ts.n_values} steps of series {ts.time_series_id!r} on sample "
+                f"{sample_id!r}: got {span!r}"
+            )
+        return
+    if not isinstance(span, TimeSpan):  # Span is abstract; only time and step spans reach here
+        raise TimeFValidationError(f"{label} is not a concrete span: {span!r}")
     scope = span.time_series_ids
     covered = {ts.time_series_id: ts.span_us for ts in time_series if scope is None or ts.time_series_id in scope}
     for series_id in scope or ():
@@ -75,7 +94,7 @@ def check_span_within_window(
         return
 
     if time_span is not None:
-        _reject_outside(label, span, time_span.start, time_span.end, sample_id)
+        _reject_outside(label, span, time_span.start_us, time_span.end_us, sample_id)
         return
 
     windows = sorted(window for window in covered.values() if window is not None)
@@ -87,29 +106,20 @@ def check_span_within_window(
     _reject_outside_union(label, span, windows, sample_id)
 
 
-def _exclusive_end(span: Span) -> int:
-    """Return the exclusive upper bound of ``span``: its ``end`` for an interval, ``start + 1`` for a point.
-
-    The window is half-open ``[start, end)``, so a point's exclusive end is ``start + 1`` and a point
-    sitting exactly on an excluded upper bound is caught.
-    """
-    return span.start + 1 if span.is_point else cast("int", span.end)
-
-
-def _reject_outside(label: str, span: Span, start: int, end: int, sample_id: str) -> None:
-    """Reject a span that runs past the half-open window ``[start, end)``.
+def _reject_outside(label: str, span: TimeSpan, start: int, end: int, sample_id: str) -> None:
+    """Reject a time span that runs past the half-open window ``[start, end)``.
 
     Raises:
         TimeFValidationError: If the span starts before ``start`` or ends after ``end``.
     """
-    if span.start < start or _exclusive_end(span) > end:
+    if span.start_us < start or span.exclusive_end > end:
         raise TimeFValidationError(
-            f"{label} ({span.start}, {span.end}) us falls outside sample {sample_id!r} span "
-            f"({start}, {end}) us; span times are in the source recording timeline"
+            f"{label} falls outside sample {sample_id!r} span ({start}, {end}) us: got {span!r}; span "
+            f"times are in the source recording timeline"
         )
 
 
-def _reject_outside_union(label: str, span: Span, windows: list[tuple[int, int]], sample_id: str) -> None:
+def _reject_outside_union(label: str, span: TimeSpan, windows: list[tuple[int, int]], sample_id: str) -> None:
     """Reject a span not covered by the union of ``windows``.
 
     With no gaps the union is one contiguous window, so this is the same bounds check as a scope. With
@@ -127,10 +137,10 @@ def _reject_outside_union(label: str, span: Span, windows: list[tuple[int, int]]
     if len(merged) == 1:
         _reject_outside(label, span, merged[0][0], merged[0][1], sample_id)
         return
-    if not any(start <= span.start and _exclusive_end(span) <= end for start, end in merged):
+    if not any(start <= span.start_us and span.exclusive_end <= end for start, end in merged):
         raise TimeFValidationError(
-            f"{label} ({span.start}, {span.end}) us falls in a gap between the recorded windows of sample "
-            f"{sample_id!r} {merged}. Declare a time_span if the session spans the gap"
+            f"{label} falls in a gap between the recorded windows of sample {sample_id!r} {merged}: got "
+            f"{span!r}. Declare a time_span if the session spans the gap"
         )
 
 
@@ -165,8 +175,8 @@ class Sample:
         start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
         start_time=1_000_000                                   # the same moment, written directly
     """
-    time_span: IntervalSpan | None = None
-    """The session's overall span on the source recording timeline: an :class:`~timenet.types.IntervalSpan`
+    time_span: TimeInterval | None = None
+    """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole sample, or ``None``. Declare it when the series have gaps and an event may fall in
     one (a note taken while every sensor was briefly off); an unscoped span is then checked against it
     rather than against the union of the series' windows. Its ``time_series_ids`` must be ``None``, and
@@ -177,10 +187,10 @@ class Sample:
 
         ``start_time`` delegates its contract: ``unix_us`` rejects a naive datetime or a bare float, and
         ``check_int64`` rejects an anchor past the int64 microsecond column. ``time_span``, when set,
-        must be a whole-sample :class:`~timenet.types.IntervalSpan` that contains every series' window.
+        must be a whole-sample :class:`~timenet.types.TimeInterval` that contains every series' window.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-sample ``IntervalSpan`` or does not
+            TimeFValidationError: If ``time_span`` is not a whole-sample ``TimeInterval`` or does not
                 contain some series' window.
         """
         if self.start_time is not None:
@@ -188,9 +198,9 @@ class Sample:
             check_int64("Sample.start_time", anchor)
             self.start_time = anchor
         if self.time_span is not None:
-            if not isinstance(self.time_span, IntervalSpan):
+            if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
-                    f"Sample.time_span must be an IntervalSpan covering the whole sample, got {self.time_span!r}"
+                    f"Sample.time_span must be a TimeInterval covering the whole sample, got {self.time_span!r}"
                 )
             if self.time_span.time_series_ids is not None:
                 raise TimeFValidationError(
@@ -198,16 +208,54 @@ class Sample:
                 )
             for ts in self.time_series:
                 window = ts.span_us
-                if window is not None and (window[0] < self.time_span.start or window[1] > self.time_span.end):
+                if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
                     raise TimeFValidationError(
-                        f"Sample.time_span ({self.time_span.start}, {self.time_span.end}) us must contain every "
-                        f"series' window, but {ts.time_series_id!r} covers {window} us"
+                        f"Sample.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
+                        f"every series' window, but {ts.time_series_id!r} covers {window} us"
                     )
 
     @property
     def has_absolute_time(self) -> bool:
         """Whether this sample's relative timeline has a Unix-time anchor."""
         return self.start_time is not None
+
+    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+        """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this sample's timeline.
+
+        Places ``at`` on the recording timeline against this sample's own ``start_time``, so the caller
+        never repeats the anchor. A span's bounds are offsets on that timeline, so this needs an
+        anchored sample; ``offset_us`` raises if the sample has no ``start_time``.
+
+        Args:
+            at: The wall-clock moment, timezone-aware.
+            time_series_ids: Series the point is scoped to; ``None`` covers every series.
+
+        Returns:
+            The point, in microseconds from this sample's relative zero.
+        """
+        return TimePoint(start_us=offset_us(at, self.start_time), time_series_ids=time_series_ids)
+
+    def time_interval(
+        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+    ) -> TimeInterval:
+        """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
+
+        Places ``start`` and ``end`` on the recording timeline against this sample's own ``start_time``;
+        ``offset_us`` raises if the sample has no ``start_time`` to measure against.
+
+        Args:
+            start: Wall-clock start, timezone-aware.
+            end: Wall-clock end, exclusive and timezone-aware.
+            time_series_ids: Series the interval is scoped to; ``None`` covers every series.
+
+        Returns:
+            The half-open interval, in microseconds from this sample's relative zero.
+        """
+        return TimeInterval(
+            start_us=offset_us(start, self.start_time),
+            end_us=offset_us(end, self.start_time),
+            time_series_ids=time_series_ids,
+        )
 
     def add_annotation(self, annotation: Annotation) -> Annotation:
         """Attach an annotation to the sample and return it.

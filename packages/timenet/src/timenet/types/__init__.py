@@ -12,7 +12,15 @@ from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema, validate_dataset_id
-from timenet.types.spans import IntervalSpan, PointSpan, Span
+from timenet.types.spans import (
+    Span,
+    StepInterval,
+    StepPoint,
+    StepSpan,
+    TimeInterval,
+    TimePoint,
+    TimeSpan,
+)
 from timenet.types.specs import DataSource, TimeSeriesSpec
 from timenet.types.tasks import (
     TASKS,
@@ -46,12 +54,13 @@ __all__ = [
     "DatasetSchema",
     "Domain",
     "ForecastingTask",
-    "IntervalSpan",
     "License",
     "LocalizationMode",
-    "PointSpan",
     "ScalarPredictionTask",
     "Span",
+    "StepInterval",
+    "StepPoint",
+    "StepSpan",
     "TSCorrespondenceTask",
     "TSEditingTask",
     "TSGenerationTask",
@@ -59,7 +68,10 @@ __all__ = [
     "TaskRefs",
     "TaskType",
     "TemporalLocalizationTask",
+    "TimeInterval",
+    "TimePoint",
     "TimeSeriesSpec",
+    "TimeSpan",
     "Version",
     "annotation_type_of",
     "new_id",

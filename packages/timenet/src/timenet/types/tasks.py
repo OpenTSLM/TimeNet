@@ -25,7 +25,14 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.types.ids import new_id
-from timenet.types.spans import Span
+from timenet.types.spans import (
+    Span,
+    StepInterval,
+    StepSpan,
+    TimeInterval,
+    TimePoint,
+    TimeSpan,
+)
 from timenet.types.units import normalize_unit
 
 
@@ -138,6 +145,14 @@ class Task:
                 found.extend(value)
         return tuple(found)
 
+    def check_against_scope(self) -> None:
+        """Validate payload that depends on the task's finalized ``scope``.
+
+        :meth:`~timenet.dataset.TimeFDataset.add_task` calls this after stamping any ``scope=`` passed
+        there, so a scope supplied at registration is in force. The base task has nothing scope-dependent
+        to check; :class:`ForecastingTask` overrides it.
+        """
+
 
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
@@ -200,24 +215,25 @@ class TemporalLocalizationTask(Task):
 
     This is the inverse of a scoped :class:`ClassificationTask`, which gives the region and asks for its
     label. One type covers event detection, segmentation, and change-point detection, because they share
-    one target. The target is a point (a :class:`~timenet.types.spans.Span` with no ``end_s``) or an
-    interval. An optional label from a referenced annotation marks each one, and each one is scoped to
-    particular series.
+    one target: a tuple of :class:`~timenet.types.spans.TimePoint` or
+    :class:`~timenet.types.spans.TimeInterval` spans, on the recording timeline. An optional label from a
+    referenced annotation marks each one, and each one is scoped to particular series.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TEMPORAL_LOCALIZATION
     refs: ClassVar[TaskRefs] = TaskRefs(span_fields=("target",))
-    target: tuple[Span, ...] | None = None
+    target: tuple[TimePoint | TimeInterval, ...] | None = None
     """The regions to find, or ``None`` when they are stored as ``target_annotation_ids``."""
     mode: LocalizationMode = LocalizationMode.SPARSE
     """Whether the spans must cover the region of interest (see :class:`LocalizationMode`)."""
 
     def __post_init__(self) -> None:
-        """Coerce ``mode`` to the enum and reject an explicitly empty ``target``.
+        """Coerce ``mode`` to the enum, reject an empty ``target``, and reject a step-framed target.
 
         Raises:
-            TimeFValidationError: If ``mode`` is unknown, or ``target`` is ``()`` rather than ``None``
-                or non-empty.
+            TimeFValidationError: If ``mode`` is unknown; if ``target`` is ``()`` rather than ``None``
+                or non-empty; or if a target span counts in steps, which has no place on the recording
+                timeline localization reports against.
         """
         try:
             self.mode = LocalizationMode(self.mode)
@@ -229,6 +245,12 @@ class TemporalLocalizationTask(Task):
             raise TimeFValidationError(
                 "TemporalLocalizationTask target must be None (answer stored by reference) or non-empty, got ()"
             )
+        for span in self.target or ():
+            if isinstance(span, StepSpan):
+                raise TimeFValidationError(
+                    f"TemporalLocalizationTask localizes on the recording timeline, so its targets are "
+                    f"TimePoint or TimeInterval spans, but got a step span {span!r}"
+                )
 
 
 @dataclass(kw_only=True)
@@ -254,23 +276,28 @@ class ForecastingTask(Task):
     target_sample_id: str | None = None
     """Id of the sample whose future values the task predicts. ``None`` when ``target_span`` names the
     region to predict in the attached sample instead."""
-    target_span: Span | None = None
-    """The region to predict, inside the sample the task is attached to. It is in microseconds on the
-    source recording timeline, the same frame as a span's bounds and a series' time offsets. It must be
-    an interval, not a point, and it is exclusive with ``target_sample_id``.
-    :meth:`~timenet.dataset.TimeFDataset.add_task` checks that it falls inside the sample, because that
-    method has the sample. It needs an explicit ``scope`` for the context region. A ``scope`` of
-    ``None`` means the whole sample, which covers the region to predict."""
+    target_span: TimeInterval | StepInterval | None = None
+    """The region to predict, inside the sample the task is attached to. It is an interval, not a point
+    (the type says so), and it is exclusive with ``target_sample_id``. It is in the same frame as
+    ``scope``. For a series with a timeline, that is a :class:`~timenet.types.spans.TimeInterval` in
+    microseconds; for a series that counts in steps, a :class:`~timenet.types.spans.StepInterval`, the
+    only frame an ordinal series can carry. :meth:`~timenet.dataset.TimeFDataset.add_task` checks that
+    it falls inside the sample, because that method has the sample. It needs an explicit ``scope`` for
+    the context region. A ``scope`` of ``None`` means the whole sample, which covers the region to
+    predict."""
 
     def __post_init__(self) -> None:
-        """Reject a forecasting task with a bad target, an empty context, or a scope that leaks the target.
+        """Reject a forecasting task with a bad target or a self-referential context.
 
         Raises:
-            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``.
-                If it sets ``target_sample_id`` with an empty ``context_sample_ids`` (a forecast with
-                no input). If ``target_span`` is a point and not an interval. If ``target_span`` and
-                ``target_sample_id`` are both set. If ``target_span`` has no ``scope``. If ``scope``
-                reaches into or past ``target_span`` on a series that both spans share.
+            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``; if
+                it sets ``target_sample_id`` with an empty ``context_sample_ids`` (a forecast with no
+                input) or with that same id in the context (its own answer as input); if ``target_span``
+                and ``target_sample_id`` are both set; if ``target_span`` carries ``context_sample_ids``
+                (its context is ``scope``, so a context sample would re-expose the target region); or if
+                ``target_span`` is a point, which spans no values. A missing scope, a frame mismatch, or a
+                context that leaks the target is checked in :meth:`check_against_scope`, once ``add_task``
+                has stamped any ``scope=``, and here too when the task is built with its ``scope``.
         """
         if self.target_span is None:
             if self.target_sample_id is None:
@@ -284,37 +311,88 @@ class ForecastingTask(Task):
                     "forecast with no input. The separate-sample form forecasts from context_sample_ids, so "
                     "give at least one id. The target_span form takes its context from scope instead"
                 )
+            if self.target_sample_id in self.context_sample_ids:
+                raise TimeFValidationError(
+                    f"ForecastingTask target_sample_id {self.target_sample_id!r} also appears in "
+                    f"context_sample_ids, so the forecast would read its own answer as input. Drop it from "
+                    f"the context"
+                )
             return
-        if self.target_span.is_point:
-            raise TimeFValidationError(
-                f"ForecastingTask target_span must be an interval, not a point. A point has no duration, so "
-                f"it names no values to predict. A one-step horizon is the interval that covers that one "
-                f"step, for example IntervalSpan.seconds(t, t + step_seconds). A point cannot express it. The "
-                f"time that one step covers depends on the series' axis, and one sample can hold several axes "
-                f"at different rates. Got {self.target_span!r}"
-            )
         if self.target_sample_id is not None:
             raise TimeFValidationError(
                 f"ForecastingTask target_span names a region of the attached sample, so it cannot be "
                 f"combined with target_sample_id={self.target_sample_id!r}. Use one or the other"
             )
+        if self.context_sample_ids:
+            raise TimeFValidationError(
+                f"ForecastingTask target_span takes its context from scope, so context_sample_ids must be "
+                f"empty in this form, got {list(self.context_sample_ids)}. A whole context sample would "
+                f"re-expose the target region; put covariate context on another series of scope with "
+                f"time_series_ids instead"
+            )
+        if self.target_span.is_point:
+            raise TimeFValidationError(
+                f"ForecastingTask target_span is the region to predict, so it must be an interval with a "
+                f"duration, not a point: got {self.target_span!r}"
+            )
+        if self.scope is not None:  # early check; add_task re-checks after any late scope= is stamped
+            self._check_scope_against_target(self.scope, self.target_span)
+
+    def check_against_scope(self) -> None:
+        """Reject a ``target_span`` forecast whose context scope is missing, misframed, or leaks the target.
+
+        Raises:
+            TimeFValidationError: If ``target_span`` is set with no ``scope`` (the whole-sample default
+                would include the region to predict); if ``scope`` and ``target_span`` are in different
+                frames; or if ``scope`` reaches into or past ``target_span`` on a series they share.
+        """
+        if self.target_span is None:
+            return
         if self.scope is None:
             raise TimeFValidationError(
                 "ForecastingTask target_span needs an explicit scope for the context region. A scope of "
                 "None means the whole sample (see Task.scope), which covers the region that target_span "
-                "predicts. Pass scope= to this constructor. add_task sets its scope= after this check runs, "
-                "so that scope= cannot satisfy this check"
+                "predicts. Pass scope= on the task or to add_task"
             )
-        # A span with time_series_ids=None covers every series. A point context covers the single
-        # microsecond at its start, so its exclusive end is start + 1.
-        scope, target = self.scope, self.target_span
-        shared = (
-            scope.time_series_ids is None
-            or target.time_series_ids is None
-            or not set(scope.time_series_ids).isdisjoint(target.time_series_ids)
-        )
-        context_end = scope.start + 1 if scope.end is None else scope.end
-        if shared and context_end > target.start:
+        self._check_scope_against_target(self.scope, self.target_span)
+
+    @staticmethod
+    def _check_scope_against_target(scope: Span, target: TimeInterval | StepInterval) -> None:
+        """Reject a context ``scope`` in the wrong frame, or one that leaks the region to predict.
+
+        A context is safe when it ends at or before the target starts on every series they share. A
+        point context covers a single position, so its exclusive end is one unit past its start.
+
+        Args:
+            scope: The context region.
+            target: The region to predict.
+
+        Raises:
+            TimeFValidationError: If ``scope`` and ``target`` are in different frames, or ``scope``
+                reaches into or past ``target`` on a series they share.
+        """
+        if isinstance(target, StepInterval):
+            if not isinstance(scope, StepSpan):
+                raise TimeFValidationError(
+                    f"ForecastingTask target_span counts in steps, so scope must too; they must share a "
+                    f"frame. Got scope={scope!r}, target_span={target!r}"
+                )
+            if scope.time_series_id == target.time_series_id and scope.exclusive_end > target.start:
+                raise TimeFValidationError(
+                    f"ForecastingTask context overlaps the region to predict on series "
+                    f"{target.time_series_id!r}: the context (scope={scope!r}) must end at or before "
+                    f"the target_span={target!r} starts, or the target leaks into the input"
+                )
+            return
+        if not isinstance(scope, TimeSpan):
+            raise TimeFValidationError(
+                f"ForecastingTask target_span is in seconds, so scope must too; they must share a frame. "
+                f"Got scope={scope!r}, target_span={target!r}"
+            )
+        # A time span with time_series_ids=None covers every series, so it shares one with any target.
+        s_ids, t_ids = scope.time_series_ids, target.time_series_ids
+        shared = s_ids is None or t_ids is None or not set(s_ids).isdisjoint(t_ids)
+        if shared and scope.exclusive_end > target.start_us:
             raise TimeFValidationError(
                 f"ForecastingTask context overlaps the region to predict. On a shared series, the context "
                 f"(scope={scope!r}) must end at or before the target_span={target!r} starts. Otherwise the "

@@ -13,11 +13,11 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
-    IntervalSpan,
     License,
-    PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -84,10 +84,10 @@ def test_scope_series_id_resolution(make_series):
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,))
     ds.add_task(
-        sample, ClassificationTask(target="beat", scope=PointSpan.seconds(0.0, time_series_ids=(ts.time_series_id,)))
+        sample, ClassificationTask(target="beat", scope=TimePoint.seconds(0.0, time_series_ids=(ts.time_series_id,)))
     )
     with pytest.raises(ValueError, match="unknown time_series_id"):
-        ds.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(0.0, time_series_ids=("nope",))))
+        ds.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(0.0, time_series_ids=("nope",))))
 
 
 def test_from_tasks_via_kwarg(make_series):
@@ -114,7 +114,7 @@ def test_derive_schema(make_series):
     ts = make_series()
     sample = ds.add_sample(time_series=(ts,))
     sample.add_annotation(Annotation(key="age", value=64, unit="years"))
-    sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(0.0, 0.004)))
+    sample.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.004)))
     ds.add_task(sample, ClassificationTask(target="afib"))
 
     schema = ds.derive_schema()
@@ -208,7 +208,7 @@ def test_add_task_rejects_scope_outside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="walking", scope=IntervalSpan.seconds(5.0, 20.0)))
+        dataset.add_task(sample, ClassificationTask(target="walking", scope=TimeInterval.seconds(5.0, 20.0)))
 
 
 def test_add_task_rejects_a_point_at_the_exclusive_window_end(make_series):
@@ -216,21 +216,21 @@ def test_add_task_rejects_a_point_at_the_exclusive_window_end(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="walking"), scope=PointSpan.seconds(10.0))
+        dataset.add_task(sample, ClassificationTask(target="walking"), scope=TimePoint.seconds(10.0))
 
 
 def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series):
     # An interval's own end is exclusive too, so [2, 10) fits inside the window [0, 10).
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=IntervalSpan.seconds(2.0, 10.0))
-    assert task.scope == IntervalSpan.seconds(2.0, 10.0)
+    task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=TimeInterval.seconds(2.0, 10.0))
+    assert task.scope == TimeInterval.seconds(2.0, 10.0)
 
 
 def test_add_task_accepts_scope_inside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    scope = IntervalSpan.seconds(2.0, 8.0)
+    scope = TimeInterval.seconds(2.0, 8.0)
     task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=scope)
     assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
 
@@ -238,9 +238,9 @@ def test_add_task_accepts_scope_inside_sample_span(make_series):
 def test_add_task_rejects_a_second_scope(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    task = ClassificationTask(target="walking", scope=IntervalSpan.seconds(1.0, 2.0))
+    task = ClassificationTask(target="walking", scope=TimeInterval.seconds(1.0, 2.0))
     with pytest.raises(TimeFValidationError, match="pass it once"):
-        dataset.add_task(sample, task, scope=IntervalSpan.seconds(3.0, 4.0))
+        dataset.add_task(sample, task, scope=TimeInterval.seconds(3.0, 4.0))
 
 
 def test_add_task_checks_every_span_a_task_carries(make_series):
@@ -251,7 +251,7 @@ def test_add_task_checks_every_span_a_task_carries(make_series):
         dataset.add_task(
             sample,
             TemporalLocalizationTask(
-                prompt="Locate the onsets.", target=(PointSpan.seconds(2.0), PointSpan.seconds(42.0))
+                prompt="Locate the onsets.", target=(TimePoint.seconds(2.0), TimePoint.seconds(42.0))
             ),
         )
 
@@ -275,7 +275,7 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(),))
-    annotation = Annotation(key="stage", value="N2", span=IntervalSpan.seconds(0.0, 0.004))
+    annotation = Annotation(key="stage", value="N2", span=TimeInterval.seconds(0.0, 0.004))
     sample.add_annotation(annotation)
     task = dataset.add_task(
         sample, TemporalLocalizationTask(prompt="Segment it.", target_annotation_ids=(annotation.id,))
@@ -300,6 +300,38 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
         ForecastingTask(context_sample_ids=(context.sample_id,), target_sample_id=target.sample_id),
     )
     assert task.target is None
+
+
+def test_add_task_supplies_the_context_scope_a_target_span_forecast_needs(make_series):
+    # The context scope may be passed to add_task, not only to the constructor; the leak check runs
+    # against it once it is stamped.
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    task = dataset.add_task(
+        sample,
+        ForecastingTask(target_span=TimeInterval.micros(4000, 6000)),
+        scope=TimeInterval.micros(0, 4000),
+    )
+    assert task.scope == TimeInterval.micros(0, 4000)
+
+
+def test_add_task_rejects_a_target_span_forecast_with_no_scope_anywhere(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    with pytest.raises(TimeFValidationError, match="needs an explicit scope"):
+        dataset.add_task(sample, ForecastingTask(target_span=TimeInterval.micros(4000, 6000)))
+
+
+def test_add_task_rejects_a_target_span_forecast_whose_scope_leaks_the_target(make_series):
+    # scope [0, 6000) covers the whole target [4000, 6000) once stamped at add_task.
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    with pytest.raises(TimeFValidationError, match="end at or before the target"):
+        dataset.add_task(
+            sample,
+            ForecastingTask(target_span=TimeInterval.micros(4000, 6000)),
+            scope=TimeInterval.micros(0, 6000),
+        )
 
 
 def test_tasks_of_filters_by_type(make_series):
@@ -462,16 +494,16 @@ def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_serie
 def test_add_task_bounds_checks_a_point_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    dataset.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(9.5)))  # inside
+    dataset.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(9.5)))  # inside
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="beat", scope=PointSpan.seconds(10.5)))
+        dataset.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(10.5)))
 
 
 def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
     # The shared window check must reject the same span whether it arrives as an annotation or a scope.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    outside = PointSpan.seconds(50.0)
+    outside = TimePoint.seconds(50.0)
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
         sample.add_annotation(Annotation(key="mark", span=outside))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):

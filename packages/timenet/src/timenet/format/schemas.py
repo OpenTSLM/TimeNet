@@ -13,8 +13,19 @@ from typing import cast
 
 import pyarrow as pa
 
-from timenet.errors import TimeFValidationError
-from timenet.types import TASKS, IntervalSpan, PointSpan, Span, TaskRefs, TaskType
+from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.types import (
+    TASKS,
+    Span,
+    StepInterval,
+    StepPoint,
+    StepSpan,
+    TaskRefs,
+    TaskType,
+    TimeInterval,
+    TimePoint,
+    TimeSpan,
+)
 from timenet.types.ids import id_from_bytes, id_to_bytes
 
 
@@ -183,9 +194,10 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
     """
     return pa.struct(
         [
-            ("start_us", pa.int64()),
-            ("end_us", pa.int64()),  # null => the span is a point at start_s
-            ("time_series_ids", pa.list_(id_types["time_series_id"])),
+            ("start_us", pa.int64()),  # microseconds in the seconds frame, a step ordinal in steps
+            ("end_us", pa.int64()),  # null => the span is a point
+            ("time_series_ids", pa.list_(id_types["time_series_id"])),  # a step span stores its one id here
+            ("frame", pa.string()),  # "seconds" or "steps"; null on a legacy partition => seconds
         ]
     )
 
@@ -362,15 +374,27 @@ class IdCodec:
 
         Returns:
             The struct row, or ``None``.
+
+        Raises:
+            TimeFValidationError: If ``span`` is not a concrete time or step span.
         """
         if span is None:
             return None
-        return {
-            "start_us": span.start,
-            "end_us": span.end,
-            "time_series_ids": (
+        if isinstance(span, StepSpan):  # one id, stored as a single-element list
+            series_ids = self.encode_list("time_series_id", (span.time_series_id,))
+            start = span.start
+        elif isinstance(span, TimeSpan):
+            series_ids = (
                 None if span.time_series_ids is None else self.encode_list("time_series_id", span.time_series_ids)
-            ),
+            )
+            start = span.start_us
+        else:
+            raise TimeFValidationError(f"cannot encode {span!r}: not a concrete span")
+        return {
+            "start_us": start,
+            "end_us": None if span.is_point else span.exclusive_end,
+            "time_series_ids": series_ids,
+            "frame": span.frame,
         }
 
     def encode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
@@ -440,19 +464,32 @@ class IdCodec:
 
         Returns:
             The span, or ``None``.
+
+        Raises:
+            TimeFFormatError: If the frame is neither ``"seconds"`` nor ``"steps"``, or a step span's
+                stored id list is empty.
         """
         if row is None:
             return None
         struct = cast("dict", row)
         series_ids = struct["time_series_ids"]
-        # A round-tripped span must come back as the class its bounds describe, or it stops
-        # comparing equal to the one that was written.
-        shape: type[Span] = PointSpan if struct["end_us"] is None else IntervalSpan
-        return shape(
-            start=struct["start_us"],
-            end=struct["end_us"],
-            time_series_ids=None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids)),
-        )
+        start, end = struct["start_us"], struct["end_us"]
+        frame = struct.get("frame") or "seconds"  # a legacy partition has no frame column
+        # A round-tripped span must come back as the leaf type its frame and bounds describe, or it
+        # stops comparing equal to the one that was written.
+        if frame == "steps":
+            if not series_ids:
+                raise TimeFFormatError("a step span stores the one series it counts on, but its id list is empty")
+            time_series_id = self.decode_list("time_series_id", series_ids)[0]  # one id, stored as a list
+            if end is None:
+                return StepPoint(time_series_id=time_series_id, start=start)
+            return StepInterval(time_series_id=time_series_id, start=start, stop=end)
+        if frame != "seconds":
+            raise TimeFFormatError(f"unknown span frame {frame!r}; expected 'seconds' or 'steps'")
+        time_series_ids = None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids))
+        if end is None:
+            return TimePoint(start_us=start, time_series_ids=time_series_ids)
+        return TimeInterval(start_us=start, end_us=end, time_series_ids=time_series_ids)
 
     def decode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
         """Decode a task payload cell holding ids or spans, leaving plain payload untouched.
