@@ -6,18 +6,25 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset
+from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
+    Annotation,
     AnswerTask,
     ClassificationTask,
+    DatasetMetadata,
     IntervalSpan,
+    License,
     LocalizationMode,
     PointSpan,
     ScalarPredictionTask,
     TemporalLocalizationTask,
+    TimeSeriesSpec,
+    Version,
+    ureg,
 )
 from timenet.writer import TimeFWriter
 
@@ -369,4 +376,53 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
             row["span"]["end_us"] = 10**15  # far past any series window
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
+        list(reader.iter_samples())
+
+
+def _time_span_dataset(tmp_path) -> Path:
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/time-span",
+            dataset_version=Version(1, 0, 0),
+            name="T",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless),
+        channel="c",
+        time_axis=RegularAxis.from_rate_hz(1),
+        n_values=3,
+        loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+    )
+    sample = dataset.add_sample(time_series=(series,), time_span=IntervalSpan.seconds(0.0, 5.0))
+    sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(2.0)))  # unscoped, inside [0, 5) s
+    return _write(tmp_path, dataset)
+
+
+def _corrupt_first_time_span(version_dir, struct):
+    """Replace the first sample's time_span struct in samples.parquet, simulating on-disk corruption."""
+    samples_path = version_dir / "samples.parquet"
+    table = pq.read_table(samples_path)
+    rows = table.to_pylist()
+    rows[0]["time_span"] = struct
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), samples_path)
+
+
+def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
+    # A stored time_span whose end is not past its start fails Span validation on decode; it must surface
+    # as a format error, not the raw ValueError that validation raises.
+    version_dir = _time_span_dataset(tmp_path)
+    _corrupt_first_time_span(version_dir, {"start_us": 6_000_000, "end_us": 5_000_000, "time_series_ids": None})
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be > start"):
+        list(reader.iter_samples())
+
+
+def test_point_shaped_time_span_raises_format_error(tmp_path):
+    # A time_span must be an interval covering the whole sample. A corrupt point-shaped one (no end) is
+    # rejected as a format error, not left to reach the unscoped-span check and raise a bare TypeError.
+    version_dir = _time_span_dataset(tmp_path)
+    _corrupt_first_time_span(version_dir, {"start_us": 0, "end_us": None, "time_series_ids": None})
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be an IntervalSpan"):
         list(reader.iter_samples())

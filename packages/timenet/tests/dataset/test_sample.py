@@ -121,8 +121,8 @@ def test_has_absolute_time(make_series):
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_sample(make_series):
-    # An unscoped span needs a timeline to be placed against. An all-ordinal sample has no timed series,
-    # so there is nothing to check it against and it is refused.
+    # An unscoped span needs a timeline to be placed against. An all-ordinal sample has no timed series
+    # and no time_span, so there is nothing to check it against and it is refused.
     ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, channel="c", time_axis=OrdinalAxis())
     sample = Sample(time_series=(ordinal,))
     with pytest.raises(ValueError, match="no timeline to place it"):
@@ -136,9 +136,9 @@ def test_annotation_span_outside_the_window_is_rejected(make_series):
         sample.add_annotation(Annotation(key="artifact", span=IntervalSpan.seconds(5.0, 20.0)))
 
 
-def test_annotation_in_a_gap_is_rejected(make_series):
-    # An event logged between two sensor windows (one sensor off, another not yet on) is rejected: the
-    # union of the series' windows has a real gap, and a span landing in it sits inside neither series.
+def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
+    # An event logged between two sensor windows (one sensor off, another not yet on) is rejected by
+    # default: the union of the series' windows has a real gap, and nothing says the session spans it.
     early = make_series(channel="early", values=(0.0,) * 5000)  # [0, 10) s
     late = make_series(
         channel="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
@@ -147,6 +147,18 @@ def test_annotation_in_a_gap_is_rejected(make_series):
     # 15 s falls in the [10, 20) s gap, inside neither series.
     with pytest.raises(TimeFValidationError, match="falls in a gap"):
         sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))
+
+
+def test_annotation_in_a_gap_is_accepted_with_a_time_span(make_series):
+    # Declaring a session span that covers the gap says the recording really spanned it (the lunch
+    # case): an unscoped span is then checked against the time_span, not the union of series windows.
+    early = make_series(channel="early", values=(0.0,) * 5000)  # [0, 10) s
+    late = make_series(
+        channel="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
+    )  # [20, 30) s
+    sample = Sample(time_series=(early, late), time_span=IntervalSpan.seconds(0.0, 30.0))
+    sample.add_annotation(Annotation(key="note", span=PointSpan.seconds(15.0)))  # inside the session span
+    assert sample.annotations[0].key == "note"
 
 
 def test_a_scoped_span_must_lie_within_the_intersection(make_series):
@@ -173,3 +185,19 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
     ids = (early.time_series_id, late.time_series_id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
         sample.add_annotation(Annotation(key="bad", span=PointSpan.seconds(5.0, time_series_ids=ids)))
+
+
+def test_time_span_must_contain_every_series_window(make_series):
+    series = make_series(values=(0.0,) * 5000)  # [0, 10) s
+    with pytest.raises(TimeFValidationError, match="must contain every series' window"):
+        Sample(time_series=(series,), time_span=IntervalSpan.seconds(0.0, 5.0))  # too short
+
+
+def test_time_span_time_series_ids_must_be_none(make_series):
+    with pytest.raises(TimeFValidationError, match="time_series_ids must be None"):
+        Sample(time_series=(make_series(),), time_span=IntervalSpan.seconds(0.0, 10.0, time_series_ids=("x",)))
+
+
+def test_time_span_must_be_an_interval(make_series):
+    with pytest.raises(TimeFValidationError, match="must be an IntervalSpan"):
+        Sample(time_series=(make_series(),), time_span=PointSpan.seconds(5.0))  # ty: ignore[invalid-argument-type]

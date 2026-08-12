@@ -77,14 +77,16 @@ via `TimeFDataset.add_sample`.
 | `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |
 | `annotations` | `tuple[Annotation, ...]` | Attached via `add_annotation`. |
 | `start_time` | `datetime \| int \| None` | Wall-clock anchor that relative time zero refers to, for every series and annotation on the sample. Pass a timezone-aware `datetime` or whole Unix microseconds; construction normalizes either one to microseconds. A bare float is refused, since seconds and microseconds are both plausible readings of it. `None` means no wall-clock reference exists (e.g. de-identified or synthetic data) — never fabricate one. |
+| `time_span` | `IntervalSpan \| None` | The session's overall span on the source recording timeline, for a recording whose series leave gaps an unscoped span may fall in (a note taken while every sensor was briefly off). Must carry no `time_series_ids` and must contain every series' window. When set, an unscoped span is checked against it instead of against the union of the series' windows. |
 
 All series and annotations in an anchored sample share this clock and relative-time coordinate system.
 Use `sample.has_absolute_time` to check whether the anchor is known.
 
-`add_annotation(annotation)` attaches and returns it, validating that a temporal annotation's
-`time_series_ids` resolve to series on the sample, and that a trial-level annotation (an interval
-span covering the sample rather than named channels) is only added when the sample's series share a
-common window, which each derives from its own axis.
+`add_annotation(annotation)` attaches and returns it, validating a temporal annotation's span by the
+same rule a task's `scope` uses. A span scoped to named `time_series_ids` must lie inside the
+*intersection* of those series' windows. An unscoped span is checked against the sample's `time_span`
+when it declares one, and otherwise against the *union* of the series' windows, so an event landing in
+an unrecorded gap between series is rejected unless a `time_span` says the session spanned it.
 
 `to_arrow()` / `to_numpy()` return the sole channel's 1-D values (Arrow / NumPy) for the common
 single-channel sample, raising `ValueError` for a multi-channel sample (index `time_series` yourself
@@ -108,7 +110,7 @@ dataset.derive_schema()
 ```python
 add_sample(
     *, time_series, subject_ids=(),
-    sample_id=None, start_time=None,
+    sample_id=None, start_time=None, time_span=None,
 ) -> Sample
 ```
 

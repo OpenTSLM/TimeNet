@@ -13,6 +13,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import types as _types
+from typing import cast
 
 import numpy as np
 import pyarrow as pa
@@ -31,6 +32,7 @@ from timenet.types import (
     Annotation,
     DatasetMetadata,
     DatasetSchema,
+    IntervalSpan,
     Task,
     TaskType,
     annotation_type_of,
@@ -326,22 +328,29 @@ class TimeFReader:
             self._resolve_annotation(sample_id, aid)
             for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
         )
-        # A span is stored on the annotation but resolved against the sample; a stored span that no
-        # longer fits the series it lands on is a corrupt artifact, not a caller mistake.
-        for annotation in annotations:
-            if annotation.span is not None:
-                try:
-                    check_span_within_window(f"annotation {annotation.key!r}", annotation.span, series, sample_id)
-                except TimeFValidationError as exc:
-                    raise TimeFFormatError(str(exc)) from exc
-        return Sample(
-            sample_id=sample_id,
-            time_series=series,
-            subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
-            task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
-            annotations=annotations,
-            start_time=row.get("start_time_us"),
-        )
+        # A stored span or time_span that no longer fits is a corrupt artifact, not a caller mistake, so
+        # the sample's own invariants surface as a format error, not a ValueError. Decode and build the
+        # sample inside the seam so a malformed time_span (bad bounds, or point-shaped) is rejected by
+        # Sample.__post_init__ before it is used to re-check the stored annotation spans.
+        try:
+            time_span = cast("IntervalSpan | None", self._codec.decode_span(row.get("time_span")))
+            sample = Sample(
+                sample_id=sample_id,
+                time_series=series,
+                subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
+                task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
+                annotations=annotations,
+                start_time=row.get("start_time_us"),
+                time_span=time_span,
+            )
+            for annotation in annotations:
+                if annotation.span is not None:
+                    check_span_within_window(
+                        f"annotation {annotation.key!r}", annotation.span, series, sample_id, time_span
+                    )
+            return sample
+        except TimeFValidationError as exc:
+            raise TimeFFormatError(str(exc)) from exc
 
     def _build_series(self, sample_id: str, struct: dict) -> TimeSeries:
         spec_type = struct["spec_type"]
