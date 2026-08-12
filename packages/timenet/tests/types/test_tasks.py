@@ -139,3 +139,116 @@ def test_registry_rejects_task_type_collision():
     # Two classes claiming the same task_type would otherwise silently drop one from the registry.
     with pytest.raises(ValueError, match="task_type"):
         _build_task_registry([ClassificationTask, ClassificationTask])
+
+
+def test_forecasting_target_span_names_a_region_of_the_attached_sample():
+    task = ForecastingTask(target_span=IntervalSpan.seconds(132.0, 144.0), scope=IntervalSpan.seconds(0.0, 132.0))
+    assert task.target_span == IntervalSpan.seconds(132.0, 144.0)
+    assert task.target_sample_id is None
+    assert task.context_sample_ids == ()
+
+
+def test_forecasting_still_accepts_a_whole_target_sample():
+    task = ForecastingTask(context_sample_ids=("c1",), target_sample_id="t1")
+    assert task.target_sample_id == "t1"
+    assert task.target_span is None
+
+
+def test_forecasting_target_span_must_be_an_interval():
+    with pytest.raises(TimeFValidationError, match="must be an interval"):
+        ForecastingTask(scope=IntervalSpan.seconds(0.0, 132.0), target_span=PointSpan.seconds(132.0))
+
+
+def test_forecasting_predicts_a_single_step_as_a_one_step_interval():
+    # One-step-ahead is the most common forecasting protocol, and rejecting point spans must not stand
+    # in its way. A point is an instant with no duration; the single step at that instant is the
+    # interval covering it, the only form that stays unambiguous on a sample holding several rates.
+    task = ForecastingTask(
+        scope=IntervalSpan.seconds(0.0, 143.0),
+        target_span=IntervalSpan.seconds(143.0, 144.0),
+    )
+    assert task.target_span == IntervalSpan.seconds(143.0, 144.0)  # an interval, not a point
+
+
+def test_forecasting_target_span_is_exclusive_with_target_sample_id():
+    with pytest.raises(TimeFValidationError, match="cannot be combined with target_sample_id"):
+        ForecastingTask(target_sample_id="t1", target_span=IntervalSpan.seconds(132.0, 144.0))
+
+
+def test_forecasting_target_span_is_declared_as_a_span_field():
+    scope = IntervalSpan.seconds(0.0, 132.0)
+    task = ForecastingTask(target_span=IntervalSpan.seconds(132.0, 144.0), scope=scope)
+    assert ForecastingTask.refs.span_fields == ("target_span",)
+    assert task.spans() == (scope, IntervalSpan.seconds(132.0, 144.0))
+
+
+def test_forecasting_requires_a_target_sample_id_or_a_target_span():
+    with pytest.raises(TimeFValidationError, match="requires either target_sample_id or target_span"):
+        ForecastingTask()
+
+
+def test_forecasting_target_span_requires_an_explicit_scope():
+    with pytest.raises(TimeFValidationError, match="needs an explicit scope"):
+        ForecastingTask(target_span=IntervalSpan.seconds(132.0, 144.0))
+
+
+def test_forecasting_rejects_an_empty_context_with_a_target_sample():
+    # The separate-target-sample form draws its input from context_sample_ids. An empty tuple there
+    # is a forecast with no input. The target_span form takes its context from scope, so an empty
+    # context_sample_ids is correct in that form.
+    with pytest.raises(TimeFValidationError, match="empty context_sample_ids"):
+        ForecastingTask(target_sample_id="t1")
+
+
+def test_forecasting_rejects_a_context_that_overlaps_the_target():
+    # scope [0, 140) covers the first 8 s of target [132, 144) on the shared whole-sample series.
+    with pytest.raises(TimeFValidationError, match="end at or before the target"):
+        ForecastingTask(
+            scope=IntervalSpan.seconds(0.0, 140.0),
+            target_span=IntervalSpan.seconds(132.0, 144.0),
+        )
+
+
+def test_forecasting_rejects_a_context_that_covers_the_whole_target():
+    with pytest.raises(TimeFValidationError, match="end at or before the target"):
+        ForecastingTask(
+            scope=IntervalSpan.seconds(0.0, 144.0),
+            target_span=IntervalSpan.seconds(132.0, 144.0),
+        )
+
+
+def test_forecasting_rejects_a_context_that_follows_the_target():
+    # This predicts the past from the future. The context sits entirely after the region to predict.
+    with pytest.raises(TimeFValidationError, match="end at or before the target"):
+        ForecastingTask(
+            scope=IntervalSpan.seconds(132.0, 144.0),
+            target_span=IntervalSpan.seconds(0.0, 12.0),
+        )
+
+
+def test_forecasting_allows_a_context_ending_exactly_at_the_target_start():
+    # The context's exclusive end can touch the target's inclusive start. [0, 132) leaves 132 to predict.
+    task = ForecastingTask(
+        scope=IntervalSpan.seconds(0.0, 132.0),
+        target_span=IntervalSpan.seconds(132.0, 144.0),
+    )
+    assert task.scope == IntervalSpan.seconds(0.0, 132.0)
+
+
+def test_forecasting_allows_context_and_target_on_disjoint_series():
+    # A future-known covariate: the context reaches past the target start, but on a different series,
+    # so there is nothing to leak.
+    task = ForecastingTask(
+        scope=IntervalSpan.seconds(0.0, 144.0, time_series_ids=("cov",)),
+        target_span=IntervalSpan.seconds(132.0, 144.0, time_series_ids=("target",)),
+    )
+    assert task.target_span == IntervalSpan.seconds(132.0, 144.0, time_series_ids=("target",))
+
+
+def test_forecasting_checks_leakage_only_on_series_the_spans_share():
+    # scope and target name series sets that overlap. The shared series ("y") must not leak.
+    with pytest.raises(TimeFValidationError, match="end at or before the target"):
+        ForecastingTask(
+            scope=IntervalSpan.seconds(0.0, 140.0, time_series_ids=("x", "y")),
+            target_span=IntervalSpan.seconds(132.0, 144.0, time_series_ids=("y", "z")),
+        )

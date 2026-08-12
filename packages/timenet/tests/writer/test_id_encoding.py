@@ -135,6 +135,32 @@ def test_forecasting_scalar_id_round_trips(tmp_path):
     assert task.context_sample_ids == (context.sample_id,)
 
 
+def test_forecasting_target_span_round_trips(tmp_path):
+    """target_span is the only single-Span payload column; exercise its encode/decode branch."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/uuid-test",
+            dataset_version=Version(1, 0, 0),
+            name="U",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    sample = dataset.add_sample(time_series=(_series(),))
+    series_id = sample.time_series[0].time_series_id
+    span = IntervalSpan.seconds(1.0, 3.0, time_series_ids=(series_id,))
+    scope = IntervalSpan.seconds(0.0, 1.0, time_series_ids=(series_id,))
+    dataset.add_task(sample, ForecastingTask(target_span=span, scope=scope))
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset)
+    with TimeFReader(version_dir) as reader:
+        task = reader.tasks[0]
+    assert isinstance(task, ForecastingTask)
+    assert task.target_span == span
+    assert task.target_sample_id is None
+    assert task.scope == scope
+
+
 def test_non_uuid_ids_stay_string(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset(sample_id="sample-0"))
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
