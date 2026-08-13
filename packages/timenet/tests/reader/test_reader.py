@@ -227,7 +227,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     # Corrupt the artifact rather than the reader's internals: the locator is read from the index on
     # each lookup now, so an in-memory poke would not survive to the read.
     version_dir = _write(tmp_path)
-    index_path = version_dir / "time_series_index.parquet"
+    index_path = version_dir / "time_series_index/part-00000000.parquet"
     table = pq.read_table(index_path)
     bogus = pa.array(["time_series/does-not-exist.parquet"] * table.num_rows)
     pq.write_table(table.set_column(table.schema.get_field_index("chunk_file"), "chunk_file", bogus), index_path)
@@ -243,7 +243,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
 
 def test_missing_listed_file_raises(tmp_path):
     version_dir = _write(tmp_path)
-    (version_dir / "samples.parquet").unlink()
+    (version_dir / "samples/part-00000000.parquet").unlink()
     with pytest.raises(FileNotFoundError):
         TimeFReader(version_dir)
 
@@ -306,7 +306,7 @@ def test_start_time_round_trips_exactly(tmp_path):
 
 def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
     version_dir = _write(tmp_path)
-    samples_path = version_dir / "samples.parquet"
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     pq.write_table(table.drop_columns(["start_time_us"]), samples_path)
     with TimeFReader(version_dir) as reader:
@@ -315,7 +315,7 @@ def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
 
 def _corrupt_first_series(version_dir, field, value):
     """Set a field on the first series' struct in samples.parquet, simulating on-disk corruption."""
-    samples_path = version_dir / "samples.parquet"
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     rows = table.to_pylist()
     rows[0]["time_series"][0][field] = value
@@ -367,7 +367,7 @@ def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_err
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     # A stored span that no longer fits the series it resolves to is corruption, not a caller mistake.
     version_dir = _write(tmp_path)
-    ann_path = version_dir / "annotations.parquet"
+    ann_path = version_dir / "annotations/part-00000000.parquet"
     table = pq.read_table(ann_path)
     rows = table.to_pylist()
     for row in rows:
@@ -403,7 +403,7 @@ def _time_span_dataset(tmp_path) -> Path:
 
 def _corrupt_first_time_span(version_dir, struct):
     """Replace the first sample's time_span struct in samples.parquet, simulating on-disk corruption."""
-    samples_path = version_dir / "samples.parquet"
+    samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     rows = table.to_pylist()
     rows[0]["time_span"] = struct

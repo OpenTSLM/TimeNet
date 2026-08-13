@@ -4,9 +4,6 @@ from timenet.errors import TimeFValidationError
 
 
 MANIFEST_FILE = "manifest.json"
-SAMPLES_FILE = "samples.parquet"
-ANNOTATIONS_FILE = "annotations.parquet"
-INDEX_FILE = "time_series_index.parquet"
 
 SHARD_DIR = "time_series"
 SHARD_TEMPLATE = "time_series/shard-{:08d}.parquet"

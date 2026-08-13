@@ -12,27 +12,27 @@ import json
 from pathlib import Path
 import shutil
 import types as _types
-from typing import assert_never
+from typing import Any, assert_never
 import uuid
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
-    ANNOTATIONS_FILE,
+    ANNOTATIONS_TEMPLATE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_COMPRESSION_LEVEL,
+    DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
-    INDEX_FILE,
+    INDEX_TEMPLATE,
     MANIFEST_FILE,
-    SAMPLES_FILE,
+    SAMPLES_TEMPLATE,
     TASK_PART_TEMPLATE,
     part_path,
 )
@@ -59,6 +59,7 @@ from timenet.values_backends.writer import (
 )
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
+from timenet.writer.sharded import write_sharded_table
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
@@ -71,6 +72,7 @@ class TimeFWriter:
         dataset: TimeFDataset,
         *,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
+        control_shard_target_bytes: int = DEFAULT_CONTROL_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
@@ -86,6 +88,8 @@ class TimeFWriter:
             root: Parent directory; the writer creates ``<root>/<dataset_id>/<version>/``.
             dataset: The populated dataset (its ``schema`` must be derived before writing).
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
+            control_shard_target_bytes: Split a control table (samples, annotations, index, tasks) into
+                a new part once the in-memory Arrow size of the emitted rows exceeds this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
@@ -124,6 +128,7 @@ class TimeFWriter:
         self._dataset = dataset
         self._derived_from = derived_from
         self._shard_target_bytes = shard_target_bytes
+        self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -430,23 +435,50 @@ class TimeFWriter:
 
     # ---- metadata tables -----------------------------------------------------------------------
 
+    def _write_control_table(
+        self,
+        rows: Iterable[dict],
+        schema: pa.Schema,
+        part_path: Callable[[int], str],
+        *,
+        dictionary_columns: list[str],
+        column_encoding: dict[str, str] | None = None,
+    ) -> list[str]:
+        return write_sharded_table(
+            rows,
+            schema,
+            part_path,
+            staging_dir=self._staging_dir,
+            control_target_bytes=self._control_shard_target_bytes,
+            row_group_target_bytes=self._row_group_target_bytes,
+            encoding=encodings.ParquetEncoding(
+                dictionary_columns=dictionary_columns,
+                column_encoding=column_encoding,
+                compression=self._compression,
+                compression_level=self._compression_level,
+            ),
+        )
+
     def _write_samples(self) -> None:
         codec = self._codec
-        rows = []
-        for sample in sorted(self._dataset.samples, key=lambda s: s.sample_id):
-            rows.append(
-                {
-                    "sample_id": codec.encode("sample_id", sample.sample_id),
-                    "start_time_us": sample.start_time,
-                    "time_span": codec.encode_span(sample.time_span),
-                    "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
-                    "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
-                    "task_ids": codec.encode_list("task_id", sample.task_ids),
-                    "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
-                }
-            )
-        self._write_table(
-            rows, samples_schema(self._id_types), SAMPLES_FILE, dictionary_columns=encodings.SAMPLES_DICTIONARY
+        rows: list[dict] = [
+            {
+                "sample_id": codec.encode("sample_id", sample.sample_id),
+                "start_time_us": sample.start_time,
+                "time_span": codec.encode_span(sample.time_span),
+                "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
+                "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
+                "task_ids": codec.encode_list("task_id", sample.task_ids),
+                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
+            }
+            for sample in self._dataset.samples
+        ]
+        rows.sort(key=lambda r: r["sample_id"])
+        self._sample_parts = self._write_control_table(
+            iter(rows),
+            samples_schema(self._id_types),
+            SAMPLES_TEMPLATE.format,
+            dictionary_columns=encodings.SAMPLES_DICTIONARY,
         )
 
     def _write_annotations(self) -> None:
@@ -465,11 +497,11 @@ class TimeFWriter:
                     },
                 )
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
-        rows = sorted(by_id.values(), key=lambda r: (r["key"], r["id"]))
-        self._write_table(
-            rows,
+        rows = sorted(by_id.values(), key=lambda r: r["id"])
+        self._annotation_parts = self._write_control_table(
+            iter(rows),
             annotations_schema(self._id_types),
-            ANNOTATIONS_FILE,
+            ANNOTATIONS_TEMPLATE.format,
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
@@ -481,37 +513,59 @@ class TimeFWriter:
         for task_type_str, tasks in sorted(by_type.items()):
             schema = task_schema(tasks[0].task_type, self._id_types)
             rows = [_task_row(task, schema, self._codec) for task in tasks]
-            rel = part_path(TASK_PART_TEMPLATE, 0, task_type=task_type_str)
-            (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-            self._write_table(rows, schema, rel, dictionary_columns=encodings.task_dictionary(schema))
-            self._task_files.append(rel)
+            parts = self._write_control_table(
+                iter(rows),
+                schema,
+                lambda index, task_type_str=task_type_str: part_path(
+                    TASK_PART_TEMPLATE, index, task_type=task_type_str
+                ),
+                dictionary_columns=encodings.task_dictionary(schema),
+            )
+            self._task_files.extend(parts)
 
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
     ) -> None:
+        # Emit rows in encoded (sample_id, time_series_id, chunk_idx) order by nested iteration, so the
+        # parts stay globally sorted without ever materializing the whole index: the reader selects the
+        # parts a probe lands in and bisects each, which requires that global order across the split.
         codec = self._codec
-        rows = []
-        for (time_series_id, chunk_idx), placement in placements.items():
-            for sample_id in series_to_samples.get(time_series_id, ()):
-                rows.append(
-                    {
-                        "sample_id": codec.encode("sample_id", sample_id),
-                        "time_series_id": codec.encode("time_series_id", time_series_id),
-                        "spec_type": placement.spec_type,
-                        "channel": placement.channel,
-                        "chunk_idx": chunk_idx,
-                        "chunk_file": placement.chunk_file,
-                        "chunk_major_idx": placement.data_index.major_idx,
-                        "chunk_minor_idx": placement.data_index.minor_idx,
-                        "n_values": placement.n_values,
-                    }
-                )
-        rows.sort(key=lambda r: (r["sample_id"], r["time_series_id"], r["chunk_idx"]))
-        self._index_rows = len(rows)
-        self._write_table(
-            rows,
+        sample_to_series: dict[str, list[str]] = {}
+        for time_series_id, sample_ids in series_to_samples.items():
+            for sample_id in sample_ids:
+                sample_to_series.setdefault(sample_id, []).append(time_series_id)
+        chunks_by_series: dict[str, list[int]] = {}
+        for time_series_id, chunk_idx in placements:  # noqa: PLE1141 - keys are (id, chunk) tuples
+            chunks_by_series.setdefault(time_series_id, []).append(chunk_idx)
+        for chunk_idxs in chunks_by_series.values():
+            chunk_idxs.sort()
+
+        enc_sid: dict[str, Any] = {sid: codec.encode("sample_id", sid) for sid in sample_to_series}
+        enc_tid: dict[str, Any] = {tid: codec.encode("time_series_id", tid) for tid in chunks_by_series}
+
+        def rows() -> Iterable[dict]:
+            for sample_id in sorted(sample_to_series, key=lambda s: enc_sid[s]):
+                series = sample_to_series[sample_id]
+                for time_series_id in sorted(series, key=lambda t: enc_tid[t]):
+                    for chunk_idx in chunks_by_series[time_series_id]:
+                        placement = placements[time_series_id, chunk_idx]
+                        yield {
+                            "sample_id": enc_sid[sample_id],
+                            "time_series_id": enc_tid[time_series_id],
+                            "spec_type": placement.spec_type,
+                            "channel": placement.channel,
+                            "chunk_idx": chunk_idx,
+                            "chunk_file": placement.chunk_file,
+                            "chunk_major_idx": placement.data_index.major_idx,
+                            "chunk_minor_idx": placement.data_index.minor_idx,
+                            "n_values": placement.n_values,
+                        }
+
+        self._index_rows = sum(len(chunks_by_series[t]) for series in sample_to_series.values() for t in series)
+        self._index_parts = self._write_control_table(
+            rows(),
             index_schema(self._id_types),
-            INDEX_FILE,
+            INDEX_TEMPLATE.format,
             dictionary_columns=encodings.INDEX_DICTIONARY,
             column_encoding=encodings.INDEX_ENCODING,
         )
@@ -527,9 +581,9 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=(SAMPLES_FILE,),
-                annotations=(ANNOTATIONS_FILE,),
-                time_series_index=(INDEX_FILE,),
+                samples=tuple(self._sample_parts),
+                annotations=tuple(self._annotation_parts),
+                time_series_index=tuple(self._index_parts),
                 tasks=tuple(self._task_files),
                 time_series=tuple(self._value_files),
             ),
@@ -592,27 +646,6 @@ class TimeFWriter:
             rel = path.relative_to(self._staging_dir).as_posix()
             checksums[rel] = file_checksum(path)
         return checksums
-
-    def _write_table(
-        self,
-        rows: list[dict],
-        schema: pa.Schema,
-        rel_path: str,
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> None:
-        table = pa.Table.from_pylist(rows, schema=schema)
-        pq.write_table(
-            table,
-            self._staging_dir / rel_path,
-            **encodings.parquet_kwargs(
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
-        )
 
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:

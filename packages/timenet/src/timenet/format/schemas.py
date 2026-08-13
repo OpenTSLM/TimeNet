@@ -94,7 +94,7 @@ def time_series_struct(id_types: IdTypes) -> pa.DataType:
 
 
 def samples_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the ``samples.parquet`` schema.
+    """Return the samples table schema.
 
     Args:
         id_types: The resolved id storage types.
@@ -116,7 +116,7 @@ def samples_schema(id_types: IdTypes) -> pa.Schema:
 
 
 def annotations_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the ``annotations.parquet`` schema.
+    """Return the annotations table schema.
 
     Args:
         id_types: The resolved id storage types.
@@ -158,7 +158,7 @@ def shard_schema(id_types: IdTypes) -> pa.Schema:
 
 
 def index_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the ``time_series_index.parquet`` schema.
+    """Return the time-series index table schema.
 
     Args:
         id_types: The resolved id storage types.
