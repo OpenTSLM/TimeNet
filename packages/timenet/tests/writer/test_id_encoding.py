@@ -212,7 +212,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     series = _series()
     sample = dataset.add_sample(time_series=(series,))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
-    dataset.add_task(sample, ClassificationTask(target="x"), scope=scope)
+    dataset.add_task(sample, ClassificationTask(target="x", scope=scope))
     dataset.add_task(
         sample,
         TemporalLocalizationTask(

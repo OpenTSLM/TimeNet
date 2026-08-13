@@ -160,8 +160,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 # The cohort annotation is context the model reads, not something it has to produce.
                 input_annotation_ids=("cohort-shared",),
                 id="task-answer-0",
+                from_tasks=(classification,),
             ),
-            from_tasks=(classification,),
         )
         dataset.add_task(
             sample0,
@@ -205,13 +205,16 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-window-2",
         )
         sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
+        # A scope narrows the input to a region: same task type as the whole-sample label above, with the
+        # window supplied. Span times are in the source recording timeline, so this sits inside the
+        # window's span.
         dataset.add_task(
             sample2,
-            ClassificationTask(target="onset", id="task-cls-2"),
-            # A scope narrows the input to a region: same task type as the whole-sample label above, with
-            # the window supplied. Span times are in the source recording timeline, so this sits inside
-            # the window's span.
-            scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
+            ClassificationTask(
+                target="onset",
+                id="task-cls-2",
+                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
+            ),
         )
         return dataset
 

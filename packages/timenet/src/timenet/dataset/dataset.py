@@ -16,7 +16,6 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
-    Span,
     Task,
     TimeInterval,
     annotation_type_of,
@@ -98,70 +97,166 @@ class TimeFDataset:
         self._samples.append(sample)
         return sample
 
-    def add_task(
-        self,
-        samples: Sample | Iterable[Sample],
-        task: Task,
-        *,
-        scope: Span | None = None,
-        from_tasks: tuple[Task, ...] = (),
-    ) -> Task:
+    def add_task(self, samples: Sample | Iterable[Sample], task: Task) -> Task:
         """Register a task and link it to its samples.
 
         Every span the task carries — its ``scope`` and, for a
         :class:`~timenet.types.TemporalLocalizationTask`, its target regions — is checked against the
         samples here, where the samples are available to check against. So are the sample and annotation
-        ids the task references.
+        ids the task references, and the source tasks in its ``from_tasks``.
+
+        Set ``scope`` and ``from_tasks`` on the task itself: they describe that one task, not the call.
 
         Args:
             samples: The sample, or samples, the task is attached to.
-            task: The task instance (payload already set by the caller).
-            scope: The input region the task is about, stamped onto ``task.scope``. A convenience for
-                passing the window at registration time; equivalent to constructing the task with it.
-            from_tasks: Source tasks this task derives from. Overrides the task's own ``from_tasks``
-                only when non-empty, so a task constructed with ``from_tasks=`` is not clobbered.
+            task: The task instance (payload, ``scope``, and ``from_tasks`` already set by the caller).
 
         Returns:
             The registered task (same instance, with ``sample_ids`` populated).
 
         Raises:
-            TimeFValidationError: If ``samples`` is empty; if ``scope`` is passed and the task already
-                carries one; if a scope-dependent payload rule fails once the scope is final (a
-                :class:`~timenet.types.ForecastingTask` ``target_span`` with no scope, a frame mismatch,
-                or a context that leaks the target); if the task sets both ``target`` and
-                ``target_annotation_ids`` or, when its answer is not a produced series, neither; if a
-                span's ``time_series_ids`` does not resolve to a series on every target sample or the span
-                falls outside a sample's covered span; or if a referenced sample or annotation is not
-                registered in this dataset.
+            TimeFValidationError: If ``samples`` is empty; if the task's id is already registered; if a
+                task in ``from_tasks`` is neither registered nor the task itself; if a scope-dependent
+                payload rule fails (a :class:`~timenet.types.ForecastingTask` ``target_span`` with no
+                scope, a frame mismatch, or a context that leaks the target); if the task sets both
+                ``target`` and ``target_annotation_ids`` or, when its answer is not a produced series,
+                neither; if a span's ``time_series_ids`` does not resolve to a series on every target
+                sample or the span falls outside a sample's covered span; or if a referenced sample or
+                annotation is not registered in this dataset.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
             raise TimeFValidationError("add_task requires at least one sample")
-        if scope is not None:
-            if task.scope is not None:
-                raise TimeFValidationError(
-                    f"add_task got scope= for a {type(task).__name__} that already has scope={task.scope!r}; "
-                    f"pass it once, either on the task or here"
-                )
-            task.scope = scope
+        return self._register_batch((task,), targets)[0]
 
-        task.check_against_scope()
-        self._check_task_answer(task)
-        self._check_sample_refs(task)
-        for sample in targets:
-            for span in task.spans():
-                check_span_within_window(
-                    f"{type(task).__name__} span", span, sample.time_series, sample.sample_id, sample.time_span
-                )
-        self._check_annotation_refs(task, targets)
+    def add_tasks(self, samples: Sample | Iterable[Sample], tasks: Iterable[Task]) -> tuple[Task, ...]:
+        """Register several tasks against the same samples, all together or not at all.
 
-        if from_tasks:
-            task.from_tasks = tuple(from_tasks)
-        task.sample_ids = tuple(sample.sample_id for sample in targets)
-        for sample in targets:
-            sample.task_ids = (*sample.task_ids, task.id)
-        self._tasks.append(task)
-        return task
+        The whole batch is validated before any of it is attached: if one task fails a check, the call
+        raises and leaves the dataset and every task in the batch untouched. To keep the tasks before a
+        failure attached, loop :meth:`add_task` instead.
+
+        A task may derive from another in the same batch — list it in the deriving task's ``from_tasks`` —
+        because the batch is checked as a unit, so the order within ``tasks`` does not matter.
+
+        Args:
+            samples: The sample, or samples, the tasks are attached to.
+            tasks: The task instances to register. Pass a single one to :meth:`add_task`.
+
+        Returns:
+            The registered tasks (the same instances, with ``sample_ids`` populated), in the order given.
+
+        Raises:
+            TimeFValidationError: If ``samples`` is empty; if two tasks in the batch share an id or one
+                reuses a registered id; if a ``from_tasks`` parent is neither registered nor in the batch,
+                or the derivation is cyclic; or if any task fails the checks :meth:`add_task` documents.
+        """
+        targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
+        if not targets:
+            raise TimeFValidationError("add_tasks requires at least one sample")
+        # Drain `tasks` before validating: a connector generator may attach an annotation and then yield
+        # a task referencing it, so the annotation must already be on the sample when the refs are checked.
+        batch = tuple(tasks)
+        return self._register_batch(batch, targets)
+
+    def _register_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> tuple[Task, ...]:
+        """Validate a whole batch of tasks and attach it, or attach none of it.
+
+        Shared by :meth:`add_task` and :meth:`add_tasks` so the singular and plural forms cannot drift;
+        the singular is the batch of one. Validation is side-effect-free, so the attachment below runs
+        only once the whole batch is known good.
+
+        Args:
+            batch: The tasks to register together, already drained from the caller's iterable.
+            targets: The samples the tasks attach to.
+
+        Returns:
+            The registered tasks (the same instances, with ``sample_ids`` populated), in order.
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_tasks`.
+        """  # noqa: DOC502 (raised by _validate_task_batch, not directly here)
+        self._validate_task_batch(batch, targets)
+        for task in batch:
+            task.sample_ids = tuple(sample.sample_id for sample in targets)
+            for sample in targets:
+                sample.task_ids = (*sample.task_ids, task.id)
+            self._tasks.append(task)
+        return batch
+
+    def _validate_task_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> None:
+        """Run every check the batch must pass, without attaching anything.
+
+        Covers the cross-task invariants a batch makes possible, on top of the per-task checks: ids stay
+        unique against the batch and the dataset, each ``from_tasks`` parent is already registered or in
+        the batch, and no task derives from itself or closes a cycle.
+
+        Args:
+            batch: The tasks being registered together.
+            targets: The samples the tasks attach to.
+
+        Raises:
+            TimeFValidationError: as documented on :meth:`add_tasks`.
+        """
+        registered_ids = {task.id for task in self._tasks}
+        batch_ids = [task.id for task in batch]
+        duplicated = sorted({task_id for task_id in batch_ids if batch_ids.count(task_id) > 1})
+        if duplicated:
+            raise TimeFValidationError(f"tasks in the batch share an id: {duplicated}")
+        reused = sorted(set(batch_ids) & registered_ids)
+        if reused:
+            raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
+        known_task_ids = registered_ids | set(batch_ids)
+        for task in batch:
+            for parent_id in task.from_task_ids:
+                if parent_id == task.id:
+                    raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
+                if parent_id not in known_task_ids:
+                    raise TimeFValidationError(
+                        f"{type(task).__name__} {task.id!r} derives from task {parent_id!r}, which is not "
+                        f"registered in this dataset or part of the batch"
+                    )
+        self._check_no_derivation_cycle(batch)
+        for task in batch:
+            task.check_against_scope()
+            self._check_task_answer(task)
+            self._check_sample_refs(task)
+            for sample in targets:
+                for span in task.spans():
+                    check_span_within_window(
+                        f"{type(task).__name__} span", span, sample.time_series, sample.sample_id, sample.time_span
+                    )
+            self._check_annotation_refs(task, targets)
+
+    @staticmethod
+    def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:
+        """Reject a ``from_tasks`` cycle formed among the batch's own tasks.
+
+        Only batch tasks can close a cycle: a task already in the dataset passed this check when it was
+        added and cannot derive from one that did not exist yet. So the walk stays inside the batch,
+        following the parents each task shares with it.
+
+        Args:
+            batch: The tasks being registered together.
+
+        Raises:
+            TimeFValidationError: If the batch's derivations contain a cycle.
+        """
+        batch_ids = {task.id for task in batch}
+        parents = {task.id: {p for p in task.from_task_ids if p in batch_ids} for task in batch}
+        # Kahn's algorithm: peel off tasks whose in-batch parents are all resolved; whatever is left
+        # after no more can be peeled sits on a cycle.
+        resolved: set[str] = set()
+        progressed = True
+        while progressed:
+            progressed = False
+            for task_id, deps in parents.items():
+                if task_id not in resolved and deps <= resolved:
+                    resolved.add(task_id)
+                    progressed = True
+        unresolved = sorted(set(parents) - resolved)
+        if unresolved:
+            raise TimeFValidationError(f"tasks in the batch form a cyclic from_tasks derivation: {unresolved}")
 
     def derive_schema(self) -> DatasetSchema:
         """Walk the dataset's instances and build its :class:`DatasetSchema`.

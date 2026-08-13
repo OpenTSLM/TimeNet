@@ -143,8 +143,8 @@ def make_dataset() -> TimeFDataset:
             rationale="Regular intervals with one peak per cycle.",
             input_annotation_ids=("cohort-shared",),
             id="task-answer-0",
+            from_tasks=(classification,),
         ),
-        from_tasks=(classification,),
     )
     dataset.add_task(
         sample0,
@@ -174,8 +174,11 @@ def make_dataset() -> TimeFDataset:
     sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
     dataset.add_task(
         sample2,
-        ClassificationTask(target="onset", id="task-cls-2"),
-        scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
+        ClassificationTask(
+            target="onset",
+            id="task-cls-2",
+            scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
+        ),
     )
     return dataset
 

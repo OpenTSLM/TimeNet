@@ -90,23 +90,22 @@ def test_scope_series_id_resolution(make_series):
         ds.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(0.0, time_series_ids=("nope",))))
 
 
-def test_from_tasks_via_kwarg(make_series):
+def test_from_tasks_on_constructor_registers(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),))
     base = ds.add_task(sample, ClassificationTask(target="a"))
-    derived = ds.add_task(sample, AnswerTask(prompt="q", target="a"), from_tasks=(base,))
+    derived = ds.add_task(sample, AnswerTask(prompt="q", target="a", from_tasks=(base,)))
     assert derived.from_tasks == (base,)
     assert derived.from_task_ids == (base.id,)
 
 
-def test_from_tasks_on_constructor_not_clobbered(make_series):
-    # A task built with from_tasks= must not lose it when add_task is called without the kwarg.
+def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(),))
-    base = ds.add_task(sample, ClassificationTask(target="a"))
-    qa = AnswerTask(prompt="q", target="a", from_tasks=(base,))
-    ds.add_task(sample, qa)
-    assert qa.from_tasks == (base,)
+    orphan = ClassificationTask(target="a")  # never added to the dataset
+    qa = AnswerTask(prompt="q", target="a", from_tasks=(orphan,))
+    with pytest.raises(TimeFValidationError, match="derives from task"):
+        ds.add_task(sample, qa)
 
 
 def test_derive_schema(make_series):
@@ -216,14 +215,14 @@ def test_add_task_rejects_a_point_at_the_exclusive_window_end(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="walking"), scope=TimePoint.seconds(10.0))
+        dataset.add_task(sample, ClassificationTask(target="walking", scope=TimePoint.seconds(10.0)))
 
 
 def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series):
     # An interval's own end is exclusive too, so [2, 10) fits inside the window [0, 10).
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=TimeInterval.seconds(2.0, 10.0))
+    task = dataset.add_task(sample, ClassificationTask(target="walking", scope=TimeInterval.seconds(2.0, 10.0)))
     assert task.scope == TimeInterval.seconds(2.0, 10.0)
 
 
@@ -231,16 +230,8 @@ def test_add_task_accepts_scope_inside_sample_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     scope = TimeInterval.seconds(2.0, 8.0)
-    task = dataset.add_task(sample, ClassificationTask(target="walking"), scope=scope)
+    task = dataset.add_task(sample, ClassificationTask(target="walking", scope=scope))
     assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
-
-
-def test_add_task_rejects_a_second_scope(make_series):
-    dataset = _dataset()
-    sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    task = ClassificationTask(target="walking", scope=TimeInterval.seconds(1.0, 2.0))
-    with pytest.raises(TimeFValidationError, match="pass it once"):
-        dataset.add_task(sample, task, scope=TimeInterval.seconds(3.0, 4.0))
 
 
 def test_add_task_checks_every_span_a_task_carries(make_series):
@@ -302,15 +293,13 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     assert task.target is None
 
 
-def test_add_task_supplies_the_context_scope_a_target_span_forecast_needs(make_series):
-    # The context scope may be passed to add_task, not only to the constructor; the leak check runs
-    # against it once it is stamped.
+def test_add_task_accepts_a_target_span_forecast_with_a_context_scope(make_series):
+    # A target_span forecast needs a scope to bound its context; the leak check runs against it.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
     task = dataset.add_task(
         sample,
-        ForecastingTask(target_span=TimeInterval.micros(4000, 6000)),
-        scope=TimeInterval.micros(0, 4000),
+        ForecastingTask(target_span=TimeInterval.micros(4000, 6000), scope=TimeInterval.micros(0, 4000)),
     )
     assert task.scope == TimeInterval.micros(0, 4000)
 
@@ -329,8 +318,7 @@ def test_add_task_rejects_a_target_span_forecast_whose_scope_leaks_the_target(ma
     with pytest.raises(TimeFValidationError, match="end at or before the target"):
         dataset.add_task(
             sample,
-            ForecastingTask(target_span=TimeInterval.micros(4000, 6000)),
-            scope=TimeInterval.micros(0, 6000),
+            ForecastingTask(target_span=TimeInterval.micros(4000, 6000), scope=TimeInterval.micros(0, 6000)),
         )
 
 
@@ -507,4 +495,101 @@ def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
         sample.add_annotation(Annotation(key="mark", span=outside))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        dataset.add_task(sample, ClassificationTask(target="x"), scope=outside)
+        dataset.add_task(sample, ClassificationTask(target="x", scope=outside))
+
+
+def test_add_annotations_attaches_all_and_returns_them(make_series):
+    sample = _dataset().add_sample(time_series=(make_series(),))
+    anns = sample.add_annotations([Annotation(key="a", value=1), Annotation(key="b", value=2)])
+    assert tuple(a.key for a in anns) == ("a", "b")
+    assert sample.annotations == anns
+
+
+def test_add_annotations_rejects_the_whole_batch_when_one_is_invalid(make_series):
+    sample = _dataset().add_sample(time_series=(make_series(),))
+    good = Annotation(key="a", value=1)
+    bad = Annotation(key="b", span=TimePoint.seconds(0.0, time_series_ids=("nope",)))
+    with pytest.raises(TimeFValidationError):
+        sample.add_annotations([good, bad])
+    assert sample.annotations == ()  # all-or-nothing: the valid one is not left attached
+
+
+def test_add_tasks_registers_all_in_order_and_links(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    tasks = ds.add_tasks(sample, [ClassificationTask(target="a"), ClassificationTask(target="b")])
+    assert tuple(t.target for t in tasks) == ("a", "b")
+    assert ds.tasks == tasks
+    assert sample.task_ids == tuple(t.id for t in tasks)
+
+
+def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
+    good = ClassificationTask(target="a")
+    bad = ClassificationTask(target="b", scope=TimeInterval.seconds(5.0, 20.0))  # outside the sample span
+    with pytest.raises(TimeFValidationError):
+        ds.add_tasks(sample, [good, bad])
+    assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either
+    assert sample.task_ids == ()
+
+
+def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_series):
+    # The deriving task is listed before its parent, so this only passes because the batch is validated
+    # as a unit rather than task by task.
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    base = ClassificationTask(target="a")
+    derived = AnswerTask(prompt="q", target="a", from_tasks=(base,))
+    registered = ds.add_tasks(sample, [derived, base])
+    assert registered == (derived, base)
+    assert derived.from_tasks == (base,)
+
+
+def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    with pytest.raises(TimeFValidationError, match="share an id"):
+        ds.add_tasks(sample, [ClassificationTask(target="a", id="dup"), ClassificationTask(target="b", id="dup")])
+    assert ds.tasks == ()
+
+
+def test_add_tasks_rejects_an_id_already_registered(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    ds.add_task(sample, ClassificationTask(target="a", id="task-0"))
+    with pytest.raises(TimeFValidationError, match="already registered"):
+        ds.add_tasks(sample, [ClassificationTask(target="b", id="task-0")])
+
+
+def test_add_tasks_rejects_a_self_dependency(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    task = AnswerTask(prompt="q", target="a")
+    task.from_tasks = (task,)  # derives from itself
+    with pytest.raises(TimeFValidationError, match="lists itself"):
+        ds.add_tasks(sample, [task])
+
+
+def test_add_tasks_rejects_a_derivation_cycle(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    first = AnswerTask(prompt="q", target="a")
+    second = AnswerTask(prompt="q", target="b", from_tasks=(first,))
+    first.from_tasks = (second,)  # first <- second <- first
+    with pytest.raises(TimeFValidationError, match="cyclic"):
+        ds.add_tasks(sample, [first, second])
+
+
+def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
+    # A connector generator may attach an annotation and then yield a task referencing it; draining the
+    # batch before the refs are checked means the annotation is already on the sample by then.
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+
+    def gen():
+        ann = sample.add_annotation(Annotation(key="peak", span=TimePoint.seconds(0.0)))
+        yield ClassificationTask(target="x", input_annotation_ids=(ann.id,))
+
+    (task,) = ds.add_tasks(sample, gen())
+    assert task.input_annotation_ids == (sample.annotations[0].id,)
