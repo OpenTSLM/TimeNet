@@ -99,10 +99,15 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. A windowed sample
   says so through its axis: `RegularAxis.at_index(...)` moves the origin into the recording.
-- `sample.add_annotation(Annotation(key=..., value=..., id=...))`. One class: its shape comes from its
-  `span`. No span means whole-sample; `span=PointSpan.seconds(...)` a time offset; `span=IntervalSpan.seconds(...)`
-  a region.
-- `dataset.add_task(sample, <Task>(...))`. Compose derived tasks with `from_tasks=(...)`.
+- `sample.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it;
+  `sample.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
+  its `span`. No span means whole-sample; `span=TimePoint.seconds(...)` a time offset;
+  `span=TimeInterval.seconds(...)` a region.
+- `dataset.add_task(sample, <Task>(...))` registers one and returns it; `dataset.add_tasks(sample, [...])`
+  takes an iterable and registers the batch all-or-nothing. Set `scope` and `from_tasks` on the task
+  itself, not the call; a batch may derive from its own members in any order.
+- Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
+  `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
 
 ## Task types (`timenet.types.tasks`)
 

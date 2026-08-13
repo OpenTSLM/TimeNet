@@ -350,20 +350,19 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             sample_id=f"sample-{scenario.name}",
             subject_ids=(f"subject-{scenario.name}",),
         )
-        sample.add_annotation(
-            Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario")
-        )
-        sample.add_annotation(
-            Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event")
-        )
+        annotations = [
+            Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),
+            Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event"),
+        ]
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
-            sample.add_annotation(
+            annotations.append(
                 Annotation(
                     key="quality-window",
                     span=TimeInterval.seconds(1.0, 2.0),
                     id=f"annotation-{scenario.name}-window",
                 )
             )
+        sample.add_annotations(annotations)
         samples[scenario.name] = sample
     _add_tasks(dataset, samples)
     _add_connector_patterns(dataset, samples, scale)
