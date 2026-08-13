@@ -111,11 +111,19 @@ class ZarrValuesBackend(BaseValuesBackend):
 
         Args:
             config: Typed Zarr backend options.
+
+        Raises:
+            TimeFValidationError: If ``compression`` is not a Blosc codec the backend can apply.
         """
+        if config.compression not in _BLOSC_CNAMES:
+            raise TimeFValidationError(
+                f"unknown compression {config.compression!r} for the zarr values backend; it "
+                f"compresses with Blosc, whose codecs are {', '.join(sorted(_BLOSC_CNAMES))}"
+            )
         self._staging_dir = config.staging_dir
         self._chunk_max_bytes = config.chunk_max_bytes
         self._shard_target_bytes = config.shard_target_bytes
-        self._cname = config.compression if config.compression in _BLOSC_CNAMES else "zstd"
+        self._cname = config.compression
         self._clevel = config.compression_level
 
     def _value_appender(self, group: Any, ts: TimeSeries, array_path: str, codec: Any) -> "_ArrayAppender":
