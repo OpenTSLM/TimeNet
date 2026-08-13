@@ -475,3 +475,40 @@ def test_overlapping_index_parts_raise(tmp_path):
         manifest_path.write_text(json.dumps(data))
         with pytest.raises(TimeFFormatError):
             TimeFReader(version_dir)
+
+
+def test_get_sample_by_index_and_id_match_iteration(tmp_path):
+    # A 1-byte control target puts every sample in its own part, so the offset/id-range skip has
+    # several parts to pick between.
+    version_dir = _write(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1)
+    with TimeFReader(version_dir) as reader:
+        streamed = list(reader.iter_samples())
+        assert len(reader) == len(streamed)
+        for i, expected in enumerate(streamed):
+            assert reader.get_sample(i).sample_id == expected.sample_id
+            assert reader.get_sample_by_id(expected.sample_id).sample_id == expected.sample_id
+
+
+def test_get_sample_out_of_range_and_unknown_id(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        with pytest.raises(IndexError):
+            reader.get_sample(len(reader))
+        with pytest.raises(IndexError):
+            reader.get_sample(-1)
+        with pytest.raises(KeyError):
+            reader.get_sample_by_id("no-such-sample")
+
+
+def test_get_sample_by_id_loads_only_the_covering_part(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1)
+    with TimeFReader(version_dir) as reader:
+        sample_parts = {str(version_dir / rel) for rel in reader._manifest.files.samples}
+        assert len(sample_parts) > 1
+        wanted = list(reader.iter_samples())[1].sample_id
+        seen: list[str] = []
+        original = parts_mod.pq.read_table
+        monkeypatch.setattr(parts_mod.pq, "read_table", lambda p, *a, **k: seen.append(str(p)) or original(p, *a, **k))
+        assert reader.get_sample_by_id(wanted).sample_id == wanted
+    touched = [s for s in seen if s in sample_parts]
+    assert 0 < len(touched) < len(sample_parts)

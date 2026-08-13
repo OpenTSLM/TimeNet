@@ -77,6 +77,17 @@ class TimeFReader:
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
         self._part_cache_size = part_cache_size
         self._index_cache = _PartCache(self._root, part_cache_size)
+        sample_stats = self._manifest.part_stats.get("samples")
+        if not sample_stats:
+            raise TimeFFormatError(f"manifest for {self._root} has no samples part_stats")
+        self._sample_stats: tuple[PartStat, ...] = sample_stats
+        self._sample_cache = _PartCache(self._root, part_cache_size)
+        self._sample_offsets: list[int] = []
+        running = 0
+        for part in self._sample_stats:
+            self._sample_offsets.append(running)
+            running += part.n_rows
+        self._sample_count = running
         # The eager loaders parse on-disk control tables against the manifest's schema. Anything they raise means
         # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
         # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
@@ -105,6 +116,7 @@ class TimeFReader:
         state = self.__dict__.copy()
         state["_values"] = None
         state.pop("_index_cache", None)
+        state.pop("_sample_cache", None)
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -115,6 +127,7 @@ class TimeFReader:
         """
         self.__dict__.update(state)
         self._index_cache = _PartCache(self._root, self._part_cache_size)
+        self._sample_cache = _PartCache(self._root, self._part_cache_size)
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -198,6 +211,59 @@ class TimeFReader:
         """
         for row in self._read_rows(self._manifest.files.samples):
             yield self._build_sample(row)
+
+    def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
+        return self._sample_count
+
+    def get_sample(self, index: int) -> Sample:
+        """Return the sample at ``index`` in stored (sample-id) order.
+
+        Args:
+            index: Zero-based position.
+
+        Returns:
+            The reconstructed sample.
+
+        Raises:
+            IndexError: If ``index`` is out of range.
+        """
+        if index < 0 or index >= self._sample_count:
+            raise IndexError(f"sample index {index} out of range [0, {self._sample_count})")
+        part_idx = bisect.bisect_right(self._sample_offsets, index) - 1
+        offset = index - self._sample_offsets[part_idx]
+        table = self._sample_cache.get(self._sample_stats[part_idx].path)
+        return self._build_sample(table.slice(offset, 1).to_pylist()[0])
+
+    def get_sample_by_id(self, sample_id: str) -> Sample:
+        """Return the sample with ``sample_id``.
+
+        Samples are stored sorted by encoded id, so the covering part is found by key range and the
+        row by a bisect within it.
+
+        Args:
+            sample_id: The logical sample id.
+
+        Returns:
+            The reconstructed sample.
+
+        Raises:
+            KeyError: If no sample has that id.
+        """
+        probe = cast("tuple[Any, ...]", (self._codec.encode("sample_id", sample_id),))
+        for part in self._sample_stats:
+            if part.first_key is None or part.last_key is None:
+                continue
+            first = cast("tuple[Any, ...]", part.first_key)
+            last = cast("tuple[Any, ...]", part.last_key)
+            if not first <= probe <= last:
+                continue
+            table = self._sample_cache.get(part.path)
+            keys = table.column("sample_id").to_pylist()
+            position = bisect.bisect_left(keys, probe[0])
+            if position < len(keys) and keys[position] == probe[0]:
+                return self._build_sample(table.slice(position, 1).to_pylist()[0])
+        raise KeyError(sample_id)
 
     # ---- loading -------------------------------------------------------------------------------
 
