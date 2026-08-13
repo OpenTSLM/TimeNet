@@ -17,6 +17,11 @@ SAMPLES_TEMPLATE = "samples/part-{:08d}.parquet"
 ANNOTATIONS_TEMPLATE = "annotations/part-{:08d}.parquet"
 INDEX_TEMPLATE = "time_series_index/part-{:08d}.parquet"
 
+# The column each prunable control table is sorted by at write time and pruned/bisected on at read
+# time. Naming the contract keeps the writer's sort and the reader's lookup from drifting.
+INDEX_SORT_KEY = "sample_id"
+ANNOTATIONS_SORT_KEY = "id"
+
 DEFAULT_SHARD_TARGET_BYTES = 128 * 2**20
 # Target size for one control-table part, measured on the in-memory Arrow table (not on disk). Kept
 # separate from the values-plane target so the two can be tuned independently.

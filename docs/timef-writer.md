@@ -33,8 +33,8 @@ Most connectors don't use `TimeFWriter` directly. `BaseConnector.store()` and th
   samples.parquet
   annotations.parquet
   time_series_index.parquet
-  tasks/task=<task_type>/part-0.parquet
-  time_series/shard-00000.parquet ...   # values_backend="parquet" (default)
+  tasks/task=<task_type>/part-00000000.parquet
+  time_series/shard-00000000.parquet ...   # values_backend="parquet" (default)
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
   time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
   time_series.zarr/_time_offsets/<spec_type>/...    # their int64 time offsets, one per value
