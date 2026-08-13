@@ -72,13 +72,6 @@ class DatasetMetadata:
     """Free-form tags for search and grouping."""
     source_url: str | None = None
     """Link to the dataset's origin, if any."""
-    value_encoding: str | None = None
-    """Storage override: force this values-column encoding instead of selecting one from the data.
-
-    The one non-descriptive field on the card, because the card is the only per-dataset file a
-    curator authors, and the case it covers is per-dataset: values the cardinality rule classifies
-    wrongly (see :mod:`timenet.writer.value_encoding`). ``None`` leaves the choice to the writer.
-    """
     yaml_schema_version: int = 1
     """Version of the card's own field schema."""
 
@@ -115,7 +108,6 @@ class DatasetMetadata:
             domains=tuple(Domain(domain) for domain in _str_tuple(data.get("domains", ()), "domains")),
             tags=_str_tuple(data.get("tags", ()), "tags"),
             source_url=data.get("source_url"),
-            value_encoding=data.get("value_encoding"),
             yaml_schema_version=data.get("yaml_schema_version", 1),
         )
 

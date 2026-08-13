@@ -92,15 +92,16 @@ class TimeFWriter:
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
                 ``spec_type`` from the data; ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
-                forces one for every modality. An explicit argument overrides the dataset card's
-                ``value_encoding``. Ignored by backends that have no such choice.
+                forces one for every modality. Only the Parquet backend applies an encoding, so
+                forcing one on another backend is rejected.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
             derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
                 another (e.g. ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
-            TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, or ``values_backend``
-                or ``value_encoding`` is unsupported.
+            TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, ``values_backend`` or
+                ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
+                that cannot apply it.
         """
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
@@ -108,11 +109,15 @@ class TimeFWriter:
             raise TimeFValidationError(
                 f"unknown values_backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
             )
-        requested = value_encoding if value_encoding != AUTO else (dataset.metadata.value_encoding or AUTO)
-        if requested != AUTO and requested not in SUPPORTED_VALUE_ENCODINGS:
+        if value_encoding != AUTO and value_encoding not in SUPPORTED_VALUE_ENCODINGS:
             raise TimeFValidationError(
-                f"unknown value_encoding {requested!r}; "
+                f"unknown value_encoding {value_encoding!r}; "
                 f"supported: {AUTO}, {', '.join(sorted(SUPPORTED_VALUE_ENCODINGS))}"
+            )
+        if value_encoding != AUTO and values_backend != ValuesBackend.PARQUET:
+            raise TimeFValidationError(
+                f"value_encoding {value_encoding!r} is only applied by the "
+                f"{ValuesBackend.PARQUET.value!r} values backend, not {values_backend!r}"
             )
         self._root = Path(root)
         self._dataset = dataset
@@ -123,7 +128,7 @@ class TimeFWriter:
         self._compression = compression
         self._compression_level = compression_level
         self._values_backend_name = values_backend
-        self._forced_value_encoding = None if requested == AUTO else ValueEncoding(requested)
+        self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
         self._value_encoding: dict[str, str] = {}
         self._progress_cb = progress_cb
 

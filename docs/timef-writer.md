@@ -136,13 +136,12 @@ The choice is recorded in the manifest as `value_encoding`, a `spec_type` -> enc
 provenance, not contract: Parquet records the applied encoding in every file's footer, so a reader
 resolves it without the manifest.
 
-`value_encoding` controls this, on the [dataset card](types.md#datasetmetadata) or as the
-`TimeFWriter(value_encoding=...)` argument, which wins over the card. Both default to `auto`, the
-measured selection above, so naming `auto` on the card is the same as omitting the field. Set a
-concrete `dictionary`, `byte_stream_split`, or `plain` to force one encoding for every modality. The
-case that needs a force is high-cardinality *quantized* data (say a 24-bit integer-scaled signal),
-which suits neither branch: too many distinct values for a dictionary, too much low-bit noise for a
-byte split.
+The `TimeFWriter(value_encoding=...)` argument controls this. It defaults to `auto`, the measured
+selection above; set a concrete `dictionary`, `byte_stream_split`, or `plain` to force one encoding
+for every modality. The case that needs a force is high-cardinality *quantized* data (say a 24-bit
+integer-scaled signal), which suits neither branch: too many distinct values for a dictionary, too
+much low-bit noise for a byte split. Only the Parquet backend applies an encoding; forcing one while
+writing another backend is rejected.
 
 ```python
 with TimeFWriter(root, dataset, value_encoding="plain") as writer:

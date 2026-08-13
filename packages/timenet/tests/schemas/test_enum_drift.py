@@ -5,7 +5,7 @@ Adding a license/domain/annotation/task in Python without updating the schema fa
 
 from timenet.schemas import DATASET_CARD_SCHEMA, MANIFEST_SCHEMA
 from timenet.types import AnnotationType, Domain, License, TaskType
-from timenet.writer.value_encoding import AUTO, ValueEncoding
+from timenet.writer.value_encoding import ValueEncoding
 
 
 def _schema_enum(schema, name):
@@ -36,18 +36,10 @@ def test_manifest_value_type_enum_matches_the_closed_set():
     assert _schema_enum(MANIFEST_SCHEMA, "valueType") == ["bool", "float", "int", "list", "str"]
 
 
-def test_value_encoding_enums_match_python():
-    assert _schema_enum(DATASET_CARD_SCHEMA, "valueEncoding") == _values(ValueEncoding)
+def test_manifest_value_encoding_enum_matches_python():
     assert _schema_enum(MANIFEST_SCHEMA, "valueEncoding") == _values(ValueEncoding)
 
 
-def test_card_allows_the_auto_value_encoding_sentinel():
-    # "auto" is a separate sentinel, not a ValueEncoding member (the manifest only records concrete
-    # applied encodings), so the card's own property carries it alongside the shared enum.
-    branches = DATASET_CARD_SCHEMA["properties"]["value_encoding"]["anyOf"]
-    assert AUTO in [branch.get("const") for branch in branches]
-
-
 def test_card_and_manifest_share_identical_shared_defs():
-    for name in ("license", "domain", "datasetId", "semver", "valueEncoding"):
+    for name in ("license", "domain", "datasetId", "semver"):
         assert DATASET_CARD_SCHEMA["$defs"][name] == MANIFEST_SCHEMA["$defs"][name]

@@ -199,17 +199,6 @@ def test_writer_argument_forces_an_encoding(tmp_path, forced):
     assert _manifest(version_dir).value_encoding == {"ecg": forced}
 
 
-def test_card_value_encoding_forces_an_encoding(tmp_path):
-    dataset = _dataset({("ecg", "I"): quantized()}, value_encoding=ValueEncoding.PLAIN.value)
-    assert _manifest(_write(tmp_path, dataset)).value_encoding == {"ecg": ValueEncoding.PLAIN.value}
-
-
-def test_writer_argument_beats_the_card(tmp_path):
-    dataset = _dataset({("ecg", "I"): quantized()}, value_encoding=ValueEncoding.PLAIN.value)
-    version_dir = _write(tmp_path, dataset, value_encoding=ValueEncoding.BYTE_STREAM_SPLIT.value)
-    assert _manifest(version_dir).value_encoding == {"ecg": ValueEncoding.BYTE_STREAM_SPLIT.value}
-
-
 def test_unknown_value_encoding_is_rejected_before_staging(tmp_path):
     dataset = _dataset({("ecg", "I"): quantized()})
     with pytest.raises(TimeFValidationError, match="value_encoding"):
@@ -217,16 +206,22 @@ def test_unknown_value_encoding_is_rejected_before_staging(tmp_path):
     assert not list(tmp_path.rglob("*.parquet"))
 
 
-def test_unknown_card_value_encoding_is_rejected(tmp_path):
-    dataset = _dataset({("ecg", "I"): quantized()}, value_encoding="rle")
+# ---- a forced encoding needs a backend that applies it -----------------------------------------
+
+
+def test_forced_argument_rejects_a_backend_that_cannot_apply_it(tmp_path):
+    # Only Parquet applies a values encoding; forcing one onto zarr is a misconfiguration, not a
+    # silent no-op.
+    dataset = _dataset({("ecg", "I"): quantized()})
     with pytest.raises(TimeFValidationError, match="value_encoding"):
-        TimeFWriter(tmp_path, dataset)
+        TimeFWriter(tmp_path, dataset, values_backend="zarr", value_encoding="dictionary")
+    assert not list(tmp_path.rglob("*.zarr"))
 
 
-def test_card_auto_selects_from_the_data(tmp_path):
-    # An explicit "auto" on the card is the writer's default: measure and pick per modality, not force.
-    dataset = _dataset({("ecg", "I"): quantized()}, value_encoding="auto")
-    assert _manifest(_write(tmp_path, dataset)).value_encoding == {"ecg": ValueEncoding.DICTIONARY.value}
+def test_auto_allows_a_backend_without_an_encoding_choice(tmp_path):
+    # auto is every backend's default, so the guard must not trip on it.
+    dataset = _dataset({("ecg", "I"): quantized()})
+    TimeFWriter(tmp_path, dataset, values_backend="zarr")  # constructs without raising
 
 
 # ---- decision log ------------------------------------------------------------------------------

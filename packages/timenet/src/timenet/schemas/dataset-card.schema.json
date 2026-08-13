@@ -19,11 +19,7 @@
     "license": { "$ref": "#/$defs/license" },
     "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
     "tags": { "type": "array", "items": { "type": "string" } },
-    "source_url": { "type": ["string", "null"] },
-    "value_encoding": {
-      "anyOf": [{ "const": "auto" }, { "$ref": "#/$defs/valueEncoding" }, { "type": "null" }],
-      "description": "Values-column encoding for this dataset. 'auto' (or omit the field) lets the writer measure the data and pick per modality; 'dictionary', 'byte_stream_split', or 'plain' forces one instead. Force one only when a measurement shows the selection is wrong for this source."
-    }
+    "source_url": { "type": ["string", "null"] }
   },
   "$defs": {
     "datasetId": {
@@ -66,15 +62,6 @@
         "economics",
         "finance",
         "general"
-      ]
-    },
-    "valueEncoding": {
-      "type": "string",
-      "description": "Parquet encoding of the shard values column. Kept in sync with timenet.writer.value_encoding.ValueEncoding by a drift test.",
-      "enum": [
-        "dictionary",
-        "byte_stream_split",
-        "plain"
       ]
     }
   }

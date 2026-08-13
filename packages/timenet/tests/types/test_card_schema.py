@@ -50,18 +50,7 @@ def test_from_yaml_loads_a_valid_card(tmp_path):
 
 def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
     m = DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD))
-    assert (m.domains, m.tags, m.source_url, m.value_encoding, m.yaml_schema_version) == ((), (), None, None, 1)
-
-
-def test_from_yaml_reads_the_value_encoding_override(tmp_path):
-    card = _MINIMAL_CARD + "value_encoding: plain\n"
-    assert DatasetMetadata.from_yaml(_write(tmp_path, card)).value_encoding == "plain"
-
-
-def test_from_yaml_reads_the_auto_value_encoding(tmp_path):
-    # "auto" names the writer's default explicitly; omitting the field means the same thing.
-    card = _MINIMAL_CARD + "value_encoding: auto\n"
-    assert DatasetMetadata.from_yaml(_write(tmp_path, card)).value_encoding == "auto"
+    assert (m.domains, m.tags, m.source_url, m.yaml_schema_version) == ((), (), None, 1)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +61,7 @@ def test_from_yaml_reads_the_auto_value_encoding(tmp_path):
         _MINIMAL_CARD.replace("demo/thing", "noslash"),  # id without a slash
         _MINIMAL_CARD.replace("1.0.0", "1.0"),  # not a full semver
         _MINIMAL_CARD + "extra: x\n",  # unknown key (additionalProperties: false)
-        _MINIMAL_CARD + "value_encoding: BYTE_STREAM_SPLIT\n",  # a Parquet name, not the manifest tag
+        _MINIMAL_CARD + "value_encoding: plain\n",  # a writer argument, not a card field
     ],
 )
 def test_from_yaml_rejects_invalid_cards(tmp_path, bad):
