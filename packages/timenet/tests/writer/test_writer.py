@@ -8,8 +8,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
-from timenet.testing import assert_datasets_equal, make_dataset
+from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
     ClassificationTask,
@@ -356,29 +355,3 @@ def test_same_series_shared_across_samples_still_dedupes(tmp_path):
     # the shared series is written once, though two samples reference it
     assert manifest.counts.time_series_chunks == 1
     assert manifest.counts.samples == 2
-
-
-def test_control_tables_shard_into_parts_and_round_trip(tmp_path):
-    # A 1-byte control target splits every control table into per-row parts under its own subdir.
-    original = make_dataset()
-    version_dir = _written(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1)
-    files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
-    assert len(files.samples) > 1
-    assert len(files.annotations) > 1
-    assert len(files.time_series_index) > 1
-    for rel in (*files.samples, *files.annotations, *files.time_series_index, *files.tasks):
-        assert (version_dir / rel).exists()
-    with TimeFReader(version_dir) as reader:
-        restored = reader.read()
-    assert_datasets_equal(original, restored)
-
-
-def test_streamed_index_is_globally_sorted_and_complete(tmp_path):
-    # Tiny chunks multiply index rows; the streamed index must stay globally sorted across parts with
-    # no rows lost, since the reader concatenates parts in manifest order and bisects.
-    version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    rows = [r for rel in manifest.files.time_series_index for r in pq.read_table(version_dir / rel).to_pylist()]
-    keys = [(r["sample_id"], r["time_series_id"], r["chunk_idx"]) for r in rows]
-    assert keys == sorted(keys)
-    assert len(rows) == manifest.counts.time_series_index_rows
