@@ -21,7 +21,7 @@ client = TimeNet()   # default local registry (~/.cache/timenet/registry)
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
 
-dataset = client.load("timenet/hello-world")   # download if needed + read
+dataset = client.load("timenet/hello-world")   # read in place through the registry, lazy values
 values = dataset.samples[0].time_series[0].to_numpy()
 ```
 
@@ -53,7 +53,7 @@ the per-area variables override just their own path. Precedence for any value is
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
 | `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-curate build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
-| `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download`/`load` fetch from the registry to read. |
+| `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during curation (removed after a successful build). |
 
 Configuration is a `pydantic-settings` model (`timenet.config.TimeNetSettings`), so new settings can be
@@ -66,8 +66,8 @@ added there.
 | `list()` | Every dataset's metadata. |
 | `get(dataset_id, version=None)` | A dataset's [manifest](manifest.md). |
 | `search(...)` | Filter datasets, mirrors [`registry.search`](registry.md#search). |
-| `download(dataset_id, version=None, *, force=False)` | Copy a version's files into local storage; returns the directory. Idempotent unless `force`. |
-| `load(dataset_id, version=None)` | `download` if needed, then read into a `TimeFDataset` with lazy per-series values. |
+| `download(dataset_id, version=None, *, force=False)` | Copy a version's files into local storage as an explicit disk cache; returns the directory. Idempotent unless `force`. |
+| `load(dataset_id, version=None)` | Read a `TimeFDataset` with lazy per-series values, in place through the registry's `open_version` handle (no whole-dataset download). |
 | `load_torch(dataset_id, version=None)` | `load`, wrapped in a read-only `torch.utils.data.Dataset` (needs the `torch` extra). |
 
 ## Versions

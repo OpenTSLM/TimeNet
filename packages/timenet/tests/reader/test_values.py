@@ -1,9 +1,11 @@
 """Tests for reader-side values backends."""
 
-from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pyarrow as pa
 
+from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 
@@ -27,9 +29,13 @@ class _Shard:
 
 def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
-    monkeypatch.setattr(reader, "_shard", lambda root, rel_path: _Shard(1.0 if root == Path("a") else 2.0))
+    monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
     rows = [{"chunk_file": "time_series/shard-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
     spec = make_dataset().samples[0].time_series[0].spec
 
-    assert reader.load(Path("a"), rows, spec).to_pylist() == [1.0]
-    assert reader.load(Path("b"), rows, spec).to_pylist() == [2.0]
+    # The reader keys its row-group cache on the handle's root, so the same relative path under two
+    # different roots must not collide; only version.root is touched here (_shard is stubbed).
+    version_a = cast("DatasetVersion", SimpleNamespace(root="a"))
+    version_b = cast("DatasetVersion", SimpleNamespace(root="b"))
+    assert reader.load(version_a, rows, spec).to_pylist() == [1.0]
+    assert reader.load(version_b, rows, spec).to_pylist() == [2.0]

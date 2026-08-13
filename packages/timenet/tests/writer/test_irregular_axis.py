@@ -11,6 +11,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 
@@ -53,7 +54,7 @@ def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset.add_sample(time_series=(ts,))
     dataset.derive_schema()
 
-    reader = TimeFReader(_written(tmp_path, dataset, values_backend=values_backend))
+    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, values_backend=values_backend)))
     back = next(iter(reader.iter_samples())).time_series[0]
     assert back.time_axis == IrregularAxis(first_us=0, last_us=6_527_881_000)
     assert back.time_offsets_us().tolist() == _HATCH_US
@@ -85,7 +86,7 @@ def test_a_mixed_sample_keeps_each_series_on_its_own_axis(tmp_path):
     dataset.add_sample(time_series=series)
     dataset.derive_schema()
 
-    reader = TimeFReader(_written(tmp_path, dataset))
+    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
     back = {ts.channel: ts for ts in next(iter(reader.iter_samples())).time_series}
     assert back["temp"].time_offsets_us().tolist() == shared_us
     assert back["humidity"].time_offsets_us().tolist() == shared_us
@@ -109,7 +110,7 @@ def test_series_sharing_time_offsets_each_store_their_own_copy(tmp_path):
         dataset.add_sample(time_series=(dataset_series,))
     dataset.derive_schema()
 
-    reader = TimeFReader(_written(tmp_path, dataset))
+    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
     streams = [s.time_series[0].time_offsets_us().tolist() for s in reader.iter_samples()]
     assert streams == [shared_us, shared_us]
 
@@ -125,7 +126,7 @@ def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
     dataset.derive_schema()
 
     # 480 bytes per chunk => 40 steps per chunk at 12 bytes a step, so ~100 chunks.
-    reader = TimeFReader(_written(tmp_path, dataset, chunk_max_bytes=480))
+    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, chunk_max_bytes=480)))
     back = next(iter(reader.iter_samples())).time_series[0]
     assert back.time_offsets_us().tolist() == time_offsets
     assert back.to_numpy().tolist() == list(range(4000))
@@ -190,7 +191,7 @@ def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes)
     dataset.derive_schema()
 
     version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
-    back = next(iter(TimeFReader(version).iter_samples())).time_series[0]
+    back = next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_samples())).time_series[0]
     assert back.time_offsets_us().tolist() == _HATCH_US
 
 
@@ -217,7 +218,9 @@ def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
     assert (store / "_irregular" / "env").is_dir()
     assert (store / "_time_offsets" / "env").is_dir()
 
-    back = {ts.channel: ts for ts in next(iter(TimeFReader(version).iter_samples())).time_series}
+    back = {
+        ts.channel: ts for ts in next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_samples())).time_series
+    }
     assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
     assert back["steady"].to_numpy().tolist() == list(range(8))
     assert back["steady"].time_offsets_loader is None
@@ -243,7 +246,7 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     rows = table.to_pylist()
     rows[0]["time_series"][0]["last_time_offset_us"] = _HATCH_US[-1] + 1_000  # axis now disagrees with the stream
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), samples_path)
-    back = next(iter(TimeFReader(version_dir).iter_samples())).time_series[0]
+    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_samples())).time_series[0]
     with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
         back.time_offsets_us()
 

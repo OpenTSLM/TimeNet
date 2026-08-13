@@ -107,6 +107,15 @@ def test_load_round_trips(registry_root, tmp_path):
     assert_datasets_equal(make_dataset(), restored)
 
 
+def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
+    # load() reads through the registry's open_version handle, not download-then-read, so it must not
+    # write a copy into local storage the way download() does.
+    storage = tmp_path / "store"
+    client = TimeNet(registry_root, storage_path=storage)
+    client.load("timenet/hello-world")
+    assert not (storage / "timenet/hello-world").exists()  # nothing fetched into the download cache
+
+
 def test_load_torch(registry_root, tmp_path):
     torch = pytest.importorskip("torch")
     from torch.utils.data import Dataset  # noqa: PLC0415

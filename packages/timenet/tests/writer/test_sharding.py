@@ -14,6 +14,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     Annotation,
@@ -86,7 +87,7 @@ def test_all_artifact_types_shard_and_round_trip(tmp_path, n_samples, series_len
     assert len(files.time_series) >= 3  # values-plane shards
     for rel in files.all_parts():
         assert (version_dir / rel).exists()
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(original, restored)
 
@@ -128,7 +129,7 @@ def test_open_and_build_samples_reads_no_value_shard(tmp_path, monkeypatch):
     opened: list[str] = []
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         _ = [s.time_series for s in dataset.samples]  # touch every sample's series metadata
     assert not opened  # values are lazy; nothing in the values plane is opened until a series is read
@@ -145,7 +146,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     opened: list[str] = []
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         assert not opened
         series = next(ts for s in dataset.samples for ts in s.time_series if ts.time_series_id == series_id)
@@ -171,7 +172,7 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
         return original(self, root, rel_path, row_group)
 
     monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         series = next(ts for s in reader.read().samples for ts in s.time_series if ts.time_series_id == "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards

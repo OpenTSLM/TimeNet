@@ -39,13 +39,14 @@ path, and `~` is expanded in a local path or `file://` URI.
 
 ## `BaseRegistry`
 
-The contract every backend implements (three data-access methods) plus a shared `search`:
+The contract every backend implements (four data-access methods) plus a shared `search`:
 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
-| `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for binary reading. |
+| `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
+| `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` is a placeholder for the
