@@ -132,7 +132,8 @@ def test_open_and_build_samples_reads_no_value_shard(tmp_path, monkeypatch):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         _ = [s.time_series for s in dataset.samples]  # touch every sample's series metadata
-    assert not opened  # values are lazy; nothing in the values plane is opened until a series is read
+    # values are lazy; building samples may open control-plane tables but no value shard (under time_series/)
+    assert not [p for p in opened if "/time_series/" in p]
 
 
 @pytest.mark.parametrize("series_id", ["ts-000", "ts-006", "ts-011"])
@@ -148,11 +149,11 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
-        assert not opened
+        assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
         series = next(ts for s in dataset.samples for ts in s.time_series if ts.time_series_id == series_id)
         series.to_arrow()
-    opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened}
-    assert opened_rel == expected_shards  # exactly the series' shards, nothing else
+    opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened if "/time_series/" in p}
+    assert opened_rel == expected_shards  # exactly the series' value shards, nothing else
 
 
 def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
