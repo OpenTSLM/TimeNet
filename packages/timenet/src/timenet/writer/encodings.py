@@ -8,6 +8,7 @@ by the explicit ``use_dictionary`` list plus a ``column_encoding`` map (nested e
 ``values.list.element``), the only combination pyarrow applies reliably.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
@@ -121,6 +122,20 @@ def task_dictionary(schema: pa.Schema) -> list[str]:
         The subset of categorical task columns present in the schema as strings.
     """
     return [name for name in _TASK_CATEGORICAL if name in schema.names and pa.types.is_string(schema.field(name).type)]
+
+
+@dataclass(frozen=True)
+class ParquetEncoding:
+    """Encoding and compression options for one sharded parquet table.
+
+    Bundles the :func:`parquet_kwargs` inputs so a sharded-table writer takes one config object rather
+    than four parallel arguments.
+    """
+
+    dictionary_columns: list[str]
+    compression: str
+    compression_level: int
+    column_encoding: dict[str, str] | None = None
 
 
 def parquet_kwargs(
