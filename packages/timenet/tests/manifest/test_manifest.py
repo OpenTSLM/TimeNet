@@ -3,7 +3,7 @@ import pint
 import pytest
 
 from timenet.errors import InvalidManifestError
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
@@ -58,11 +58,11 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             time_series_specs={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            samples=("samples.parquet",),
-            annotations=("annotations.parquet",),
-            time_series_index=("time_series_index.parquet",),
-            tasks=("tasks/task=classification/part-0.parquet",),
-            time_series=("time_series/shard-00000.parquet",),
+            samples=(FilePart("samples.parquet", "sha256:aa", 10),),
+            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
+            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
+            tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
+            time_series=(FilePart("time_series/shard-00000.parquet", "sha256:ee", 50),),
         ),
         values_backend=values_backend,
     )
@@ -71,11 +71,11 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
 def test_files_all_parts_concatenates_in_order():
     files = _manifest().files
     assert files.all_parts() == (
-        *files.samples,
-        *files.annotations,
-        *files.time_series_index,
-        *files.tasks,
-        *files.time_series,
+        *(p.path for p in files.samples),
+        *(p.path for p in files.annotations),
+        *(p.path for p in files.time_series_index),
+        *(p.path for p in files.tasks),
+        *(p.path for p in files.time_series),
     )
 
 
@@ -158,6 +158,28 @@ def test_from_dict_requires_core_blocks(missing):
         Manifest.from_dict(d)
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "oops",  # a bare string where a file descriptor object is required
+        {"path": "samples/part-00000000.parquet"},  # missing checksum and size
+        {"path": "x", "checksum": "sha256:" + "a" * 64},  # missing size
+        {"path": 123, "checksum": "sha256:" + "a" * 64, "size": 10},  # path not a string
+        {"path": "", "checksum": "sha256:" + "a" * 64, "size": 10},  # empty path
+        {"path": "x", "checksum": "md5:whatever", "size": 10},  # checksum not sha256-prefixed
+        {"path": "x", "checksum": "sha256:" + "a" * 64, "size": -1},  # negative size
+        {"path": "x", "checksum": "sha256:" + "a" * 64, "size": True},  # bool masquerading as an int
+    ],
+)
+def test_from_dict_rejects_a_malformed_file_entry(entry):
+    # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
+    # field is a corrupt manifest, surfaced as InvalidManifestError rather than a raw TypeError/KeyError.
+    d = _manifest().to_dict()
+    d["files"]["samples"] = [entry]
+    with pytest.raises(InvalidManifestError):
+        Manifest.from_dict(d)
+
+
 def test_optional_schema_and_counts_default_empty():
     d = _manifest().to_dict()
     del d["schema"]
@@ -223,7 +245,7 @@ def test_non_string_dataset_version_rejected():
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["schema", "counts", "checksums", "metadata", "files"])
+@pytest.mark.parametrize("block", ["schema", "counts", "metadata", "files"])
 def test_null_block_rejected(block):
     d = _manifest().to_dict()
     d[block] = None
@@ -248,9 +270,9 @@ def test_codec_roundtrip_property(version, samples, task_counts):
         ),
         counts=ManifestCounts(samples=samples, tasks=task_counts),
         files=ManifestFiles(
-            samples=("samples.parquet",),
-            annotations=("annotations.parquet",),
-            time_series_index=("time_series_index.parquet",),
+            samples=(FilePart("samples.parquet", "sha256:aa", 10),),
+            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
+            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
         ),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest
@@ -268,9 +290,9 @@ def test_string_for_list_field_rejected(block, key):
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["checksums", "id_encoding", "derived_from"])
+@pytest.mark.parametrize("block", ["id_encoding", "derived_from"])
 def test_bad_dict_block_names_itself(block):
-    # each block gets its own error message, rather than one shared "checksums/id_encoding/..." string
+    # each block gets its own error message, rather than one shared "id_encoding/derived_from" string
     d = _manifest().to_dict()
     d[block] = "oops"
     with pytest.raises(InvalidManifestError, match=block):

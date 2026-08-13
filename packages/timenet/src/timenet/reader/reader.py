@@ -26,7 +26,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
-from timenet.manifest import Manifest
+from timenet.manifest import FilePart, Manifest
 from timenet.types import (
     TASKS,
     Annotation,
@@ -135,13 +135,15 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
         """
-        for rel, expected in sorted(self._manifest.checksums.items()):
-            path = self._root / rel
+        for part in sorted(self._manifest.files.all_files(), key=lambda p: p.path):
+            path = self._root / part.path
             if not path.exists():
-                raise TimeFFormatError(f"manifest lists a missing file: {rel}")
+                raise TimeFFormatError(f"manifest lists a missing file: {part.path}")
             actual = file_checksum(path)
-            if actual != expected:
-                raise TimeFFormatError(f"checksum mismatch for {rel}: manifest says {expected}, file is {actual}")
+            if actual != part.checksum:
+                raise TimeFFormatError(
+                    f"checksum mismatch for {part.path}: manifest says {part.checksum}, file is {actual}"
+                )
 
     @property
     def metadata(self) -> DatasetMetadata:
@@ -187,17 +189,17 @@ class TimeFReader:
 
     # ---- loading -------------------------------------------------------------------------------
 
-    def _read_rows(self, parts: tuple[str, ...]) -> Iterator[dict]:
+    def _read_rows(self, parts: tuple[FilePart, ...]) -> Iterator[dict]:
         """Yield every row across a multi-part artifact, in part order.
 
         Args:
-            parts: The artifact's relative part paths from the manifest.
+            parts: The artifact's file descriptors from the manifest.
 
         Yields:
             Each row as a dict, concatenated across parts.
         """
-        for rel in parts:
-            yield from pq.read_table(self._root / rel).to_pylist()
+        for part in parts:
+            yield from pq.read_table(self._root / part.path).to_pylist()
 
     def _check_files_exist(self) -> None:
         for rel in self._manifest.files.all_parts():
@@ -207,7 +209,8 @@ class TimeFReader:
     def _load_tasks(self) -> tuple[Task, ...]:
         by_id: dict[str, Task] = {}
         pending: dict[str, tuple[str, ...]] = {}
-        for rel in self._manifest.files.tasks:
+        for part in self._manifest.files.tasks:
+            rel = part.path
             task_type = TaskType(Path(rel).parent.name.split("=", 1)[1])
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
@@ -289,7 +292,7 @@ class TimeFReader:
         was not written in. ``binary(16)`` ids compare as bytes and string ids as text, and a tuple
         gets both right without a separator that either could contain.
         """
-        parts = [pq.read_table(self._root / rel) for rel in self._manifest.files.time_series_index]
+        parts = [pq.read_table(self._root / part.path) for part in self._manifest.files.time_series_index]
         table = parts[0] if len(parts) == 1 else pa.concat_tables(parts)
         self._index_table = table
         self._index_keys: list[tuple] = list(
