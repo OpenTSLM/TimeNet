@@ -455,7 +455,7 @@ def test_verify_detects_a_corrupted_shard(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(_open(version_dir)) as reader:
         # a shard: read lazily, so __init__ still succeeds and verify() is what catches it
-        rel = next(r for r in reader._manifest.checksums if r.startswith("time_series/shard-"))
+        rel = next(p.path for p in reader._manifest.files.all_files() if p.path.startswith("time_series/shard-"))
     target = version_dir / rel
     target.write_bytes(target.read_bytes() + b"corruption")
     with TimeFReader(_open(version_dir)) as reader, pytest.raises(TimeFFormatError, match="checksum mismatch"):
@@ -465,7 +465,7 @@ def test_verify_detects_a_corrupted_shard(tmp_path):
 def test_verify_detects_a_deleted_file(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(_open(version_dir)) as reader:
-        rel = next(r for r in reader._manifest.checksums if r.startswith("time_series/shard-"))
+        rel = next(p.path for p in reader._manifest.files.all_files() if p.path.startswith("time_series/shard-"))
     (version_dir / rel).unlink()
     # __init__ no longer stat-sweeps, so verify() (reopening through the filesystem) is what catches it
     with TimeFReader(_open(version_dir)) as reader, pytest.raises(TimeFFormatError, match="missing file"):
@@ -481,12 +481,8 @@ def test_corrupt_task_partition_raises_format_error_on_first_task_access(tmp_pat
     tasks_dir.rename(tasks_dir.parent / "task=not_a_real_task_type")
     manifest_path = version_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["files"]["tasks"] = [
-        p.replace(tasks_dir.name, "task=not_a_real_task_type") for p in manifest["files"]["tasks"]
-    ]
-    manifest["checksums"] = {
-        k.replace(tasks_dir.name, "task=not_a_real_task_type"): v for k, v in manifest["checksums"].items()
-    }
+    for entry in manifest["files"]["tasks"]:
+        entry["path"] = entry["path"].replace(tasks_dir.name, "task=not_a_real_task_type")
     manifest_path.write_text(json.dumps(manifest))
     reader = TimeFReader(_open(version_dir))  # construction is happy: it does not touch the task partition
     with pytest.raises(TimeFFormatError):

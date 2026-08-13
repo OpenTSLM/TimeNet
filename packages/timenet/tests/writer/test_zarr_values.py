@@ -33,10 +33,10 @@ def test_manifest_records_zarr_backend_and_store_files(tmp_path):
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     assert manifest.files.time_series, "expected the zarr store's files to be listed"
-    for rel in manifest.files.time_series:
-        assert rel.startswith("time_series.zarr/")
-        assert (version_dir / rel).is_file()
-        assert manifest.checksums[rel].startswith("sha256:")
+    for part in manifest.files.time_series:
+        assert part.path.startswith("time_series.zarr/")
+        assert (version_dir / part.path).is_file()
+        assert part.checksum.startswith("sha256:")
 
 
 def test_one_array_per_spec_type(tmp_path):

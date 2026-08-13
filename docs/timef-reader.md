@@ -43,7 +43,7 @@ than materializing it.
 
 | Part | When it loads | What is kept |
 | --- | --- | --- |
-| Manifest | carried by the handle | metadata, schema, file list, checksums |
+| Manifest | carried by the handle | metadata, schema, file descriptors (path, checksum, size) |
 | `tasks` | first `.tasks` access | the decoded tasks, cached for the reader's lifetime |
 | Annotations | first sample that references one | the row group that holds it, plus a bounded LRU of decoded `Annotation`s |
 | Time-series index | first value read | a row-group directory (one entry per row group, not per row) and the last few decoded row groups |

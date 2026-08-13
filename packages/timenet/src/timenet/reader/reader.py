@@ -334,15 +334,17 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
         """
-        for rel, expected in sorted(self._manifest.checksums.items()):
+        for part in sorted(self._manifest.files.all_files(), key=lambda p: p.path):
             try:
-                handle = self._fs.open_input_file(self._version.path(rel))
+                handle = self._fs.open_input_file(self._version.path(part.path))
             except FileNotFoundError as exc:
-                raise TimeFFormatError(f"manifest lists a missing file: {rel}") from exc
+                raise TimeFFormatError(f"manifest lists a missing file: {part.path}") from exc
             with handle:
                 actual = stream_checksum(handle)
-            if actual != expected:
-                raise TimeFFormatError(f"checksum mismatch for {rel}: manifest says {expected}, file is {actual}")
+            if actual != part.checksum:
+                raise TimeFFormatError(
+                    f"checksum mismatch for {part.path}: manifest says {part.checksum}, file is {actual}"
+                )
 
     @property
     def metadata(self) -> DatasetMetadata:
@@ -436,7 +438,7 @@ class TimeFReader:
                 cannot know an id is absent until it has read every part.
         """
         if self._samples_data is None:
-            parts = [self._version.path(rel) for rel in self._manifest.files.samples]
+            parts = [self._version.path(part.path) for part in self._manifest.files.samples]
             self._samples_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
         data = self._samples_data
         if sample_ids is None:
@@ -458,7 +460,8 @@ class TimeFReader:
     def _load_tasks(self) -> tuple[Task, ...]:
         by_id: dict[str, Task] = {}
         pending: dict[str, tuple[str, ...]] = {}
-        for rel in self._manifest.files.tasks:
+        for part in self._manifest.files.tasks:
+            rel = part.path
             task_type = TaskType(Path(rel).parent.name.split("=", 1)[1])
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
@@ -501,7 +504,7 @@ class TimeFReader:
             self._annotations = _PrunedControlTable(
                 self._fs,
                 self._root,
-                self._manifest.files.annotations,
+                tuple(part.path for part in self._manifest.files.annotations),
                 lookup_columns=(key_column,),
                 columns=["id", "key", "value", "span"],
             )
@@ -562,7 +565,7 @@ class TimeFReader:
             self._index = _PrunedControlTable(
                 self._fs,
                 self._root,
-                self._manifest.files.time_series_index,
+                tuple(part.path for part in self._manifest.files.time_series_index),
                 lookup_columns=(key_column, "time_series_id"),
             )
         return self._index

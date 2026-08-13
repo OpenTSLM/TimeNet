@@ -34,7 +34,6 @@ Manifest(
     files=files,                # ManifestFiles (required)
     schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
-    checksums={},               # relpath -> "sha256:..." (default: empty)
     id_encoding={},             # logical id -> "uuid16" (absent => string)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     derived_from=None,          # copy-on-write lineage (see below)
@@ -85,8 +84,11 @@ Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_ver
 
 ## `ManifestFiles`
 
-Relative paths within the version directory: `samples`, `annotations`, `time_series_index` (required),
-plus `tasks` and `time_series` (tuples, default empty). Readers use this list, never a directory glob.
+File descriptors grouped by kind: `samples`, `annotations`, `time_series_index` (required), plus
+`tasks` and `time_series` (tuples, default empty). Readers use this list, never a directory glob. Each
+entry is a `FilePart` carrying the file's `path` (version-relative), its `checksum` (`sha256:`
+prefixed), and its `size` in bytes, so path and digest never live in separate structures. `all_files()`
+returns every descriptor; `all_parts()` returns just the paths.
 
 ---
 

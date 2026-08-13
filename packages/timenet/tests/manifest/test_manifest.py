@@ -3,7 +3,7 @@ import pint
 import pytest
 
 from timenet.errors import InvalidManifestError
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.types import (
     AnnotationDescriptor,
     AnnotationType,
@@ -18,6 +18,10 @@ from timenet.types import (
     Version,
     ureg,
 )
+
+
+def _fp(path: str, size: int = 1) -> FilePart:
+    return FilePart(path=path, checksum="sha256:" + "0" * 64, size=size)
 
 
 def _manifest(*, values_backend: str = "parquet") -> Manifest:
@@ -58,25 +62,21 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             time_series_specs={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            samples=("samples.parquet",),
-            annotations=("annotations.parquet",),
-            time_series_index=("time_series_index.parquet",),
-            tasks=("tasks/task=classification/part-0.parquet",),
-            time_series=("time_series/shard-00000.parquet",),
+            samples=(_fp("samples.parquet"),),
+            annotations=(_fp("annotations.parquet"),),
+            time_series_index=(_fp("time_series_index.parquet"),),
+            tasks=(_fp("tasks/task=classification/part-0.parquet"),),
+            time_series=(_fp("time_series/shard-00000.parquet"),),
         ),
         values_backend=values_backend,
     )
 
 
-def test_files_all_parts_concatenates_in_order():
+def test_files_all_files_and_parts_concatenate_in_order():
     files = _manifest().files
-    assert files.all_parts() == (
-        *files.samples,
-        *files.annotations,
-        *files.time_series_index,
-        *files.tasks,
-        *files.time_series,
-    )
+    ordered = (*files.samples, *files.annotations, *files.time_series_index, *files.tasks, *files.time_series)
+    assert files.all_files() == ordered
+    assert files.all_parts() == tuple(part.path for part in ordered)
 
 
 def test_default_format_version():
@@ -223,7 +223,7 @@ def test_non_string_dataset_version_rejected():
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["schema", "counts", "checksums", "metadata", "files"])
+@pytest.mark.parametrize("block", ["schema", "counts", "metadata", "files"])
 def test_null_block_rejected(block):
     d = _manifest().to_dict()
     d[block] = None
@@ -248,9 +248,9 @@ def test_codec_roundtrip_property(version, samples, task_counts):
         ),
         counts=ManifestCounts(samples=samples, tasks=task_counts),
         files=ManifestFiles(
-            samples=("samples.parquet",),
-            annotations=("annotations.parquet",),
-            time_series_index=("time_series_index.parquet",),
+            samples=(_fp("samples.parquet"),),
+            annotations=(_fp("annotations.parquet"),),
+            time_series_index=(_fp("time_series_index.parquet"),),
         ),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest
@@ -268,9 +268,9 @@ def test_string_for_list_field_rejected(block, key):
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["checksums", "id_encoding", "derived_from"])
+@pytest.mark.parametrize("block", ["id_encoding", "derived_from"])
 def test_bad_dict_block_names_itself(block):
-    # each block gets its own error message, rather than one shared "checksums/id_encoding/..." string
+    # each block gets its own error message, rather than one shared "id_encoding/derived_from" string
     d = _manifest().to_dict()
     d[block] = "oops"
     with pytest.raises(InvalidManifestError, match=block):

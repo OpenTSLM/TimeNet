@@ -49,7 +49,7 @@ from timenet.format.schemas import (
     samples_schema,
     task_schema,
 )
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.types import Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -504,20 +504,18 @@ class TimeFWriter:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
             raise RuntimeError("schema was not derived")
-        checksums = self._checksums()
         manifest = Manifest(
             dataset_id=self._dataset.metadata.dataset_id,
             metadata=self._dataset.metadata,
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=(SAMPLES_FILE,),
-                annotations=(ANNOTATIONS_FILE,),
-                time_series_index=(INDEX_FILE,),
-                tasks=tuple(self._task_files),
-                time_series=tuple(self._value_files),
+                samples=self._file_parts((SAMPLES_FILE,)),
+                annotations=self._file_parts((ANNOTATIONS_FILE,)),
+                time_series_index=self._file_parts((INDEX_FILE,)),
+                tasks=self._file_parts(self._task_files),
+                time_series=self._file_parts(self._value_files),
             ),
-            checksums=checksums,
             id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
             derived_from=self._derived_from,
@@ -562,19 +560,28 @@ class TimeFWriter:
             time_series_specs=specs_by_type,
         )
 
-    def _checksums(self) -> dict[str, str]:
-        """Checksum every staged artifact except the not-yet-written manifest.
+    def _file_parts(self, rels: Iterable[str]) -> tuple[FilePart, ...]:
+        """Describe each staged artifact by its path, checksum, and size.
+
+        Args:
+            rels: The version-relative paths of the artifacts to describe.
 
         Returns:
-            A mapping from version-relative file paths to prefixed SHA-256 digests.
+            One :class:`FilePart` per path, in the given order.
         """
-        checksums: dict[str, str] = {}
-        for path in sorted(self._staging_dir.rglob("*")):
-            if not path.is_file() or path.name == MANIFEST_FILE:
-                continue
-            rel = path.relative_to(self._staging_dir).as_posix()
-            checksums[rel] = file_checksum(path)
-        return checksums
+        return tuple(self._file_part(rel) for rel in rels)
+
+    def _file_part(self, rel: str) -> FilePart:
+        """Describe one staged file: its path, ``sha256:`` checksum, and byte size.
+
+        Args:
+            rel: The file's version-relative path.
+
+        Returns:
+            The file's descriptor.
+        """
+        path = self._staging_dir / rel
+        return FilePart(path=rel, checksum=file_checksum(path), size=path.stat().st_size)
 
     def _write_table(
         self,

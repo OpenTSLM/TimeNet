@@ -50,21 +50,21 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     assert manifest.counts.samples == 3
     assert len(manifest.schema.time_series_specs) == 2
     # files listed in the manifest all exist
-    for rel in (*manifest.files.samples, *manifest.files.annotations, *manifest.files.time_series_index):
-        assert (version_dir / rel).exists()
-    for rel in (*manifest.files.tasks, *manifest.files.time_series):
-        assert (version_dir / rel).exists()
+    for part in manifest.files.all_files():
+        assert (version_dir / part.path).exists()
 
 
-def test_manifest_has_per_file_checksums(tmp_path):
+def test_manifest_records_per_file_checksum_and_size(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.checksums, "expected per-file checksums"
-    assert all(v.startswith("sha256:") for v in manifest.checksums.values())
-    assert manifest.files.samples[0] in manifest.checksums
+    parts = manifest.files.all_files()
+    assert parts, "expected per-file descriptors"
+    for part in parts:
+        assert part.checksum.startswith("sha256:")
+        assert part.size == (version_dir / part.path).stat().st_size
 
 
-def test_manifest_data_files_are_lists_of_parts(tmp_path):
+def test_manifest_data_files_are_lists_of_descriptors(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     for parts in (manifest.files.samples, manifest.files.annotations, manifest.files.time_series_index):
@@ -73,6 +73,8 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
     for key in ("samples", "annotations", "time_series_index", "tasks", "time_series"):
         assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
+    entry = raw_files["samples"][0]
+    assert set(entry) == {"path", "checksum", "size"}, "each file entry is a {path, checksum, size} object"
 
 
 # ---- shard schema & encodings -----------------------------------------------------------------
@@ -128,8 +130,8 @@ def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64, shard_target_bytes=64)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.files.time_series, "expected at least one shard"
-    for rel in manifest.files.time_series:
-        assert pq.ParquetFile(version_dir / rel).metadata.num_rows > 0, f"empty shard {rel} was published"
+    for part in manifest.files.time_series:
+        assert pq.ParquetFile(version_dir / part.path).metadata.num_rows > 0, f"empty shard {part.path} was published"
 
 
 # ---- validation & commit protocol -------------------------------------------------------------

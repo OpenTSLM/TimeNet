@@ -12,11 +12,6 @@
     "schema": { "$ref": "#/$defs/schema" },
     "counts": { "$ref": "#/$defs/counts" },
     "files": { "$ref": "#/$defs/files" },
-    "checksums": {
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "description": "Map of version-relative path to a 'sha256:...' digest."
-    },
     "values_backend": {
       "type": "string",
       "enum": ["parquet", "zarr"],
@@ -166,14 +161,24 @@
     },
     "files": {
       "type": "object",
-      "description": "Version-relative file parts. Each artifact is a list, never a bare string.",
+      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
       "required": ["samples", "annotations", "time_series_index"],
       "properties": {
-        "samples": { "type": "array", "items": { "type": "string" } },
-        "annotations": { "type": "array", "items": { "type": "string" } },
-        "time_series_index": { "type": "array", "items": { "type": "string" } },
-        "tasks": { "type": "array", "items": { "type": "string" } },
-        "time_series": { "type": "array", "items": { "type": "string" } }
+        "samples": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
+      }
+    },
+    "filePart": {
+      "type": "object",
+      "description": "One data file: its version-relative path, checksum, and byte size.",
+      "required": ["path", "checksum", "size"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "description": "Version-relative POSIX path." },
+        "checksum": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The file's 'sha256:<hex>' digest." },
+        "size": { "type": "integer", "minimum": 0, "description": "The file's size in bytes." }
       }
     }
   }
