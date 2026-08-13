@@ -19,6 +19,8 @@ from timenet.types import (
     ureg,
 )
 from timenet.writer import TimeFWriter
+from timenet.writer.encodings import applied_matches, values_encoding_of
+from timenet.writer.value_encoding import ValueEncoding
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -86,18 +88,16 @@ def test_shard_has_time_series_id_column(tmp_path):
     assert "values" in names
 
 
-def test_values_use_byte_stream_split(tmp_path):
+def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
-    shard = next(version_dir.glob("time_series/shard-*.parquet"))
-    pf = pq.ParquetFile(shard)
-    encodings = set()
-    meta = pf.metadata
-    for rg in range(meta.num_row_groups):
-        for col in range(meta.num_columns):
-            column = meta.row_group(rg).column(col)
-            if column.path_in_schema == "values.list.element":
-                encodings.update(column.encodings)
-    assert "BYTE_STREAM_SPLIT" in encodings
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    assert manifest.value_encoding, "the manifest should record what each modality was encoded with"
+    for shard in version_dir.glob("time_series/shard-*.parquet"):
+        pf = pq.ParquetFile(shard)
+        spec_types = set(pf.read(columns=["spec_type"]).column("spec_type").to_pylist())
+        assert len(spec_types) == 1, "shards are single-modality so one encoding always fits"
+        selected = ValueEncoding(manifest.value_encoding[spec_types.pop()])
+        assert applied_matches(selected, values_encoding_of(str(shard)))
 
 
 # ---- chunk splitting --------------------------------------------------------------------------

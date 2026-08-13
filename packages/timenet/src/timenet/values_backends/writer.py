@@ -70,6 +70,11 @@ class ValuesWriteResult:
     """``(time_series_id, chunk_idx)`` -> its on-disk placement."""
     files: list[str] = field(default_factory=list)
     """Value files produced, relative to the staging directory, for ``manifest.files.time_series``."""
+    value_encoding: dict[str, str] = field(default_factory=dict)
+    """``spec_type`` -> the values encoding the backend applied, for ``manifest.value_encoding``.
+
+    Empty for a backend whose layout has no such choice (Zarr fixes its codec per array instead).
+    """
 
 
 ValuesBackendConfig = ParquetValuesConfig | ZarrValuesConfig

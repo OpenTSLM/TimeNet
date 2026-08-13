@@ -53,6 +53,13 @@ class Manifest:
     """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
     values_backend: str = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
+    value_encoding: dict[str, str] = field(default_factory=dict)
+    """``spec_type`` -> the values-column encoding its shards carry.
+
+    Provenance only: Parquet records the applied encoding in each file's footer, so a reader never
+    needs this. It is here so a curator can see what a build chose without opening a shard. Empty for
+    a backend with no such choice.
+    """
     derived_from: dict[str, str] | None = None
     """Copy-on-write lineage (base version + operation), or ``None`` for a freshly built version."""
     timef_format_version: int = 1
@@ -102,6 +109,7 @@ class Manifest:
             "checksums": dict(self.checksums),
             "id_encoding": dict(self.id_encoding),
             "values_backend": self.values_backend,
+            "value_encoding": dict(self.value_encoding),
             "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
         }
 
@@ -141,6 +149,7 @@ class Manifest:
             checksums=checksums,
             id_encoding=id_encoding,
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
+            value_encoding=_dict_block(data, "value_encoding"),
             derived_from=derived_from,
             timef_format_version=data["timef_format_version"],
         )

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from timenet.format.schemas import IdCodec, IdTypes
+from timenet.writer.value_encoding import ValueEncoding
 
 
 @dataclass(frozen=True)
@@ -26,3 +27,5 @@ class ParquetValuesConfig:
     """Parquet compression codec."""
     compression_level: int
     """Parquet compression level."""
+    value_encoding: ValueEncoding | None = None
+    """Forced values-column encoding for every modality, or ``None`` to select one per modality."""

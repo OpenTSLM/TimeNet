@@ -61,6 +61,7 @@ def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
         _MINIMAL_CARD.replace("demo/thing", "noslash"),  # id without a slash
         _MINIMAL_CARD.replace("1.0.0", "1.0"),  # not a full semver
         _MINIMAL_CARD + "extra: x\n",  # unknown key (additionalProperties: false)
+        _MINIMAL_CARD + "value_encoding: plain\n",  # a writer argument, not a card field
     ],
 )
 def test_from_yaml_rejects_invalid_cards(tmp_path, bad):

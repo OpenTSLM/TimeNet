@@ -9,6 +9,7 @@ import zarr
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
+from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -36,6 +37,12 @@ def test_manifest_records_zarr_backend_and_store_files(tmp_path):
         assert rel.startswith("time_series.zarr/")
         assert (version_dir / rel).is_file()
         assert manifest.checksums[rel].startswith("sha256:")
+
+
+def test_unknown_blosc_compression_is_rejected(tmp_path):
+    # The zarr backend compresses with Blosc; a Parquet-only codec used to fall back to zstd silently.
+    with pytest.raises(TimeFValidationError, match="compression"):
+        _write(tmp_path, compression="snappy")
 
 
 def test_one_array_per_spec_type(tmp_path):

@@ -37,6 +37,7 @@ Manifest(
     checksums={},               # relpath -> "sha256:..." (default: empty)
     id_encoding={},             # logical id -> "uuid16" (absent => string)
     values_backend="parquet",   # "parquet" (default) or "zarr"
+    value_encoding={},          # spec_type -> the encoding its shards carry
     derived_from=None,          # copy-on-write lineage (see below)
     timef_format_version=1,     # validated against the supported set {1}
 )
@@ -47,6 +48,10 @@ an absent entry means that id is a UTF-8 string. `values_backend` names the
 [values backend](timef-writer.md#values-backends) that wrote `files.time_series`; the reader dispatches
 on it, and a format-v2 manifest without the key reads as `"parquet"`. `derived_from` is set only on a version
 produced by a [copy-on-write edit](timef-writer.md#copy-on-write-edits).
+
+`value_encoding` reports the [values encoding](timef-writer.md#values-encoding) each modality's shards
+were written with. Nothing dispatches on it: Parquet records the applied encoding in every file's footer,
+so it exists for a curator inspecting what a build chose. It is empty for a backend with no such choice.
 
 The backend-neutral values locator schema introduced in format v2 applies to both scalar and
 multidimensional datasets. Multidimensional specs also require v2 so older readers reject their
