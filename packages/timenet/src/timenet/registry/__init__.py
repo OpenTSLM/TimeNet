@@ -11,12 +11,14 @@ from timenet.registry.factory import (
 from timenet.registry.local import LocalRegistry
 from timenet.registry.remote import RemoteRegistry
 from timenet.registry.s3 import S3Registry
+from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 
 
 __all__ = [
     "TIMENET_REGISTRY_URL",
     "BaseRegistry",
+    "DatasetVersion",
     "LocalRegistry",
     "RemoteRegistry",
     "S3Registry",

@@ -6,6 +6,7 @@ from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError
 from timenet.manifest import Manifest
 from timenet.registry import (
     BaseRegistry,
+    DatasetVersion,
     LocalRegistry,
     RemoteRegistry,
     S3Registry,
@@ -166,6 +167,38 @@ def test_open_file_rejects_path_traversal(registry_root):
         registry.open_file("demo/ecg", "2.0.0", "../../../../etc/passwd")
 
 
+# ---- open_version -----------------------------------------------------------------------------
+
+
+def test_open_version_returns_handle(registry_root):
+    version = LocalRegistry(registry_root).open_version("demo/ecg")
+    assert isinstance(version, DatasetVersion)
+    assert version.manifest.metadata.dataset_id == "demo/ecg"
+    assert version.root == str(registry_root / "demo/ecg" / "2.0.0")
+
+
+def test_open_version_resolves_latest_to_a_concrete_directory(registry_root):
+    # ``None`` means latest, but the handle roots at that resolved version, never the string "latest"
+    version = LocalRegistry(registry_root).open_version("demo/ecg", version=None)
+    assert version.root.endswith("/2.0.0")
+
+
+def test_open_version_filesystem_reads_a_file(registry_root):
+    version = LocalRegistry(registry_root).open_version("demo/ecg")
+    with version.filesystem.open_input_file(version.path("manifest.json")) as handle:
+        assert b"demo/ecg" in handle.read()
+
+
+def test_open_version_unknown_raises(registry_root):
+    with pytest.raises(DatasetNotFoundError):
+        LocalRegistry(registry_root).open_version("does/not-exist")
+
+
+def test_open_version_unknown_version_raises(registry_root):
+    with pytest.raises(DatasetNotFoundError):
+        LocalRegistry(registry_root).open_version("demo/ecg", version="9.9.9")
+
+
 # ---- search -----------------------------------------------------------------------------------
 
 
@@ -280,6 +313,8 @@ def test_remote_registry_is_deferred():
     with pytest.raises(NotImplementedError):
         remote.list_datasets()
     with pytest.raises(NotImplementedError):
+        remote.open_version("demo/ecg")
+    with pytest.raises(NotImplementedError):
         remote.store(make_dataset())
 
 
@@ -287,5 +322,7 @@ def test_s3_registry_is_deferred():
     s3 = S3Registry("s3://bucket/registry")
     with pytest.raises(NotImplementedError):
         s3.list_datasets()
+    with pytest.raises(NotImplementedError):
+        s3.open_version("demo/ecg")
     with pytest.raises(NotImplementedError):
         s3.store(make_dataset())

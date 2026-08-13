@@ -1,14 +1,16 @@
 """The registry contract and its shared search implementation.
 
-A registry serves compiled TimeF versions; it never runs connector code. Concrete backends
-implement the three data-access methods; :meth:`BaseRegistry.search` is shared, filtering
-:meth:`list_datasets` output and consulting :meth:`get_manifest` for the type-filters.
+A registry serves compiled TimeF versions; it never runs connector code. Concrete backends implement
+the four data-access methods (:meth:`list_datasets`, :meth:`get_manifest`, :meth:`open_file`,
+:meth:`open_version`); :meth:`BaseRegistry.search` is shared, filtering :meth:`list_datasets` output
+and consulting :meth:`get_manifest` for the type-filters.
 """
 
 from abc import ABC, abstractmethod
 from typing import BinaryIO, TypeVar
 
 from timenet.manifest import Manifest
+from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
 
 
@@ -52,6 +54,26 @@ class BaseRegistry(ABC):
 
         Returns:
             An open binary file object.
+
+        Raises:
+            DatasetNotFoundError: If the dataset id or version is unknown.
+        """
+
+    @abstractmethod
+    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
+        """Open a committed dataset version as a random-access handle.
+
+        The returned :class:`~timenet.registry.version.DatasetVersion` bundles the parsed manifest with a
+        filesystem-rooted handle to the version's files, so a reader built from it never re-opens the
+        registry nor re-reads ``manifest.json``. Its filesystem MUST serve range reads: the reader pulls
+        Parquet footers and value slices out of order through it.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest.
+
+        Returns:
+            A handle to the committed version's manifest and files.
 
         Raises:
             DatasetNotFoundError: If the dataset id or version is unknown.
