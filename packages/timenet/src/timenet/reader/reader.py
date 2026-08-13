@@ -45,7 +45,10 @@ class TimeFReader:
     """Reads a committed TimeF version directory. Use as a context manager to close shard handles."""
 
     def __init__(self, root: Path, part_cache_size: int = 4) -> None:
-        """Open a dataset version directory and load its manifest, tasks, annotations, and index.
+        """Open a dataset version directory and load its manifest, tasks, and index.
+
+        Annotations resolve lazily by id on first access, so a corrupt annotation surfaces then, not
+        at open.
 
         A malformed or unsupported-version manifest raises ``InvalidManifestError`` (a
         ``TimeFFormatError``) while parsing.
@@ -88,12 +91,17 @@ class TimeFReader:
             self._sample_offsets.append(running)
             running += part.n_rows
         self._sample_count = running
+        annotation_stats = self._manifest.part_stats.get("annotations")
+        if not annotation_stats:
+            raise TimeFFormatError(f"manifest for {self._root} has no annotations part_stats")
+        self._annotation_stats: tuple[PartStat, ...] = annotation_stats
+        self._annotation_cache = _PartCache(self._root, part_cache_size)
+        self._annotation_objects: dict[str, Annotation] = {}
         # The eager loaders parse on-disk control tables against the manifest's schema. Anything they raise means
         # the artifact is corrupt or disagrees with its manifest, which is a TimeFFormatError; letting
         # a bare ValueError from TaskType()/pyarrow escape would contradict this method's contract.
         try:
             self._tasks = self._load_tasks()
-            self._annotations = self._load_annotations()
             self._load_index()
         except TimeFFormatError:
             raise
@@ -117,6 +125,7 @@ class TimeFReader:
         state["_values"] = None
         state.pop("_index_cache", None)
         state.pop("_sample_cache", None)
+        state.pop("_annotation_cache", None)
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -128,6 +137,7 @@ class TimeFReader:
         self.__dict__.update(state)
         self._index_cache = _PartCache(self._root, self._part_cache_size)
         self._sample_cache = _PartCache(self._root, self._part_cache_size)
+        self._annotation_cache = _PartCache(self._root, self._part_cache_size)
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -317,42 +327,51 @@ class TimeFReader:
             by_id[task_id].from_tasks = tuple(resolved)
         return tuple(by_id.values())
 
-    def _load_annotations(self) -> dict[str, Annotation]:
-        annotations: dict[str, Annotation] = {}
-        for row in self._read_rows(self._manifest.files.annotations):
-            key = row["key"]
-            if key not in self._annotation_descriptors:
-                raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
-            descriptor = self._annotation_descriptors[key]
-            value = None if row["value"] is None else json.loads(row["value"])
-            annotation_id = self._codec.decode("annotation_id", row["id"])
-            fields: dict = {
-                "id": annotation_id,
-                "key": key,
-                "value": value,
-                "unit": descriptor.unit,
-                "description": descriptor.description,
-            }
-            span = self._codec.decode_span(row["span"])
-            if span is not None:
-                fields["span"] = span
-            annotation = Annotation(**fields)
-            # The descriptor is what a registry query filters on, so a decoded annotation whose shape
-            # or value type disagrees with it would answer those queries wrongly. That is corruption.
-            derived_type = annotation_type_of(annotation)
-            if derived_type != descriptor.annotation_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
-                    f"says {descriptor.annotation_type.value!r}"
-                )
-            derived_value_type = value_type_of(annotation.value)
-            if derived_value_type != descriptor.value_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
-                    f"descriptor says {descriptor.value_type!r}"
-                )
-            annotations[annotation_id] = annotation
-        return annotations
+    def _build_annotation(self, row: dict) -> Annotation:
+        """Rebuild one :class:`Annotation` from its stored row and validate it against its descriptor.
+
+        Args:
+            row: The decoded annotation row.
+
+        Returns:
+            The reconstructed annotation.
+
+        Raises:
+            TimeFFormatError: If the row's key is not in the schema, or its decoded shape or value type
+                disagrees with the descriptor a registry query filters on.
+        """
+        key = row["key"]
+        if key not in self._annotation_descriptors:
+            raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
+        descriptor = self._annotation_descriptors[key]
+        value = None if row["value"] is None else json.loads(row["value"])
+        annotation_id = self._codec.decode("annotation_id", row["id"])
+        fields: dict = {
+            "id": annotation_id,
+            "key": key,
+            "value": value,
+            "unit": descriptor.unit,
+            "description": descriptor.description,
+        }
+        span = self._codec.decode_span(row["span"])
+        if span is not None:
+            fields["span"] = span
+        annotation = Annotation(**fields)
+        # The descriptor is what a registry query filters on, so a decoded annotation whose shape
+        # or value type disagrees with it would answer those queries wrongly. That is corruption.
+        derived_type = annotation_type_of(annotation)
+        if derived_type != descriptor.annotation_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
+                f"says {descriptor.annotation_type.value!r}"
+            )
+        derived_value_type = value_type_of(annotation.value)
+        if derived_value_type != descriptor.value_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
+                f"descriptor says {descriptor.value_type!r}"
+            )
+        return annotation
 
     def _load_index(self) -> None:
         """Validate the index parts' key ranges from the manifest alone, reading no data.
@@ -571,9 +590,26 @@ class TimeFReader:
             ) from exc
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
-        if annotation_id not in self._annotations:
-            raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
-        return self._annotations[annotation_id]
+        cached = self._annotation_objects.get(annotation_id)
+        if cached is not None:
+            return cached
+        probe = cast("Any", self._codec.encode("annotation_id", annotation_id))
+        probe_key: tuple[Any, ...] = (probe,)
+        for part in self._annotation_stats:
+            if part.first_key is None or part.last_key is None:
+                continue
+            first = cast("tuple[Any, ...]", part.first_key)
+            last = cast("tuple[Any, ...]", part.last_key)
+            if not first <= probe_key <= last:
+                continue
+            table = self._annotation_cache.get(part.path)
+            keys = table.column("id").to_pylist()
+            position = bisect.bisect_left(keys, probe)
+            if position < len(keys) and keys[position] == probe:
+                annotation = self._build_annotation(table.slice(position, 1).to_pylist()[0])
+                self._annotation_objects[annotation_id] = annotation
+                return annotation
+        raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
 
     # ---- id decoding ---------------------------------------------------------------------------
 

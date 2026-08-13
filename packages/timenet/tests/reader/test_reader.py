@@ -398,16 +398,18 @@ def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tm
     # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
-    with pytest.raises(TimeFFormatError, match="decodes to shape"):
-        TimeFReader(version_dir)
+    # Annotations are resolved lazily, so the mismatch surfaces when a sample resolves one.
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="decodes to shape"):
+        list(reader.iter_samples())
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "age" is an int; a descriptor that calls it a str no longer matches the decoded value.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "age", "value_type", "str")
-    with pytest.raises(TimeFFormatError, match="value type"):
-        TimeFReader(version_dir)
+    # Annotations are resolved lazily, so the mismatch surfaces when a sample resolves one.
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="value type"):
+        list(reader.iter_samples())
 
 
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
@@ -512,3 +514,27 @@ def test_get_sample_by_id_loads_only_the_covering_part(tmp_path, monkeypatch):
         assert reader.get_sample_by_id(wanted).sample_id == wanted
     touched = [s for s in seen if s in sample_parts]
     assert 0 < len(touched) < len(sample_parts)
+
+
+def test_annotations_resolve_lazily_and_match(tmp_path):
+    original = make_dataset()
+    version_dir = _write(tmp_path, dataset=make_dataset(), control_shard_target_bytes=1)
+    with TimeFReader(version_dir) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)
+
+
+def test_corrupt_annotation_raises_on_access_not_open(tmp_path):
+    # Annotations are lazy, so a bad key opens fine and only raises when a sample resolves it.
+    version_dir = _write(tmp_path)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    ann_path = version_dir / manifest.files.annotations[0]
+    table = pq.read_table(ann_path)
+    rows = table.to_pylist()
+    for row in rows:
+        row["key"] = "not-a-declared-key"
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
+    reader = TimeFReader(version_dir)
+    with pytest.raises(TimeFFormatError):
+        reader.read()
+    reader.close()
