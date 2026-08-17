@@ -1,11 +1,13 @@
 from pathlib import Path
 import sys
+import threading
 
 import boto3
 from botocore import UNSIGNED
 import pytest
 
 from timenet_connectors.download import s3
+from timenet_connectors.download.progress import progress_sink
 from timenet_connectors.download.s3 import _s3_client, download_s3_object
 
 
@@ -77,3 +79,33 @@ def test_download_s3_object_cleans_up_part_on_failure(monkeypatch, tmp_path):
         download_s3_object("s3://bucket/key.bin", dest)
     assert not dest.exists()  # no file produced on failure
     assert not (tmp_path / "obj.bin.part").exists()  # partial removed
+
+
+def test_download_s3_object_reports_progress(monkeypatch, tmp_path):
+    class _FakeClient:
+        def head_object(self, Bucket, Key):  # noqa: N803 (boto3's kwarg names)
+            return {"ContentLength": 100}
+
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803
+            Path(Filename).parent.mkdir(parents=True, exist_ok=True)
+            Path(Filename).write_bytes(b"x" * 100)
+            if Callback is None:
+                return
+
+            def _report() -> None:
+                Callback(60)  # boto3 reports bytes transferred incrementally
+                Callback(40)
+
+            # boto3 fires the Callback from a transfer worker thread, which does not inherit the ambient
+            # ContextVar sink; running it in a thread here fails the test unless the sink was captured.
+            worker = threading.Thread(target=_report)
+            worker.start()
+            worker.join()
+
+    monkeypatch.setattr(s3, "_s3_client", _FakeClient)
+    events = []
+    with progress_sink(events.append):
+        download_s3_object("s3://bucket/key.bin", tmp_path / "key.bin")
+
+    assert [event.downloaded for event in events] == [60, 100]  # accumulated across the worker thread
+    assert all(event.total == 100 for event in events)

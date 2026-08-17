@@ -117,6 +117,12 @@ class MyConnector(BaseConnector[MyRawRef]):
         return [...]  # lightweight references into cache_dir
 ```
 
+Progress is reported through an ambient sink (`timenet_connectors.download.progress`): the download helpers
+emit `DownloadProgress` events and the `timenet-curate` CLI renders them, so downloads show progress with
+no `progress` argument threaded through the connector. On a terminal they render as live progress bars,
+one row per file updating in parallel; piped output falls back to throttled text lines, and `--quiet`
+silences them.
+
 PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O and use `ensure_archive` to pull
 their database archive.
 

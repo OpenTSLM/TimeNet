@@ -7,6 +7,8 @@ it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) an
 (:mod:`~timenet_connectors.download.http`). Both are async so they compose with a connector's
 ``download_async``; the S3 branch is a plain blocking call (boto3 already parallelizes a single object's
 transfer), so a list mixing schemes runs its S3 entries one at a time and its HTTP entries concurrently.
+Progress flows through the ambient :mod:`~timenet_connectors.download.progress` sink, so neither takes a
+progress argument.
 """
 
 from collections.abc import Iterable, Mapping
