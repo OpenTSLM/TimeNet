@@ -13,6 +13,7 @@ PTB-XL download.
 """
 
 import ast
+import asyncio
 import csv
 from dataclasses import dataclass
 from fractions import Fraction
@@ -29,6 +30,7 @@ from timenet.types import (
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet_connectors.download import Artifact, ensure_archive, fetch_files
 
 
 # PTB-XL 500 Hz records from PhysioNet's open S3 bucket; ``_hr`` = high-rate (500 Hz) recordings.
@@ -170,8 +172,11 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         ("test", "ecg_qa_cot_test.csv"),
     )
 
-    def download(self, cache_dir: Path) -> list[EcgQaCotRef]:
+    async def download_async(self, cache_dir: Path) -> list[EcgQaCotRef]:
         """Fetch PTB-XL, the template answers, and the CoT CSVs, and resolve references.
+
+        PTB-XL is an S3 archive fetched synchronously (boto3 parallelizes the transfer internally); the
+        two HTTP artifacts, the template-answers CSV and the CoT archive, download concurrently.
 
         Args:
             cache_dir: Directory downloaded archives are cached under.
@@ -179,14 +184,15 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         Returns:
             One reference per CoT row across all splits.
         """
-        ptbxl_root = _find_dir_containing(
-            self._ensure_archive(PTBXL_ZIP_URL, cache_dir, sentinel="ptbxl-extracted"), "ptbxl_database.csv"
-        )
+        # PTB-XL is an S3 archive; fetch it first (boto3 blocks the loop but parallelizes the transfer).
+        ptbxl_root = _find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         answers_path = cache_dir / "answers_for_each_template.csv"
-        if not answers_path.exists():
-            self._stream_download(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)
+        # The two HTTP artifacts download concurrently.
+        _, cot_root = await asyncio.gather(
+            fetch_files([Artifact(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)]),
+            ensure_archive(ECG_QA_COT_URL, cache_dir),
+        )
         answers = _load_template_answers(answers_path)
-        cot_root = self._ensure_archive(ECG_QA_COT_URL, cache_dir, sentinel="ecg-qa-cot-extracted")
 
         refs: list[EcgQaCotRef] = []
         for split, csv_name in self._COT_CSVS:

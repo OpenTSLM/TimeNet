@@ -44,6 +44,9 @@ def _s3_client() -> Any:
 def download_s3_object(s3_url: str, dest: Path) -> None:
     """Download an ``s3://bucket/key`` object to ``dest``, creating parent directories.
 
+    Writes atomically: bytes land in a ``.part`` temp file that is renamed into place only on success,
+    so an interrupted download never leaves a truncated file a later ``skip_existing`` check would trust.
+
     Args:
         s3_url: The object URL, ``s3://<bucket>/<key>``.
         dest: The local destination path.
@@ -56,4 +59,11 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
     if parsed.scheme != "s3" or not bucket or not key:
         raise TimeFValidationError(f"not an s3://bucket/key URL: {s3_url!r}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _s3_client().download_file(bucket, key, str(dest))
+    part = dest.parent / f"{dest.name}.part"
+    client = _s3_client()
+    try:
+        client.download_file(bucket, key, str(part))
+        part.replace(dest)
+    except BaseException:
+        part.unlink(missing_ok=True)  # a partial or interrupted download must not masquerade as complete
+        raise
