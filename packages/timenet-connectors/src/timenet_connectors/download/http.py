@@ -19,6 +19,7 @@ import aiofiles
 import aiohttp
 
 from timenet.errors import TimeFFormatError
+from timenet_connectors.download.progress import DownloadProgress, report_progress
 
 
 _DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB streamed per write
@@ -135,11 +136,15 @@ async def _download_one(session: aiohttp.ClientSession, artifact: Artifact, *, s
     try:
         async with session.get(artifact.url, headers=headers, cookies=cookies) as response:
             response.raise_for_status()
+            total = response.content_length
+            downloaded = 0
             async with aiofiles.open(part, "wb") as handle:
                 async for chunk in response.content.iter_chunked(_DOWNLOAD_CHUNK_BYTES):
                     await handle.write(chunk)
                     if digest is not None:
                         digest.update(chunk)
+                    downloaded += len(chunk)
+                    report_progress(DownloadProgress(artifact.url, downloaded, total))
         if artifact.sha256 is not None and digest is not None and digest.hexdigest() != artifact.sha256.lower():
             raise TimeFFormatError(
                 f"SHA-256 mismatch downloading {artifact.url!r}: "

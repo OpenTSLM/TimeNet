@@ -13,6 +13,7 @@ import pytest
 
 from timenet.errors import TimeFFormatError
 from timenet_connectors.download.http import Artifact, download_http, download_http_many
+from timenet_connectors.download.progress import progress_sink
 
 
 _Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -190,6 +191,22 @@ def test_fails_fast_and_names_the_url(tmp_path):
         asyncio.run(scenario())
     assert "/bad" in str(exc_info.value)
     assert not (tmp_path / "bad").exists()  # the failed download left nothing behind
+
+
+def test_download_http_reports_progress(tmp_path):
+    events = []
+
+    async def scenario() -> None:
+        async with serving(routes={"/data.bin": _bytes(b"x" * 3_000_000)}) as base:  # 3 chunks
+            with progress_sink(events.append):
+                await download_http(f"{base}/data.bin", tmp_path / "data.bin")
+
+    asyncio.run(scenario())
+    assert events, "expected at least one progress event"
+    assert all(event.url.endswith("/data.bin") for event in events)
+    assert [event.downloaded for event in events] == sorted(event.downloaded for event in events)
+    assert events[-1].downloaded == 3_000_000  # final event covers the whole file
+    assert events[-1].total == 3_000_000  # total taken from Content-Length
 
 
 def test_download_http_accepts_a_matching_sha256(tmp_path):

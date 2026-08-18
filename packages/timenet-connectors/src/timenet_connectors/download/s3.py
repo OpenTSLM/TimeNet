@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from timenet.errors import TimeFValidationError
+from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
 
 
 def _s3_client() -> Any:
@@ -61,8 +62,23 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"
     client = _s3_client()
+    # boto3 invokes the Callback from its own transfer worker threads, which don't inherit the ambient
+    # ContextVar sink, so capture it here on the calling thread and call it directly.
+    sink = current_sink()
     try:
-        client.download_file(bucket, key, str(part))
+        if sink is not None:
+            # boto3 reports bytes incrementally; a HEAD gives the total for a full progress figure.
+            total = client.head_object(Bucket=bucket, Key=key)["ContentLength"]
+            transferred = 0
+
+            def _on_bytes(count: int, report: ProgressCallback = sink) -> None:
+                nonlocal transferred
+                transferred += count
+                report(DownloadProgress(s3_url, transferred, total))
+
+            client.download_file(bucket, key, str(part), Callback=_on_bytes)
+        else:
+            client.download_file(bucket, key, str(part))
         part.replace(dest)
     except BaseException:
         part.unlink(missing_ok=True)  # a partial or interrupted download must not masquerade as complete
