@@ -1,0 +1,110 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Index to publish to
+        required: true
+        default: TestPyPI
+        type: choice
+        options:
+          - TestPyPI
+          - PyPI
+      package:
+        description: Package(s) to publish
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - timenet
+          - timenet-connectors
+
+run-name: Publish ${{ inputs.package }} to ${{ inputs.target }}
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The `pypi` environment gates every run behind its required reviewers, so a publish only
+    # proceeds once one of the listed admins approves it, even though workflow_dispatch is offered
+    # to anyone with write access. Configure the reviewers in Settings > Environments > pypi.
+    environment:
+      name: pypi
+    permissions:
+      # Mint the OIDC token uv exchanges for a PyPI/TestPyPI trusted-publishing token. No API
+      # tokens are stored as repo secrets.
+      id-token: write
+      contents: read
+    steps:
+      - name: Guard PyPI to main
+        run: |
+          echo "Branch: $BRANCH_NAME"
+          if [ "${{ inputs.target }}" = "PyPI" ] && [ "$BRANCH_NAME" != "main" ]; then
+            echo "::error title=Invalid branch::PyPI releases must come from main."
+            exit 1
+          fi
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+      - name: Build
+        run: |
+          if [ "${{ inputs.package }}" = "both" ]; then
+            uv build --all-packages
+          else
+            uv build --package "${{ inputs.package }}"
+          fi
+      - name: Smoke test built artifacts
+        # Import each built wheel and sdist in an isolated environment to catch missing files or
+        # broken metadata before uploading. timenet-connectors depends on timenet, so hand it the
+        # wheel we just built when it is present (a `both` run); otherwise timenet resolves from the
+        # default index, which requires it to be published already.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          timenet_whl=(dist/timenet-*.whl)
+          smoke() {
+            local module="$1"; shift
+            local args=() artifact
+            for artifact in "$@"; do args+=(--with "$artifact"); done
+            echo "::group::import $module"
+            uv run --isolated --no-project "${args[@]}" \
+              python -c "import $module; print('smoke ok:', $module.__name__)"
+            echo "::endgroup::"
+          }
+          for artifact in dist/*; do
+            case "$artifact" in
+              dist/timenet-*.whl | dist/timenet-*.tar.gz)
+                smoke timenet "$artifact" ;;
+              dist/timenet_connectors-*.whl | dist/timenet_connectors-*.tar.gz)
+                smoke timenet_connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
+            esac
+          done
+      - name: Publish
+        run: |
+          if [ "${{ inputs.target }}" = "TestPyPI" ]; then
+            uv publish --publish-url https://test.pypi.org/legacy/
+          else
+            uv publish
+          fi
+      - name: Summary
+        if: success()
+        run: |
+          host=pypi.org
+          if [ "${{ inputs.target }}" = "TestPyPI" ]; then host=test.pypi.org; fi
+          {
+            echo "### Published to ${{ inputs.target }} :rocket:"
+            echo
+            for whl in dist/*.whl; do
+              base=$(basename "$whl")
+              dist_name=${base%%-*}
+              rest=${base#*-}
+              version=${rest%%-*}
+              project=${dist_name//_/-}
+              echo "- \`$project\` $version — https://$host/project/$project/$version/"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
