@@ -181,7 +181,7 @@ def test_every_manifest_shard_exists_and_is_non_empty(tmp_path):
     manifest = _manifest(version_dir)
     assert manifest.files.time_series
     for rel in manifest.files.time_series:
-        assert pq.ParquetFile(version_dir / rel).metadata.num_rows > 0
+        assert pq.ParquetFile(version_dir / rel.path).metadata.num_rows > 0
 
 
 def test_writing_twice_reaches_the_same_encoding(tmp_path):
