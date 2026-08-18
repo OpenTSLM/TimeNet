@@ -6,6 +6,7 @@ knowledge of the registry, engine, or any other connector. The engine drives it
 """
 
 from abc import ABC, abstractmethod
+import asyncio
 import inspect
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar
@@ -26,9 +27,18 @@ class BaseConnector(ABC, Generic[TRaw]):
     CPU-only. Connectors take no constructor arguments.
     """
 
+    __test__ = False  # a connector named Test* (e.g. the test_mean dataset) is not a pytest test class
+
     CARD: ClassVar[str | Path | None] = None
     """Optional explicit path to the dataset card YAML. When ``None`` (the default), the card is read
     from ``dataset.yaml`` in the connector's own folder."""
+
+    def __init__(self) -> None:
+        cls = type(self)
+        # download() is concrete (it bridges to download_async), so a subclass that overrides neither
+        # would instantiate and only fail deep in the engine; catch it at construction instead.
+        if cls.download is BaseConnector.download and cls.download_async is BaseConnector.download_async:
+            raise TypeError(f"{cls.__name__} must implement download() or download_async()")
 
     @classmethod
     def _card_path(cls) -> Path:
@@ -52,11 +62,13 @@ class BaseConnector(ABC, Generic[TRaw]):
         """
         return DatasetMetadata.from_yaml(self._card_path())
 
-    @abstractmethod
     def download(self, cache_dir: Path) -> list[TRaw]:
         """Fetch or discover raw source files and return lightweight references to them.
 
-        I/O only: no parsing, no array work. Must be idempotent for a given ``cache_dir``.
+        I/O only: no parsing, no array work. Must be idempotent for a given ``cache_dir``. Override
+        this for a synchronous connector. For an I/O-bound one, override :meth:`download_async`
+        instead and leave this default, which drives it to completion, since the engine calls
+        connectors synchronously.
 
         Args:
             cache_dir: Directory to write downloaded files into (created by the engine).
@@ -64,6 +76,26 @@ class BaseConnector(ABC, Generic[TRaw]):
         Returns:
             Raw references passed directly to :meth:`convert`.
         """
+        return asyncio.run(self.download_async(cache_dir))
+
+    async def download_async(self, cache_dir: Path) -> list[TRaw]:
+        """Async variant of :meth:`download` for connectors whose downloads are I/O-bound.
+
+        Override this to fetch artifacts concurrently (e.g. via the connector HTTP download helpers);
+        the default :meth:`download` runs it for you. Implement exactly one of the two.
+
+        Args:
+            cache_dir: Directory to write downloaded files into (created by the engine).
+
+        Returns:
+            Raw references passed directly to :meth:`convert`.
+
+        Raises:
+            NotImplementedError: If neither :meth:`download` nor :meth:`download_async` is overridden.
+        """
+        raise NotImplementedError(
+            "a connector must implement download() (synchronous) or download_async() (asynchronous)"
+        )
 
     @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:

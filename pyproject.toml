@@ -72,8 +72,10 @@ ignore = [
 # Don't require docstrings for test modules and functions. Pickle round-trips are intentional
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
 # Tests legitimately import private helpers to exercise them, assert self-equality, compare to "",
-# call context-manager dunders directly, and compare against literal fixture values.
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301"]
+# call context-manager dunders directly, and compare against literal fixture values. Async test
+# stubs (aiohttp route handlers, awaited download fakes) must be `async` for their interface even
+# when their body doesn't await (RUF029).
+"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 

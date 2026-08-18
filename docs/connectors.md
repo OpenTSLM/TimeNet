@@ -29,13 +29,19 @@ class MyConnector(BaseConnector[MyRawRef]):
     def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
 ```
 
-Two abstract stages, kept distinct so the engine can drive
+Two stages, kept distinct so the engine can drive
 `download -> convert -> derive_schema -> store`:
 
 | Method | Nature | Contract |
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch/discover raw files, return lightweight references. Idempotent; no parsing. |
 | `convert(raw_refs)` | CPU only | Parse references into a `TimeFDataset` with lazy Arrow loaders. No network. |
+
+`convert` is the only method you must implement. `download` is I/O-bound, so it comes in two shapes:
+override `download(cache_dir)` for a synchronous fetch, or `async download_async(cache_dir)` to fetch
+artifacts concurrently. Implement exactly one. The engine always calls the synchronous `download()`,
+whose default drives `download_async` to completion, so an async connector needs no event-loop wiring
+of its own.
 
 `metadata()` and `store()` are concrete methods you inherit, not stages you implement:
 
@@ -74,6 +80,45 @@ A connector may need libraries or credentials its source requires. Declare heavy
 a missing library should raise a clear error. Credentials come from the environment. For the
 HuggingFace Hub, a token is read from `HF_TOKEN` automatically (needed only for gated/private sources).
 Downloaded source files cache under `<TIMENET_CACHE>` (see [client config](client.md#configuration)).
+
+## Downloading artifacts
+
+`timenet_connectors.download` has two async helpers that pick the backend from each URL's scheme,
+so a connector never branches on `s3://` vs `http(s)://` itself:
+
+- `fetch_files([Artifact(url, dest), ...])` downloads a list, mixing schemes freely: HTTP entries run
+  concurrently (bounded by `max_concurrency`, sharing one connection pool), S3 entries one at a time. A
+  single file is a one-element list.
+- `ensure_archive(url, target)` downloads a zip and extracts it into `target`, idempotently: a marker
+  file records success, so a re-run reuses the extracted contents and skips the download.
+
+Each `Artifact` takes optional `headers`, `cookies`, and a `sha256` to verify the download; `fetch_files`
+also takes batch-level `headers`/`cookies` applied to every HTTP request, with the per-artifact ones
+merged over them (all ignored for S3). HTTP downloads (`aiohttp` + `aiofiles`, both base deps) stream to
+disk and write atomically through a `.part` temp file (a SHA-256 mismatch raises and leaves nothing
+behind), skipping an existing destination. S3 downloads use boto3 and stay synchronous, since boto3
+already parallelizes a single object's transfer. `ensure_archive` also takes a `filename` override for
+URLs whose path has no usable name (a trailing slash or `/download` suffix). Call them from
+`download_async`:
+
+```python
+from timenet_connectors.download import Artifact, ensure_archive, fetch_files
+
+class MyConnector(BaseConnector[MyRawRef]):
+    async def download_async(self, cache_dir):
+        await fetch_files(
+            [
+                Artifact("https://host/a.csv", cache_dir / "a.csv"),
+                Artifact("s3://bucket/b.csv", cache_dir / "b.csv"),
+            ],
+            headers={"Authorization": "Bearer …"},  # applied to every HTTP request
+        )
+        await ensure_archive("https://host/records.zip", cache_dir)
+        return [...]  # lightweight references into cache_dir
+```
+
+PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O and use `ensure_archive` to pull
+their database archive.
 
 ## Example connectors
 
