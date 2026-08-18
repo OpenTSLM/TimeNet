@@ -21,10 +21,11 @@ cli = [
     "typer>=0.12",
     "rich>=13",
 ]
-torch-gpu = [
-    "torch>=2.2",
-]
-torch-cpu = [
+# Optional PyTorch loader (timenet.torch / load_torch). Build-agnostic: any torch build (CPU, CUDA,
+# ROCm, MPS) satisfies it, so a user with an existing CUDA torch reuses it and nothing is downgraded.
+# For a small CPU-only torch, install it from the CPU index first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch = [
     "torch>=2.2",
 ]
 # Curating a dataset loads and validates its human-authored card YAML against the packaged JSON Schema.
@@ -41,17 +42,15 @@ zarr = [
     "zarr>=3",
 ]
 all = [
-    "timenet[cli,torch-gpu,curation,zarr]",
+    "timenet[cli,torch,curation,zarr]",
 ]
 
 [project.scripts]
 timenet = "timenet.cli:main"
 
-[tool.uv]
-conflicts = [[{ extra = "torch-gpu" }, { extra = "torch-cpu" }]]
-
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", extra = "torch-cpu" }]
+# uv-only (never in published metadata): pin this repo's own dev/CI torch to the small CPU build.
+torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

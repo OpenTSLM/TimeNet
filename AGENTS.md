@@ -55,8 +55,8 @@ workspace definition and the shared ruff/ty/pytest config; per-package
 
 ## Python And uv
 - Use `uv` for all Python workflows. The build backend is `uv_build`.
-- Set up the environment with `make sync` (`uv sync --all-groups --all-extras --no-extra torch-cpu`),
-  which installs every workspace member plus their optional extras (`timenet[cli,torch-gpu]`,
+- Set up the environment with `make sync` (`uv sync --all-groups --all-extras`),
+  which installs every workspace member plus their optional extras (`timenet[cli,torch]`,
   `timenet-connectors[huggingface]`) so tests and `ty` see the optional deps.
 - Build distributables with `make build` (`uv build --package <name>` per member).
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
