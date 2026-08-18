@@ -34,6 +34,7 @@ from timenet.format.constants import (
     MANIFEST_FILE,
     SAMPLES_FILE,
     TASK_PART_TEMPLATE,
+    part_path,
 )
 from timenet.format.schemas import (
     LOGICAL_IDS,
@@ -480,7 +481,7 @@ class TimeFWriter:
         for task_type_str, tasks in sorted(by_type.items()):
             schema = task_schema(tasks[0].task_type, self._id_types)
             rows = [_task_row(task, schema, self._codec) for task in tasks]
-            rel = TASK_PART_TEMPLATE.format(0, task_type=task_type_str)
+            rel = part_path(TASK_PART_TEMPLATE, 0, task_type=task_type_str)
             (self._staging_dir / rel).parent.mkdir(parents=True, exist_ok=True)
             self._write_table(rows, schema, rel, dictionary_columns=encodings.task_dictionary(schema))
             self._task_files.append(rel)
