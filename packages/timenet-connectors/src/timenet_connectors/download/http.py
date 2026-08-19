@@ -16,7 +16,7 @@ import hashlib
 from pathlib import Path
 
 import aiofiles
-import aiohttp
+import httpx
 
 from timenet.errors import TimeFFormatError
 from timenet_connectors.download.progress import DownloadProgress, report_progress
@@ -24,8 +24,8 @@ from timenet_connectors.download.progress import DownloadProgress, report_progre
 
 _DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB streamed per write
 _DEFAULT_MAX_CONCURRENCY = 8
-# No total cap (archives can take a while), but fail if a connect or a single read stalls.
-_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=60, sock_read=60)
+# No overall cap (archives can take a while), but fail if a connect or a single read stalls.
+_TIMEOUT = httpx.Timeout(None, connect=60.0, read=60.0)
 
 
 @dataclass(frozen=True)
@@ -69,8 +69,8 @@ async def download_http(  # noqa: PLR0913
         The destination path.
     """
     artifact = Artifact(url, Path(dest), headers=headers, cookies=cookies, sha256=sha256)
-    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-        await _download_one(session, artifact, skip_existing=skip_existing)
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        await _download_one(client, artifact, batch_headers=None, batch_cookies=None, skip_existing=skip_existing)
     return artifact.dest
 
 
@@ -100,26 +100,35 @@ async def download_http_many(
     """
     items = list(artifacts)
     semaphore = asyncio.Semaphore(max_concurrency)
-    async with aiohttp.ClientSession(
-        headers=dict(headers) if headers else None, cookies=dict(cookies) if cookies else None, timeout=_TIMEOUT
-    ) as session:
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
 
         async def bounded(artifact: Artifact) -> None:
             async with semaphore:
-                await _download_one(session, artifact, skip_existing=skip_existing)
+                await _download_one(
+                    client, artifact, batch_headers=headers, batch_cookies=cookies, skip_existing=skip_existing
+                )
 
         await asyncio.gather(*(bounded(artifact) for artifact in items))
     return [artifact.dest for artifact in items]
 
 
-async def _download_one(session: aiohttp.ClientSession, artifact: Artifact, *, skip_existing: bool) -> None:
+async def _download_one(
+    client: httpx.AsyncClient,
+    artifact: Artifact,
+    *,
+    batch_headers: Mapping[str, str] | None,
+    batch_cookies: Mapping[str, str] | None,
+    skip_existing: bool,
+) -> None:
     """Stream one artifact to its destination via a ``.part`` temp file, renamed on success.
 
-    aiohttp merges the artifact's headers and cookies over the session's.
+    Batch headers/cookies are merged under the artifact's own.
 
     Args:
-        session: The shared client session.
+        client: The shared async client.
         artifact: The artifact to download.
+        batch_headers: Headers applied to every request, under the artifact's own.
+        batch_cookies: Cookies applied to every request, under the artifact's own.
         skip_existing: Return early if the destination already exists.
 
     Raises:
@@ -130,16 +139,18 @@ async def _download_one(session: aiohttp.ClientSession, artifact: Artifact, *, s
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"
-    headers = dict(artifact.headers) if artifact.headers else None
-    cookies = dict(artifact.cookies) if artifact.cookies else None
+    headers = {**(batch_headers or {}), **(artifact.headers or {})} or None
+    cookies = {**(batch_cookies or {}), **(artifact.cookies or {})} or None
     digest = hashlib.sha256() if artifact.sha256 is not None else None
     try:
-        async with session.get(artifact.url, headers=headers, cookies=cookies) as response:
-            response.raise_for_status()
-            total = response.content_length
+        async with client.stream("GET", artifact.url, headers=headers, cookies=cookies) as response:
+            if response.is_error:
+                await response.aread()
+                response.raise_for_status()
+            total = int(response.headers["content-length"]) if "content-length" in response.headers else None
             downloaded = 0
             async with aiofiles.open(part, "wb") as handle:
-                async for chunk in response.content.iter_chunked(_DOWNLOAD_CHUNK_BYTES):
+                async for chunk in response.aiter_bytes(_DOWNLOAD_CHUNK_BYTES):
                     await handle.write(chunk)
                     if digest is not None:
                         digest.update(chunk)
