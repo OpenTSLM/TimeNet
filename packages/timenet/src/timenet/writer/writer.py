@@ -477,7 +477,7 @@ class TimeFWriter:
         self._sample_parts = self._write_control_table(
             iter(rows),
             samples_schema(self._id_types),
-            SAMPLES_TEMPLATE.format,
+            lambda index: part_path(SAMPLES_TEMPLATE, index),
             dictionary_columns=encodings.SAMPLES_DICTIONARY,
         )
 
@@ -501,7 +501,7 @@ class TimeFWriter:
         self._annotation_parts = self._write_control_table(
             iter(rows),
             annotations_schema(self._id_types),
-            ANNOTATIONS_TEMPLATE.format,
+            lambda index: part_path(ANNOTATIONS_TEMPLATE, index),
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
@@ -565,7 +565,7 @@ class TimeFWriter:
         self._index_parts = self._write_control_table(
             rows(),
             index_schema(self._id_types),
-            INDEX_TEMPLATE.format,
+            lambda index: part_path(INDEX_TEMPLATE, index),
             dictionary_columns=encodings.INDEX_DICTIONARY,
             column_encoding=encodings.INDEX_ENCODING,
         )

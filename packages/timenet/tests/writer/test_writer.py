@@ -7,6 +7,7 @@ import pytest
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
+from timenet.format.constants import ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE, SAMPLES_TEMPLATE, part_path
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
 from timenet.types import (
@@ -44,6 +45,20 @@ def test_writes_expected_layout(tmp_path):
         assert any(rel.startswith(prefix) for rel in parts), f"expected a part under {prefix!r}"
     for rel in parts:
         assert (version_dir / rel).exists()
+
+
+def test_control_tables_route_part_names_through_part_path(tmp_path, monkeypatch):
+    # samples/annotations/time_series_index must render part names through part_path (which guards the
+    # 8-digit ceiling), like tasks and shards, not by formatting the template directly.
+    seen: list[str] = []
+
+    def spy(template, index, **fields):
+        seen.append(template)
+        return part_path(template, index, **fields)
+
+    monkeypatch.setattr("timenet.writer.writer.part_path", spy)
+    _written(tmp_path)
+    assert {SAMPLES_TEMPLATE, ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE} <= set(seen)
 
 
 def test_manifest_is_valid_and_matches_dataset(tmp_path):
