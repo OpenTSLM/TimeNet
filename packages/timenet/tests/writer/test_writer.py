@@ -7,6 +7,7 @@ import pytest
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
+from timenet.format.constants import ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE, SAMPLES_TEMPLATE, part_path
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
 from timenet.types import (
@@ -37,11 +38,27 @@ def _written(tmp_path, dataset=None, **kwargs):
 def test_writes_expected_layout(tmp_path):
     version_dir = _written(tmp_path)
     assert (version_dir / "manifest.json").exists()
-    assert (version_dir / "samples.parquet").exists()
-    assert (version_dir / "annotations.parquet").exists()
-    assert (version_dir / "time_series_index.parquet").exists()
-    assert (version_dir / "time_series/shard-00000000.parquet").exists()
-    assert list(version_dir.glob("tasks/task=*/part-00000000.parquet"))
+    parts = Manifest.from_json((version_dir / "manifest.json").read_text()).files.all_parts()
+    # Read the paths from the manifest rather than hard-coding part numbers; check each artifact lands
+    # under its own directory and every listed part exists on disk.
+    for prefix in ("samples/", "annotations/", "time_series_index/", "time_series/", "tasks/task="):
+        assert any(rel.startswith(prefix) for rel in parts), f"expected a part under {prefix!r}"
+    for rel in parts:
+        assert (version_dir / rel).exists()
+
+
+def test_control_tables_route_part_names_through_part_path(tmp_path, monkeypatch):
+    # samples/annotations/time_series_index must render part names through part_path (which guards the
+    # 8-digit ceiling), like tasks and shards, not by formatting the template directly.
+    seen: list[str] = []
+
+    def spy(template, index, **fields):
+        seen.append(template)
+        return part_path(template, index, **fields)
+
+    monkeypatch.setattr("timenet.writer.writer.part_path", spy)
+    _written(tmp_path)
+    assert {SAMPLES_TEMPLATE, ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE} <= set(seen)
 
 
 def test_manifest_is_valid_and_matches_dataset(tmp_path):
@@ -106,7 +123,7 @@ def test_values_carry_the_selected_encoding(tmp_path):
 def test_long_series_splits_into_multiple_chunks(tmp_path):
     # Tiny chunk cap forces the long hello_world series to split.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     chunks_per_series: dict[str, set] = {}
     for row in index:
         chunks_per_series.setdefault(row["time_series_id"], set()).add(row["chunk_idx"])
@@ -115,7 +132,7 @@ def test_long_series_splits_into_multiple_chunks(tmp_path):
 
 def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
     row = index[0]
     shard = pq.ParquetFile(version_dir / row["chunk_file"])
     table = shard.read_row_group(row["chunk_major_idx"])
@@ -242,7 +259,7 @@ def test_per_series_array_contract_enforced(tmp_path):
 
 def test_samples_parquet_content(tmp_path):
     version_dir = _written(tmp_path)
-    rows = {r["sample_id"]: r for r in pq.read_table(version_dir / "samples.parquet").to_pylist()}
+    rows = {r["sample_id"]: r for r in pq.read_table(version_dir / "samples/part-00000000.parquet").to_pylist()}
     assert set(rows) == {"sample-0", "sample-1", "sample-2"}
     # shared series appears in both sample-0 and sample-1
     ids0 = {ts["time_series_id"] for ts in rows["sample-0"]["time_series"]}
@@ -261,7 +278,7 @@ def test_shared_series_stored_once(tmp_path):
     ]
     index_rows = [
         r
-        for r in pq.read_table(version_dir / "time_series_index.parquet").to_pylist()
+        for r in pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
         if r["time_series_id"] == "ts-shared"
     ]
     assert len(shard_rows) == 1
