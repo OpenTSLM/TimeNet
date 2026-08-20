@@ -1,9 +1,8 @@
-"""Conversions onto TimeF's microsecond timeline.
+"""Convert values onto TimeF's microsecond timeline.
 
-Every time quantity TimeF stores is a whole number of microseconds. Storing a float would make the
-resolution change with magnitude and two equal time offsets need not compare equal, which is not
-something a format should leave to its callers. These are the conversions that get a caller's value
-onto that timeline, and they are the only place the rounding rule lives.
+TimeF stores every time quantity as a whole number of microseconds. A float changes the
+resolution with the magnitude, and two equal offsets can compare as different. These functions
+convert a caller's value onto that timeline. They hold the only rounding rule.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -21,11 +20,11 @@ INT64_MAX = 2**63 - 1
 
 
 def check_int64(name: str, value: int) -> None:
-    """Reject a value that would not fit the int64 microsecond column TimeF stores it in.
+    """Reject a value that does not fit the int64 microsecond column TimeF stores it in.
 
-    Every stored time quantity is int64 microseconds. A Python int is unbounded, so a value past the
-    range wraps silently in numpy or raises a bare ``OverflowError`` from pyarrow on write rather than
-    being caught. Enforcing the range at construction turns that into a clear failure at the boundary.
+    TimeF stores every time quantity as int64 microseconds. A Python int is unbounded. A value past
+    the range wraps silently in numpy, or raises a bare ``OverflowError`` from pyarrow on write. This
+    check turns that into a clear failure at the boundary.
 
     Args:
         name: The field being checked, used in the error message.
@@ -53,8 +52,8 @@ def seconds_to_us(seconds: float) -> int:
 def us_to_seconds(microseconds: int) -> float:
     """Render microseconds back as seconds.
 
-    Exact for everything TimeF can store, so a value written in seconds reads back equal to itself
-    unless it was finer than a microsecond to begin with.
+    This is exact for everything TimeF can store. A value written in seconds reads back equal to
+    itself, unless it was finer than a microsecond.
 
     Args:
         microseconds: A time offset or duration in microseconds.
@@ -68,13 +67,13 @@ def us_to_seconds(microseconds: int) -> float:
 def unix_us(moment: datetime | int) -> int:
     """Normalize a wall-clock timestamp to Unix microseconds.
 
-    Accepts the two forms a curator actually has. A timezone-aware :class:`~datetime.datetime` is the
-    common one, and it already resolves to microseconds, so this is a change of origin rather than a
-    rounding. An ``int`` passes through, for a source that hands over microseconds directly.
+    This accepts two forms. A timezone-aware :class:`~datetime.datetime` already resolves to
+    microseconds, so this changes the origin without rounding. An ``int`` passes through, for a source
+    that gives microseconds directly.
 
-    A float is refused. Seconds and microseconds are both plausible readings of ``1700000000.5``, and
-    the wrong one is off by a factor of a million with nothing downstream to catch it. When the source
-    really does give seconds, wrap it in :func:`seconds_to_us` so the unit is visible at the call site.
+    This refuses a float. The value ``1700000000.5`` can mean seconds or microseconds, and the wrong
+    reading is off by a factor of a million. If the source gives seconds, wrap it in
+    :func:`seconds_to_us` so the unit is visible at the call site.
 
     Args:
         moment: A timezone-aware datetime, or whole Unix microseconds.
@@ -83,9 +82,9 @@ def unix_us(moment: datetime | int) -> int:
         Unix microseconds.
 
     Raises:
-        TimeFValidationError: If ``moment`` is a float or any other type, or is a naive datetime. A
-            naive datetime would be read in the curating machine's local zone, anchoring the same
-            recording differently depending on who curated it.
+        TimeFValidationError: If ``moment`` is a float, any other type, or a naive datetime. A naive
+            datetime reads in the local zone of the curating machine. That anchors the same recording
+            differently for each curator.
     """
     if isinstance(moment, (bool, float)):
         raise TimeFValidationError(
@@ -119,8 +118,8 @@ def offset_us(moment: datetime, start_time: datetime | int | None) -> int:
         Microseconds from the sample's relative zero.
 
     Raises:
-        TimeFValidationError: If ``start_time`` is ``None``, because a sample with no wall-clock
-            anchor has no calendar time to measure a moment against.
+        TimeFValidationError: If ``start_time`` is ``None``. A sample with no wall-clock anchor has
+            no calendar time to measure a moment against.
     """
     if start_time is None:
         raise TimeFValidationError(

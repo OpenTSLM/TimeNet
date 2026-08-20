@@ -27,7 +27,7 @@ from timenet.types import (
 
 
 class CountingLoader:
-    """A loader that records how many times it was called, for lazy-read assertions."""
+    """A loader that counts its own calls, for lazy-read assertions."""
 
     def __init__(self, values: Sequence[float]) -> None:
         """Store the values to return.
@@ -47,7 +47,7 @@ class CountingLoader:
 def sine_loader(
     *, n: int, freq_hz: float = 1.0, sampling_rate_hz: float = 100.0, phase: float = 0.0
 ) -> Callable[[], pa.Array]:
-    """Build a loader returning a deterministic float32 sine wave (closed-form, no RNG).
+    """Build a loader that returns a deterministic float32 sine wave.
 
     Args:
         n: Number of samples.
@@ -95,14 +95,15 @@ def _series(spec, channel, n, time_series_id, source_id, phase=0.0):  # noqa: PL
 
 
 def make_dataset() -> TimeFDataset:
-    """Build a fully deterministic dataset exercising every TimeF feature.
+    """Build a deterministic dataset that exercises every TimeF feature.
 
-    Two modalities over a shared data source; a series shared across two samples; a long series (to
-    exercise chunk splitting); a windowed sample; all three annotation shapes including one shared
-    across samples; and a classification -> answer task chain (the answer carrying a rationale and an
-    input annotation) plus a scoped classification, a scalar prediction, and a temporal localization
-    whose target is a point and an interval. All ids are fixed, so two calls produce equal datasets,
-    making this the canonical writer/reader round-trip fixture.
+    The dataset covers two modalities over a shared data source. Two samples share one series.
+    One long series exercises chunk splitting. One sample uses a windowed series. It uses all three
+    annotation shapes, and one annotation appears in two samples. It chains a classification task
+    to an answer task, and the answer carries a rationale and an input annotation. It also adds a
+    scoped classification, a scalar prediction, and a temporal localization whose target is a point
+    and an interval. The ids never change, so two calls produce equal datasets. This is the canonical
+    writer and reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.
@@ -124,7 +125,7 @@ def make_dataset() -> TimeFDataset:
         time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
         subject_ids=("subj-0",),
         sample_id="sample-0",
-        start_time=9_007_199_254_740_993,  # anchored sample; the other samples stay unanchored
+        start_time=9_007_199_254_740_993,  # anchored sample, the other samples stay unanchored
     )
     sample0.add_annotations(
         [
@@ -169,7 +170,7 @@ def make_dataset() -> TimeFDataset:
         subject_ids=("subj-1",),
         sample_id="sample-1",
     )
-    sample1.add_annotation(cohort)  # same instance/id => shared across samples
+    sample1.add_annotation(cohort)  # same instance and id, so two samples share it
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
     sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
@@ -187,8 +188,8 @@ def make_dataset() -> TimeFDataset:
 def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """Assert two datasets are logically equal per the round-trip preserved-field contract.
 
-    Compares metadata, and every sample (matched by ``sample_id``) and task (matched by ``id``),
-    including each series' fields and its materialized values. Raises ``AssertionError`` (via ``assert``)
+    This compares the metadata, every sample matched by ``sample_id``, and every task matched by
+    ``id``. It compares each series' fields and its materialized values. It raises ``AssertionError``
     if any compared field differs.
 
     Args:
@@ -231,7 +232,7 @@ def _assert_series_equal(sample_id: str, expected: tuple[TimeSeries, ...], actua
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare
-        # equal above. The stream is data and is compared as data, like the values.
+        # equal above. This function compares the stream as data, like the values.
         exp_time_offsets, act_time_offsets = exp_ts.time_offsets_loader, act_ts.time_offsets_loader
         assert (exp_time_offsets is None) == (act_time_offsets is None), (
             f"one side stores time offsets and the other does not for {series_id}"

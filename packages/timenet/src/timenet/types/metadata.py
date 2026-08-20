@@ -21,8 +21,8 @@ _DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 def validate_dataset_id(dataset_id: str) -> None:
     """Check that a dataset id is a safe ``org/name`` pair.
 
-    Ids are joined into filesystem paths by the registry, the writer, and the download cache, so this
-    is the single gate that keeps an id from naming a location outside its root.
+    The registry, the writer, and the download cache join ids into filesystem paths. This check is the
+    only gate that stops an id from naming a location outside its root.
 
     Args:
         dataset_id: The id to check.
@@ -39,8 +39,8 @@ def validate_dataset_id(dataset_id: str) -> None:
 
 
 def _str_tuple(value: Any, key: str) -> tuple[str, ...]:
-    # tuple("abc") silently yields ("a", "b", "c"), so a bare string where a list is expected would be
-    # accepted as corrupt data; require an actual list/tuple instead. Callers wrap the TypeError.
+    # tuple("abc") returns ("a", "b", "c"). A bare string where callers expect a list passes as
+    # corrupt data. Require an actual list or tuple instead. Callers wrap the TypeError.
     if not isinstance(value, list | tuple):
         raise TypeError(f"{key!r} must be a list, got {type(value).__name__}")
     return tuple(value)
@@ -50,14 +50,14 @@ def _str_tuple(value: Any, key: str) -> tuple[str, ...]:
 class DatasetMetadata:
     """A dataset's descriptive identity: who it is, not what it emits.
 
-    Authored in the dataset card. ``dataset_version`` is the upstream source's semantic version;
-    ``yaml_schema_version`` is the card's own field-schema version. ``dataset_id`` is an ``org/name``
-    pair (HuggingFace style, exactly one slash); ids are case-sensitive, so avoid casing-only
-    differences on case-insensitive filesystems.
+    The dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream
+    source. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
+    ``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid
+    casing-only differences on case-insensitive filesystems.
     """
 
     dataset_id: str
-    """HuggingFace-style ``org/name`` pair; case-sensitive, exactly one slash."""
+    """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: Version
     """Semantic version of the upstream source data."""
     name: str
@@ -78,9 +78,10 @@ class DatasetMetadata:
     def __post_init__(self) -> None:
         """Validate the ``dataset_id`` shape via :func:`validate_dataset_id`.
 
-        No segment may start with ``.``: dataset ids are joined into filesystem paths, so a ``.`` /
-        ``..`` segment could escape the registry/storage root, and a leading-dot name (e.g. ``.git``)
-        writes to disk but is skipped by discovery, which drops hidden directories.
+        No segment can start with ``.``. The registry, the writer, and the download cache join
+        dataset ids into filesystem paths. A ``.`` or ``..`` segment can escape the registry or
+        storage root. A leading-dot name like ``.git`` writes to disk, but discovery skips it
+        because discovery drops hidden directories.
         """
         validate_dataset_id(self.dataset_id)
 
@@ -88,10 +89,11 @@ class DatasetMetadata:
     def from_dict(cls, data: dict[str, Any]) -> "DatasetMetadata":
         """Build metadata from a plain mapping of card fields.
 
-        Enum and version fields arrive as strings (``license``, ``domains``, ``dataset_version``) and are
-        coerced here; unmodeled keys are ignored. Shared by :meth:`from_yaml` and the manifest codec so
-        the mapping lives in one place. Coercion may raise ``KeyError`` (missing field) or ``ValueError``
-        (bad license/domain/version); callers wrap these in their own error type.
+        The enum and version fields arrive as strings (``license``, ``domains``, ``dataset_version``).
+        This method coerces them and ignores unmodeled keys. :meth:`from_yaml` and the manifest codec
+        share it, so the mapping lives in one place. Coercion can raise ``KeyError`` for a missing field
+        or ``ValueError`` for a bad license, domain, or version. Callers wrap these in their own error
+        type.
 
         Args:
             data: A mapping with the card fields (strings for the enums and the version).
@@ -115,10 +117,11 @@ class DatasetMetadata:
     def from_yaml(cls, path: str | Path) -> "DatasetMetadata":
         """Load and validate a dataset card YAML into metadata.
 
-        The card is validated against the packaged ``dataset-card.schema.json`` before construction, so
-        authoring mistakes surface with clear, aggregated messages rather than a stack trace from deep
-        inside coercion. PyYAML and jsonschema are optional and imported lazily, so the types package
-        does not depend on them; install the ``timenet[curation]`` extra to use this.
+        This method validates the card against the packaged ``dataset-card.schema.json`` before
+        construction. Authoring mistakes then surface as clear, aggregated messages instead of a stack
+        trace from deep inside coercion. PyYAML and jsonschema are optional. This method imports them
+        lazily, so the types package does not depend on them. Install the ``timenet[curation]`` extra
+        to use this.
 
         Args:
             path: Path to the card YAML file.
@@ -170,8 +173,8 @@ class DatasetMetadata:
 class DatasetSchema:
     """A dataset's type declaration, derived from its data (never hand-authored).
 
-    Holds flat descriptor instances for specs / annotations, and the real built-in
-    :class:`~timenet.types.tasks.Task` subclasses (resolved against the registry, not reconstructed).
+    It holds flat descriptor instances for specs and annotations. It also holds the real built-in
+    :class:`~timenet.types.tasks.Task` subclasses, resolved against the registry instead of reconstructed.
     """
 
     time_series_specs: tuple[TimeSeriesSpec, ...] = ()

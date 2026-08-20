@@ -9,7 +9,7 @@ class ZarrValuesConfig:
     """Typed construction options for the Zarr values backend."""
 
     staging_dir: Path
-    """Version staging directory; the Zarr store is written beneath it."""
+    """Version staging directory. The backend writes the Zarr store beneath it."""
     shard_target_bytes: int
     """Target size of one Zarr shard."""
     chunk_max_bytes: int

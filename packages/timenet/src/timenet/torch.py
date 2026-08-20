@@ -1,7 +1,8 @@
-"""A read-only PyTorch view over a :class:`~timenet.dataset.TimeFDataset`.
+"""A read-only PyTorch view of a :class:`~timenet.dataset.TimeFDataset`.
 
-Requires the ``torch`` extra (``pip install 'timenet[torch]'``). :meth:`timenet.client.TimeNet.load_torch`
-imports this module lazily, so base users who never touch PyTorch don't need it installed.
+This module needs the ``torch`` extra (``pip install 'timenet[torch]'``). The method
+:meth:`timenet.client.TimeNet.load_torch` loads this module only when it is used. Users who do not
+use PyTorch do not need to install it.
 """
 
 from collections.abc import Callable
@@ -18,21 +19,22 @@ from timenet.types import Task
 
 
 class TimeFTorchDataset(Dataset):
-    """Exposes a dataset's samples as a map-style ``torch.utils.data.Dataset``.
+    """Shows a dataset's samples as a map-style ``torch.utils.data.Dataset``.
 
-    ``__getitem__`` returns a dict with the sample's ``series`` as dtype-preserving tensors shaped
-    ``(n_steps, *value_shape)``, its ``sample_id``, its resolved ``tasks``, and its ``annotations``.
-    Pass ``transform`` to reshape items into whatever a model expects. Series lengths or trailing
-    shapes may vary between samples, so a ``DataLoader`` that batches them needs a custom
-    ``collate_fn`` (or ``batch_size=1``).
+    ``__getitem__`` returns a dict. The dict has the sample's ``series`` as tensors that keep the
+    original dtype, with shape ``(n_steps, *value_shape)``. The dict also has the sample's
+    ``sample_id``, its resolved ``tasks``, and its ``annotations``. Use the ``transform`` argument
+    to reshape items for a model. Series lengths and trailing shapes can vary between samples.
+    Because of this, a ``DataLoader`` that batches samples needs a custom ``collate_fn``, or you
+    must set ``batch_size=1``.
     """
 
     def __init__(self, dataset: TimeFDataset, *, transform: Callable[[dict[str, Any]], Any] | None = None) -> None:
         """Wrap a dataset.
 
         Args:
-            dataset: The dataset to view (its per-series values load lazily on access).
-            transform: Optional callable applied to each item dict before it is returned.
+            dataset: The dataset to view. Its per-series values load only when accessed.
+            transform: An optional callable applied to each item dict before it is returned.
         """
         self._samples = dataset.samples
         self._tasks_by_id = {task.id: task for task in dataset.tasks}
@@ -52,11 +54,11 @@ class TimeFTorchDataset(Dataset):
         return self._transform(item) if self._transform is not None else item
 
     def _resolve_task(self, task_id: str, sample_id: str) -> Task:
-        """Return the task a sample references, or raise if the id is dangling.
+        """Return the task that a sample references. Raise an error if the id does not exist.
 
         Args:
             task_id: A task id from the sample's ``task_ids``.
-            sample_id: The referencing sample's id, for the error message.
+            sample_id: The id of the sample that references the task. Used in the error message.
 
         Returns:
             The resolved :class:`~timenet.types.Task`.
@@ -71,7 +73,7 @@ class TimeFTorchDataset(Dataset):
 
 
 def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
-    """Materialize one series as a tensor with its temporal and per-step dimensions.
+    """Convert one series to a tensor with its time and per-step dimensions.
 
     Args:
         ts: The series to load.
@@ -79,5 +81,6 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
     Returns:
         The values with shape ``(n_steps, *spec.value_shape)``.
     """
-    # copy(): Arrow's zero-copy numpy view is read-only, which torch.from_numpy warns about.
+    # copy(): Arrow's zero-copy numpy view is read-only. torch.from_numpy warns when an array is
+    # read-only.
     return torch.from_numpy(ts.to_numpy().copy())

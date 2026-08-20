@@ -1,12 +1,12 @@
-"""The :class:`TimeNet` SDK: the single entry point for using TimeNet from code.
+"""The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
 
-Wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path (the download
-cache), exposing ``list`` / ``get`` / ``search`` / ``download`` / ``load``. It never runs connector
-code; producing datasets is the curation side.
+This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
+(the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
+``load``. This class never runs connector code. The curation side produces datasets.
 """
 
-# The public API has a method named ``list``; deferred annotations keep ``list[str]`` type hints
-# resolving to the builtin rather than the method.
+# The public API has a method named ``list``. Deferred annotations keep the type hint
+# ``list[str]`` resolved to the builtin type, not to the method.
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,25 +28,26 @@ if TYPE_CHECKING:
     from timenet.torch import TimeFTorchDataset
 
 
-# Defined at module scope, where `list` is the builtin (the class has a method named ``list`` that
-# would otherwise shadow it in type annotations).
+# This code is at module scope, where `list` is the builtin type. The class has a method
+# named ``list``. This placement stops that method name from shadowing the builtin in type
+# annotations.
 T = TypeVar("T")
 _Metadatas: TypeAlias = list[DatasetMetadata]
 _OrList: TypeAlias = T | list[T] | None
 
 
 def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]:
-    """Split an ``org/id@version`` ref and reconcile it with an explicit ``version``.
+    """Split an ``org/id@version`` ref, then combine it with an explicit ``version``.
 
     Args:
-        dataset_id: A dataset id, optionally suffixed with ``@<version>`` or ``@latest``.
-        version: An explicit version, or ``None`` for the latest.
+        dataset_id: A dataset id. It can have a suffix of ``@<version>`` or ``@latest``.
+        version: An explicit version, or ``None`` for the latest version.
 
     Returns:
-        The bare dataset id and the resolved version (``None`` = latest).
+        The bare dataset id and the resolved version. ``None`` means the latest version.
 
     Raises:
-        TimeFValidationError: If a version is given both in the ref and as ``version``.
+        TimeFValidationError: The ref and ``version`` both give a version.
     """
     ref_id, ref_version = split_ref(dataset_id)
     if ref_version is not None and version is not None:
@@ -60,15 +61,15 @@ class TimeNet:
     def __init__(
         self, registry: str | Path | BaseRegistry | None = None, *, storage_path: str | Path | None = None
     ) -> None:
-        """Open a client against a registry.
+        """Open a client for a registry.
 
-        Registry selection order: the ``registry`` argument, then ``$TIMENET_REGISTRY``, then the local
-        default registry (``<TIMENET_HOME>/registry``).
+        The client selects the registry in this order: the ``registry`` argument, then
+        ``$TIMENET_REGISTRY``, then the local default registry (``<TIMENET_HOME>/registry``).
 
         Args:
             registry: A registry instance, URL, ``file://`` URI, or local path.
-            storage_path: Where downloads are cached (defaults to ``$TIMENET_STORAGE`` or
-                ``<TIMENET_HOME>/storage``).
+            storage_path: The directory for cached downloads. The default is
+                ``$TIMENET_STORAGE``, or ``<TIMENET_HOME>/storage`` if that variable is not set.
         """
         given_registry = registry if isinstance(registry, BaseRegistry) else None
         cfg = settings(
@@ -116,17 +117,17 @@ class TimeNet:
         tag: _OrList[str] = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Search the registry. Mirrors :meth:`~timenet.registry.BaseRegistry.search`.
+        """Search the registry. This method mirrors :meth:`~timenet.registry.BaseRegistry.search`.
 
         Args:
-            query: Free-text terms over name/description/tags.
-            domain: Keep datasets sharing any of these domains.
+            query: Free text terms for the name, description, and tags.
+            domain: Keep datasets that share any of these domains.
             task: Keep datasets whose schema includes any of these task classes.
             license: Keep datasets with any of these licenses.
-            time_series_spec: Keep datasets declaring all of these ``spec_type`` values.
+            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
             dataset_id: Keep only these ids.
-            tag: Keep datasets declaring all of these tags.
-            limit: Maximum number of results.
+            tag: Keep datasets that declare all of these tags.
+            limit: The maximum number of results.
 
         Returns:
             The matching dataset metadata.
@@ -143,12 +144,12 @@ class TimeNet:
         )
 
     def download(self, dataset_id: str, version: str | None = None, *, force: bool = False) -> Path:
-        """Fetch a dataset version's files into local storage and return its directory.
+        """Fetch a dataset version's files into local storage. Return its directory.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            force: Re-download even if an up-to-date copy already exists.
+            force: Download again, even if an up-to-date copy already exists.
 
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
@@ -161,12 +162,13 @@ class TimeNet:
             return target
 
         relpaths = manifest.files.all_parts()
-        # Fetch into a staging dir and swap it in atomically, so an interrupted (re-)download never
-        # leaves a half-written copy in place of a good one — the live target is replaced only once
-        # every file (manifest.json last) has landed.
+        # Fetch files into a staging directory, then swap it in as one atomic step. If a
+        # download stops partway, the live target never has a half-written copy. The code
+        # replaces the live target only after every file (manifest.json last) has landed.
         staging_parent = self._storage / dataset_id
-        # A hard kill (SIGKILL/power loss) skips the finally below, so its staging dir lingers. Sweep
-        # any stale <version>.tmp-* sibling before staging a fresh copy (mirrors the writer).
+        # A hard kill (SIGKILL or power loss) skips the finally block below, so its staging
+        # directory stays behind. Remove any stale <version>.tmp-* directory before you stage
+        # a new copy. This matches the writer's behavior.
         if staging_parent.is_dir():
             for entry in staging_parent.glob(f"{resolved}.tmp-*"):
                 if entry.is_dir():
@@ -185,27 +187,28 @@ class TimeNet:
         return target
 
     def load(self, dataset_id: str, version: str | None = None) -> TimeFDataset:
-        """Read the dataset into memory, reading in place through the registry's storage handle.
+        """Read the dataset into memory. This method reads data in place through the registry's storage handle.
 
-        No whole-dataset download: the reader pulls each series lazily from the registry over the handle
-        :meth:`~timenet.registry.BaseRegistry.open_version` returns. Use :meth:`download` for an explicit
-        on-disk cache.
+        This method does not download the whole dataset. The reader loads each series only
+        when code uses it. It loads data from the registry through the handle that
+        :meth:`~timenet.registry.BaseRegistry.open_version` returns. To get an on-disk cache,
+        use :meth:`download`.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
 
         Returns:
-            The dataset with lazy per-series loaders backed by the registry handle.
+            The dataset with lazy, per-series loaders that use the registry handle.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
         return TimeFReader(self._registry.open_version(dataset_id, version)).read()
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
-        """Download if needed and return the dataset as a read-only PyTorch ``Dataset``.
+        """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.
 
-        Requires the ``torch`` extra (``pip install 'timenet[torch]'``); the torch
-        view is imported lazily so base users don't need torch.
+        This method needs the ``torch`` extra (``pip install 'timenet[torch]'``). The code
+        imports the torch view lazily, so base users do not need torch installed.
 
         Args:
             dataset_id: The dataset id.
@@ -222,7 +225,8 @@ class TimeNet:
         """Copy one file from the registry into the local ``target`` directory.
 
         Raises:
-            TimeFFormatError: If ``relpath`` would write outside ``target`` (e.g. it contains ``..``).
+            TimeFFormatError: The path ``relpath`` escapes the ``target`` directory, for
+                example when it contains ``..``.
         """
         destination = target / relpath
         if not destination.resolve().is_relative_to(target.resolve()):

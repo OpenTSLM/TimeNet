@@ -10,8 +10,8 @@ from timenet.errors import TimeNetError
 def run_cli(app: typer.Typer) -> None:
     """Run a Typer app as a console-script entry point.
 
-    Expected failures (a raised :class:`~timenet.errors.TimeNetError`) print a one-line message and
-    exit non-zero; only unexpected errors surface a traceback.
+    If the app raises a :class:`~timenet.errors.TimeNetError`, print a one-line message and exit
+    non-zero. Any other error keeps its traceback.
 
     Args:
         app: The Typer application to invoke.

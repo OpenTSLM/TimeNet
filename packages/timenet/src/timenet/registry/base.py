@@ -1,9 +1,9 @@
 """The registry contract and its shared search implementation.
 
-A registry serves compiled TimeF versions; it never runs connector code. Concrete backends implement
-the four data-access methods (:meth:`list_datasets`, :meth:`get_manifest`, :meth:`open_file`,
-:meth:`open_version`); :meth:`BaseRegistry.search` is shared, filtering :meth:`list_datasets` output
-and consulting :meth:`get_manifest` for the type-filters.
+A registry serves compiled TimeF versions. It does not run connector code. Concrete backends
+must implement the four data-access methods: :meth:`list_datasets`, :meth:`get_manifest`,
+:meth:`open_file`, and :meth:`open_version`. :meth:`BaseRegistry.search` is shared. It filters
+the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type filters.
 """
 
 from abc import ABC, abstractmethod
@@ -22,22 +22,22 @@ class BaseRegistry(ABC):
 
     @abstractmethod
     def list_datasets(self) -> list[DatasetMetadata]:
-        """Return the metadata of every dataset (latest version), sorted by id.
+        """Return the metadata of every dataset, using the latest version. The result is sorted by dataset id.
 
         Returns:
-            One :class:`~timenet.types.DatasetMetadata` per dataset.
+            One :class:`~timenet.types.DatasetMetadata` object for each dataset.
         """
 
     @abstractmethod
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
-        """Return a dataset's manifest.
+        """Return the manifest of a dataset.
 
         Args:
             dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest.
+            version: The version string, or ``None`` for the latest version.
 
         Returns:
-            The dataset's :class:`~timenet.manifest.Manifest`.
+            The :class:`~timenet.manifest.Manifest` of the dataset.
 
         Raises:
             DatasetNotFoundError: If the dataset id or version is unknown.
@@ -63,17 +63,18 @@ class BaseRegistry(ABC):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed dataset version as a random-access handle.
 
-        The returned :class:`~timenet.registry.version.DatasetVersion` bundles the parsed manifest with a
-        filesystem-rooted handle to the version's files, so a reader built from it never re-opens the
-        registry nor re-reads ``manifest.json``. Its filesystem MUST serve range reads: the reader pulls
-        Parquet footers and value slices out of order through it.
+        The returned :class:`~timenet.registry.version.DatasetVersion` object bundles the parsed
+        manifest with a handle to the files of the version. The handle is rooted in a filesystem.
+        A reader built from this object does not re-open the registry. It also does not re-read
+        ``manifest.json``. The filesystem of the handle MUST serve range reads. The reader uses it
+        to read Parquet footers and value slices out of order.
 
         Args:
             dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest.
+            version: The version string, or ``None`` for the latest version.
 
         Returns:
-            A handle to the committed version's manifest and files.
+            A handle to the manifest and files of the committed version.
 
         Raises:
             DatasetNotFoundError: If the dataset id or version is unknown.
@@ -93,23 +94,26 @@ class BaseRegistry(ABC):
     ) -> list[DatasetMetadata]:
         """Filter datasets by any combination of criteria.
 
-        Each filter accepts a scalar or a list; ``None`` filters are ignored and non-``None`` filters
-        are ANDed. ``query``/``domain``/``task``/``license``/``dataset_id`` match any of their values;
-        ``time_series_spec``/``tag`` require all of theirs. Type-filters (``task``,
-        ``time_series_spec``) read each dataset's manifest schema.
+        Each filter accepts a single value or a list of values. The method ignores filters set to
+        ``None``. It combines all other filters with AND logic. The filters ``query``, ``domain``,
+        ``task``, ``license``, and ``dataset_id`` match a dataset when any of their values match.
+        The filters ``time_series_spec`` and ``tag`` match a dataset only when all of their values
+        match. The type filters ``task`` and ``time_series_spec`` read the manifest schema of each
+        dataset.
 
         Args:
-            query: Free-text terms matched (case-insensitive substring) against name/description/tags.
-            domain: Keep datasets sharing any of these domains.
+            query: Free-text terms. The method matches each term as a case-insensitive substring
+                in the dataset name, description, or tags.
+            domain: Keep datasets that share any of these domains.
             task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets with any of these licenses.
-            time_series_spec: Keep datasets declaring all of these ``spec_type`` values.
+            license: Keep datasets that have any of these licenses.
+            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
             dataset_id: Keep only these ids.
-            tag: Keep datasets declaring all of these tags.
-            limit: Maximum number of results (default 100).
+            tag: Keep datasets that declare all of these tags.
+            limit: The maximum number of results. The default is 100.
 
         Returns:
-            The matching dataset metadata, at most ``limit`` entries.
+            The matching dataset metadata. The list has at most ``limit`` entries.
 
         Raises:
             ValueError: If ``limit`` is negative.
@@ -144,7 +148,7 @@ class BaseRegistry(ABC):
         return results
 
     def _schema_matches(self, dataset_id: str, tasks: list[type[Task]], specs: list[str]) -> bool:
-        """Return whether a dataset's manifest schema satisfies the type-filters."""
+        """Return whether the manifest schema of a dataset satisfies the type filters."""
         schema = self.get_manifest(dataset_id).schema
         if tasks and not set(tasks) & set(schema.tasks):
             return False
@@ -152,13 +156,13 @@ class BaseRegistry(ABC):
 
 
 def _as_list(value: T | list[T] | None) -> list[T]:
-    """Normalize a scalar-or-list-or-None filter to a list.
+    """Normalize a filter value to a list.
 
     Args:
         value: ``None``, a single value, or a list of values.
 
     Returns:
-        The empty list, the list itself, or a one-element list.
+        An empty list, the list itself, or a list with one value.
     """
     if value is None:
         return []
@@ -168,6 +172,6 @@ def _as_list(value: T | list[T] | None) -> list[T]:
 
 
 def _query_matches(metadata: DatasetMetadata, terms: list[str]) -> bool:
-    """Return whether any term is a case-insensitive substring of name/description/tags."""
+    """Return whether any term is a case-insensitive substring of the dataset name, description, or tags."""
     haystack = " ".join([metadata.name, metadata.description, *metadata.tags]).lower()
     return any(term.lower() in haystack for term in terms)

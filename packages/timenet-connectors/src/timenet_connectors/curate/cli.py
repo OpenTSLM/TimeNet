@@ -1,9 +1,9 @@
 """``timenet-curate``: the producer CLI that runs connectors through the engine.
 
-Distinct from the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory (itself a
-valid local registry) that the SDK can then load. Connectors are resolved lazily by dataset id, so
-adding one is just dropping a ``datasets/<org>/<name>/`` package (a ``connector.py`` exposing
-``CONNECTOR`` plus a ``dataset.yaml`` card). No registration here.
+This is not the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory that the SDK
+can load. That directory is a valid local registry. The CLI resolves connectors by dataset id at run
+time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.py`` that exposes
+``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
 from collections.abc import Iterator
@@ -43,16 +43,16 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _default_root() -> Path:
-    """The registry directory a build writes to when ``--out`` is not given.
+    """Return the registry directory a build writes to when ``--out`` is not given.
 
-    Mirrors the consumer side's selection order, so the CLI that writes a dataset and the SDK that
-    reads it land on the same directory.
+    This uses the same selection order as the consumer side. The CLI that writes a dataset and the
+    SDK that reads it land on the same directory.
 
     Returns:
         ``$TIMENET_REGISTRY`` when it names a local directory, else ``<home>/registry``.
 
     Raises:
-        BadParameter: If ``$TIMENET_REGISTRY`` cannot be resolved to a local output directory.
+        BadParameter: If ``$TIMENET_REGISTRY`` does not resolve to a local output directory.
     """
     try:
         return default_registry_path()
@@ -73,8 +73,8 @@ def build(
 ) -> None:
     """Run a connector through the engine and write its dataset.
 
-    Prints an emoji build summary to stderr and the version directory to stdout (for scripts to
-    capture). An already-curated version is reused unless ``--force`` is given.
+    This prints an emoji build summary to stderr and the version directory to stdout, so scripts can
+    capture it. If a curated version already exists, the build reuses it unless you give ``--force``.
 
     Raises:
         BadParameter: If ``dataset_id`` has no known connector, or ``$TIMENET_REGISTRY`` is remote.
@@ -85,7 +85,7 @@ def build(
         raise typer.BadParameter(str(exc)) from exc
     root = Path(out).expanduser() if out is not None else _default_root()
     console.status("🔧", f"Building '{dataset_id}'…")
-    # A connector's downloads report through the ambient progress sink; _download_progress renders them.
+    # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         version_dir = run_pipeline(
             connector_cls(), root, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
@@ -111,12 +111,12 @@ def _download_progress() -> Iterator[Progress | None]:
     """Install the download-progress sink for a build and render it.
 
     In an interactive terminal, downloads show as live progress bars, one row per file, updating in
-    parallel. When output is piped or ``--quiet`` is set, falls back to throttled text lines (or
-    silence), so redirected logs stay readable.
+    parallel. When output goes through a pipe or you set ``--quiet``, this falls back to throttled
+    text lines (or silence), so redirected logs stay readable.
 
     Yields:
-        The live progress display when rendering bars, else ``None``; the sink is installed for the
-        duration of the block.
+        The live progress display when rendering bars, else ``None``. This installs the sink for
+        the duration of the block.
     """
     if console.quiet:
         with progress_sink(None):
@@ -146,7 +146,7 @@ def _bar_reporter(progress: Progress) -> ProgressCallback:
     """Build a download-progress sink that maps each URL to a live progress-bar task.
 
     The first event for a URL adds a task (keyed by URL so concurrent downloads stay on their own
-    row); later events update its position.
+    row). Later events update its position.
 
     Args:
         progress: The display to add and update per-file tasks on.
@@ -172,8 +172,8 @@ _UNKNOWN_TOTAL_STEP_BYTES = 50 * 1024 * 1024  # progress cadence when the downlo
 def _text_download_reporter() -> ProgressCallback:
     """Build a download-progress sink that prints throttled status lines to the console.
 
-    Reports each file at roughly 20% steps (or every 50 MB when the total size is unknown), keyed per
-    URL so concurrent downloads don't interleave into a flood of lines.
+    Reports each file at roughly 20% steps, or every 50 MB when the total size is unknown. Keys each
+    report per URL so concurrent downloads do not interleave into a flood of lines.
 
     Returns:
         A callback for :func:`~timenet_connectors.download.progress_sink`.
@@ -198,6 +198,6 @@ def _text_download_reporter() -> ProgressCallback:
 def main() -> None:
     """Entry point for the ``timenet-curate`` console script.
 
-    Expected failures print a one-line message; only unexpected errors surface a traceback.
+    Expected failures print a one-line message. Only unexpected errors surface a traceback.
     """
     run_cli(app)

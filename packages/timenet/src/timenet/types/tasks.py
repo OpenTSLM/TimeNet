@@ -150,7 +150,7 @@ class Task:
 
         :meth:`~timenet.dataset.TimeFDataset.add_task` calls this after stamping any ``scope=`` passed
         there, so a scope supplied at registration is in force. The base task has nothing scope-dependent
-        to check; :class:`ForecastingTask` overrides it.
+        to check. :class:`ForecastingTask` overrides it.
         """
 
 
@@ -158,9 +158,9 @@ class Task:
 class ClassificationTask(Task):
     """One categorical label: over the whole sample, or over ``scope`` when one is set.
 
-    A whole-recording class ("this ECG shows atrial fibrillation") and a label on a given region ("this
-    30 s epoch is sleep stage N2") differ in only one way: whether ``scope`` narrows the input. So both
-    are this type.
+    A whole-recording class ("this ECG shows atrial fibrillation") and a scoped label ("this 30 s
+    epoch is sleep stage N2") differ in one way. The only difference is whether ``scope`` narrows
+    the input. So both are this type.
     """
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
@@ -231,8 +231,8 @@ class TemporalLocalizationTask(Task):
         """Coerce ``mode`` to the enum, reject an empty ``target``, and reject a step-framed target.
 
         Raises:
-            TimeFValidationError: If ``mode`` is unknown; if ``target`` is ``()`` rather than ``None``
-                or non-empty; or if a target span counts in steps, which has no place on the recording
+            TimeFValidationError: If ``mode`` is unknown. If ``target`` is ``()`` rather than ``None``
+                or non-empty. If a target span counts in steps, which has no place on the recording
                 timeline localization reports against.
         """
         try:
@@ -280,8 +280,8 @@ class ForecastingTask(Task):
     """The region to predict, inside the sample the task is attached to. It is an interval, not a point
     (the type says so), and it is exclusive with ``target_sample_id``. It is in the same frame as
     ``scope``. For a series with a timeline, that is a :class:`~timenet.types.spans.TimeInterval` in
-    microseconds; for a series that counts in steps, a :class:`~timenet.types.spans.StepInterval`, the
-    only frame an ordinal series can carry. :meth:`~timenet.dataset.TimeFDataset.add_task` checks that
+    microseconds. For a series that counts in steps, it is a :class:`~timenet.types.spans.StepInterval`,
+    the only frame an ordinal series can carry. :meth:`~timenet.dataset.TimeFDataset.add_task` checks that
     it falls inside the sample, because that method has the sample. It needs an explicit ``scope`` for
     the context region. A ``scope`` of ``None`` means the whole sample, which covers the region to
     predict."""
@@ -290,14 +290,16 @@ class ForecastingTask(Task):
         """Reject a forecasting task with a bad target or a self-referential context.
 
         Raises:
-            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``; if
-                it sets ``target_sample_id`` with an empty ``context_sample_ids`` (a forecast with no
-                input) or with that same id in the context (its own answer as input); if ``target_span``
-                and ``target_sample_id`` are both set; if ``target_span`` carries ``context_sample_ids``
-                (its context is ``scope``, so a context sample would re-expose the target region); or if
-                ``target_span`` is a point, which spans no values. A missing scope, a frame mismatch, or a
-                context that leaks the target is checked in :meth:`check_against_scope`, once ``add_task``
-                has stamped any ``scope=``, and here too when the task is built with its ``scope``.
+            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``.
+                If it sets ``target_sample_id`` with an empty ``context_sample_ids``, which is a
+                forecast with no input. If it sets ``target_sample_id`` and that same id also appears
+                in ``context_sample_ids``, its own answer as input. If ``target_span`` and
+                ``target_sample_id`` are both set. If ``target_span`` carries ``context_sample_ids``.
+                Its context is already ``scope``, so a context sample would re-expose the target
+                region. If ``target_span`` is a point, which spans no values. :meth:`check_against_scope`
+                checks for a missing scope, a frame mismatch, or a context that leaks the target. It
+                runs once ``add_task`` has stamped any ``scope=``, and also here when the task is built
+                with its own ``scope``.
         """
         if self.target_span is None:
             if self.target_sample_id is None:
@@ -335,16 +337,16 @@ class ForecastingTask(Task):
                 f"ForecastingTask target_span is the region to predict, so it must be an interval with a "
                 f"duration, not a point: got {self.target_span!r}"
             )
-        if self.scope is not None:  # early check; add_task re-checks after any late scope= is stamped
+        if self.scope is not None:  # early check. add_task re-checks after it stamps any late scope=
             self._check_scope_against_target(self.scope, self.target_span)
 
     def check_against_scope(self) -> None:
         """Reject a ``target_span`` forecast whose context scope is missing, misframed, or leaks the target.
 
         Raises:
-            TimeFValidationError: If ``target_span`` is set with no ``scope`` (the whole-sample default
-                would include the region to predict); if ``scope`` and ``target_span`` are in different
-                frames; or if ``scope`` reaches into or past ``target_span`` on a series they share.
+            TimeFValidationError: If ``target_span`` is set with no ``scope``, the whole-sample default
+                would include the region to predict. If ``scope`` and ``target_span`` are in different
+                frames. If ``scope`` reaches into or past ``target_span`` on a series they share.
         """
         if self.target_span is None:
             return

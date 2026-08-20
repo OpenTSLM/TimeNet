@@ -1,32 +1,31 @@
-"""How a series' values are placed in time, or that they are not placed at all.
+"""Define how a series places its values in time, or state that it does not place them.
 
-Three shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time offset from a
-period and an origin, storing nothing per value. :class:`IrregularAxis` covers the placements no
-formula produces, so every time offset is written down beside the values. :class:`OrdinalAxis` records
-order and offers no route to a time offset at all, so a time-valued question about one does not
-type-check.
+TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
+offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
+placements that no formula produces. It writes down every time offset beside the values.
+:class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
+one does not type-check.
 
-Two words, deliberately not interchangeable, because the format has two different things to name:
+This module uses two words that are not interchangeable, because the format names two different things:
 
 **time offset**
-    A position on a series' own axis: an integer microsecond offset from the sample's relative zero.
-    Every axis quantity here is one, as are a span's bounds. A time offset says where a value sits
-    within its recording and nothing about what day that was. A series with no anchor has time offsets
-    and no timestamps, which is the whole of case 4.
+    A position on a series' own axis. It is an integer microsecond offset from the sample's relative
+    zero. Every axis quantity here is a time offset, and so are a span's bounds. A time offset says
+    where a value sits within its recording. It says nothing about the calendar day. A series with no
+    anchor has time offsets and no timestamps.
 
 **timestamp**
-    An absolute point on the wall clock, in Unix microseconds. Exactly one thing carries one:
+    An absolute point on the wall clock, in Unix microseconds. Exactly one field carries one:
     :attr:`~timenet.dataset.Sample.start_time`. It is what a sample's relative zero refers to.
 
-Wall clock therefore enters once and composes by addition: a value's timestamp is the sample's
-``start_time`` plus the value's time offset. One is measured from the recording's own zero and the
-other from the Unix epoch, so the split is this format's, stated here and applied consistently rather
-than inferred from the word.
+The wall clock enters once and composes by addition. A value's timestamp is the sample's
+``start_time`` plus the value's time offset. The recording's own zero anchors the time offset.
+The Unix epoch anchors the timestamp.
 
-The period is a :class:`~fractions.Fraction` of microseconds rather than a float rate, because not
-every real rate is a whole number of them: 360 Hz is 25000/9 us and 256 Hz is 15625/4. A Fraction
-keeps the arithmetic exact, so placing a value and locating a time offset are inverse without a
-tolerance band to tune, and it reduces and validates itself.
+The period is a :class:`~fractions.Fraction` of microseconds, not a float rate. Not every real
+rate is a whole number of them: 360 Hz is 25000/9 us and 256 Hz is 15625/4. A Fraction keeps the
+arithmetic exact, so placing a value and locating a time offset are inverse without a tolerance band.
+A Fraction also reduces and validates itself.
 """
 
 from collections.abc import Sequence
@@ -45,10 +44,10 @@ from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
 
 @unique
 class AxisType(StrEnum):
-    """Which shape a series' time axis has.
+    """Name which shape a series' time axis has.
 
-    Stored, and dispatched on before any shape-specific column is read, so the case is never inferred
-    from which columns came back null.
+    TimeF stores this value and dispatches on it before it reads any shape-specific column. TimeF
+    never infers the case from which columns came back null.
     """
 
     REGULAR = "regular"
@@ -63,28 +62,28 @@ class AxisType(StrEnum):
 class RegularAxis:
     """A constant cadence: value ``k`` sits at ``(start_index + k) * period_us`` microseconds.
 
-    The origin is an index into the cadence rather than a time, because a window rarely starts on a
-    whole microsecond. At 44.1 kHz only 3 of 1000 possible window starts do, so a microsecond origin
-    would be inexact for almost every window a curator cuts. An index is exact for all of them.
+    The origin is an index into the cadence, not a time, because a window rarely starts on a whole
+    microsecond. At 44.1 kHz only 3 of 1000 window starts do, so a microsecond origin is inexact for
+    almost every window. An index is exact for all of them.
     """
 
     axis_type: ClassVar[AxisType] = AxisType.REGULAR
-    """The stored discriminator. Declared on each shape rather than derived by a dispatch function,
-    so a new shape cannot be added without giving itself a tag."""
+    """The stored discriminator. Each shape declares its own tag, so a new shape must declare one
+    too."""
     period_us: Fraction
-    """Microseconds between values. A :class:`~fractions.Fraction` because not every real rate is a
-    whole number of microseconds: 360 Hz is 25000/9 and 256 Hz is 15625/4, the ECG and EEG rates a
-    health corpus runs into. It is stored as its numerator and denominator."""
+    """Microseconds between values. It is a :class:`~fractions.Fraction` because not every real rate is
+    a whole number of microseconds: 360 Hz is 25000/9 and 256 Hz is 15625/4. TimeF stores it as its
+    numerator and denominator."""
     start_index: int = 0
-    """Index of this series' first value on the cadence. Non-zero for a window cut into a longer
-    recording, which is what keeps a span written against the recording meaningful on the window."""
+    """Index of this series' first value on the cadence. It is non-zero for a window cut from a longer
+    recording, which keeps a span written against the recording meaningful on the window."""
 
     def __post_init__(self) -> None:
         """Reject a period of the wrong type or too fine, or a non-integer or negative origin.
 
         Raises:
             TimeFValidationError: If ``period_us`` is not a :class:`~fractions.Fraction`, is under one
-                microsecond, or has a term past int64; or ``start_index`` is not a non-negative
+                microsecond, or has a term past int64. Also if ``start_index`` is not a non-negative
                 integer that fits int64.
         """
         if not isinstance(self.period_us, Fraction):
@@ -97,8 +96,8 @@ class RegularAxis:
                 f"RegularAxis.period_us is {self.period_us} us, finer than the one microsecond the "
                 f"format can address. The highest rate it can carry is 1 MHz"
             )
-        # The period is stored as a numerator/denominator pair of int64 columns. Since it is >= 1 the
-        # reduced numerator is the larger term, so range-checking it covers the denominator too.
+        # TimeF stores the period as a numerator/denominator pair of int64 columns. It is >= 1, so
+        # the reduced numerator is the larger term. A range check on the numerator covers the denominator.
         check_int64("RegularAxis.period_us", self.period_us.numerator)
         if isinstance(self.start_index, bool) or not isinstance(self.start_index, int):
             raise TimeFValidationError(f"RegularAxis.start_index must be an integer, got {self.start_index!r}")
@@ -110,12 +109,12 @@ class RegularAxis:
     def from_rate_hz(cls, rate_hz: int | Fraction) -> Self:
         """Build the axis of a regularly sampled series from its exact rate.
 
-        A float is not accepted. Every real sampling rate is a whole number of values per second, so
-        ``500.0`` should be written ``500``, and a rate that genuinely is not whole has no single
-        reading: 29.97 fps is 2997/100 by its spelling and 30000/1001 by its intent, and those drift
-        3.6 ms apart over an hour. Say which with a :class:`~fractions.Fraction`, and build it from a
-        string rather than a float, because ``Fraction(29.97)`` is the binary expansion
-        (1054475631502295/35184372088832) while ``Fraction("29.97")`` is 2997/100.
+        This method does not accept a float. Every real sampling rate is a whole number of values per
+        second, so write ``500.0`` as ``500``. A rate that is not whole has no single reading: 29.97
+        fps is 2997/100 by its spelling and 30000/1001 by its intent. Those two drift 3.6 ms apart
+        over an hour. State which one with a :class:`~fractions.Fraction`, and build the Fraction from
+        a string, not a float. ``Fraction(29.97)`` is the binary expansion
+        (1054475631502295/35184372088832), and ``Fraction("29.97")`` is 2997/100.
 
         Args:
             rate_hz: Values per second.
@@ -126,8 +125,8 @@ class RegularAxis:
         Raises:
             TimeFValidationError: If ``rate_hz`` is not a positive integer or ``Fraction``.
         """
-        # bool is an int subclass, so it would otherwise slip through as 1 Hz; a float carries no
-        # single exact reading (29.97 fps is 2997/100 or 30000/1001), so it is refused too.
+        # bool is an int subclass, so without this guard it slips through as 1 Hz. A float carries no
+        # single exact reading (29.97 fps is 2997/100 or 30000/1001), so this method refuses it too.
         if isinstance(rate_hz, bool) or not isinstance(rate_hz, int | Fraction):
             raise TimeFValidationError(
                 f"RegularAxis.from_rate_hz needs an integer or Fraction rate, got {rate_hz!r}. Write "
@@ -138,23 +137,23 @@ class RegularAxis:
         return cls(period_us=Fraction(US_PER_S) / Fraction(rate_hz))
 
     def at_index(self, index: int) -> Self:
-        """Return the axis of a window starting at ``index`` values into this one.
+        """Return the axis of a window that starts ``index`` values into this one.
 
-        Exact at every rate, because the origin it moves is an index rather than a derived time.
+        This is exact at every rate, because the origin it moves is an index, not a derived time.
 
         Args:
             index: How many values into this axis the window starts.
 
         Returns:
-            The window's axis, sharing this period.
+            The window's axis, which shares this period.
         """
         return replace(self, start_index=self.start_index + index)
 
     def time_offset_us(self, index: int) -> int:
         """Return the time offset of one value, floored to whole microseconds.
 
-        Floor here pairs with the ceiling in :meth:`index_at_or_after`, and the two are exactly
-        inverse at every period of one microsecond or coarser, including the non-integral ones.
+        This floor pairs with the ceiling in :meth:`index_at_or_after`. The two are exactly inverse at
+        every period of one microsecond or coarser, including the non-integral ones.
 
         Args:
             index: The value's index within this series.
@@ -179,13 +178,13 @@ class RegularAxis:
 def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarray:
     """Normalize a stream of per-value time offsets to int64 microseconds.
 
-    The strict gate every irregular stream passes through. It refuses the two inputs that would
-    otherwise be wrong by a constant factor with nothing downstream to notice.
+    Every irregular stream passes through this strict gate. It refuses the two inputs that are wrong
+    by a constant factor, with nothing downstream to notice.
 
-    A ``datetime64`` array is refused rather than converted. ``pandas.DatetimeIndex.values`` is
-    ``datetime64[ns]``, and reading it as int64 yields nanoseconds, so every time offset lands a
-    thousandfold out while staying a plausible-looking number. Floats are refused for the same reason
-    seconds and microseconds are both readings of ``1.5``.
+    This function refuses a ``datetime64`` array, it does not convert it. ``pandas.DatetimeIndex.values``
+    is ``datetime64[ns]``, and reading it as int64 gives nanoseconds, so every time offset lands a
+    thousandfold out but still looks plausible. It refuses floats for the same reason: ``1.5`` reads as
+    both seconds and microseconds.
 
     Args:
         time_offsets_us: The per-value time offsets, in microseconds from the sample's relative zero.
@@ -210,8 +209,8 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
         )
     if array.ndim != 1:
         raise TimeFValidationError(f"time offsets must be one time offset per value, got shape {array.shape}")
-    # Before the dtype check: an empty list is float64 by numpy default, and reporting that as a
-    # float-vs-microseconds problem would name the wrong defect.
+    # This runs before the dtype check. An empty list is float64 by numpy default, and a
+    # float-vs-microseconds error names the wrong defect.
     if array.size == 0:
         raise TimeFValidationError("time offsets must hold at least one time offset")
     if array.dtype.kind not in {"i", "u"}:
@@ -236,9 +235,9 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
 def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: datetime | int | None) -> np.ndarray:
     """Convert wall-clock moments to time offsets on a sample's recording timeline.
 
-    The safe path from calendar time, and the reason :func:`to_time_offsets_us` refuses a ``datetime64``
-    array outright. Each moment is measured against the sample's anchor, so the result is in the same
-    frame as a span's bounds and a regular axis' computed time offsets.
+    This is the safe path from calendar time, and the reason :func:`to_time_offsets_us` refuses a
+    ``datetime64`` array outright. This function measures each moment against the sample's anchor.
+    The result lands in the same frame as a span's bounds and a regular axis' computed time offsets.
 
     Args:
         moments: The wall-clock moments, each timezone-aware.
@@ -247,7 +246,7 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
     Returns:
         A C-contiguous int64 array of microseconds from the sample's relative zero.
 
-    :func:`~timenet.types.clock.offset_us` raises if ``start_time`` is ``None``, since a sample with
+    :func:`~timenet.types.clock.offset_us` raises if ``start_time`` is ``None``, because a sample with
     no wall-clock anchor has no calendar time to measure against.
     """
     return to_time_offsets_us(np.fromiter((offset_us(m, start_time) for m in moments), dtype=np.int64))
@@ -255,23 +254,23 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 
 @dataclass(frozen=True, kw_only=True)
 class IrregularAxis:
-    """A placement no formula produces, so every time offset is written down beside the values.
+    """A placement no formula produces, so this axis writes down every time offset beside the values.
 
-    What lives here is only the pair a curator can state and the writer can verify without a read: the
-    first and the last stored time offset. The time offsets themselves ride the values plane and are reached
-    through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
+    This axis holds only the pair a curator can state and the writer can verify without a read. That
+    pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
+    them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
 
-    That split is the point. Two ints compare and hash, so the axis still goes whole into the writer's
-    series identity and still round-trips as a value through the samples struct. An axis holding the
-    array could do neither: a tuple comparison against an ndarray field raises rather than answering.
+    That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
+    identity and round-trips as a value through the samples struct. An axis holding the array does
+    neither: a tuple comparison against an ndarray field raises instead of answering.
 
     The endpoints are metadata about the stream, not an identity for it. Two series whose time offsets
-    differ only in the middle carry equal axes, so nothing may use axis equality to conclude the
-    time offsets agree; compare the streams.
+    differ only in the middle carry equal axes. Nothing can use axis equality to conclude the time
+    offsets agree. Compare the streams instead.
 
-    There is deliberately no ``time_offset_us`` and no ``index_at_or_after``. Both need a read, and a read
-    is a series-level operation. :class:`OrdinalAxis` sets the precedent: an axis that cannot answer in
-    constant time does not offer the method.
+    This axis has no ``time_offset_us`` and no ``index_at_or_after`` on purpose. Both need a read, and a
+    read is a series-level operation. :class:`OrdinalAxis` sets the precedent: an axis that cannot
+    answer in constant time does not offer the method.
     """
 
     axis_type: ClassVar[AxisType] = AxisType.IRREGULAR
@@ -279,8 +278,8 @@ class IrregularAxis:
     first_us: int
     """Time offset of the first value, in microseconds from the sample's relative zero."""
     last_us: int
-    """Time offset of the last value. Checked against the stream itself at write time, so it is verified
-    metadata rather than an unbacked claim."""
+    """Time offset of the last value. The writer checks it against the stream at write time, so it is
+    verified metadata, not an unbacked claim."""
 
     def __post_init__(self) -> None:
         """Reject non-integral or backwards endpoints.

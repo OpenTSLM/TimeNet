@@ -1,8 +1,9 @@
-"""The :class:`Manifest`: the compiled ``manifest.json`` and its JSON codec.
+"""The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec.
 
-The manifest is pure data with no file I/O; the writer and reader own reading/writing the file. Its
-``schema`` block is a faithful serialization of :class:`~timenet.types.DatasetSchema` (flat descriptors),
-so there is no separate set of "entry" types to keep in sync.
+The manifest is pure data. It has no file I/O. The writer and the reader do the read and write
+operations for the file. The ``schema`` block is a direct serialization of
+:class:`~timenet.types.DatasetSchema` (flat descriptors). No separate set of "entry" types exists to
+keep in sync.
 """
 
 from dataclasses import dataclass, field
@@ -39,7 +40,7 @@ class Manifest:
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
 
     dataset_id: str
-    """Denormalized copy of ``metadata.dataset_id``, readable without parsing metadata."""
+    """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
     metadata: DatasetMetadata
     """Descriptive identity of the dataset (name, version, license, domains, tags)."""
     files: ManifestFiles
@@ -49,26 +50,26 @@ class Manifest:
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
     id_encoding: dict[str, str] = field(default_factory=dict)
-    """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
+    """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``. An id not listed here is a string."""
     values_backend: str = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
     value_encoding: dict[str, str] = field(default_factory=dict)
-    """``spec_type`` -> the values-column encoding its shards carry.
+    """``spec_type`` -> the values-column encoding that its shards carry.
 
-    Provenance only: Parquet records the applied encoding in each file's footer, so a reader never
-    needs this. It is here so a curator can see what a build chose without opening a shard. Empty for
-    a backend with no such choice.
+    This field exists only for provenance. Parquet already records the applied encoding in each
+    file's footer, so a reader does not need this field. The field lets a curator see what a build
+    chose without opening a shard. The field is empty for a backend with no such choice.
     """
     derived_from: dict[str, str] | None = None
-    """Copy-on-write lineage (base version + operation), or ``None`` for a freshly built version."""
+    """Copy-on-write lineage (base version and operation), or ``None`` for a newly built version."""
     timef_format_version: int = 1
-    """TimeF manifest format version; must be in ``SUPPORTED_FORMAT_VERSIONS``."""
+    """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
-        """Validate the format version, values backend, and denormalized ``dataset_id``.
+        """Validate the format version, the values backend, and the denormalized ``dataset_id``.
 
-        ``dataset_id`` is a top-level copy of ``metadata.dataset_id`` so a consumer can read the id
-        without parsing the metadata block; the two must agree.
+        ``dataset_id`` is a top-level copy of ``metadata.dataset_id``, so a consumer can read the id
+        without parsing the metadata block. The two values must match.
 
         Raises:
             InvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
@@ -121,16 +122,16 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Manifest":
-        """Parse a manifest dict, tolerating missing optional blocks.
+        """Parse a manifest dict. Allow missing optional blocks.
 
         Args:
-            data: The manifest dict (e.g. from ``json.loads``).
+            data: The manifest dict, for example the output of ``json.loads``.
 
         Returns:
             The parsed :class:`Manifest`.
 
         Raises:
-            InvalidManifestError: If a required key is missing or a block is malformed.
+            InvalidManifestError: If a required key is missing or a block is invalid.
         """
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
@@ -161,7 +162,7 @@ class Manifest:
             The parsed :class:`Manifest`.
 
         Raises:
-            InvalidManifestError: If the text is not valid JSON or a block is malformed.
+            InvalidManifestError: If the text is not valid JSON or a block is invalid.
         """
         try:
             data = json.loads(text)
@@ -171,17 +172,17 @@ class Manifest:
 
 
 def _dict_block(data: dict[str, Any], key: str) -> dict:
-    """Coerce an optional manifest dict block to a ``dict``, naming it on failure.
+    """Convert an optional manifest dict block to a ``dict``. Name the block in the error on failure.
 
     Args:
         data: The manifest dict.
         key: The block's key.
 
     Returns:
-        The block as a ``dict`` (empty when absent).
+        The block as a ``dict``. The result is empty when the block is absent.
 
     Raises:
-        InvalidManifestError: If the block is present but not a mapping.
+        InvalidManifestError: If the block is present but is not a mapping.
     """
     try:
         return dict(data.get(key, {}))
@@ -190,17 +191,17 @@ def _dict_block(data: dict[str, Any], key: str) -> dict:
 
 
 def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
-    """Coerce a nullable manifest dict block to a ``dict`` or ``None``, naming it on failure.
+    """Convert a nullable manifest dict block to a ``dict`` or ``None``. Name the block in the error on failure.
 
     Args:
         data: The manifest dict.
         key: The block's key.
 
     Returns:
-        The block as a ``dict``, or ``None`` when the value is ``null``/absent.
+        The block as a ``dict``, or ``None`` when the value is ``null`` or absent.
 
     Raises:
-        InvalidManifestError: If the block is present, non-null, and not a mapping.
+        InvalidManifestError: If the block is present, is not null, and is not a mapping.
     """
     value = data.get(key)
     if value is None:
@@ -376,15 +377,15 @@ def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
 
 
 def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
-    """Read one ``files`` field: a list of ``{path, checksum, size}`` objects, rejecting a bare string.
+    """Read one ``files`` field. The field is a list of ``{path, checksum, size}`` objects. Reject a bare string.
 
     Args:
         value: The field's value from the manifest ``files`` block.
-        key: The field's name, for error messages.
+        key: The field's name. The name appears in error messages.
 
     Returns:
-        The field's parts as a tuple of :class:`FilePart`. A missing ``path`` / ``checksum`` / ``size``
-        raises ``KeyError``, which the caller re-raises as ``InvalidManifestError``.
+        The field's parts as a tuple of :class:`FilePart`. A missing ``path``, ``checksum``, or
+        ``size`` raises ``KeyError``. The caller re-raises this error as ``InvalidManifestError``.
 
     Raises:
         TypeError: If the field is a string, or an entry is not an object.

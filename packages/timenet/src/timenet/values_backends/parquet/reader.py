@@ -1,7 +1,7 @@
 """The default reader-side values backend: reads float32 values from Parquet shards.
 
-Each shared row group is decoded at most once, since chunks of different series can land in the same
-row group.
+The reader decodes each shared row group at most once because chunks of different series can land
+in the same row group.
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ class ParquetValuesReader(BaseValuesReader):
             One int64 microsecond time offset per value.
 
         Raises:
-            TimeFFormatError: If a chunk stores no time offsets, which means the row was tagged irregular
-                but written without them.
+            TimeFFormatError: If a chunk stores no time offsets. The index tags the row irregular,
+                but the writer omitted them.
         """
         chunks = []
         for row in rows:
@@ -113,8 +113,8 @@ class ParquetValuesReader(BaseValuesReader):
     def _row_group_values(self, version: DatasetVersion, rel_path: str, row_group: int) -> pa.ChunkedArray:
         """Return a shard row group's ``values`` column, decoding each row group at most once.
 
-        Chunks of different series can share a row group; without this cache every per-series read
-        would re-decode the whole column, making value materialization quadratic in chunks per group.
+        Chunks of different series can share a row group. Without this cache, every per-series read
+        will re-decode the whole column. That makes value materialization quadratic in chunks per group.
 
         Args:
             version: The opened version handle.
@@ -143,10 +143,8 @@ class ParquetValuesReader(BaseValuesReader):
         """Return a shard row group's values and time offsets together, decoding it at most once.
 
         Both columns come back in one read because pyarrow decodes a row group's columns in a single
-        pass, so adding the time offsets costs almost nothing: measured -0.4% on an all-regular shard,
-        where the column is null, and 9.2% in the worst case where every series is irregular. Two
-        separate reads cost 26% more whenever a caller wants both, which for an irregular series is
-        nearly always, since its time offsets are what make its values interpretable.
+        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more when a
+        caller wants both, which is nearly always the case for an irregular series.
 
         Args:
             version: The opened version handle.

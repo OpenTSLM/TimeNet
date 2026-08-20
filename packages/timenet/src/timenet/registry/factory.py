@@ -22,9 +22,9 @@ _REMOTE_SCHEMES = ("timenet://", "http://", "https://", "s3://")
 def open_registry(uri: str | Path) -> BaseRegistry:
     """Open a registry from a URI or path.
 
-    Dispatches by scheme: ``http(s)://`` and ``timenet://`` open a :class:`RemoteRegistry`
-    (``timenet://`` is an alias for the hosted :data:`TIMENET_REGISTRY_URL`), ``s3://`` opens an
-    :class:`S3Registry`, and ``file://`` or a plain path opens a :class:`LocalRegistry`.
+    The scheme selects the backend. ``http(s)://`` and ``timenet://`` open a :class:`RemoteRegistry`,
+    and ``timenet://`` is an alias for the hosted :data:`TIMENET_REGISTRY_URL`. ``s3://`` opens an
+    :class:`S3Registry`. ``file://`` or a plain path opens a :class:`LocalRegistry`.
 
     Args:
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
@@ -33,8 +33,8 @@ def open_registry(uri: str | Path) -> BaseRegistry:
         The matching registry backend.
 
     Raises:
-        ValueError: If ``uri`` carries a scheme no backend handles, or is a ``file://`` URI with a
-            host component (which would silently drop the host).
+        ValueError: If ``uri`` carries a scheme no backend handles. Also if ``uri`` is a ``file://``
+            URI with a host component, because this function drops the host without notice.
     """
     text = str(uri)
     if text.startswith("timenet://"):
@@ -75,8 +75,8 @@ def open_writable_registry(uri: str | Path) -> WritableRegistry:
 def local_registry_path(uri: str | Path) -> Path:
     """Resolve a registry URI to the local directory it names, for curation to write into.
 
-    Every backend is a :class:`WritableRegistry`, so :func:`open_writable_registry` cannot tell a
-    directory the engine can write to from a remote stub. This can.
+    Every backend is a :class:`WritableRegistry`, so :func:`open_writable_registry` cannot separate a
+    directory the engine can write to from a remote stub. This function can.
 
     Args:
         uri: A ``file://`` URI or local path.
@@ -106,11 +106,12 @@ def local_registry_path(uri: str | Path) -> Path:
 def default_registry_path() -> Path:
     """Resolve the local registry directory a build writes to (and the SDK reads from) by default.
 
-    Honors ``$TIMENET_REGISTRY`` when it names a local directory, otherwise falls back to the default
-    ``<TIMENET_HOME>/registry``. The single source of truth shared by the curate CLI and the
-    ``timenet_connectors`` build/load helpers, so producer and consumer never disagree on where a
-    dataset lands. Propagates :class:`~timenet.errors.RegistryError` from :func:`local_registry_path`
-    when ``$TIMENET_REGISTRY`` names a remote registry, which cannot be built into.
+    If ``$TIMENET_REGISTRY`` names a local directory, use it. Otherwise use the default
+    ``<TIMENET_HOME>/registry``. The curate CLI and the ``timenet_connectors`` build and load helpers
+    all call this function, so producer and consumer agree on where a dataset lands. If
+    ``$TIMENET_REGISTRY`` names a remote registry, this function propagates the
+    :class:`~timenet.errors.RegistryError` from :func:`local_registry_path`, because a build cannot
+    write to a remote registry.
 
     Returns:
         The local registry directory.

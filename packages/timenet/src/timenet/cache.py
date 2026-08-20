@@ -1,6 +1,6 @@
 """Inspect and clear the local TimeNet cache under ``~/.cache/timenet/`` (see :mod:`timenet.config`).
 
-Datasets live in the local registry (curated locally) and the download storage; raw sources land in the
+Datasets live in the local registry (curated locally) and the download storage. Raw sources land in the
 download cache. All three sit under the home directory.
 """
 
@@ -64,18 +64,18 @@ def raw_cache_size() -> int:
 
 
 def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
-    """Delete cached data, returning the bytes freed and the directories removed.
+    """Delete cached data and return the bytes freed and the directories removed.
 
-    Always clears the download storage and the raw download cache (both re-fetchable). Only removes the
-    local registry (locally curated datasets) when ``include_registry`` is set.
+    This always clears the download storage and the raw download cache. The caller can fetch both again.
+    It removes the local registry (locally curated datasets) only when the caller sets ``include_registry``.
 
     Args:
         include_registry: Also remove the local registry.
 
     Returns:
-        A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone by the time
-        this returns: a tree that cannot be fully removed raises an ``OSError`` rather than letting the
-        caller report space that was never freed.
+        A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone when this
+        returns. This raises an ``OSError`` if it cannot fully remove a tree. This stops the caller from
+        reporting space it never freed.
     """
     config = settings()
     targets = [config.storage_dir, config.cache_dir]
@@ -92,10 +92,10 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
 
 
 def _delete_and_measure(path: Path) -> int:
-    """Delete a directory tree and return the bytes it held, statting each file only once.
+    """Delete a directory tree and return the bytes it held. It stats each file only once.
 
-    Sizing then :func:`shutil.rmtree` would walk every file twice; here the single file pass both
-    measures and unlinks, leaving :func:`shutil.rmtree` only the empty directory skeleton to remove.
+    One file pass both measures and unlinks each file. Then :func:`shutil.rmtree` removes the empty
+    directory skeleton. This avoids a second walk over every file.
 
     An unreadable directory or a failed removal raises an ``OSError``.
 

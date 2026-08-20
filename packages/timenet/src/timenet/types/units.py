@@ -1,24 +1,23 @@
 """The shared pint unit registry.
 
-TimeNet uses `pint <https://pint.readthedocs.io>`_ for all physical units instead of a hand-rolled
-system. This registry owns every definition and conversion; units built from any other registry will
-not compare or convert cleanly, so always reference units through :data:`ureg` (``ureg.hertz``,
-``ureg.millivolt``, ...).
+TimeNet uses `pint <https://pint.readthedocs.io>`_ for all physical units. This registry owns every
+definition and conversion. Units built from another registry will not compare or convert cleanly, so
+always reference units through :data:`ureg` (``ureg.hertz``, ``ureg.millivolt``, ...).
 
-The registry is private to TimeNet: importing this module does not call
-``pint.set_application_registry``, so a host application keeps whatever registry it already had.
-Nothing TimeNet owns depends on process-global pint state. Units cross process and storage boundaries
-as names, never as registry-bound objects: the manifest codec writes ``str(unit)`` and reads it back
-through ``ureg.Unit(...)``, and :class:`~timenet.types.specs.TimeSeriesSpec` pickles the same way.
+The registry is private to TimeNet. Importing this module does not call
+``pint.set_application_registry``, so a host application keeps its own registry. Units cross process
+and storage boundaries as names, never as registry-bound objects. The manifest codec writes
+``str(unit)`` and reads it back through ``ureg.Unit(...)``, and
+:class:`~timenet.types.specs.TimeSeriesSpec` pickles the same way.
 
-That covers everything TimeNet defines, but it cannot cover a bare :class:`pint.Unit` or
-:class:`pint.Quantity` you pickle yourself. Those carry only the unit's name and resolve it against
-pint's *application* registry on unpickle, which does not know ``beat`` or ``bpm``::
+That covers every unit TimeNet defines. It cannot cover a bare :class:`pint.Unit` or
+:class:`pint.Quantity` that you pickle yourself. Those carry only the unit name and resolve it
+against pint's *application* registry on unpickle, which does not know ``beat`` or ``bpm``::
 
     pickle.loads(pickle.dumps(ureg.bpm))  # UndefinedUnitError: 'bpm' is not defined
 
-There is no per-object fix for that; pint's application registry is the only hook. Call
-:func:`use_as_application_registry` once at application start if you need it.
+Pint's application registry is the only hook for that. If you need it, call
+:func:`use_as_application_registry` once at application start.
 """
 
 import pint
@@ -28,7 +27,7 @@ from timenet.errors import TimeFValidationError
 
 ureg = pint.UnitRegistry()
 
-# Non-physical units pint does not ship. `beat` is a dimensionless count given its own base dimension
+# Non-physical units pint does not ship. `beat` is a dimensionless count with its own base dimension,
 # so heart-rate units stay distinct from plain frequencies.
 ureg.define("beat = [beat]")
 ureg.define("bpm = beat / minute")
@@ -37,13 +36,13 @@ ureg.define("bpm = beat / minute")
 def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
     """Validate a unit against the shared registry, rejecting an unrecognized unit string.
 
-    A :class:`pint.Unit` is stored as its canonical name; a unit string is kept as written but validated
-    (an unknown one raises); ``None`` passes through. The result is always a string (or ``None``), so
-    serialization is unchanged. Shared by every type that carries a unit (annotation values and scalar
-    task targets) so they accept and store units identically.
+    A :class:`pint.Unit` becomes its canonical name. The function keeps a unit string as written but
+    validates it, and raises on an unknown one. ``None`` passes through. The result is always a
+    string or ``None``, so serialization is unchanged. Every type that carries a unit uses this
+    function, so annotation values and scalar task targets accept and store units the same way.
 
     Args:
-        unit: A :class:`pint.Unit`, a unit string (e.g. ``"years"``), or ``None``.
+        unit: A :class:`pint.Unit`, a unit string (for example ``"years"``), or ``None``.
 
     Returns:
         The unit as a string, or ``None``.
@@ -68,15 +67,15 @@ def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
 def use_as_application_registry() -> None:
     """Make TimeNet's registry pint's process-wide application registry.
 
-    Opt in when you pickle bare :class:`pint.Unit` or :class:`pint.Quantity` objects built from
-    :data:`ureg` (custom units such as ``bpm`` otherwise fail to unpickle), or when you want units
-    from :data:`ureg` to compare and convert against units another library built.
+    Opt in for two cases. First, when you pickle bare :class:`pint.Unit` or :class:`pint.Quantity`
+    objects built from :data:`ureg`, because custom units such as ``bpm`` otherwise fail to unpickle.
+    Second, when you want units from :data:`ureg` to compare and convert against units another
+    library built.
 
-    Deliberately not called on import. It replaces the process-wide registry, so a library doing it
-    behind your back would silently break a host that has its own. Call it from application startup,
-    where the decision is yours to make, and only once.
+    Importing this module does not call this function. It replaces the process-wide registry, so a host
+    with its own registry can break. Call it once from application startup, where the decision is yours.
 
-    Note this is a global assignment, not a merge: whichever call runs last wins, and any custom units
-    a previously installed registry defined stop resolving.
+    This is a global assignment, not a merge. The last call wins, and any custom units that a
+    previously installed registry defined stop resolving.
     """
     pint.set_application_registry(ureg)

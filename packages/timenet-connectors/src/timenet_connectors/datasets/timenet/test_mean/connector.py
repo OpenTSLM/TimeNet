@@ -1,10 +1,11 @@
-"""A synthetic, offline connector for the ``timenet/test-mean`` classification demo.
+"""Synthetic offline connector for the ``timenet/test-mean`` classification demo.
 
-Each sample is one noisy signal: a constant offset plus Gaussian noise. The label is ``above_zero``
-or ``below_zero`` by the sign of that offset, so a classifier can recover the sign from simple summary
-features. Offsets alternate by index for an exactly balanced two-class set, and every value is seeded,
-so the dataset is fully deterministic and needs no network. It has no raw source, so ``download``
-returns nothing and ``convert`` builds every sample; it backs the end-to-end training example.
+Each sample is one noisy signal. The signal is a constant offset plus Gaussian noise. The label is
+``above_zero`` or ``below_zero`` by the sign of the offset. A classifier can recover the sign from
+simple summary features. Offsets alternate by index, so the two-class set is exactly balanced. Every
+value is seeded, so the dataset is deterministic and needs no network. The dataset has no raw source.
+``download`` returns nothing and ``convert`` builds every sample. This connector backs the end-to-end
+training example.
 """
 
 from pathlib import Path

@@ -1,10 +1,10 @@
 """Reader-side values backend seam: the abstract contract plus its factory.
 
-The inverse of :mod:`timenet.values_backends.writer`. A :class:`BaseValuesReader` takes the index rows for one
-series (sorted by ``chunk_idx``, each carrying the backend's chunk locator) and returns a primitive or
-fixed-shape tensor Arrow array matching the spec. :class:`TimeFReader` picks the backend from the
-manifest's ``values_backend`` tag and never imports a specific storage library itself. Concrete readers
-live in their own modules — :mod:`timenet.values_backends.parquet.reader` (the default) and
+This module mirrors :mod:`timenet.values_backends.writer`. A :class:`BaseValuesReader` takes the index rows
+for one series and returns a primitive or fixed-shape tensor Arrow array that matches the spec. The rows are
+sorted by ``chunk_idx``, and each row carries the backend's chunk locator. :class:`TimeFReader` picks the
+backend from the manifest's ``values_backend`` tag. It never imports a specific storage library itself.
+Concrete readers live in their own modules: :mod:`timenet.values_backends.parquet.reader` (the default) and
 :mod:`timenet.values_backends.zarr.reader`.
 """
 
@@ -32,8 +32,8 @@ class BaseValuesReader(ABC):
         """Read and concatenate one series' chunk values.
 
         Args:
-            version: The opened version handle; reads flow through its filesystem/store.
-            rows: The series' index rows, sorted by ``chunk_idx``; each holds ``chunk_file``,
+            version: The opened version handle. Reads flow through its filesystem/store.
+            rows: The series' index rows, sorted by ``chunk_idx``. Each holds ``chunk_file``,
                 ``chunk_major_idx``, and ``chunk_minor_idx``.
             spec: The series' spec, for backends whose decoding depends on shape/dtype.
 
@@ -56,7 +56,7 @@ class BaseValuesReader(ABC):
         """Read and concatenate one irregular series' per-value time offsets.
 
         Args:
-            version: The opened version handle; reads flow through its filesystem/store.
+            version: The opened version handle. Reads flow through its filesystem/store.
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:

@@ -26,13 +26,15 @@ def check_span_within_window(
     is allowed to fall depends on what it is scoped to:
 
     - **Scoped** to named ``time_series_ids``: it claims to apply to every one of them, so it must lie
-      inside the *intersection* of their windows. Falling outside even one would be misleading.
+      inside the *intersection* of their windows. Falling outside even one of those windows breaks
+      that claim.
     - **Unscoped** (``time_series_ids`` is ``None``) on a sample that declares a ``time_span``: checked
-      against that session span. This is how a recording spanning a sensor gap says so, letting an event
-      fall in the gap on purpose (a note taken while every sensor was briefly off).
-    - **Unscoped** with no ``time_span``: checked against the *union* of the timed series' windows. An
-      event landing in an unrecorded gap is rejected rather than silently accepted, so a convex hull of
-      the series never masks a hole in the data. Timeless (ordinal) series carry no window and drop out.
+      against that session span. This is how a recording that spans a sensor gap says so. It lets an
+      event fall in the gap on purpose, for example a note taken while every sensor was briefly off.
+    - **Unscoped** with no ``time_span``: checked against the *union* of the timed series' windows.
+      This rejects an event landing in an unrecorded gap instead of silently accepting it. That way, a
+      convex hull of the series never masks a hole in the data. Timeless (ordinal) series carry no
+      window and drop out.
 
     Shared by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
 
@@ -41,13 +43,13 @@ def check_span_within_window(
         span: The span to check.
         time_series: The series the span is checked against.
         sample_id: The owning sample's id, for the error message.
-        time_span: The sample's declared session span, if any; consulted only for an unscoped span.
+        time_span: The sample's declared session span, if any, consulted only for an unscoped span.
 
     Raises:
-        TimeFValidationError: If a series id is unknown, a scoped span names a timeless series or ones
-            whose windows do not overlap, the sample has no timeline for an unscoped span, or the span
-            falls outside the window the rule selects; or a step span names a series with a timeline or
-            runs past its steps.
+        TimeFValidationError: If a series id is unknown. If a scoped span names a timeless series
+            or ones whose windows do not overlap. If the sample has no timeline for an unscoped
+            span. If the span falls outside the window the rule selects. If a step span names a
+            series with a timeline, or it runs past its steps.
     """
     if isinstance(span, StepSpan):
         ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
@@ -66,7 +68,7 @@ def check_span_within_window(
                 f"{sample_id!r}: got {span!r}"
             )
         return
-    if not isinstance(span, TimeSpan):  # Span is abstract; only time and step spans reach here
+    if not isinstance(span, TimeSpan):  # Span is abstract. Only time and step spans reach here
         raise TimeFValidationError(f"{label} is not a concrete span: {span!r}")
     scope = span.time_series_ids
     covered = {ts.time_series_id: ts.span_us for ts in time_series if scope is None or ts.time_series_id in scope}
@@ -124,13 +126,14 @@ def _reject_outside_union(label: str, span: TimeSpan, windows: list[tuple[int, i
     """Reject a span not covered by the union of ``windows``.
 
     With no gaps the union is one contiguous window, so this is the same bounds check as a scope. With
-    gaps the span must fall entirely within one of the merged windows; one landing in a gap is rejected.
+    gaps the span must fall entirely within one of the merged windows. This rejects a span that lands
+    in a gap.
 
     Raises:
         TimeFValidationError: If the span runs past the windows or falls in a gap between them.
     """
     merged: list[tuple[int, int]] = []
-    for start, end in windows:  # sorted by start; half-open, so windows that touch are contiguous
+    for start, end in windows:  # sorted by start, half-open, so windows that touch are contiguous
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
@@ -164,13 +167,13 @@ class Sample:
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the sample."""
     start_time: datetime | int | None = None
-    """Wall-clock timestamp that this sample's relative time zero refers to, for every series and
-    annotation on it. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix microseconds;
-    construction normalizes either one to microseconds, so a constructed sample holds an ``int``.
-    ``None`` means no wall-clock reference exists; never fabricate one.
+    """Wall-clock timestamp that this sample's relative time zero refers to. It applies to every series
+    and annotation on the sample. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
+    microseconds. Construction normalizes either one to microseconds, so a constructed sample holds an
+    ``int``. ``None`` means no wall-clock reference exists. Never fabricate one.
 
-    A bare float is refused, because seconds and microseconds are both plausible readings of it. When
-    the source really does hand over seconds, convert at the call site so the unit is visible::
+    A bare float is refused, because seconds and microseconds are both plausible readings of it. If the
+    source hands over seconds, convert at the call site so the unit is visible::
 
         start_time=datetime(2026, 8, 5, tzinfo=timezone.utc)   # 1_785_888_000_000_000
         start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
@@ -179,9 +182,9 @@ class Sample:
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole sample, or ``None``. Declare it when the series have gaps and an event may fall in
-    one (a note taken while every sensor was briefly off); an unscoped span is then checked against it
-    rather than against the union of the series' windows. Its ``time_series_ids`` must be ``None``, and
-    it must contain every series' window."""
+    one, for example a note taken while every sensor was briefly off. This checks an unscoped span
+    against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
+    ``None``, and it must contain every series' window."""
 
     def __post_init__(self) -> None:
         """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
@@ -225,11 +228,11 @@ class Sample:
 
         Places ``at`` on the recording timeline against this sample's own ``start_time``, so the caller
         never repeats the anchor. A span's bounds are offsets on that timeline, so this needs an
-        anchored sample; ``offset_us`` raises if the sample has no ``start_time``.
+        anchored sample. ``offset_us`` raises if the sample has no ``start_time``.
 
         Args:
             at: The wall-clock moment, timezone-aware.
-            time_series_ids: Series the point is scoped to; ``None`` covers every series.
+            time_series_ids: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
             The point, in microseconds from this sample's relative zero.
@@ -241,13 +244,13 @@ class Sample:
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
-        Places ``start`` and ``end`` on the recording timeline against this sample's own ``start_time``;
+        Places ``start`` and ``end`` on the recording timeline against this sample's own ``start_time``.
         ``offset_us`` raises if the sample has no ``start_time`` to measure against.
 
         Args:
             start: Wall-clock start, timezone-aware.
             end: Wall-clock end, exclusive and timezone-aware.
-            time_series_ids: Series the interval is scoped to; ``None`` covers every series.
+            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
             The half-open interval, in microseconds from this sample's relative zero.
@@ -268,10 +271,10 @@ class Sample:
             The attached annotation (the same instance).
 
         Raises:
-            TimeFValidationError: If the annotation's span references a series not on this sample, a
-                scoped span names a timeless series, or the span falls outside the window its scope
-                selects (the intersection of named series, the sample's ``time_span``, or the union of
-                the series' windows).
+            TimeFValidationError: If the annotation's span references a series not on this sample. If a
+                scoped span names a timeless series. If the span falls outside the window its scope
+                selects: the intersection of named series, the sample's ``time_span``, or the union of
+                the series' windows.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation)
         self.annotations = (*self.annotations, annotation)
@@ -327,7 +330,7 @@ class Sample:
             The single :class:`TimeSeries`' values as a 1-D Arrow array.
 
         Raises:
-            ValueError: If the sample has more than one channel; read ``time_series[i]`` explicitly then.
+            ValueError: If the sample has more than one channel, read ``time_series[i]`` explicitly then.
         """
         if len(self.time_series) != 1:
             raise ValueError(

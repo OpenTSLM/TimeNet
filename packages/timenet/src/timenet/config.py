@@ -1,10 +1,10 @@
 """Runtime configuration, resolved with pydantic-settings.
 
-All local state lives under a single home directory (default ``~/.cache/timenet``), mirroring
-HuggingFace's ``HF_HOME`` -> ``HF_DATASETS_CACHE`` / ``HF_HUB_CACHE`` hierarchy. Setting ``TIMENET_HOME``
-relocates everything; the per-area env vars override just their own path. Precedence for any value is
-**explicit argument (e.g. a CLI flag) > environment variable > default**. This model is the single place
-to add future configuration.
+All local state lives under one home directory (default ``~/.cache/timenet``). This mirrors
+HuggingFace's ``HF_HOME`` -> ``HF_DATASETS_CACHE`` / ``HF_HUB_CACHE`` hierarchy. Set ``TIMENET_HOME``
+to relocate everything. Each per-area env var overrides only its own path. For any value the precedence
+is explicit argument (for example a CLI flag), then environment variable, then default. Add future
+configuration to this model.
 """
 
 from pathlib import Path
@@ -30,12 +30,12 @@ class TimeNetSettings(BaseSettings):
 
     @property
     def storage_dir(self) -> Path:
-        """Where loaded/downloaded datasets are cached (analog of ``HF_DATASETS_CACHE``)."""
+        """Where the client caches loaded or downloaded datasets (analog of ``HF_DATASETS_CACHE``)."""
         return (self.storage if self.storage is not None else self.home_dir / "storage").expanduser()
 
     @property
     def cache_dir(self) -> Path:
-        """Where curation raw sources and Hub downloads are cached (analog of ``HF_HUB_CACHE``)."""
+        """Where the client caches raw curation sources and Hub downloads (analog of ``HF_HUB_CACHE``)."""
         return (self.cache if self.cache is not None else self.home_dir / "cache").expanduser()
 
     @property
@@ -45,13 +45,13 @@ class TimeNetSettings(BaseSettings):
 
 
 def settings(**overrides: Any) -> TimeNetSettings:
-    """Build settings, letting explicit non-``None`` overrides win over env and defaults.
+    """Build settings so explicit non-``None`` overrides win over env vars and defaults.
 
-    ``None`` overrides are dropped so a missing CLI flag falls through to the environment, then the
-    default.
+    This function drops a ``None`` override. A missing CLI flag then falls through to the environment,
+    then the default.
 
     Args:
-        **overrides: Field overrides (e.g. ``storage=...``, ``registry=...``).
+        **overrides: Field overrides (for example ``storage=...``, ``registry=...``).
 
     Returns:
         The resolved :class:`TimeNetSettings`.

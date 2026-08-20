@@ -12,11 +12,11 @@ class ParquetValuesConfig:
     """Typed construction options for the Parquet values backend."""
 
     staging_dir: Path
-    """Version staging directory; shards are written beneath it."""
+    """Version staging directory. The writer puts shards beneath it."""
     id_types: IdTypes
     """Resolved logical-id storage types."""
     codec: IdCodec
-    """Shared logical-id codec used by the rest of the TimeF writer."""
+    """Shared logical-id codec that the rest of the TimeF writer uses."""
     shard_target_bytes: int
     """Target size for rotating shards."""
     row_group_target_bytes: int

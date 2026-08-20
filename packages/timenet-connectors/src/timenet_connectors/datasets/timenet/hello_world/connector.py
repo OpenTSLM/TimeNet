@@ -1,10 +1,11 @@
-"""A synthetic, offline connector that exercises every TimeF feature.
+"""A synthetic, offline connector that tests every TimeF feature.
 
-``HelloWorldConnector`` needs no network and produces a fully deterministic dataset, so it doubles as the
-fixture the writer and reader test suites round-trip against. It covers two modalities, a shared data
-source, a series shared across samples, a windowed sample, a longer series (which the writer tests split
-into chunks under a small chunk cap), all three annotation shapes (including one shared across samples),
-and a task chain.
+``HelloWorldConnector`` needs no network. It creates a fully deterministic dataset. The writer and
+reader test suites use this dataset as a fixture for round-trip tests. The connector covers two
+modalities, a shared data source, a series shared across samples, and a windowed sample. It also
+covers a longer series. The writer tests split this longer series into chunks under a small chunk
+cap. The connector covers all three annotation shapes, including one shared across samples, and a
+task chain.
 """
 
 from collections.abc import Callable
@@ -61,12 +62,14 @@ class HelloWorldRecording:
 def _wave_values(
     fn: Callable[[Float64[np.ndarray, " time"]], Float[np.ndarray, " time"]], n: int, phase: float
 ) -> Float[np.ndarray, " time"]:
-    """Compute a closed-form wave as an array (no RNG, no I/O).
+    """Compute a closed-form wave as an array.
+
+    The function does not use a random number generator or perform I/O.
 
     Args:
-        fn: The wave function applied to the angular time base (e.g. ``np.sin``).
-        n: Number of samples.
-        phase: Phase offset in radians.
+        fn: The wave function to apply to the angular time base, for example ``np.sin``.
+        n: The number of samples.
+        phase: The phase offset in radians.
 
     Returns:
         The wave values as a float32 ``np.ndarray``.
@@ -78,15 +81,17 @@ def _wave_values(
 def _wave(
     fn: Callable[[Float64[np.ndarray, " time"]], Float[np.ndarray, " time"]], n: int, phase: float
 ) -> Callable[[], pa.Array]:
-    """Build a deterministic lazy loader for a closed-form wave (used for the chunk-split long series).
+    """Build a deterministic lazy loader for a closed-form wave.
+
+    The connector uses this loader for the long series that the writer splits into chunks.
 
     Args:
-        fn: The wave function applied to the angular time base (e.g. ``np.sin``).
-        n: Number of samples.
-        phase: Phase offset in radians.
+        fn: The wave function to apply to the angular time base, for example ``np.sin``.
+        n: The number of samples.
+        phase: The phase offset in radians.
 
     Returns:
-        A no-argument loader returning the wave as a float32 Arrow array.
+        A loader with no arguments. The loader returns the wave as a float32 Arrow array.
     """
     return lambda: pa.array(_wave_values(fn, n, phase))
 
@@ -94,19 +99,24 @@ def _wave(
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
-    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002, PLR6301 (override; synthetic: no cache)
-        """Return deterministic recording descriptions (no network, ``cache_dir`` unused).
+    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002, PLR6301 (override: the data is synthetic, so this method needs no cache)
+        """Return deterministic recording descriptions.
+
+        This method uses no network and does not use ``cache_dir``.
 
         Args:
-            cache_dir: Ignored; the data is synthetic.
+            cache_dir: Not used. The data is synthetic.
 
         Returns:
-            One short recording and one longer one (the writer splits the longer one under a small chunk cap).
+            One short recording and one longer recording. The writer splits the longer recording into
+            chunks under a small chunk cap.
         """
         return [HelloWorldRecording(index=0, n_values=16), HelloWorldRecording(index=1, n_values=512)]
 
     def convert(self, raw_refs: list[HelloWorldRecording]) -> TimeFDataset:
-        """Build the feature-complete dataset from the recording descriptions.
+        """Build the complete dataset from the recording descriptions.
+
+        The dataset includes every TimeF feature.
 
         Args:
             raw_refs: The recordings from :meth:`download`.
@@ -117,7 +127,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset = TimeFDataset(metadata=self.metadata())
         short, long = raw_refs[0], raw_refs[1]
 
-        # A series shared across two samples (dedupe-by-id path).
+        # A series shared across two samples. This uses the dedupe-by-id path.
         shared = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values, phase=0.0),
             spec=_SINE,
@@ -126,10 +136,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             source_id="rec-0",
             time_series_id="ts-shared",
         )
-        # An annotation shared across two samples (dedupe-by-id path).
+        # An annotation shared across two samples. This uses the dedupe-by-id path.
         cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
-        # Sample 0: full recording, two modalities, all annotation shapes, a task chain.
+        # Sample 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = TimeSeries.from_values(
             _wave_values(np.cos, short.n_values, phase=0.0),
             spec=_COSINE,
@@ -139,7 +149,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-cos-0",
         )
         sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
-        # Named so the localization task below can reference them by id rather than repeating the literals.
+        # These annotations have names. The localization task below can reference them by id instead
+        # of repeating the literal values.
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
         artifact = Annotation(
             key="artifact",
@@ -162,16 +173,19 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 AnswerTask(
                     prompt="What rhythm?",
                     target="Normal.",
-                    # Any task may carry a chain of thought; an answer task with one is the old reasoning task.
+                    # Any task can carry a chain of thought. An answer task with a chain of thought is
+                    # the old reasoning task.
                     rationale="The peaks repeat once per cycle at a constant interval.",
-                    # The cohort annotation is context the model reads, not something it has to produce.
+                    # The cohort annotation gives context to the model. The model does not need to
+                    # produce this annotation.
                     input_annotation_ids=(cohort.id,),
                     from_tasks=(classification,),
                     id="task-answer-0",
                 ),
                 ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
-                # Localization runs a scope backwards: the query goes in and the regions come out. Here the
-                # answer is stored by reference, so the target *is* the two temporal annotations above.
+                # Localization works backward from a normal task. The query is the input, and the
+                # regions are the output. Here, the task stores the answer by reference, so the target
+                # is the two temporal annotations above.
                 TemporalLocalizationTask(
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
@@ -181,7 +195,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ],
         )
 
-        # Sample 1: reuses the shared series plus a longer series (the writer tests split it under a tiny cap).
+        # Sample 1: this reuses the shared series and adds a longer series. The writer tests split the
+        # longer series into chunks under a small chunk cap.
         long_series = TimeSeries(
             spec=_SINE,
             channel="a",
@@ -192,11 +207,12 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             n_values=long.n_values,
         )
         sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
-        sample1.add_annotation(cohort)  # same instance/id => shared
+        sample1.add_annotation(cohort)  # same instance and id, so the annotation is shared
 
-        # Sample 2: a windowed slice with a scoped classification task. It covers the *second* half of
-        # rec-0, so it is a genuine offset window rather than a byte-identical prefix of `ts-shared`. The
-        # phase offset continues the same wave, so the values match rec-0 over the window.
+        # Sample 2: a windowed slice with a scoped classification task. This window covers the second
+        # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
+        # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
+        # window.
         window_start = short.n_values // 2
         window = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
@@ -207,9 +223,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-window-2",
         )
         sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
-        # A scope narrows the input to a region: same task type as the whole-sample label above, with the
-        # window supplied. Span times are in the source recording timeline, so this sits inside the
-        # window's span.
+        # A scope narrows the input to a region. This task has the same task type as the whole-sample
+        # label above, but it supplies the window. Span times use the source recording timeline, so
+        # this task's span sits inside the window's span.
         dataset.add_task(
             sample2,
             ClassificationTask(

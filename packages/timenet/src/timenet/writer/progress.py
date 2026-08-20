@@ -5,7 +5,7 @@ from enum import StrEnum
 
 
 class ProgressStage(StrEnum):
-    """The writer's incremental stages. Only stages that carry information are emitted."""
+    """The writer's incremental stages. The writer emits only stages that carry information."""
 
     TIME_SERIES = "time_series"
     SHARD_FINALIZED = "shard_finalized"

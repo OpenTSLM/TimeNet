@@ -1,7 +1,7 @@
 """The :class:`License` enum: the legal license of a dataset's source data.
 
-Values are SPDX-style identifiers (mirroring GitHub's license keyword list) rather than display
-strings, so they round-trip unambiguously through the manifest.
+Values are SPDX-style identifiers that mirror GitHub's license keyword list, not display strings.
+This lets them round-trip through the manifest without ambiguity.
 """
 
 from enum import StrEnum, unique

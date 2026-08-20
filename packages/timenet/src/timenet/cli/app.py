@@ -30,7 +30,7 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choices: Iterable[str]) -> list[T] | None:
-    """Parse a repeated string option into enum values, reporting a bad value as a clean CLI error.
+    """Parse a repeated string option into enum values. Report a bad value as a clean CLI error.
 
     Args:
         values: The raw strings passed for the option.
@@ -39,10 +39,10 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
         choices: The valid values, for the error message.
 
     Returns:
-        The parsed values, or ``None`` if none were given.
+        The parsed values, or ``None`` if the caller passed no values.
 
     Raises:
-        BadParameter: If any value is not recognized.
+        BadParameter: If the factory does not recognize a value.
     """
     try:
         parsed = [factory(value) for value in values]
@@ -193,7 +193,7 @@ def cache_clear(
     all_: bool = typer.Option(False, "--all", help="Also remove the local registry (curated datasets)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data. Clears downloads by default; ``--all`` also removes curated datasets."""
+    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes curated datasets."""
     if not yes:
         what = "downloaded datasets and the raw cache"
         if all_:
@@ -206,7 +206,7 @@ def cache_clear(
 def main() -> None:
     """Entry point for the ``timenet`` console script.
 
-    Expected failures (unknown dataset, unreachable registry) print a one-line message; only
-    unexpected errors surface a traceback.
+    Expected failures (unknown dataset, unreachable registry) print a one-line message. Only
+    unexpected errors show a traceback.
     """
     run_cli(app)

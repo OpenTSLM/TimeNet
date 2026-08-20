@@ -18,25 +18,24 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """Serves datasets from a local directory (the output of curation is itself a valid one)."""
+    """Serve datasets from a local directory. The curation output is itself a valid registry."""
 
     def __init__(self, root: Path) -> None:
         """Open a local registry rooted at a directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts. ``~`` is expanded.
+            root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
         """
         self._root = Path(root).expanduser()
-        # (dataset_id, version) -> (manifest mtime, parsed manifest); avoids re-parsing on repeat reads
-        # (e.g. list_datasets then search's schema filter). Invalidated when the file's mtime changes.
+        # (dataset_id, version) -> (manifest mtime, parsed manifest). This avoids re-parsing on repeat
+        # reads, for example list_datasets then search's schema filter. An mtime change invalidates it.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
-        Discovers datasets depth-agnostically so both flat (``hello_world``) and namespaced
-        (``org/name``) layouts are found. A dataset id is the path from the root to a version
-        directory's parent.
+        Search at any depth. This finds both flat (``hello_world``) and namespaced (``org/name``)
+        layouts. A dataset id is the path from the root to a version directory's parent.
 
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
@@ -72,8 +71,8 @@ class LocalRegistry(WritableRegistry):
 
         Raises:
             DatasetNotFoundError: If the dataset id or version has no committed manifest.
-            TimeFFormatError: If the stored manifest's own dataset id disagrees with the directory it
-                was loaded from (a misplaced or corrupt artifact).
+            TimeFFormatError: If the stored manifest declares a dataset id that differs from its
+                directory. This means a misplaced or corrupt artifact.
         """
         resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
         if resolved is None:
@@ -132,9 +131,9 @@ class LocalRegistry(WritableRegistry):
     ) -> str:
         """Compile a dataset and write it into this registry's directory tree.
 
-        Streams the dataset through a :class:`~timenet.writer.TimeFWriter`, which stages under
-        ``<version>.tmp-*`` and publishes with a single atomic rename. An already-committed version is
-        skipped unless ``force`` is set.
+        Stream the dataset through a :class:`~timenet.writer.TimeFWriter`. The writer stages under
+        ``<version>.tmp-*`` and publishes with a single atomic rename. It skips an already-committed
+        version unless the caller sets ``force``.
 
         Args:
             dataset: The populated dataset to store.
@@ -149,8 +148,8 @@ class LocalRegistry(WritableRegistry):
             dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)
         dataset_id = dataset.metadata.dataset_id
-        # _dataset_dir validates the id (rejecting any ``..`` that would let the write or the force
-        # rmtree escape the root); dataset.metadata already enforces this at construction.
+        # _dataset_dir validates the id. This rejects any ``..`` that would let the write or the
+        # force rmtree escape the root. dataset.metadata already enforces this at construction.
         final_dir = self._dataset_dir(dataset_id) / version
         if self.exists(dataset_id, version) and not force:
             return version
@@ -163,8 +162,8 @@ class LocalRegistry(WritableRegistry):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local, random-access handle.
 
-        Reuses the manifest :meth:`get_manifest` already parsed and validated (so a missing version or a
-        misplaced artifact is caught there) and roots the handle at the version's directory over a
+        Reuses the manifest :meth:`get_manifest` already parsed and validated, so a missing version or a
+        misplaced artifact surfaces there. Roots the handle at the version's directory over a
         :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable.
 
         Args:
@@ -209,8 +208,8 @@ class LocalRegistry(WritableRegistry):
 def _is_version(name: str) -> bool:
     """Return whether a directory name is a parseable version.
 
-    Skips non-version siblings such as a crashed build's ``<version>.tmp-<uuid>`` staging directory,
-    which would otherwise crash :meth:`LocalRegistry._latest_version` when parsed.
+    This skips non-version siblings such as a crashed build's ``<version>.tmp-<uuid>`` staging
+    directory. Without the skip, parsing that name crashes :meth:`LocalRegistry._latest_version`.
 
     Args:
         name: The directory name.
