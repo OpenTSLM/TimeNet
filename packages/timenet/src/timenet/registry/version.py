@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 
-from timenet.format.constants import MANIFEST_FILE
+from timenet.format.constants import MANIFEST_FILE, check_relative_path
 from timenet.manifest import Manifest
 
 
@@ -39,6 +39,7 @@ class DatasetVersion:
         Returns:
             The path to hand a pyarrow reader alongside :attr:`filesystem`.
         """
+        check_relative_path("relpath", relpath)
         return f"{self.root}/{relpath}"
 
     def store_uri(self, relpath: str) -> str:

@@ -4,6 +4,7 @@ import pickle
 import pyarrow.fs as pafs
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.registry import DatasetVersion
 
 
@@ -31,6 +32,26 @@ def test_path_joins_root_and_relpath(registry_root):
 def test_store_uri_matches_path_for_local(registry_root):
     version = DatasetVersion.open_local(_version_dir(registry_root))
     assert version.store_uri("values.zarr") == version.path("values.zarr")
+
+
+@pytest.mark.parametrize(
+    "relpath",
+    [
+        "/etc/passwd",  # absolute path
+        "../../etc/passwd",  # traversal above root
+        "time_series/../../etc/passwd",  # traversal mid-path
+    ],
+)
+def test_path_rejects_a_relpath_that_escapes_the_root(registry_root, relpath):
+    version = DatasetVersion.open_local(_version_dir(registry_root))
+    with pytest.raises(TimeFValidationError, match="dataset root"):
+        version.path(relpath)
+
+
+def test_store_uri_rejects_a_relpath_that_escapes_the_root(registry_root):
+    version = DatasetVersion.open_local(_version_dir(registry_root))
+    with pytest.raises(TimeFValidationError, match="dataset root"):
+        version.store_uri("../../etc/passwd")
 
 
 def test_handle_is_picklable(registry_root):
