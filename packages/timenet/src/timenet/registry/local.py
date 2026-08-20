@@ -5,10 +5,13 @@ from pathlib import Path
 import shutil
 from typing import BinaryIO
 
+import pyarrow.fs as pafs
+
 from timenet.dataset import TimeFDataset
 from timenet.errors import DatasetNotFoundError, TimeFFormatError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
+from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version, validate_dataset_id
 from timenet.writer import TimeFWriter, WriteProgressEvent
@@ -156,6 +159,25 @@ class LocalRegistry(WritableRegistry):
         with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
             writer.write()
         return version
+
+    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
+        """Open a committed version as a local, random-access handle.
+
+        Reuses the manifest :meth:`get_manifest` already parsed and validated (so a missing version or a
+        misplaced artifact is caught there) and roots the handle at the version's directory over a
+        :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest.
+
+        Returns:
+            A handle to the committed version's manifest and files.
+        """
+        manifest = self.get_manifest(dataset_id, version)
+        resolved = str(manifest.metadata.dataset_version)
+        root = self._dataset_dir(dataset_id) / resolved
+        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.
