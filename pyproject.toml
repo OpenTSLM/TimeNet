@@ -65,6 +65,7 @@ ignore = [
     "D417",  # Don't require documentation for every function parameter
     "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
+    "RET505",  # Allow elif/else after a return, for explicit if/elif/else branching
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -73,9 +74,9 @@ ignore = [
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
 # Tests legitimately import private helpers to exercise them, assert self-equality, compare to "",
 # call context-manager dunders directly, and compare against literal fixture values. Async test
-# stubs (aiohttp route handlers, awaited download fakes) must be `async` for their interface even
+# stubs (MockTransport handlers, awaited download fakes) must be `async` for their interface even
 # when their body doesn't await (RUF029).
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
+"**/tests/**/*.py" = ["S101", "S105", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 

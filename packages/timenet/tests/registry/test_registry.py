@@ -5,6 +5,7 @@ import pytest
 from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.registry import (
+    TIMENET_REGISTRY_URL,
     BaseRegistry,
     DatasetVersion,
     LocalRegistry,
@@ -42,9 +43,16 @@ def test_open_registry_s3_is_s3():
 
 
 def test_open_registry_timenet_scheme_aliases_hosted_remote():
-    registry = open_registry("timenet://hello/world")
+    registry = open_registry("timenet://")
     assert isinstance(registry, RemoteRegistry)
-    assert registry._base_url.startswith("https://registry.timenet.ai")
+    assert registry._base_url == TIMENET_REGISTRY_URL
+
+
+def test_open_registry_timenet_scheme_ignores_any_path():
+    # A path after timenet:// must not be folded into the API base url (it would 404 every call).
+    registry = open_registry("timenet://chengsenwang/tsqa")
+    assert isinstance(registry, RemoteRegistry)
+    assert registry._base_url == TIMENET_REGISTRY_URL
 
 
 def test_open_writable_registry_returns_writable(registry_root):
@@ -306,16 +314,6 @@ def test_store_force_overwrites(tmp_path):
 
 
 # ---- remote / s3 stubs ------------------------------------------------------------------------
-
-
-def test_remote_registry_is_deferred():
-    remote = RemoteRegistry("https://registry.timenet.io")
-    with pytest.raises(NotImplementedError):
-        remote.list_datasets()
-    with pytest.raises(NotImplementedError):
-        remote.open_version("demo/ecg")
-    with pytest.raises(NotImplementedError):
-        remote.store(make_dataset())
 
 
 def test_s3_registry_is_deferred():

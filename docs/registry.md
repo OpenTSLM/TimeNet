@@ -35,10 +35,25 @@ registry = open_registry("./local_registry")
 An unrecognized scheme, for example `gs://` or `az://`, raises `ValueError` instead of becoming a
 local path. `open_registry` expands `~` in a local path or a `file://` URI.
 
-!!! warning "Only local registries today"
-    `LocalRegistry` is the only working backend. The `s3://`, `http(s)://`, and `timenet://`
-    backends are stubs. These backends raise `NotImplementedError` because they are not
-    available yet.
+!!! note "What works today"
+    `LocalRegistry` and the `http(s)://` / `timenet://` `RemoteRegistry` serve reads, and both publish
+    with `store` (remote publishing needs a writer token). The `s3://` backend still raises
+    `NotImplementedError` until it lands.
+
+### Remote registries
+
+`http(s)://` and `timenet://` both select `RemoteRegistry`. `timenet://` is a shorthand for the hosted
+`https://registry.timenet.ai` service root and takes no path: dataset ids are passed to the client
+methods, not folded into the registry URI. An `http(s)://` URI is used verbatim as the service root,
+which is how you point at a private or a dev deployment.
+
+The HTTP transport authenticates with a bearer token read from `$TIMENET_TOKEN`. When it is unset the
+SDK talks to the registry anonymously (no `Authorization` header), which is enough for public reads.
+Set it to reach private datasets or to write:
+
+```bash
+export TIMENET_TOKEN=your-token
+```
 
 ## `BaseRegistry`
 
@@ -52,10 +67,10 @@ Every backend implements this contract: four data-access methods and one shared 
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 
-`LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` is a placeholder
-for the versioned REST contract, for example `GET /v1/datasets` and
-`/v1/datasets/{id}/{version}/manifest`. `S3Registry` is a placeholder for the same layout under an
-S3 prefix. Both backends raise `NotImplementedError` now.
+`LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
+over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}/{version}/manifest`,
+`.../download/{relpath}`); `S3Registry` targets the same layout under an S3 prefix and still raises
+`NotImplementedError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds these ids at any depth. Use
@@ -71,11 +86,10 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 | `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, and skips an already-committed version unless `force`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
-`LocalRegistry` implements `store` by streaming the dataset through a
-[`TimeFWriter`](timef-writer.md). The writer stages the dataset under `<version>.tmp-*` and
-publishes it with one atomic rename. `RemoteRegistry` and `S3Registry` are write stubs for now.
-`open_writable_registry(uri)` resolves a URI like `open_registry` does, but it returns a
-`WritableRegistry`.
+`LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
+which stages under `<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` runs
+the [publish flow](#remote-publishing) below. `S3Registry` is still a write stub.
+`open_writable_registry(uri)` resolves a URI like `open_registry` but returns a `WritableRegistry`.
 
 ```python
 from timenet.registry import open_writable_registry
@@ -91,6 +105,30 @@ information. It returns the directory that a `file://` URI or a plain path names
 the default local registry. It uses `$TIMENET_REGISTRY` when its value is a local path. Otherwise,
 it uses `<home>/registry`. This is how [`timenet-curate build`](cli/curate.md) resolves its output
 when `--out` is absent. The `timenet_connectors.build` and `load` helpers use it too.
+
+### Remote publishing
+
+`RemoteRegistry.store` compiles the dataset locally, then hands the artifacts to the service over the
+REST contract. Dataset bytes never pass through the API: the service issues a presigned PUT per file and
+the SDK uploads straight to the object store. The token must be a writer token (`$TIMENET_TOKEN`); an
+anonymous or read-only caller is rejected by the service.
+
+1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
+   schema first if the dataset has none. An already-committed version returns early unless `force`.
+2. `POST /datasets/{id}/{version}/publish` with the compiled `manifest.json` as the body. The service
+   registers the pending version and returns the list of files it expects.
+3. For each file, `POST /datasets/{id}/{version}/publish/upload-url` with `{"path": relpath}` to get a
+   presigned grant (`{"url", "headers"}`), then `PUT` the file's bytes to that URL with the returned
+   headers.
+4. `POST /datasets/{id}/{version}/finalize` to commit the version. The staging directory is removed
+   whether or not the publish succeeds.
+
+```python
+from timenet.registry import open_writable_registry
+
+registry = open_writable_registry("timenet://")  # needs $TIMENET_TOKEN
+version = registry.store(dataset)                 # compile, upload, finalize
+```
 
 ## `search`
 

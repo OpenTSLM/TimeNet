@@ -10,17 +10,15 @@ This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a l
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
-import uuid
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
-from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry import BaseRegistry, LocalRegistry, RemoteRegistry, open_registry
 from timenet.types import DatasetMetadata, Domain, License, Task
 
 
@@ -79,7 +77,7 @@ class TimeNet:
         if given_registry is not None:
             self._registry = given_registry
         elif cfg.registry is not None:
-            self._registry = open_registry(cfg.registry)
+            self._registry = open_registry(cfg.registry, cache_dir=cfg.storage_dir)
         else:
             self._registry = LocalRegistry(cfg.registry_path)
         self._storage = cfg.storage_dir
@@ -158,35 +156,12 @@ class TimeNet:
         manifest = self._registry.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         target = self._storage / dataset_id / resolved
-        if (target / "manifest.json").exists() and not force:
-            return target
-
-        relpaths = manifest.files.all_parts()
-        # Fetch files into a staging directory, then swap it in as one atomic step. If a
-        # download stops partway, the live target never has a half-written copy. The code
-        # replaces the live target only after every file (manifest.json last) has landed.
-        staging_parent = self._storage / dataset_id
-        # A hard kill (SIGKILL or power loss) skips the finally block below, so its staging
-        # directory stays behind. Remove any stale <version>.tmp-* directory before you stage
-        # a new copy. This matches the writer's behavior.
-        if staging_parent.is_dir():
-            for entry in staging_parent.glob(f"{resolved}.tmp-*"):
-                if entry.is_dir():
-                    shutil.rmtree(entry, ignore_errors=True)
-        staging = staging_parent / f"{resolved}.tmp-{uuid.uuid4().hex}"
-        try:
-            for relpath in relpaths:
-                self._fetch(dataset_id, resolved, relpath, staging)
-            self._fetch(dataset_id, resolved, "manifest.json", staging)  # commit marker last
-            if target.exists():
-                shutil.rmtree(target)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            staging.replace(target)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
+        # The registry owns the fetch: the base implementation stages each file and swaps atomically,
+        # and a remote registry overrides it to resolve and stream every file in parallel.
+        self._registry.download_version(dataset_id, resolved, target, force=force, manifest=manifest)
         return target
 
-    def load(self, dataset_id: str, version: str | None = None) -> TimeFDataset:
+    def load(self, dataset_id: str, version: str | None = None, *, download: str | None = None) -> TimeFDataset:
         """Read the dataset into memory. This method reads data in place through the registry's storage handle.
 
         This method does not download the whole dataset. The reader loads each series only
@@ -197,12 +172,18 @@ class TimeNet:
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
+            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                fetch mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
-        return TimeFReader(self._registry.open_version(dataset_id, version)).read()
+        if download is not None and isinstance(self._registry, RemoteRegistry):
+            handle = self._registry.open_version(dataset_id, version, mode=download)
+        else:
+            handle = self._registry.open_version(dataset_id, version)
+        return TimeFReader(handle).read()
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
         """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.
@@ -219,18 +200,6 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
-
-    def _fetch(self, dataset_id: str, version: str, relpath: str, target: Path) -> None:
-        """Copy one file from the registry into the local ``target`` directory.
-
-        Raises:
-            TimeFFormatError: The path ``relpath`` escapes the ``target`` directory, for
-                example when it contains ``..``.
-        """
-        destination = target / relpath
-        if not destination.resolve().is_relative_to(target.resolve()):
-            raise TimeFFormatError(f"manifest file path {relpath!r} escapes the download directory")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with self._registry.open_file(dataset_id, version, relpath) as source, destination.open("wb") as sink:
-            shutil.copyfileobj(source, sink)
+        # Force the full download: a DataLoader pickles the handle to its workers, and the on-demand
+        # handle wraps a live httpx client that cannot pickle; only the local-filesystem handle survives.
+        return TimeFTorchDataset(self.load(dataset_id, version, download="full"))

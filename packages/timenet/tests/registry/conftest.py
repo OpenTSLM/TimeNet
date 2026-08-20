@@ -1,6 +1,12 @@
 from pathlib import Path
+import sys
 
 import pytest
+
+
+# Make sibling test helpers (e.g. ``_fake_registry``) importable by name under
+# pytest's importlib import mode, which does not add test dirs to ``sys.path``.
+sys.path.insert(0, str(Path(__file__).parent))
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis

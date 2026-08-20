@@ -8,7 +8,7 @@ configuration to this model.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +22,10 @@ class TimeNetSettings(BaseSettings):
     storage: Path | None = None
     cache: Path | None = None
     registry: str | None = None
+    token: str | None = None
+    """Bearer token for a remote registry (``TIMENET_TOKEN``); ``None`` is anonymous."""
+    download_mode: Literal["full", "on_demand"] = "on_demand"
+    """How a remote ``load`` fetches bytes: ``"on_demand"`` (lazy range reads) or ``"full"``."""
 
     @property
     def home_dir(self) -> Path:

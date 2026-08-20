@@ -19,7 +19,7 @@ TIMENET_REGISTRY_URL = "https://registry.timenet.ai"
 _REMOTE_SCHEMES = ("timenet://", "http://", "https://", "s3://")
 
 
-def open_registry(uri: str | Path) -> BaseRegistry:
+def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> BaseRegistry:
     """Open a registry from a URI or path.
 
     The scheme selects the backend. ``http(s)://`` and ``timenet://`` open a :class:`RemoteRegistry`,
@@ -28,6 +28,8 @@ def open_registry(uri: str | Path) -> BaseRegistry:
 
     Args:
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
+        cache_dir: Where a remote backend caches downloads; ignored by the local backend. Defaults to
+            the configured storage directory when ``None``.
 
     Returns:
         The matching registry backend.
@@ -38,10 +40,11 @@ def open_registry(uri: str | Path) -> BaseRegistry:
     """
     text = str(uri)
     if text.startswith("timenet://"):
-        rest = text.removeprefix("timenet://").strip("/")
-        return RemoteRegistry(f"{TIMENET_REGISTRY_URL}/{rest}" if rest else TIMENET_REGISTRY_URL)
+        # timenet:// is a bare alias for the hosted service root; any path after it is NOT part of the
+        # base URL (dataset ids are passed to the client methods, not folded into the registry URI).
+        return RemoteRegistry(TIMENET_REGISTRY_URL, cache_dir=cache_dir)
     if text.startswith(("http://", "https://")):
-        return RemoteRegistry(text)
+        return RemoteRegistry(text, cache_dir=cache_dir)
     if text.startswith("s3://"):
         return S3Registry(text)
     if text.startswith("file://"):
