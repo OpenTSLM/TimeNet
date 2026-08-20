@@ -30,8 +30,8 @@ timenet download chengsenwang/tsqa
 | --- | --- |
 | `timenet list` | Print every dataset in the registry with its latest version. |
 | `timenet search [flags]` | Filter datasets. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). |
-| `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): schema, counts, and files. |
-| `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). Idempotent unless `--force`. |
+| `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): metadata, schema, and counts. |
+| `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). If a local version already exists, it skips the copy. |
 | `timenet cache info` | List downloaded datasets on disk (location, id, version, size) and the total. |
 | `timenet cache clear` | Remove downloads and the raw cache. It prompts first. `-y` skips the prompt. `--all` also clears curated data. |
 

@@ -12,12 +12,11 @@ An annotation is side-information attached to a [sample](samples.md). Every anno
 The **scope** says which channels and which point or window in time the annotation refers to. The
 free-text **content** can be as short as a tag or as long as a paragraph of reasoning. One
 `Annotation` class covers every case. The optional `span` says how the annotation sits in time.
-Annotations are timeline events. That span is a `TimePoint` or a `TimeInterval`. Both read as
-microseconds on the source recording timeline. The step frame (`StepPoint` and `StepInterval`,
-counted in a series' own ordinals) is for [tasks](tasks.md) on an ordinal series. Annotations do not
-use it. The `Annotation` class is a keyword-only frozen dataclass with `key`, `value`, `unit` and
-`description` fields. A connector authors it directly, or subclasses it with field defaults for
-reuse.
+A span is a `TimePoint` or a `TimeInterval`. Both read as microseconds on the source recording
+timeline. The step frame (`StepPoint` and `StepInterval`, counted in a series' own ordinals) is for
+[tasks](tasks.md) on an ordinal series. Annotations do not use it. The `Annotation` class is a
+keyword-only frozen dataclass with `key`, `value`, `unit` and `description` fields. A connector
+authors it directly, or subclasses it with field defaults for reuse.
 
 ## Sample-wide facts
 

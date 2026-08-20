@@ -10,9 +10,9 @@ tags:
 
 A time series is one channel of a [sample](samples.md): `float32` values over time. A sample carries one
 or more time series. Each one has a `time_series_id` (for example, the vibration and temperature channels
-of a machine). The [`TimeSeriesSpec`](../types.md) gives the type and the units of the value, time, and
-sampling-rate axes. A g-scale accelerometer channel and a °C temperature channel therefore read through
-the same API.
+of a machine). The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
+offset is always in microseconds, and a sampling rate is always in hertz. A g-scale accelerometer channel
+and a °C temperature channel therefore read through the same API.
 
 <figure markdown="span">
   ![One channel labelled with its time_series_id, spec, and units](../assets/figures/time-series-example.svg)

@@ -22,7 +22,7 @@ The values plane can be Parquet or Zarr. The client never runs connector code.
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
 | **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (`pip install timenet`) |
-| **registry** | a served location | compiled TimeF versions | the SDK reads it; curation publishes to it |
+| **registry** | a served location | compiled TimeF versions | the SDK reads it and curation publishes to it |
 | **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-curate` CLI | connector authors (clone it) |
 
 There can be several registries: one public, private internal ones, or a local directory.
@@ -41,12 +41,14 @@ PRODUCE  dataset.yaml + connector
          registry
              │
              ▼
-CONSUME  SDK ─► get_manifest ─► fetch TimeF files ─► TimeFReader ─► Arrow
+CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` (the card's human-authored metadata plus the schema derived from the data)
-is the single source of truth the SDK reads. Because the SDK never imports connector code, everything a
-consumer needs to interpret either values backend lives in the manifest.
+is the single source of truth the SDK reads. `open_version` returns a handle: the manifest plus a
+filesystem-rooted view of the version's files. `TimeFReader` reads through this handle. It loads each
+series only on first use, not every file up front. Because the SDK never imports connector code,
+everything a consumer needs to interpret either values backend lives in the manifest.
 
 ---
 

@@ -32,8 +32,9 @@ run_pipeline(
 2. download: `connector.download(cache_dir)` fetches the raw references. Only this stage touches the
    network.
 3. convert: `connector.convert(raw_refs)` builds an in-memory [`TimeFDataset`](timef-dataset.md).
-4. derive_schema and store: first derive the schema. Then `connector.store()` streams it through
-   [`TimeFWriter`](timef-writer.md) and returns the committed version directory.
+4. derive_schema and store: the engine derives the schema first. It then calls `store_dataset()`,
+   which streams the dataset through [`TimeFWriter`](timef-writer.md) and returns the committed
+   version directory.
 
 `run_pipeline` is idempotent. If a version is already committed, it short-circuits, unless you pass
 `force=True`. Distributed (Ray-backed) scheduling is out of scope for now.

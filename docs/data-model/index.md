@@ -23,16 +23,16 @@ same primitives describe any sensor stream, from an ECG to a market series.
 
 ## Ingesting a dataset
 
-To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The engine drives it through a
-fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an in-memory dataset
-(CPU only, and sharded across workers). The engine then derives the schema from the data. It stores the
-result as parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets
-round-trip deterministically, and the consumer SDK never runs connector code.
+To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The engine drives it
+through a fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an
+in-memory dataset (CPU only). The engine then derives the schema from the data. It stores the result
+as parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets round-trip
+deterministically, and the consumer SDK never runs connector code.
 
 ```mermaid
 flowchart LR
     D["download()<br/><i>I/O · fetch raw refs</i>"]
-    C["convert()<br/><i>CPU · parallel, sharded</i>"]
+    C["convert()<br/><i>CPU only</i>"]
     S["derive_schema()<br/><i>types from data</i>"]
     W["store()<br/><i>TimeFWriter</i>"]
     R[("registry<br/>parquet + manifest.json")]

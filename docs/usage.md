@@ -76,7 +76,7 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
     # needs: pip install 'timenet[torch]'
     ds = TimeNet().load_torch("chengsenwang/tsqa")
     item = ds[0]
-    series, question = item["series"][0], item["tasks"][0].question
+    series, prompt = item["series"][0], item["tasks"][0].prompt
 
     # Series lengths vary between samples, so batch with a collate_fn that picks
     # out what the model needs.

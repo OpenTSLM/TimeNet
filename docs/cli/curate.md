@@ -41,7 +41,7 @@ derive_schema, store. Then it writes the dataset into the output registry.
 
 !!! warning "`--quiet` goes before the subcommand"
     `timenet-curate --quiet build <id>` works. `timenet-curate build <id> --quiet` exits `2` with
-    `No such option: --quiet`.
+    `No such option '--quiet'`.
 
 If `$TIMENET_REGISTRY` names a remote registry (`timenet://`, `s3://`, `http(s)://`), there is no
 local place to build into. Then `build` exits `2` and asks for `--out`.

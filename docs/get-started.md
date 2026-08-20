@@ -40,8 +40,9 @@ are extras. You can add them.
     # or, with pipx:  pipx install 'timenet[cli]'
     ```
 
-The `torch` extra accepts any torch build. If you already have a CUDA torch (say, for training), it
-is reused as-is. For a small CPU-only torch, install it from the PyTorch CPU index first:
+The `torch` extra accepts any torch build. If you already have a CUDA torch (for example, for
+training), you keep it as-is. For a small CPU-only torch, install it from the PyTorch CPU index
+first:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu

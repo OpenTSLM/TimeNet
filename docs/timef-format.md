@@ -20,20 +20,24 @@ Everything else is addressed from the manifest, not from a directory scan.
 ## On-disk layout
 
 A version directory looks like this. A [registry](registry.md) addresses it by `org/name` and
-version, and hands a reader the directory root.
+version. Its `open_version()` method returns a [`DatasetVersion`](registry.md) handle for the
+version: the parsed manifest plus a filesystem-rooted view of its files.
 
 ```text
 <org>/<name>/<version>/
-├── manifest.json               # the contract: metadata, schema, file list, checksums
-├── samples.parquet             # one row per sample (the control plane)
-├── annotations.parquet         # one row per annotation
-├── time_series_index.parquet   # locates every values chunk
-├── tasks/                      # one partition directory per task type
-│   ├── task=classification/part-0.parquet
-│   └── task=answer/part-0.parquet
-└── time_series/                # the values plane (default Parquet backend)
-    ├── shard-00000.parquet
-    └── shard-00001.parquet
+├── manifest.json       # the contract: metadata, schema, and the file list
+├── samples/            # one row per sample (the control plane)
+│   └── part-00000000.parquet
+├── annotations/        # one row per annotation
+│   └── part-00000000.parquet
+├── time_series_index/  # locates every values chunk
+│   └── part-00000000.parquet
+├── tasks/              # one partition directory per task type
+│   ├── task=classification/part-00000000.parquet
+│   └── task=answer/part-00000000.parquet
+└── time_series/        # the values plane (default Parquet backend)
+    ├── shard-00000000.parquet
+    └── shard-00000001.parquet
 ```
 
 The reader does not glob these paths. The manifest's `files` block lists every part, so a table can
@@ -62,10 +66,10 @@ the versions it supports, and rebuilds the dataset types from the flat descripto
 | `metadata` | Descriptive identity: name, version, license, domains, tags, source URL. |
 | `schema` | Structural schema: the time-series specs, the annotation descriptors, and the task types. |
 | `counts` | Row and entity counts, for quick inspection. |
-| `files` | Relative paths to every artifact, grouped by kind. |
-| `checksums` | One `sha256:` checksum per file, keyed by relative path. |
+| `files` | Each artifact's path, `sha256:` checksum, and size, grouped by kind. |
 | `id_encoding` | Which id columns are stored as raw bytes (see [Id storage](#id-storage)). |
 | `values_backend` | The values plane backend: `parquet` or `zarr`. |
+| `value_encoding` | The Parquet values encoding per `spec_type`, for provenance (see [below](#choosing-the-values-encoding)). |
 | `derived_from` | Copy-on-write lineage, or `null` for a freshly built version. |
 
 ## The control-plane tables
@@ -73,7 +77,7 @@ the versions it supports, and rebuilds the dataset types from the flat descripto
 Every table is Parquet. The column layout is fixed. Only the id columns change type, and
 `id_encoding` records that choice.
 
-### samples.parquet
+### samples/part-00000000.parquet
 
 One row per [sample](data-model/samples.md). A sample groups the series that were recorded
 together, plus the tasks and annotations that point at them.
@@ -93,7 +97,7 @@ The `time_series` struct carries each series' identity and its time axis. It hol
 `first_time_offset_us` and `last_time_offset_us` instead. The struct does not hold the values
 themselves.
 
-### annotations.parquet
+### annotations/part-00000000.parquet
 
 One row per [annotation](data-model/annotations.md).
 
@@ -108,7 +112,7 @@ One row per [annotation](data-model/annotations.md).
 A span struct holds `start_us`, `end_us`, and the `time_series_ids` it is scoped to. A null `end_us`
 means the span is a point at `start_us`.
 
-### time_series_index.parquet
+### time_series_index/part-00000000.parquet
 
 One row per values chunk. This table is the join between a series and its bytes on disk. A series is
 split into chunks, and each chunk gets one row here.
@@ -128,7 +132,7 @@ The two locator columns are backend-neutral. For the Parquet backend, `chunk_maj
 group in the shard and `chunk_minor_idx` is the row within that row group. For the Zarr backend,
 `chunk_major_idx` is the element-start index in the per-modality array and `chunk_minor_idx` is null.
 
-### tasks/task=&lt;type&gt;/part-0.parquet
+### tasks/task=&lt;type&gt;/part-00000000.parquet
 
 Tasks are partitioned by type, one directory per [task type](data-model/tasks.md). Every partition
 shares a common set of columns: `id`, `sample_ids`, `from_task_ids`, `prompt`, `scope`,
@@ -141,7 +145,7 @@ columns. A classification task adds `target` and `target_schema`. A scalar predi
 The waveform values live outside the sample table, in the values plane. The default backend writes
 rotating Parquet shards.
 
-### shard-NNNNN.parquet
+### shard-00000000.parquet
 
 | Column | Type | Meaning |
 | --- | --- | --- |
@@ -171,7 +175,7 @@ they point at.
 To read one series, the reader joins the sample to its bytes through the index:
 
 1. Read the sample row and take a `time_series_id` from its `time_series` list.
-2. Find that series' chunks in `time_series_index.parquet`.
+2. Find that series' chunks in the `time_series_index` table.
 3. For each chunk, open `chunk_file` and go to `chunk_major_idx`, then `chunk_minor_idx`.
 4. Read the `values` list and rebuild the series on its time axis.
 

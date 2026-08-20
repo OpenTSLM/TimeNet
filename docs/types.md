@@ -110,12 +110,12 @@ vibration = TimeSeriesSpec(
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `spec_type` | `str` | yes | Dataset-unique modality tag (e.g. `"vibration"`). |
+| `spec_type` | `str` | yes | Dataset-unique modality tag (for example `"vibration"`). |
 | `name` | `str` | yes | Human-readable modality label. |
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
-| `dtype` | `str` | no | Canonical NumPy scalar dtype; defaults to `"float32"`. |
-| `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time; `()` means scalar. |
+| `dtype` | `str` | no | Canonical NumPy scalar dtype. Defaults to `"float32"`. |
+| `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
@@ -156,8 +156,8 @@ subclass with field defaults for reuse. The annotations round-trip without runti
 | `span` | Extra fields | Scope |
 | --- | --- | --- |
 | absent | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
-| `TimePoint` | — | One time offset, on specific signals or the whole sample. |
-| `TimeInterval` | — | A bounded region, on specific signals or the whole sample. |
+| `TimePoint` | none | One time offset, on specific signals or the whole sample. |
+| `TimeInterval` | none | A bounded region, on specific signals or the whole sample. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
 `description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
@@ -217,9 +217,9 @@ Every task is `inputs -> one typed answer`, and the shared frame lives on the `T
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `str` | Auto uuid7. |
-| `sample_ids` | `tuple[str, ...]` | The samples the task is about; populated by `add_task`. |
-| `prompt` | `str \| None` | What the model is asked; `None` for an unprompted task. |
-| `scope` | `Span \| None` | The input region; `None` means the whole sample. |
+| `sample_ids` | `tuple[str, ...]` | The samples the task is about. `add_task` can populate this after construction. |
+| `prompt` | `str \| None` | What the model is asked. `None` means an unprompted task. |
+| `scope` | `Span \| None` | The input region. `None` means the whole sample. |
 | `input_annotation_ids` | `tuple[str, ...]` | Annotations given to the model as context. |
 | `target` | typed per subclass | The answer, inline. |
 | `target_annotation_ids` | `tuple[str, ...]` | The answer by reference to stored annotations. |
@@ -231,7 +231,7 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 | Class | `task_type` | Answer | Extra payload |
 | --- | --- | --- | --- |
 | `ClassificationTask` | `classification` | `target: str` (a label) | `target_schema` |
-| `AnswerTask` | `answer` | `target: str` (free text) | — |
+| `AnswerTask` | `answer` | `target: str` (free text) | none |
 | `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
 | `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[TimePoint \| TimeInterval, ...]` | `mode` |
 | `ForecastingTask` | `forecasting` | a produced series | `context_sample_ids`, `target_sample_id`, `target_span` |
@@ -254,13 +254,13 @@ set `answer_is_sample` and point at the sample that holds it, instead of a value
 A task's `scope` and a localization target are **spans**: one region a task or annotation localizes. A
 span has a shape (a point, or a half-open interval) and a **frame**, and the frame is the type. The
 frame decides what the bounds mean. A **time** frame reads them as microseconds on the source recording
-timeline; a **step** frame reads them as ordinal indices into one series' own array. `Span` is the base
-you annotate with for any span; it and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
+timeline. A **step** frame reads them as ordinal indices into one series' own array. `Span` is the base
+you annotate with for any span. It and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
 always build a concrete leaf.
 
 Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
 meaningful on a windowed sample that starts partway into the recording. `TimePoint(start_us=...)` is one
-point; `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
+point. `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
 covers the whole sample, or a subset of series named by `time_series_ids` (`None` = every series). Build
 with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
 has integers. For a wall-clock moment, build it from the sample (`sample.time_point(at)` /
@@ -269,9 +269,9 @@ as whole microseconds, so two equal regions compare equal.
 
 Step spans count a series' own ordinal positions, for a series that has no clock at all. A step index
 means nothing without a series to count on, so a step span names exactly one `time_series_id` (a single
-str). `StepPoint(time_series_id=..., start=...)` is one step;
+str). `StepPoint(time_series_id=..., start=...)` is one step.
 `StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
-are no unit builders; construct them directly.
+are no unit builders. Construct them directly.
 
 Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
 irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
@@ -341,7 +341,7 @@ StepInterval(time_series_id="tsqa", start=132, stop=144)
   ```
 - `ForecastingTask`: predict a series' future values. The future is a whole separate sample
   (`target_sample_id`) or a region of the attached sample (`target_span`, an interval with an explicit
-  `scope` for the context) — exactly one.
+  `scope` for the context). Exactly one of the two is required.
   ```python
   dataset.add_task(future, ForecastingTask(
       context_sample_ids=("rec_001::history",),
@@ -419,7 +419,7 @@ A dataset's descriptive identity (authored in the card).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `dataset_id` | `str` | yes | `org/name` pair (one slash); matches the card / connector module path. |
+| `dataset_id` | `str` | yes | `org/name` pair (one slash) that matches the card / connector module path. |
 | `dataset_version` | `Version` | yes | The upstream source's semantic version. |
 | `name` | `str` | yes | Display name. |
 | `description` | `str` | yes | One-sentence description. |
