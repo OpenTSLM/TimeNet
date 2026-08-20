@@ -30,11 +30,11 @@ def run_pipeline(  # noqa: PLR0913
 
     Args:
         connector: The connector to curate.
-        root: Output root. The dataset is written to ``<root>/<dataset_id>/<version>/``.
+        root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory after the dataset is stored. The raw sources are only
-            needed during conversion, so this frees disk after a successful build. The sources
-            re-download on the next run.
+        clean_cache: Remove the cache directory after storing the dataset. Conversion is the only
+            stage that needs the raw sources, so this frees disk after a successful build. The
+            sources re-download on the next run.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -83,7 +83,7 @@ def store_dataset(
 
     Args:
         dataset: The populated dataset from ``convert``.
-        root: Parent directory; the version directory is created beneath it.
+        root: Parent directory. This function creates the version directory beneath it.
         progress_cb: Optional writer progress callback.
 
     Returns:

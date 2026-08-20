@@ -1,4 +1,4 @@
-"""The :class:`TimeFDataset` in-memory model a connector populates during ``convert()``."""
+"""The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections.abc import Iterable
 from datetime import datetime
@@ -28,7 +28,7 @@ TTask = TypeVar("TTask", bound=Task)
 
 
 class TimeFDataset:
-    """Holds samples and their tasks as Python objects. No I/O: persistence is the writer's concern."""
+    """Holds samples and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
         """Create an empty dataset.
@@ -53,25 +53,28 @@ class TimeFDataset:
         """Create a sample, register it, and return it.
 
         Args:
-            time_series: The logical :class:`TimeSeries` streams the sample uses.
-            subject_ids: Subjects this sample belongs to (empty for subject-less domains).
-            sample_id: An explicit id (default: an auto-generated uuid4). Pass one for deterministic
-                output, e.g. when generating golden fixtures.
-            start_time: Wall-clock timestamp that the sample's relative zero refers to: a
-                timezone-aware datetime or whole Unix microseconds, or ``None`` when no wall-clock
-                reference exists.
-            time_span: The session's overall span, if the series have gaps an unscoped span may fall in
-                (see :attr:`Sample.time_span`). Must be a whole-sample :class:`~timenet.types.TimeInterval`
-                containing every series' window.
+            time_series: The logical :class:`TimeSeries` streams that the sample uses.
+            subject_ids: The subjects that this sample belongs to. The tuple is empty for
+                domains that have no subjects.
+            sample_id: An explicit ID. The default is an automatically generated uuid4 value.
+                Pass an explicit ID for deterministic output, for example for golden test fixtures.
+            start_time: The wall-clock timestamp for the sample's relative zero point. This value
+                can be a timezone-aware datetime or a whole number of Unix microseconds. Use
+                ``None`` when no wall-clock reference exists.
+            time_span: The overall span of the session. Use this if the series have gaps that an
+                unscoped span can fall into (see :attr:`Sample.time_span`). The value must be a
+                whole-sample :class:`~timenet.types.TimeInterval` object that contains every
+                series window.
 
         Returns:
             The newly created :class:`Sample`.
 
         Raises:
-            TimeFValidationError: If ``time_series`` is empty, or two series share a
-                ``time_series_id``. Ids must be distinct: the writer keys shards by them, and
-                :meth:`Sample.add_annotation` and :meth:`add_task` both resolve references against
-                them, so a repeat silently collapses two channels into one.
+            TimeFValidationError: This error occurs if ``time_series`` is empty, or if two series
+                share the same ``time_series_id`` value. The ids must be distinct. The writer uses
+                the ids as shard keys, and :meth:`Sample.add_annotation` and :meth:`add_task` both
+                resolve references by these ids. So a repeated id silently merges two channels
+                into one.
         """
         if not time_series:
             raise TimeFValidationError("add_sample requires a non-empty time_series")
@@ -100,29 +103,35 @@ class TimeFDataset:
     def add_task(self, samples: Sample | Iterable[Sample], task: Task) -> Task:
         """Register a task and link it to its samples.
 
-        Every span the task carries — its ``scope`` and, for a
-        :class:`~timenet.types.TemporalLocalizationTask`, its target regions — is checked against the
-        samples here, where the samples are available to check against. So are the sample and annotation
-        ids the task references, and the source tasks in its ``from_tasks``.
+        This method checks every span that the task carries against the samples given here. This
+        includes the task's ``scope`` and, for a :class:`~timenet.types.TemporalLocalizationTask`,
+        its target regions. The samples are available here, so the method checks them at this
+        point. The method also checks the sample and annotation ids that the task references, and
+        the source tasks listed in its ``from_tasks``.
 
-        Set ``scope`` and ``from_tasks`` on the task itself: they describe that one task, not the call.
+        Set ``scope`` and ``from_tasks`` on the task itself. These fields describe that one task,
+        not the call to this method.
 
         Args:
-            samples: The sample, or samples, the task is attached to.
-            task: The task instance (payload, ``scope``, and ``from_tasks`` already set by the caller).
+            samples: The sample, or samples, that the task attaches to.
+            task: The task instance. The caller must already set its payload, ``scope``, and
+                ``from_tasks`` fields.
 
         Returns:
-            The registered task (same instance, with ``sample_ids`` populated).
+            The registered task. This is the same instance, with the ``sample_ids`` field
+            populated.
 
         Raises:
-            TimeFValidationError: If ``samples`` is empty; if the task's id is already registered; if a
-                task in ``from_tasks`` is neither registered nor the task itself; if a scope-dependent
-                payload rule fails (a :class:`~timenet.types.ForecastingTask` ``target_span`` with no
-                scope, a frame mismatch, or a context that leaks the target); if the task sets both
-                ``target`` and ``target_annotation_ids`` or, when its answer is not a produced series,
-                neither; if a span's ``time_series_ids`` does not resolve to a series on every target
-                sample or the span falls outside a sample's covered span; or if a referenced sample or
-                annotation is not registered in this dataset.
+            TimeFValidationError: This error occurs if ``samples`` is empty. It also occurs if the
+                task's id is already registered, or if a task in ``from_tasks`` is neither
+                registered nor the task itself. It also occurs if a scope-dependent payload rule
+                fails. Examples include a :class:`~timenet.types.ForecastingTask` ``target_span``
+                with no scope, a frame mismatch, or a context that leaks the target. It also occurs if
+                the task sets both ``target`` and ``target_annotation_ids``, or if its answer is
+                not a produced series and it sets neither field. It also occurs if a span's
+                ``time_series_ids`` does not resolve to a series on every target sample. It also
+                occurs if the span falls outside a sample's covered span. It also occurs if a
+                referenced sample or annotation is not registered in this dataset.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
@@ -132,50 +141,59 @@ class TimeFDataset:
     def add_tasks(self, samples: Sample | Iterable[Sample], tasks: Iterable[Task]) -> tuple[Task, ...]:
         """Register several tasks against the same samples, all together or not at all.
 
-        The whole batch is validated before any of it is attached: if one task fails a check, the call
-        raises and leaves the dataset and every task in the batch untouched. To keep the tasks before a
-        failure attached, loop :meth:`add_task` instead.
+        The method validates the whole batch before it attaches any task. If one task fails a
+        check, the call raises an error, and the dataset and every task in the batch stay
+        unchanged. To keep the tasks that passed before a failure, call :meth:`add_task` in a
+        loop instead.
 
-        A task may derive from another in the same batch — list it in the deriving task's ``from_tasks`` —
-        because the batch is checked as a unit, so the order within ``tasks`` does not matter.
+        A task can derive from another task in the same batch. To do this, list the parent task
+        in the deriving task's ``from_tasks`` field. The batch is checked as a unit, so the order
+        of tasks within ``tasks`` does not matter.
 
         Args:
-            samples: The sample, or samples, the tasks are attached to.
-            tasks: The task instances to register. Pass a single one to :meth:`add_task`.
+            samples: The sample, or samples, that the tasks attach to.
+            tasks: The task instances to register. For a single task, use :meth:`add_task` instead.
 
         Returns:
-            The registered tasks (the same instances, with ``sample_ids`` populated), in the order given.
+            The registered tasks, in the order given. These are the same instances, with the
+            ``sample_ids`` field populated.
 
         Raises:
-            TimeFValidationError: If ``samples`` is empty; if two tasks in the batch share an id or one
-                reuses a registered id; if a ``from_tasks`` parent is neither registered nor in the batch,
-                or the derivation is cyclic; or if any task fails the checks :meth:`add_task` documents.
+            TimeFValidationError: This error occurs if ``samples`` is empty. It also occurs if two
+                tasks in the batch share an id, or if one task reuses an id that is already
+                registered. It also occurs if a ``from_tasks`` parent is neither registered nor in
+                the batch, or if the derivation forms a cycle. It also occurs if any task fails a
+                check that :meth:`add_task` documents.
         """
         targets = (samples,) if isinstance(samples, Sample) else tuple(samples)
         if not targets:
             raise TimeFValidationError("add_tasks requires at least one sample")
-        # Drain `tasks` before validating: a connector generator may attach an annotation and then yield
-        # a task referencing it, so the annotation must already be on the sample when the refs are checked.
+        # Drain `tasks` before validation. A connector generator can attach an annotation and then
+        # yield a task that references it, so the annotation must already be on the sample when
+        # the method checks the references.
         batch = tuple(tasks)
         return self._register_batch(batch, targets)
 
     def _register_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> tuple[Task, ...]:
-        """Validate a whole batch of tasks and attach it, or attach none of it.
+        """Validate a whole batch of tasks, then attach all of it or none of it.
 
-        Shared by :meth:`add_task` and :meth:`add_tasks` so the singular and plural forms cannot drift;
-        the singular is the batch of one. Validation is side-effect-free, so the attachment below runs
-        only once the whole batch is known good.
+        :meth:`add_task` and :meth:`add_tasks` both call this method. This keeps the singular and
+        plural forms consistent. The singular form is just a batch of one. Validation has no side
+        effects, so the attachment step below runs only after the method confirms that the whole
+        batch is good.
 
         Args:
             batch: The tasks to register together, already drained from the caller's iterable.
-            targets: The samples the tasks attach to.
+            targets: The samples that the tasks attach to.
 
         Returns:
-            The registered tasks (the same instances, with ``sample_ids`` populated), in order.
+            The registered tasks, in order. These are the same instances, with the ``sample_ids``
+            field populated.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_tasks`.
-        """  # noqa: DOC502 (raised by _validate_task_batch, not directly here)
+            TimeFValidationError: This error occurs under the conditions documented on
+                :meth:`add_tasks`.
+        """  # noqa: DOC502 (_validate_task_batch raises this error, not this method)
         self._validate_task_batch(batch, targets)
         for task in batch:
             task.sample_ids = tuple(sample.sample_id for sample in targets)
@@ -185,18 +203,20 @@ class TimeFDataset:
         return batch
 
     def _validate_task_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> None:
-        """Run every check the batch must pass, without attaching anything.
+        """Run every check that the batch must pass, without attaching anything.
 
-        Covers the cross-task invariants a batch makes possible, on top of the per-task checks: ids stay
-        unique against the batch and the dataset, each ``from_tasks`` parent is already registered or in
-        the batch, and no task derives from itself or closes a cycle.
+        This method checks the cross-task rules that only a batch makes possible, in addition to
+        the per-task checks. The ids must stay unique against the batch and the dataset. Each
+        ``from_tasks`` parent must already be registered or be in the batch. No task can derive
+        from itself or close a cycle.
 
         Args:
-            batch: The tasks being registered together.
-            targets: The samples the tasks attach to.
+            batch: The tasks to register together.
+            targets: The samples that the tasks attach to.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_tasks`.
+            TimeFValidationError: This error occurs under the conditions documented on
+                :meth:`add_tasks`.
         """
         registered_ids = {task.id for task in self._tasks}
         batch_ids = [task.id for task in batch]
@@ -230,22 +250,23 @@ class TimeFDataset:
 
     @staticmethod
     def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:
-        """Reject a ``from_tasks`` cycle formed among the batch's own tasks.
+        """Reject a ``from_tasks`` cycle that forms among the batch's own tasks.
 
-        Only batch tasks can close a cycle: a task already in the dataset passed this check when it was
-        added and cannot derive from one that did not exist yet. So the walk stays inside the batch,
-        following the parents each task shares with it.
+        Only tasks in the batch can close a cycle. A task already in the dataset passed this
+        check when the dataset added it. So it cannot derive from a task that did not exist yet.
+        For this reason, the walk stays inside the batch. It follows the parents that each task
+        shares with the batch.
 
         Args:
-            batch: The tasks being registered together.
+            batch: The tasks to register together.
 
         Raises:
             TimeFValidationError: If the batch's derivations contain a cycle.
         """
         batch_ids = {task.id for task in batch}
         parents = {task.id: {p for p in task.from_task_ids if p in batch_ids} for task in batch}
-        # Kahn's algorithm: peel off tasks whose in-batch parents are all resolved; whatever is left
-        # after no more can be peeled sits on a cycle.
+        # Kahn's algorithm: the loop peels off tasks whose parents in the batch are all resolved.
+        # A task that remains when the loop can peel off no more tasks sits on a cycle.
         resolved: set[str] = set()
         progressed = True
         while progressed:
@@ -261,8 +282,8 @@ class TimeFDataset:
     def derive_schema(self) -> DatasetSchema:
         """Walk the dataset's instances and build its :class:`DatasetSchema`.
 
-        Collects the distinct spec, annotation, and task types, stores the result on the
-        dataset, and returns it.
+        This method collects the distinct spec, annotation, and task types. It stores the result
+        on the dataset, and it returns the result.
 
         Returns:
             The derived :class:`DatasetSchema`.
@@ -285,7 +306,8 @@ class TimeFDataset:
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
                 value_type=value_type_of(annotation.value),
-                # __post_init__ normalizes unit to a plain string (or None), so this is always str | None.
+                # The __post_init__ method normalizes unit to a plain string or None, so this
+                # value is always str | None.
                 unit=cast("str | None", annotation.unit),
                 description=annotation.description,
             )
@@ -318,16 +340,18 @@ class TimeFDataset:
         tasks: Iterable[Task],
         schema: DatasetSchema,
     ) -> "TimeFDataset":
-        """Build a dataset from already-constructed parts (used by the reader on read-back).
+        """Build a dataset from parts that are already constructed.
+
+        The reader uses this method when it reads a dataset back from disk.
 
         Args:
             metadata: The dataset's descriptive identity.
-            samples: Fully-built samples (their loaders pull from disk).
-            tasks: Fully-built tasks with resolved ``from_tasks``.
+            samples: Fully built samples. Their loaders pull data from disk.
+            tasks: Fully built tasks, with their ``from_tasks`` references resolved.
             schema: The schema reconstructed from the manifest.
 
         Returns:
-            The hydrated dataset.
+            The dataset, built from these parts.
         """
         dataset = cls(metadata=metadata)
         dataset._samples = list(samples)
@@ -337,14 +361,15 @@ class TimeFDataset:
 
     @staticmethod
     def _check_task_answer(task: Task) -> None:
-        """Reject a task whose answer is both inline and by reference, or missing entirely.
+        """Reject a task whose answer is both inline and by reference, or whose answer is missing.
 
         Args:
-            task: The task being registered.
+            task: The task to register.
 
         Raises:
-            TimeFValidationError: If ``target`` and ``target_annotation_ids`` are both set, or both are
-                unset on a task whose answer is not a produced series.
+            TimeFValidationError: This error occurs if ``target`` and ``target_annotation_ids``
+                are both set. It also occurs if both fields are unset on a task whose answer is
+                not a produced series.
         """
         name = type(task).__name__
         if task.target is not None and task.target_annotation_ids:
@@ -362,8 +387,8 @@ class TimeFDataset:
         """Reject an input or target annotation id that none of the task's samples carries.
 
         Args:
-            task: The task being registered.
-            samples: The samples the task is attached to.
+            task: The task to register.
+            samples: The samples that the task attaches to.
 
         Raises:
             TimeFValidationError: If a referenced annotation id is not attached to any target sample.
@@ -381,7 +406,7 @@ class TimeFDataset:
         """Reject a payload sample id that is not registered in this dataset.
 
         Args:
-            task: The task being registered.
+            task: The task to register.
 
         Raises:
             TimeFValidationError: If a payload reference names an unknown sample.
@@ -425,7 +450,7 @@ class TimeFDataset:
         """Return every task of a given type, in insertion order.
 
         Args:
-            task_type: The task subclass to keep (e.g. :class:`~timenet.types.ClassificationTask`).
+            task_type: The task subclass to keep, for example :class:`~timenet.types.ClassificationTask`.
 
         Returns:
             The matching tasks.
@@ -439,19 +464,21 @@ class TimeFDataset:
     def tasks_for(self, sample: Sample, task_type: type[Task] = Task) -> tuple[Task, ...]:
         """Return the tasks attached to a sample, optionally filtered by type.
 
-        The inverse of the stored direction: tasks reference their samples, so this resolves a
-        sample's ``task_ids`` back to the task objects.
+        This method reverses the stored direction. Tasks reference their samples, so this method
+        resolves a sample's ``task_ids`` back to the task objects.
 
         Args:
             sample: The sample whose tasks to resolve.
-            task_type: Keep only tasks of this subclass (defaults to every task on the sample).
+            task_type: Keep only tasks of this subclass. The default keeps every task on the
+                sample.
 
         Returns:
             The sample's tasks of ``task_type``, in the sample's task order.
 
         Raises:
-            TimeFValidationError: If ``sample`` is not registered in this dataset, or if one of its
-                ``task_ids`` does not resolve to a registered task that links back to the sample.
+            TimeFValidationError: This error occurs if ``sample`` is not registered in this
+                dataset. It also occurs if one of the sample's ``task_ids`` does not resolve to a
+                registered task that links back to the sample.
         """
         registered_ids = {registered.sample_id for registered in self._samples}
         if sample.sample_id not in registered_ids:
@@ -491,38 +518,45 @@ class TimeFDataset:
         output: Literal["arrow", "numpy"] = "arrow",
         features: Literal["timestep", "series"] = "timestep",
     ) -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]:
-        """Build an ``(X, y)`` training pair, deferring materialization by default.
+        """Build an ``(X, y)`` training pair. By default, this method defers materialization.
 
-        Requires every sample to carry exactly one task of ``task`` and pairs its sole channel's values
-        with that task's ``target``. ``features`` chooses the shape of ``X``:
+        This method requires every sample to carry exactly one task of ``task``. It pairs the
+        values of that task's sole channel with the task's ``target``. The ``features`` argument
+        chooses the shape of ``X``:
 
-        - ``"timestep"`` (default): one feature per point, a rectangular matrix. Needs equal-length
-          samples. Arrow ``FixedSizeListArray[T]``; NumPy ``(n, T)`` ``float32``.
-        - ``"series"``: one sequence feature per sample, so variable-length series are fine. Arrow
-          ``ListArray``; NumPy ``(n,)`` object array of 1-D arrays.
+        - ``"timestep"`` (the default): one feature per point, in a rectangular matrix. This needs
+          equal-length samples. The result is an Arrow ``FixedSizeListArray[T]``, or a NumPy
+          ``(n, T)`` array of ``float32`` values.
+        - ``"series"``: one sequence feature per sample, so variable-length series work too. The
+          result is an Arrow ``ListArray``, or a NumPy ``(n,)`` object array of 1-D arrays.
 
-        ``output="arrow"`` (the default) builds those straight from the series loaders with no NumPy copy
-        in between; ``output="numpy"`` materializes them. ``y`` is always the targets (an Arrow string
-        array or a 1-D NumPy array).
+        With ``output="arrow"`` (the default), the method builds these arrays straight from the
+        series loaders, with no NumPy copy in between. With ``output="numpy"``, the method
+        materializes them. ``y`` is always the targets, as an Arrow string array or a 1-D NumPy
+        array.
 
         Args:
-            task: The task type to read targets from (e.g.
-                :class:`~timenet.types.ClassificationTask`). Omit it to infer the type when the dataset
-                has exactly one task type carrying an inline target.
-            output: ``"arrow"`` to keep the deferred Arrow arrays, or ``"numpy"`` to materialize them.
-            features: ``"timestep"`` for a rectangular per-point matrix, or ``"series"`` for one
-                variable-length sequence per sample.
+            task: The task type to read targets from, for example
+                :class:`~timenet.types.ClassificationTask`. Omit this argument to infer the type
+                when the dataset has exactly one task type that carries an inline target.
+            output: Use ``"arrow"`` to keep the deferred Arrow arrays, or ``"numpy"`` to
+                materialize them.
+            features: Use ``"timestep"`` for a rectangular per-point matrix, or ``"series"`` for
+                one variable-length sequence per sample.
 
         Returns:
-            ``(X, y)`` as two Arrow arrays (``output="arrow"``) or two NumPy arrays (``output="numpy"``).
+            ``(X, y)`` as two Arrow arrays when ``output="arrow"``, or two NumPy arrays when
+            ``output="numpy"``.
 
         Raises:
-            TimeFValidationError: If ``output``/``features`` is invalid; if ``task`` is omitted and the
-                dataset has zero or several task types with inline targets; if a matched task carries no inline target
-                (its answer is a produced series, or stored as ``target_annotation_ids``); if a matched
-                sample is not single-channel; or ``features="timestep"`` is asked of samples that are not
-                all the same length; or if the dataset has no samples or any sample does not carry exactly
-                one task of ``task``.
+            TimeFValidationError: This error occurs if ``output`` or ``features`` is invalid. It
+                also occurs if ``task`` is omitted and the dataset has zero or several task types
+                with inline targets. It also occurs if a matched task carries no inline target,
+                for example if its answer is a produced series or is stored as
+                ``target_annotation_ids``. It also occurs if a matched sample is not single
+                channel, or if ``features="timestep"`` is asked of samples that are not all the
+                same length. It also occurs if the dataset has no samples, or if any sample does
+                not carry exactly one task of ``task``.
         """
         if output not in {"arrow", "numpy"}:
             raise TimeFValidationError(f"output must be 'arrow' or 'numpy', got {output!r}")
@@ -530,8 +564,8 @@ class TimeFDataset:
             raise TimeFValidationError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
         rows, targets = self._rows_and_targets(resolved)
-        # Build only the representation asked for: no Arrow list array on the NumPy path, and no
-        # concat of every point on the series+NumPy path.
+        # Build only the representation that the caller asked for. This skips the Arrow list
+        # array on the NumPy path, and skips the concat of every point on the series+NumPy path.
         try:
             y = pa.array(targets)
         except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
@@ -547,7 +581,7 @@ class TimeFDataset:
             for row in rows:
                 offsets.append(offsets[-1] + len(row))
             return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(rows)), y
-        # features == "timestep": a rectangular matrix, so every sample must share one length
+        # features == "timestep" builds a rectangular matrix, so every sample must share one length
         length = len(rows[0])
         if any(len(row) != length for row in rows):
             raise TimeFValidationError(
@@ -569,8 +603,9 @@ class TimeFDataset:
             The per-sample Arrow value arrays and their targets, in sample order.
 
         Raises:
-            TimeFValidationError: If a matched task carries no inline target, if the dataset has no
-                samples, or any sample does not carry exactly one task of ``resolved``.
+            TimeFValidationError: This error occurs if a matched task carries no inline target. It
+                also occurs if the dataset has no samples, or if any sample does not carry exactly
+                one task of ``resolved``.
         """
         if not resolved.target_is_scalar:
             raise TimeFValidationError(
@@ -601,13 +636,14 @@ class TimeFDataset:
         return rows, targets
 
     def _infer_target_task(self) -> type[Task]:
-        """Infer the dataset's sole task type carrying an inline target, for :meth:`to_features_and_targets`.
+        """Infer the dataset's sole task type that carries an inline target, for :meth:`to_features_and_targets`.
 
         Returns:
             The single task class whose instances carry a ``target``.
 
         Raises:
-            TimeFValidationError: If the dataset has zero or several such task types (pass ``task=``).
+            TimeFValidationError: If the dataset has zero or several such task types. In that
+                case, pass ``task=`` instead.
         """
         kinds = {type(task) for task in self._tasks if task.target is not None and type(task).target_is_scalar}
         if len(kinds) == 1:
@@ -616,14 +652,15 @@ class TimeFDataset:
         raise TimeFValidationError(f"pass task= to to_features_and_targets; dataset has target task types: {names}")
 
     def describe(self, *, rows: int = 5, file: TextIO | None = None) -> None:
-        """Print a plain-text summary: identity, counts, specs/columns, and a sample preview.
+        """Print a plain-text summary of the dataset: its identity, counts, specs and columns, and a sample preview.
 
-        Like pandas' ``describe``/``info``. The preview reads only span metadata (no series values);
-        value dtypes are sampled from one series per spec. Works before :meth:`derive_schema` since
-        everything is computed from the samples.
+        This method works like pandas' ``describe`` and ``info`` methods. The preview reads only
+        span metadata, not series values. The method samples value dtypes from one series per
+        spec. This method works even before :meth:`derive_schema` runs, because it computes
+        everything from the samples.
 
         Args:
-            rows: Number of samples to show in the preview.
-            file: Where to write (defaults to ``sys.stdout``).
+            rows: The number of samples to show in the preview.
+            file: Where to write the output. The default is ``sys.stdout``.
         """
         print(describe_text(self, rows=rows), file=file or sys.stdout)

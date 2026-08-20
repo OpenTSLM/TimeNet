@@ -39,8 +39,8 @@ def validate_dataset_id(dataset_id: str) -> None:
 
 
 def _str_tuple(value: Any, key: str) -> tuple[str, ...]:
-    # tuple("abc") returns ("a", "b", "c"). A bare string where a list is expected passes as corrupt
-    # data. Require an actual list or tuple instead. Callers wrap the TypeError.
+    # tuple("abc") returns ("a", "b", "c"). A bare string where callers expect a list passes as
+    # corrupt data. Require an actual list or tuple instead. Callers wrap the TypeError.
     if not isinstance(value, list | tuple):
         raise TypeError(f"{key!r} must be a list, got {type(value).__name__}")
     return tuple(value)
@@ -57,7 +57,7 @@ class DatasetMetadata:
     """
 
     dataset_id: str
-    """HuggingFace-style ``org/name`` pair; case-sensitive, exactly one slash."""
+    """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: Version
     """Semantic version of the upstream source data."""
     name: str
@@ -78,9 +78,10 @@ class DatasetMetadata:
     def __post_init__(self) -> None:
         """Validate the ``dataset_id`` shape via :func:`validate_dataset_id`.
 
-        No segment can start with ``.``. Dataset ids are joined into filesystem paths. A ``.`` or ``..``
-        segment can escape the registry or storage root. A leading-dot name like ``.git`` writes to
-        disk, but discovery skips it because discovery drops hidden directories.
+        No segment can start with ``.``. The registry, the writer, and the download cache join
+        dataset ids into filesystem paths. A ``.`` or ``..`` segment can escape the registry or
+        storage root. A leading-dot name like ``.git`` writes to disk, but discovery skips it
+        because discovery drops hidden directories.
         """
         validate_dataset_id(self.dataset_id)
 
@@ -118,8 +119,9 @@ class DatasetMetadata:
 
         This method validates the card against the packaged ``dataset-card.schema.json`` before
         construction. Authoring mistakes then surface as clear, aggregated messages instead of a stack
-        trace from deep inside coercion. PyYAML and jsonschema are optional and imported lazily, so the
-        types package does not depend on them. Install the ``timenet[curation]`` extra to use this.
+        trace from deep inside coercion. PyYAML and jsonschema are optional. This method imports them
+        lazily, so the types package does not depend on them. Install the ``timenet[curation]`` extra
+        to use this.
 
         Args:
             path: Path to the card YAML file.

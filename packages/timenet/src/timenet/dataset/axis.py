@@ -19,10 +19,10 @@ This module uses two words that are not interchangeable, because the format name
     :attr:`~timenet.dataset.Sample.start_time`. It is what a sample's relative zero refers to.
 
 The wall clock enters once and composes by addition. A value's timestamp is the sample's
-``start_time`` plus the value's time offset. The time offset is measured from the recording's own
-zero. The timestamp is measured from the Unix epoch.
+``start_time`` plus the value's time offset. The recording's own zero anchors the time offset.
+The Unix epoch anchors the timestamp.
 
-The period is a :class:`~fractions.Fraction` of microseconds, not a float rate, because not every real
+The period is a :class:`~fractions.Fraction` of microseconds, not a float rate. Not every real
 rate is a whole number of them: 360 Hz is 25000/9 us and 256 Hz is 15625/4. A Fraction keeps the
 arithmetic exact, so placing a value and locating a time offset are inverse without a tolerance band.
 A Fraction also reduces and validates itself.
@@ -46,8 +46,8 @@ from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
 class AxisType(StrEnum):
     """Name which shape a series' time axis has.
 
-    TimeF stores this value and dispatches on it before it reads any shape-specific column. The case is
-    never inferred from which columns came back null.
+    TimeF stores this value and dispatches on it before it reads any shape-specific column. TimeF
+    never infers the case from which columns came back null.
     """
 
     REGULAR = "regular"
@@ -68,8 +68,8 @@ class RegularAxis:
     """
 
     axis_type: ClassVar[AxisType] = AxisType.REGULAR
-    """The stored discriminator. Each shape declares its own tag, so a new shape cannot be added
-    without one."""
+    """The stored discriminator. Each shape declares its own tag, so a new shape must declare one
+    too."""
     period_us: Fraction
     """Microseconds between values. It is a :class:`~fractions.Fraction` because not every real rate is
     a whole number of microseconds: 360 Hz is 25000/9 and 256 Hz is 15625/4. TimeF stores it as its
@@ -96,8 +96,8 @@ class RegularAxis:
                 f"RegularAxis.period_us is {self.period_us} us, finer than the one microsecond the "
                 f"format can address. The highest rate it can carry is 1 MHz"
             )
-        # The period is stored as a numerator/denominator pair of int64 columns. It is >= 1, so the
-        # reduced numerator is the larger term. A range check on the numerator covers the denominator.
+        # TimeF stores the period as a numerator/denominator pair of int64 columns. It is >= 1, so
+        # the reduced numerator is the larger term. A range check on the numerator covers the denominator.
         check_int64("RegularAxis.period_us", self.period_us.numerator)
         if isinstance(self.start_index, bool) or not isinstance(self.start_index, int):
             raise TimeFValidationError(f"RegularAxis.start_index must be an integer, got {self.start_index!r}")
@@ -111,7 +111,7 @@ class RegularAxis:
 
         This method does not accept a float. Every real sampling rate is a whole number of values per
         second, so write ``500.0`` as ``500``. A rate that is not whole has no single reading: 29.97
-        fps is 2997/100 by its spelling and 30000/1001 by its intent, and those drift 3.6 ms apart
+        fps is 2997/100 by its spelling and 30000/1001 by its intent. Those two drift 3.6 ms apart
         over an hour. State which one with a :class:`~fractions.Fraction`, and build the Fraction from
         a string, not a float. ``Fraction(29.97)`` is the binary expansion
         (1054475631502295/35184372088832), and ``Fraction("29.97")`` is 2997/100.
@@ -236,8 +236,8 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
     """Convert wall-clock moments to time offsets on a sample's recording timeline.
 
     This is the safe path from calendar time, and the reason :func:`to_time_offsets_us` refuses a
-    ``datetime64`` array outright. Each moment is measured against the sample's anchor, so the result
-    is in the same frame as a span's bounds and a regular axis' computed time offsets.
+    ``datetime64`` array outright. This function measures each moment against the sample's anchor.
+    The result lands in the same frame as a span's bounds and a regular axis' computed time offsets.
 
     Args:
         moments: The wall-clock moments, each timezone-aware.
@@ -254,10 +254,10 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 
 @dataclass(frozen=True, kw_only=True)
 class IrregularAxis:
-    """A placement no formula produces, so every time offset is written down beside the values.
+    """A placement no formula produces, so this axis writes down every time offset beside the values.
 
-    This axis holds only the pair a curator can state and the writer can verify without a read: the
-    first and the last stored time offset. The time offsets themselves ride the values plane. Reach
+    This axis holds only the pair a curator can state and the writer can verify without a read. That
+    pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
     them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series

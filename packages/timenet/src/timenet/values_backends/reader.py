@@ -32,8 +32,8 @@ class BaseValuesReader(ABC):
         """Read and concatenate one series' chunk values.
 
         Args:
-            version: The opened version handle; reads flow through its filesystem/store.
-            rows: The series' index rows, sorted by ``chunk_idx``; each holds ``chunk_file``,
+            version: The opened version handle. Reads flow through its filesystem/store.
+            rows: The series' index rows, sorted by ``chunk_idx``. Each holds ``chunk_file``,
                 ``chunk_major_idx``, and ``chunk_minor_idx``.
             spec: The series' spec, for backends whose decoding depends on shape/dtype.
 
@@ -56,7 +56,7 @@ class BaseValuesReader(ABC):
         """Read and concatenate one irregular series' per-value time offsets.
 
         Args:
-            version: The opened version handle; reads flow through its filesystem/store.
+            version: The opened version handle. Reads flow through its filesystem/store.
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:

@@ -1,9 +1,10 @@
-"""``TimeFReader``: deserialize a TimeF version directory back into a :class:`TimeFDataset`.
+"""``TimeFReader`` reads a TimeF version directory and rebuilds it as a :class:`TimeFDataset`.
 
-Driven entirely by ``manifest.json`` — the reader never runs connector code. Opening a version reads
-only the manifest; tasks, annotations, the time-series index, and per-series values are all resolved on
-first use. Types are reconstructed from the manifest's flat descriptors (no runtime class synthesis), so
-read-back objects pickle and match the originals field-for-field.
+The file ``manifest.json`` controls the reader. The reader does not run connector code. When you open a
+version, the reader reads only the manifest. The reader resolves tasks, annotations, the time-series
+index, and each series' values only on first use. The reader rebuilds types from the manifest's flat
+descriptors, and it does not create classes at runtime. As a result, read-back objects can pickle, and
+they match the original objects field for field.
 """
 
 from __future__ import annotations
@@ -51,14 +52,16 @@ if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
 
 
-#: Rows per batch when streaming ``samples.parquet``.
+#: The number of rows in each batch when the reader streams ``samples.parquet``.
 _SAMPLE_BATCH_ROWS = 4096
 
-#: Decoded annotations kept for reuse, so an annotation shared across samples is decoded once.
+#: The maximum number of decoded annotations that the cache keeps for reuse. This lets an
+#: annotation shared across samples decode only once.
 _ANNOTATION_CACHE_SIZE = 4096
 
-#: Byte budget for decoded control-table row groups. Sized by total bytes, not group count, so shuffled
-#: reads do not thrash a small cache.
+#: The byte budget for decoded control-table row groups. The budget counts total bytes, not the
+#: number of groups. This design stops a shuffled read from filling and clearing a small cache too
+#: often.
 _CONTROL_TABLE_CACHE_MAX_BYTES = 64 * 2**20
 
 #: An id in its stored form: the id string, or the 16 raw bytes of a ``uuid16`` column.
@@ -67,7 +70,7 @@ _StoredId = str | bytes
 
 @dataclass(frozen=True)
 class _RowGroupStats:
-    """One row group of a sorted control table, and the stored-key range its statistics promise."""
+    """One row group of a sorted control table, with the stored-key range that its statistics guarantee."""
 
     part: str
     """The table part's manifest-relative path."""
@@ -79,26 +82,27 @@ class _RowGroupStats:
     """The highest stored key in the group."""
 
     def may_hold(self, key: _StoredId) -> bool:
-        """Report whether this row group can contain a stored key.
+        """Return whether this row group can hold a stored key.
 
         Args:
             key: The key in its stored form (a string, or 16 bytes for a ``uuid16`` column).
 
         Returns:
-            ``False`` only when the statistics prove the key is outside the group.
+            ``False`` only when the statistics prove that the key is outside the group.
         """
         return self.min_key <= key <= self.max_key  # ty: ignore[unsupported-operator]
 
 
 class _PrunedControlTable:
-    """A control-plane table sorted by one key column, read a row group at a time with pruning.
+    """A control-plane table sorted by one key column, read one row group at a time, with pruning.
 
-    The reader never holds the whole table. It builds a row-group directory from the Parquet footers,
-    bisects it on the sorted key column's statistics to prune the groups a lookup cannot match, and
-    decodes the matching groups into a byte-bounded LRU. Within a decoded group it bisects a materialized
-    sorted list of the lookup-key column to slice the matching run. The time-series index (keyed by
-    ``sample_id``, many rows per key) and the annotations table (keyed by ``id``, one row per key) are
-    both served this one way; the key column is the leading entry of ``lookup_columns``.
+    The reader never holds the whole table in memory. It builds a row-group directory from the
+    Parquet footers. It bisects the directory on the sorted key column's statistics, and this
+    prunes the groups that a lookup cannot match. Then it decodes the matching groups into a
+    byte-bounded LRU cache. Inside a decoded group, it bisects a materialized sorted list of the
+    lookup-key column to select the matching rows. The time-series index (keyed by ``sample_id``,
+    many rows per key) and the annotations table (keyed by ``id``, one row per key) both use this
+    method. The key column is the first entry of ``lookup_columns``.
     """
 
     def __init__(
@@ -116,8 +120,8 @@ class _PrunedControlTable:
             filesystem: The filesystem the version's files live on.
             root: The version's root prefix on ``filesystem``.
             parts: The table's manifest-relative part paths.
-            lookup_columns: The columns whose stored values a lookup matches on, as a tuple; the first is
-                the sorted key column the footer statistics prune on.
+            lookup_columns: The columns whose stored values a lookup matches, given as a tuple. The
+                first column is the sorted key column. The footer statistics use it to prune row groups.
             columns: The columns to decode per row group, or ``None`` for all of them.
 
         """
@@ -144,8 +148,9 @@ class _PrunedControlTable:
     def groups(self) -> list[_RowGroupStats]:
         """Return the row-group directory: where each group lives and the stored keys it can hold.
 
-        Built from the Parquet footers on first lookup, so it is O(row groups), never O(rows). The
-        writer emits key-column statistics on every row group, so a lookup always bisects on the maxima.
+        This method builds the directory from the Parquet footers on the first lookup. As a result,
+        the cost is O(row groups), never O(rows). The writer emits key-column statistics on every row
+        group, so a lookup always bisects on the maxima.
 
         Returns:
             One entry per row group, in file order.
@@ -162,17 +167,18 @@ class _PrunedControlTable:
         return self._directory
 
     def rows_for(self, lookup: tuple[_StoredId, ...]) -> list[dict]:
-        """Return the rows matching a stored lookup key, pruning the row groups that cannot hold it.
+        """Return the rows that match a stored lookup key, and prune the row groups that cannot hold it.
 
         The prune key is ``lookup[0]`` (the sorted key column). The search bisects to the first group
-        that can hold it and stops at the first that cannot; the rows of one key are contiguous within a
-        group, and groups are visited in file order, so the writer's sort carries through to the result.
+        that can hold the key, and stops at the first group that cannot. The rows of one key are
+        contiguous within a group. The reader visits the groups in file order, so the writer's sort
+        order carries through to the result.
 
         Args:
             lookup: The stored values to match, one per ``lookup_columns`` entry, in that order.
 
         Returns:
-            The matching rows as dicts, in stored order; empty if the key is absent.
+            The matching rows as dicts, in stored order, or empty if the key is absent.
         """
         key = lookup[0]
         groups = self.groups()
@@ -183,8 +189,8 @@ class _PrunedControlTable:
             if not group.may_hold(key):
                 break  # group maxima are sorted, so the first that cannot hold the key ends the search
             table, keys = self._group_rows(group)
-            # The group is sorted by its lookup columns, so the matches are the half-open range
-            # [bisect_left, bisect_right). One key's rows are contiguous; a unique key is a run of one.
+            # The group is sorted by its lookup columns, so the matches form the half-open range
+            # [bisect_left, bisect_right). One key's rows are contiguous. A unique key is a run of one row.
             lo = bisect.bisect_left(keys, lookup)
             hi = bisect.bisect_right(keys, lookup)
             if hi > lo:
@@ -209,8 +215,8 @@ class _PrunedControlTable:
     def _group_rows(self, group: _RowGroupStats) -> tuple[pa.Table, list[tuple]]:
         """Return one row group as Arrow, plus its lookup-key column as a sorted list to bisect.
 
-        The list is the group's lookup columns zipped into one tuple per row, in stored (sorted) order,
-        so :meth:`rows_for` bisects it with the stdlib.
+        This method zips the group's lookup columns into one tuple per row, in stored (sorted)
+        order, so :meth:`rows_for` can bisect it with the stdlib.
 
         Args:
             group: The row group to decode.
@@ -228,7 +234,7 @@ class _PrunedControlTable:
         keys = list(zip(*columns, strict=True))
         entry = (table, keys)
         if table.nbytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
-            return entry  # a single group over budget is served without displacing the whole cache
+            return entry  # this skips the cache for a group over budget, so it does not evict the whole cache
         self._cache[key] = entry
         self._cache_bytes += table.nbytes
         while self._cache_bytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
@@ -243,24 +249,25 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Open a committed dataset version through a storage handle.
 
-        Nothing is read here: the handle already carries the parsed manifest, and the filesystem and root
-        it wraps are the seam every read flows through. Tasks, annotations, the time-series index, and
-        per-series values all resolve on first use, so opening a version costs the same whether it has
-        three samples or three million.
+        This constructor reads nothing. The handle already carries the parsed manifest. The handle
+        also wraps the filesystem and root that every later read uses. The reader resolves tasks,
+        annotations, the time-series index, and each series' values only on first use. As a result,
+        the cost to open a version is the same for three samples or three million.
 
-        Because the control plane is no longer decoded up front, and no file is stat-swept on open, a
-        structurally corrupt (or missing) file now fails on the first access that needs it (``.tasks``,
-        the first annotation, the first value read) rather than here. Call :meth:`verify` when you want a
-        construction-time integrity check. Build the handle with
-        :meth:`~timenet.registry.BaseRegistry.open_version` or
-        :meth:`~timenet.registry.version.DatasetVersion.open_local`.
+        This constructor no longer decodes the control plane up front, and it no longer stat-sweeps
+        every file on open. As a result, a structurally corrupt or missing file now fails on its
+        first access, not here. Examples of a first access are ``.tasks``, the first annotation, or
+        the first value read. Call :meth:`verify` for a check of the version's integrity at
+        construction time. Build the handle with :meth:`~timenet.registry.BaseRegistry.open_version`
+        or with :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
         Args:
             version: The opened version handle: a manifest plus a filesystem-rooted view of its files.
         """
         self._version = version
-        # Aliases of the handle's fields for the read sites below; all three pickle, so a DataLoader
-        # worker rebuilds the reader (and its lazy loaders) from them without re-opening the registry.
+        # These are aliases of the handle's fields, for the read sites below. All three pickle, so a
+        # DataLoader worker can rebuild the reader (and its lazy loaders) from them without reopening
+        # the registry.
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
@@ -268,7 +275,8 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        # Per-process scratch, built on demand and dropped on pickle; __getstate__ must stay in step.
+        # This is per-process scratch space. The reader builds it on demand and drops it on pickle.
+        # ``__getstate__`` must stay in step with these fields.
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._samples_data: pads.Dataset | None = None
@@ -326,11 +334,14 @@ class TimeFReader:
     def verify(self) -> None:
         """Check every file the manifest lists against its recorded ``sha256:`` checksum.
 
-        Not done on open: hashing every shard would read the whole dataset and defeat the lazy read
-        path this class exists to provide. Call it explicitly when integrity matters more than
-        latency (after a download, before a long training run, in a fsck-style command). Each file is
-        reopened through the version's filesystem, so this is also where a missing file surfaces now that
-        ``__init__`` no longer stat-sweeps.
+        This method does not run automatically when you open a version. It reads and hashes every
+        shard, so it reads the whole dataset. The lazy read design of this class avoids that cost on
+        open.
+
+        When integrity matters more than speed, call this method explicitly. Examples are after a
+        download, before a long training run, or inside a fsck-style command. This method reopens
+        each file through the version's filesystem. As a result, a missing file now surfaces here,
+        because ``__init__`` no longer stat-sweeps the files.
 
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
@@ -391,13 +402,13 @@ class TimeFReader:
     def iter_samples(self, sample_ids: Iterable[str] | None = None) -> Iterator[Sample]:
         """Yield samples lazily without materializing a :class:`TimeFDataset`.
 
-        With ``sample_ids``, the read is filtered on the stored id column, which prunes the row groups
-        that cannot contain a requested id instead of scanning the file. Samples come back in stored
-        order (sorted by ``sample_id``), not in the order they were asked for, and an id the dataset
-        does not contain raises ``TimeFValidationError``.
+        When you pass ``sample_ids``, this method filters the read on the stored id column. This
+        prunes the row groups that cannot hold a requested id, and it does not scan the whole file.
+        Samples come back in stored order (sorted by ``sample_id``), not in the order you asked for
+        them. An id that the dataset does not contain raises ``TimeFValidationError``.
 
         Args:
-            sample_ids: The samples to yield; ``None`` yields every sample.
+            sample_ids: The samples to yield, or ``None`` to yield every sample.
 
         Yields:
             Each reconstructed :class:`Sample`.
@@ -412,12 +423,13 @@ class TimeFReader:
         """Re-raise a decode failure against the manifest's schema as a :class:`TimeFFormatError`.
 
         The loaders parse on-disk control tables against the manifest's schema. Anything they raise
-        means the artifact is corrupt or disagrees with its manifest, which is a format failure; letting
-        a bare ``ValueError`` from ``TaskType()`` or an ``OSError`` from a corrupt data page escape would
-        contradict the reader's contract.
+        means that the artifact is corrupt, or that it disagrees with its manifest. Both cases are a
+        format failure. This context manager stops a bare ``ValueError`` from ``TaskType()``, or an
+        ``OSError`` from a corrupt data page, from escaping as-is. The reader's contract requires
+        every failure to reach the caller as a :class:`TimeFFormatError`.
 
         Yields:
-            Nothing; this only rewrites the exception type.
+            Nothing. This context manager only rewrites the exception type.
 
         Raises:
             TimeFFormatError: If the wrapped code fails to decode what the manifest describes.
@@ -439,9 +451,9 @@ class TimeFReader:
             Each sample row as a dict.
 
         Raises:
-            TimeFValidationError: If ``sample_ids`` names an id the dataset does not contain, raised
-                once the iterator is fully consumed rather than on the offending id: a lazy reader
-                cannot know an id is absent until it has read every part.
+            TimeFValidationError: If ``sample_ids`` names an id that the dataset does not contain,
+                the error raises after the iterator is fully consumed, not at the offending id. A
+                lazy reader cannot know that an id is absent until it has read every part.
         """
         if self._samples_data is None:
             parts = [self._version.path(part.path) for part in self._manifest.files.samples]
@@ -500,7 +512,8 @@ class TimeFReader:
     def _annotations_table(self) -> _PrunedControlTable:
         """Return the pruned view over the annotations table, built on first annotation access.
 
-        Only the four columns a decode reads are pulled; ``sample_ids``, the widest column, is skipped.
+        A decode reads only four columns, and this method pulls only those columns. It skips
+        ``sample_ids``, the widest column.
 
         Returns:
             The cached pruned annotations view.
@@ -544,8 +557,8 @@ class TimeFReader:
         if span is not None:
             fields["span"] = span
         annotation = Annotation(**fields)
-        # The descriptor is what a registry query filters on, so a decoded annotation whose shape
-        # or value type disagrees with it would answer those queries wrongly. That is corruption.
+        # The descriptor is what a registry query filters on. A decoded annotation whose shape or
+        # value type disagrees with the descriptor answers those queries wrongly, and that is corruption.
         derived_type = annotation_type_of(annotation)
         if derived_type != descriptor.annotation_type:
             raise TimeFFormatError(
@@ -602,10 +615,11 @@ class TimeFReader:
             self._resolve_annotation(sample_id, aid)
             for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
         )
-        # A stored span or time_span that no longer fits is a corrupt artifact, not a caller mistake, so
-        # the sample's own invariants surface as a format error, not a ValueError. Decode and build the
-        # sample inside the seam so a malformed time_span (bad bounds, or point-shaped) is rejected by
-        # Sample.__post_init__ before it is used to re-check the stored annotation spans.
+        # A stored span or time_span that no longer fits the sample is a corrupt artifact, not a caller
+        # mistake. As a result, the sample's own invariants surface as a format error, not a ``ValueError``.
+        # This code decodes and builds the sample inside the try block below. This lets
+        # ``Sample.__post_init__`` reject a malformed time_span (bad bounds, or point-shaped) before the
+        # code uses it to recheck the stored annotation spans.
         try:
             time_span = cast("TimeInterval | None", self._codec.decode_span(row.get("time_span")))
             sample = Sample(
@@ -658,8 +672,8 @@ class TimeFReader:
     def _axis(struct: dict, sample_id: str) -> TimeAxis:
         """Rebuild a series' time axis from the stored discriminator.
 
-        The tag is read before any shape-specific column, so a corrupt row raises here rather than
-        producing an axis inferred from which columns happen to be null.
+        This method reads the tag before any shape-specific column. As a result, a corrupt row
+        raises an error here, not later from an axis inferred from null columns.
 
         Args:
             struct: The stored time-series struct.
@@ -674,8 +688,8 @@ class TimeFReader:
         kind = struct["axis_type"]
         if kind == AxisType.ORDINAL:
             # An ordinal series has no cadence and no per-value time offsets, so every shape column must
-            # be null. A populated one means the tag and the columns disagree, the corruption this
-            # method catches.
+            # be null. A populated column means that the tag and the columns disagree. This disagreement
+            # is the corruption that this method catches.
             shape_cols = (
                 "period_numerator_us",
                 "period_denominator",
@@ -751,8 +765,9 @@ class TimeFReader:
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
         """Return one annotation, decoding it on first use and caching it in a bounded LRU.
 
-        The id is looked up through the pruned annotations table, so only the row group that can hold it
-        is decoded; a shared annotation is decoded once and served from the LRU thereafter.
+        This method looks up the id through the pruned annotations table. As a result, it decodes
+        only the row group that can hold the id. A shared annotation decodes once, and the LRU
+        serves it after that.
 
         Args:
             sample_id: The referencing sample, for the error message.
@@ -810,9 +825,9 @@ class TimeFReader:
 class _SeriesLoader:
     """A picklable lazy loader for one series' values (replaces a per-series closure).
 
-    A nested closure can't be pickled, which would make every read-back dataset unpicklable and break
-    a multi-worker torch ``DataLoader``. This holds the reader and the series' identity instead, and
-    reads on call.
+    A nested closure cannot pickle. This class holds the reader and the series' identity instead of
+    a closure. As a result, a read-back dataset can pickle, and a multi-worker torch ``DataLoader``
+    can use it. The class reads the series' values only when you call it.
     """
 
     reader: TimeFReader
@@ -849,11 +864,10 @@ class _SeriesLoader:
 
 
 def _as_tuple_if_list(value: object) -> object:
-    """Convert list payloads (and nested lists) to tuples; pass scalars and structs through.
+    """Convert list payloads (and nested lists) to tuples. Pass scalars and structs through unchanged.
 
-    Span structs stay dicts for :meth:`~timenet.format.schemas.IdCodec.decode_span` to rebuild; only the
-    list nesting around them is normalized, since tasks store tuples.
-
+    Span structs stay as dicts, so :meth:`~timenet.format.schemas.IdCodec.decode_span` can rebuild
+    them. This function normalizes only the list nesting around them, because tasks store tuples.
 
     Args:
         value: A cell value read from a task partition.
@@ -870,10 +884,10 @@ def _as_tuple_if_list(value: object) -> object:
 class _TimeOffsetsLoader:
     """A picklable lazy loader for an irregular series' per-value time offsets.
 
-    A nested closure can't be pickled, so this is a class rather than a lambda: a multi-worker torch
-    DataLoader sends the series to its workers, and a closure would fail there. It mirrors
-    :class:`_SeriesLoader` because time offsets and values are separate columns and each is read on its
-    own.
+    A nested closure cannot pickle, so this loader is a class, not a lambda. A multi-worker torch
+    ``DataLoader`` pickles the series to send it to its workers, and a closure cannot pickle. This
+    class mirrors :class:`_SeriesLoader`, because time offsets and values are separate columns, and
+    each column reads on its own.
     """
 
     reader: TimeFReader
@@ -892,15 +906,16 @@ class _TimeOffsetsLoader:
     def __call__(self) -> pa.Array:
         """Read the series' time offsets, checking them against the axis and value count.
 
-        The writer verifies ordering, count, and endpoints, but nothing re-checks them on read, so a
-        corrupt shard could otherwise hand back a decreasing, wrong-length, or off-endpoint stream.
+        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. As a
+        result, a corrupt shard can otherwise hand back a decreasing, wrong-length, or off-endpoint
+        stream.
 
         Returns:
             One int64 microsecond time offset per value.
 
         Raises:
-            TimeFFormatError: If the stored time offsets disagree with the axis endpoints or value count,
-                or are not non-decreasing.
+            TimeFFormatError: If the stored time offsets disagree with the axis endpoints or the
+                value count, or if they decrease at any point.
         """
         time_offsets = self.reader._load_time_offsets(self.sample_id, self.time_series_id)
         values = time_offsets.to_numpy(zero_copy_only=False)

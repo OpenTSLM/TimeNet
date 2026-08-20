@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 def build(dataset_id: str, *, version: str | None = None, out: str | Path | None = None, force: bool = False) -> Path:
     """Curate a dataset into a local registry by connector id.
 
-    This is the producer-side one-liner over the engine. An already-curated version is reused unless
-    ``force`` is set. The default output is the shared local registry
+    This is the producer-side one-liner over the engine. The build reuses an already-curated version
+    unless the caller sets ``force``. The default output is the shared local registry
     (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
     here loads at once with ``TimeNet().load(dataset_id)``.
 
@@ -27,13 +27,14 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
             value is a guard. If it does not match the connector's metadata, the build stops before it
             runs. ``None`` builds the version that the connector declares.
         out: Output registry directory. Defaults to the shared local registry.
-        force: Rebuild even if the version is already curated.
+        force: Rebuild even if the registry already has a curated version.
 
     Returns:
         The committed version directory.
 
     Raises:
-        TimeFValidationError: If ``version`` is set and does not match the connector's declared version.
+        TimeFValidationError: If the caller sets ``version`` and it does not match the connector's
+            declared version.
     """
     from timenet.engine import run_pipeline  # noqa: PLC0415
     from timenet.errors import TimeFValidationError  # noqa: PLC0415

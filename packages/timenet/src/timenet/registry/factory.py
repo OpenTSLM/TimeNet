@@ -34,7 +34,7 @@ def open_registry(uri: str | Path) -> BaseRegistry:
 
     Raises:
         ValueError: If ``uri`` carries a scheme no backend handles. Also if ``uri`` is a ``file://``
-            URI with a host component, because the host is dropped without notice.
+            URI with a host component, because this function drops the host without notice.
     """
     text = str(uri)
     if text.startswith("timenet://"):

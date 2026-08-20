@@ -2,8 +2,8 @@
 
 Each connector lives in its own folder at ``datasets/<org>/<name>/``, or ``datasets/<name>/`` for a
 flat id. The package's ``__init__.py`` exposes a ``CONNECTOR`` class. A ``dataset.yaml`` card sits
-beside it. A dataset id maps to that package by convention, so there is no central registry. Only the
-requested connector is imported. Each connector declares its own id through ``metadata()``.
+beside it. A dataset id maps to that package by convention, so there is no central registry. Discovery
+imports only the requested connector. Each connector declares its own id through ``metadata()``.
 """
 
 import importlib
@@ -63,7 +63,7 @@ def available() -> list[str]:
         # Skip each connector's co-located ``tests`` package of test modules and fixtures. It lives
         # beside the connector but is not a connector module. Importing a test module pulls
         # test-only deps such as pytest into this producer path. Match the ``tests`` dir, not a
-        # ``test_``-prefixed name, so a connector like ``timenet/test-mean`` is still discovered.
+        # ``test_``-prefixed name, so this still finds a connector like ``timenet/test-mean``.
         if "tests" in info.name.split("."):
             continue
         # A connector package re-exports CONNECTOR from its ``connector`` submodule, so both the

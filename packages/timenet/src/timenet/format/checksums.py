@@ -16,7 +16,7 @@ _BLOCK_BYTES = 1 << 20  # hash a block at a time, not all-in-memory
 class _Readable(Protocol):
     """A binary stream that yields its bytes a block at a time.
 
-    Both a ``BufferedReader`` (``path.open("rb")``) and a ``pyarrow`` ``NativeFile`` satisfy it, so the
+    Both a ``BufferedReader`` (``path.open("rb")``) and a ``pyarrow`` ``NativeFile`` satisfy it. The
     same hashing runs over a local ``Path`` and a file opened through a pyarrow filesystem.
     """
 
@@ -41,8 +41,9 @@ def file_checksum(path: Path) -> str:
 def stream_checksum(handle: _Readable) -> str:
     """Return an open binary stream's manifest checksum, hashing it a block at a time.
 
-    The stream counterpart of :func:`file_checksum`, so a reader can hash a file it opened through a
-    pyarrow filesystem (local now, an object store later) rather than a local ``Path``.
+    This is the stream counterpart of :func:`file_checksum`. A reader can use it to hash a file
+    opened through a pyarrow filesystem (local now, an object store later) instead of a local
+    ``Path``.
 
     Args:
         handle: An open binary stream positioned at the start.

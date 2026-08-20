@@ -1,10 +1,10 @@
-"""The default values backend: streams ``list<float32>`` chunks into rotating Parquet shards.
+"""The default values backend. It streams ``list<float32>`` chunks into rotating Parquet shards.
 
-Shards are zstd-compressed and single-modality, each carrying the values encoding chosen for its
-``spec_type`` (see :mod:`timenet.writer.value_encoding`). Each chunk's placement is recorded in the
-backend-neutral time-series index as a ``chunk_file`` plus a
-:class:`~timenet.values_backends.writer.ChunkDataIndex` — for Parquet, the shard path, the row group
-(``major_idx``), and the row offset (``minor_idx``).
+Each shard uses zstd compression and holds one modality. Each shard carries the values encoding
+chosen for its ``spec_type`` (see :mod:`timenet.writer.value_encoding`). The backend-neutral
+time-series index records each chunk's placement. This record has a ``chunk_file`` plus a
+:class:`~timenet.values_backends.writer.ChunkDataIndex`. For Parquet, this index gives the shard
+path, the row group (``major_idx``), and the row offset (``minor_idx``).
 """
 
 from collections.abc import Callable
@@ -44,29 +44,29 @@ _LOG = logging.getLogger(__name__)
 
 
 def _step_bytes(stores_time_offsets: bool) -> int:
-    """Return the uncompressed bytes one step of a series costs.
+    """Return the uncompressed bytes that one step of a series costs.
 
-    An irregular series carries an int64 time offset beside each float32 value, so its step costs three
-    times a regular one. Chunk sizing, row-group flushing and shard rotation all budget in these
-    units; charging every series the float32 rate would let an irregular one overrun each target
-    threefold.
+    An irregular series stores an int64 time offset next to each float32 value. So its step costs
+    three times more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
+    use this unit as their budget. If the code charges every series at the float32 rate, an
+    irregular series will overrun each target by three times.
 
     Args:
-        stores_time_offsets: Whether the series stores one time offset per value.
+        stores_time_offsets: True if the series stores one time offset for each value.
 
     Returns:
-        Bytes per step.
+        The number of bytes for one step.
     """
     return _BYTES_PER_FLOAT32 + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
 
 
 class ParquetValuesBackend(BaseValuesBackend):
-    """Streams series into rotating Parquet shards of ``list<float32>`` chunks (the default backend)."""
+    """The default values backend. It streams series into rotating Parquet shards of ``list<float32>`` chunks."""
 
     name = ValuesBackend.PARQUET
 
     def __init__(self, config: ParquetValuesConfig) -> None:
-        """Configure the Parquet shard backend.
+        """Configure the Parquet values backend.
 
         Args:
             config: Typed Parquet backend options.
@@ -91,20 +91,24 @@ class ParquetValuesBackend(BaseValuesBackend):
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
-        """Stream all series into rotating shard files and return chunk placements.
+        """Stream all series into rotating shard files and return the chunk placements.
 
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series' float32 values.
-            read_time_offsets: Loads an irregular series' int64 time offsets, or ``None`` for other shapes.
-            on_series_done: Progress callback invoked ``(completed, total)`` after each series.
-            on_file_done: Progress callback invoked ``(files_finalized)`` after each shard closes.
+            read_time_offsets: Loads an irregular series' int64 time offsets. Returns ``None`` for
+                other shapes.
+            on_series_done: Progress callback. This method calls it with ``(completed, total)``
+                after each series.
+            on_file_done: Progress callback. This method calls it with ``(files_finalized)`` after
+                each shard closes.
 
         Returns:
-            The chunk placements, the shard files written, and the encoding applied per ``spec_type``.
+            The chunk placements, the shard files written, and the encoding chosen for each
+            ``spec_type``.
 
         Raises:
-            TimeFValidationError: If a spec uses an N-D shape or non-float32 dtype.
+            TimeFValidationError: If a spec uses an N-D shape or a dtype other than float32.
         """
         unsupported = [ts.spec.spec_type for ts in unique_series if ts.spec.value_shape or ts.spec.dtype != "float32"]
         if unsupported:
@@ -127,20 +131,23 @@ class ParquetValuesBackend(BaseValuesBackend):
         )
 
     def encoding_for(self, spec_type: str, buffered: list[pa.Array]) -> ValueEncoding:
-        """Return the encoding to use for a modality, deciding it on first sight and logging the choice.
+        """Return the encoding to use for a modality. Decide it on first sight and log the choice.
 
-        The caller passes the values it has buffered for the modality's first row group, so the
-        decision costs a distinct-value count over data already in memory: no second pass over the
-        series, no extra loader calls, and the buffer stays bounded by ``row_group_target_bytes``. The
-        decision is logged at INFO under this module's logger, so a curator can see per ``spec_type``
-        what was chosen and, for the auto path, the cardinality that drove it.
+        The caller passes the values it buffered for the modality's first row group. So the
+        decision costs only a distinct-value count over data already in memory. The backend does
+        not read the series a second time and does not call the loader again. The buffer size stays
+        within ``row_group_target_bytes``. The backend logs the decision at INFO level under this
+        module's logger. So a curator can see, for each ``spec_type``, what encoding the backend
+        chose. For the auto path, the log also shows the cardinality that drove the choice.
 
         Args:
-            spec_type: The modality the decision is for, named in the log line.
-            buffered: The buffered chunks' values, used only the first time a modality appears.
+            spec_type: The modality for this decision. The log line names it.
+            buffered: The buffered chunks' values. The backend uses them only the first time a
+                modality appears.
 
         Returns:
-            The forced encoding when the caller set one, else the encoding selected from the sample.
+            The forced encoding, if the caller set one. Otherwise, the encoding chosen from the
+            sample.
         """
         if self._forced_encoding is not None:
             _LOG.info("values encoding for %r: %s (forced)", spec_type, self._forced_encoding.value)
@@ -168,24 +175,24 @@ class ParquetValuesBackend(BaseValuesBackend):
         )
 
     def _verify_values_encoding(self, rel_path: str, value_encoding: ValueEncoding) -> None:
-        """Verify a finalized shard's values column carries the encoding that was selected for it.
+        """Verify a finalized shard's values column carries the encoding chosen for it.
 
-        pyarrow drops a column encoding silently when the column path does not match, so without this
-        the size the selection was made for would not be the size on disk. Parquet's own
-        dictionary-to-plain fallback is permitted: it happens when a dictionary outgrows its page
-        limit, is lossless, and is not something the writer chose.
+        pyarrow can silently drop a column encoding when the column path does not match. Without
+        this check, the size on disk can differ from the size that the choice expected. The code
+        allows Parquet's own dictionary-to-plain fallback. This fallback happens when a dictionary
+        outgrows its page limit. The fallback is lossless, and the writer does not choose it.
 
         Args:
-            rel_path: The finalized shard's path relative to the staging directory.
-            value_encoding: The encoding the shard was opened with.
+            rel_path: The finalized shard's path, relative to the staging directory.
+            value_encoding: The encoding used to open the shard.
 
         Raises:
-            TimeFValidationError: If the values column does not carry the selected encoding, or a
-                shard that carries time offsets does not encode them DELTA_BINARY_PACKED.
+            TimeFValidationError: If the values column does not carry the chosen encoding, or a
+                shard that carries time offsets does not encode them as DELTA_BINARY_PACKED.
         """
         path = self._staging_dir / rel_path
         applied = encodings.values_encoding_of(str(path))
-        if not applied:  # empty shard (no values written yet); nothing to verify
+        if not applied:  # empty shard (no values written yet), so there is nothing to verify
             return
         if not encodings.applied_matches(value_encoding, applied):
             raise TimeFValidationError(
@@ -193,8 +200,8 @@ class ParquetValuesBackend(BaseValuesBackend):
             )
         if not self._time_offsets_checked:
             time_offsets = encodings.values_encoding_of(str(path), encodings.TIME_OFFSETS_COLUMN)
-            # An all-regular shard carries only RLE definition levels here and has no time offsets to
-            # encode, so it settles nothing and the check stays armed for a later shard.
+            # An all-regular shard has only RLE definition levels here. It has no time offsets to
+            # encode. So this case proves nothing, and the check stays active for a later shard.
             if time_offsets and time_offsets != {"RLE"}:
                 if "DELTA_BINARY_PACKED" not in time_offsets:
                     raise TimeFValidationError(
@@ -225,10 +232,10 @@ class _Chunk:
 class _ShardStream:
     """Buffers chunks into row groups and streams each modality through its own rotating-part writer.
 
-    Shards are single-modality: the writer hands chunks over sorted by ``spec_type``, and the stream
-    starts a fresh :class:`RotatingPartWriter` whenever that changes, so each modality's shards carry
-    the values encoding chosen for it. Part numbers stay globally unique because each modality's writer
-    is offset by the shards already written.
+    Each shard holds only one modality. The stream receives chunks sorted by ``spec_type``. It
+    starts a fresh :class:`RotatingPartWriter` each time the modality changes. So each modality's
+    shards carry the values encoding chosen for it. Part numbers stay globally unique because each
+    modality's writer starts counting after the shards already written.
     """
 
     def __init__(
@@ -238,13 +245,16 @@ class _ShardStream:
         shard_target_bytes: int,
         on_file_done: Callable[[int], None],
     ) -> None:
-        """Bind the stream to its backend and the byte targets that trigger flush/rotation.
+        """Bind the stream to its backend and to the byte targets that trigger a flush or rotation.
 
         Args:
-            backend: The owning backend, used for the shard schema, codec, encoding choice, and self-check.
-            row_group_target_bytes: Flush a row group once buffered values exceed this.
-            shard_target_bytes: Rotate to a new shard once a shard's written values exceed this.
-            on_file_done: Progress callback invoked with the finalized shard count.
+            backend: The owning backend. The stream uses it for the shard schema, the codec, the
+                encoding choice, and the self-check.
+            row_group_target_bytes: If buffered values pass this number of bytes, the stream flushes
+                a row group.
+            shard_target_bytes: If a shard's written values pass this number of bytes, the stream
+                rotates to a new shard.
+            on_file_done: Progress callback. The stream calls it with the count of finalized shards.
         """
         self._backend = backend
         self._row_group_target_bytes = row_group_target_bytes
@@ -258,7 +268,7 @@ class _ShardStream:
         self._shard_paths: list[str] = []
         self.placements: dict[tuple[str, int], ChunkPlacement] = {}
         self.encodings: dict[str, ValueEncoding] = {}
-        """The encoding settled on for each ``spec_type``, in first-seen order."""
+        """The encoding chosen for each ``spec_type``, in first-seen order."""
 
     @property
     def shard_paths(self) -> list[str]:
@@ -266,7 +276,7 @@ class _ShardStream:
         return self._shard_paths
 
     def add(self, chunk: _Chunk) -> None:
-        """Buffer one chunk, closing the current modality's shards when the modality changes."""
+        """If the modality changes, close the current modality's shards. Then buffer the chunk."""
         if self._spec_type is not None and chunk.spec_type != self._spec_type:
             self._flush()
             self._close_modality()
@@ -282,7 +292,7 @@ class _ShardStream:
         self._close_modality()
 
     def _open_modality(self) -> RotatingPartWriter:
-        """Open a rotating-part writer for the buffered modality, choosing its encoding on first sight.
+        """Open a rotating-part writer for the buffered modality. Choose its encoding on first sight.
 
         Returns:
             The rotating-part writer bound to this modality's encoding and shard-index offset.
@@ -308,7 +318,7 @@ class _ShardStream:
         return self._core
 
     def _close_modality(self) -> None:
-        """Close the current modality's writer and advance the global shard index past its parts."""
+        """Close the current modality's writer. Advance the global shard index past its parts."""
         if self._core is None:
             return
         self._core.finish()
@@ -356,8 +366,8 @@ def _plan_chunks(
 ) -> list[_Chunk]:
     """Split a validated series into backend-independent logical chunks.
 
-    Values and time offsets are cut at identical boundaries, which is what lets one chunk locator address
-    both: time offset ``k`` is always in the same chunk as value ``k``.
+    The code cuts values and time offsets at the same boundaries. This lets one chunk locator
+    address both. So time offset ``k`` is always in the same chunk as value ``k``.
 
     Args:
         ts: Series metadata used for chunk identity and timing.
@@ -387,13 +397,13 @@ def _plan_chunks(
 
 
 def _time_offsets_column(chunks: list[pa.Array | None]) -> pa.ListArray:
-    """Pack per-chunk int64 time offsets into one ``list<int64>`` column, null where a chunk has none.
+    """Pack per-chunk int64 time offsets into one ``list<int64>`` column. Use null where a chunk has none.
 
-    A null cell is deliberate: an empty list would be indistinguishable from a zero-length chunk and
-    would still cost an offset.
+    The null cell is deliberate. An empty list looks identical to a zero-length chunk, and it still
+    costs one offset.
 
     Args:
-        chunks: The per-row time offset arrays, ``None`` for a chunk whose series stores none.
+        chunks: The per-row time offset arrays. ``None`` marks a chunk whose series stores no offsets.
 
     Returns:
         A ``list<int64>`` array with one row per chunk.

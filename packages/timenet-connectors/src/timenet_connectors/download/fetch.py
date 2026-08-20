@@ -1,14 +1,14 @@
 """High-level, scheme-dispatching downloads for connectors.
 
 :func:`fetch_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
-backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself; a
+backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself. A
 single file is just a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
 it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through aiohttp
 (:mod:`~timenet_connectors.download.http`). Both are async so they compose with a connector's
-``download_async``; the S3 branch is a plain blocking call (boto3 already parallelizes a single object's
-transfer), so a list mixing schemes runs its S3 entries one at a time and its HTTP entries concurrently.
-Progress flows through the ambient :mod:`~timenet_connectors.download.progress` sink, so neither takes a
-progress argument.
+``download_async``. The S3 branch is a plain blocking call, because boto3 already parallelizes a single
+object's transfer. A list mixing schemes runs its S3 entries one at a time and its HTTP entries
+concurrently. Progress flows through the ambient :mod:`~timenet_connectors.download.progress` sink, so
+neither takes a progress argument.
 """
 
 from collections.abc import Iterable, Mapping
@@ -32,9 +32,9 @@ __all__ = ["Artifact", "ensure_archive", "fetch_files"]
 def _safe_filename(url: str) -> str:
     """Derive a cache filename from a URL's path, hashing the URL when it has no final segment.
 
-    The last path segment (query and fragment stripped) is used. A trailing slash or a ``/download``
-    suffix leaves no usable name, so fall back to a short hash of the URL, keeping the cache path
-    deterministic without colliding across URLs.
+    The function uses the last path segment, with the query and fragment stripped. A trailing slash or
+    a ``/download`` suffix leaves no usable name. The function then falls back to a short hash of the
+    URL. This keeps the cache path deterministic and avoids collisions across URLs.
 
     Args:
         url: The source URL.
@@ -68,14 +68,14 @@ async def fetch_files(
 ) -> list[Path]:
     """Download a list of artifacts, mixing ``s3://`` and ``http(s)://`` freely.
 
-    HTTP entries download concurrently (bounded by ``max_concurrency``, sharing one connection pool); S3
+    HTTP entries download concurrently (bounded by ``max_concurrency``, sharing one connection pool). S3
     entries download one at a time, since boto3 blocks the event loop but parallelizes each transfer
     itself. Batch ``headers`` and ``cookies`` apply to every HTTP request, under each artifact's own
-    (ignored for S3). Every scheme is validated up front, so an unsupported one fails before any
-    download starts.
+    (ignored for S3). The function validates every scheme up front, so an unsupported one fails before
+    any download starts.
 
     Args:
-        artifacts: The artifacts to download; a single file is a one-element list.
+        artifacts: The artifacts to download. A single file is a one-element list.
         headers: Headers applied to every HTTP request, under each artifact's own.
         cookies: Cookies applied to every HTTP request, under each artifact's own.
         max_concurrency: Maximum number of concurrent HTTP downloads.
@@ -113,12 +113,12 @@ async def ensure_archive(  # noqa: PLR0913
 ) -> Path:
     """Download a zip archive (``s3://`` or ``http(s)://``) and extract it into ``target`` once.
 
-    Idempotent: a marker file under ``target``, keyed by the archive URL, is written after a successful
-    extraction, so a re-run reuses the extracted contents and skips the download.
+    Idempotent: the function writes a marker file under ``target``, keyed by the archive URL, after a
+    successful extraction. A re-run then reuses the extracted contents and skips the download.
 
     Args:
         url: The archive URL, ``s3://`` or ``http(s)://``.
-        target: Directory the archive is downloaded into and extracted to.
+        target: Directory into which the function downloads the archive and extracts its contents.
         filename: Overrides the cached archive name, for URLs whose path has no usable filename (a
             trailing slash or a ``/download`` suffix).
         headers: Request headers for an HTTP download (ignored for S3).
@@ -130,8 +130,8 @@ async def ensure_archive(  # noqa: PLR0913
     """
     target = Path(target)
     name = filename or _safe_filename(url)
-    # Key the cache path and marker on the URL so two archives that share a basename don't collide (which
-    # would silently skip the second download).
+    # Key the cache path and marker on the URL. This keeps two archives that share a basename from
+    # colliding, which would silently skip the second download.
     key = hashlib.sha256(url.encode()).hexdigest()[:8]
     marker = target / f".{key}-{name}.extracted"
     if marker.exists():

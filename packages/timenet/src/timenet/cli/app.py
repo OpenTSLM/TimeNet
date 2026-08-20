@@ -39,10 +39,10 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
         choices: The valid values, for the error message.
 
     Returns:
-        The parsed values, or ``None`` if none were given.
+        The parsed values, or ``None`` if the caller passed no values.
 
     Raises:
-        BadParameter: If any value is not recognized.
+        BadParameter: If the factory does not recognize a value.
     """
     try:
         parsed = [factory(value) for value in values]
@@ -193,7 +193,7 @@ def cache_clear(
     all_: bool = typer.Option(False, "--all", help="Also remove the local registry (curated datasets)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data. Clears downloads by default; ``--all`` also removes curated datasets."""
+    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes curated datasets."""
     if not yes:
         what = "downloaded datasets and the raw cache"
         if all_:

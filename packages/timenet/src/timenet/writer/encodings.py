@@ -1,11 +1,12 @@
-"""Role-based Parquet encodings, pinned in code rather than left to writer heuristics.
+"""This module pins Parquet encodings by column role, instead of the writer choosing them by heuristics.
 
-Monotonic ints get DELTA_BINARY_PACKED, bounded categoricals get dictionary+RLE, and id-like columns
-stay plain. Float waveform values are the one column no fixed rule fits, so the writer measures the
-data and picks per modality (see :mod:`timenet.writer.value_encoding`); this module translates that
-choice into pyarrow write options and back out of a finished file's footer. Encodings are addressed
-by the explicit ``use_dictionary`` list plus a ``column_encoding`` map (nested elements as
-``values.list.element``), the only combination pyarrow applies reliably.
+Monotonic integers use DELTA_BINARY_PACKED. Bounded categorical columns use dictionary encoding with
+RLE. ID-like columns stay in plain encoding. Float waveform values are the one column type with no
+fixed rule. For these columns, the writer measures the data and selects an encoding for each modality
+(see :mod:`timenet.writer.value_encoding`). This module converts that choice into pyarrow write
+options. It also reads the choice back from the footer of a finished file. Encodings use the explicit
+``use_dictionary`` list and a ``column_encoding`` map. Nested elements use the path
+``values.list.element``. This is the only combination that pyarrow applies reliably.
 """
 
 from dataclasses import dataclass
@@ -18,23 +19,26 @@ from timenet.writer.value_encoding import ValueEncoding
 
 
 VALUES_COLUMN = "values.list.element"
-"""Parquet path of the shard values column; the nested element, not the list."""
+"""Parquet path of the shard values column. This is the nested element, not the list."""
 
 TIME_OFFSETS_COLUMN = "time_offsets_us.list.element"
-"""Parquet path of the shard time-offsets column; the nested element of the irregular-series list."""
+"""Parquet path of the shard time-offsets column. This is the nested element of the irregular-series
+list."""
 
 SHARD_CATEGORICAL = ["spec_type", "channel"]
-"""Shard columns dictionary-encoded regardless of the values encoding."""
+"""These shard columns always use dictionary encoding, independent of the values encoding choice."""
 
 _PARQUET_COLUMN_ENCODING = {
     ValueEncoding.BYTE_STREAM_SPLIT: "BYTE_STREAM_SPLIT",
     ValueEncoding.PLAIN: "PLAIN",
 }
-"""Parquet ``column_encoding`` name per value encoding. Dictionary is absent: pyarrow requests it
-through ``use_dictionary``, and passing a column in both lists is rejected."""
+"""The Parquet ``column_encoding`` name for each value encoding. Dictionary encoding is not in this
+map. pyarrow requests dictionary encoding through ``use_dictionary`` instead. If a column appears in
+both lists, pyarrow rejects it."""
 
 _DICTIONARY_MARKERS = frozenset({"RLE_DICTIONARY", "PLAIN_DICTIONARY"})
-"""Footer names for dictionary-encoded indices; PLAIN_DICTIONARY is the pre-2.4 spelling."""
+"""Footer names for dictionary-encoded indices. PLAIN_DICTIONARY is the name used before Parquet
+version 2.4."""
 
 INDEX_DICTIONARY = ["spec_type", "channel", "chunk_file"]
 INDEX_ENCODING = {
@@ -58,10 +62,11 @@ def shard_dictionary(value_encoding: ValueEncoding) -> list[str]:
     """Return the shard columns to dictionary-encode.
 
     Args:
-        value_encoding: The encoding selected for this shard's values column.
+        value_encoding: The encoding the writer selected for this shard's values column.
 
     Returns:
-        The categorical columns, plus the values column when it was selected for dictionary encoding.
+        The categorical columns, and the values column if the writer chose dictionary encoding
+        for it.
     """
     columns = list(SHARD_CATEGORICAL)
     if value_encoding == ValueEncoding.DICTIONARY:
@@ -73,12 +78,12 @@ def shard_encoding(value_encoding: ValueEncoding) -> dict[str, str]:
     """Return the shard's explicit per-column encodings.
 
     Args:
-        value_encoding: The encoding selected for this shard's values column.
+        value_encoding: The encoding the writer selected for this shard's values column.
 
     Returns:
-        The ``column_encoding`` map, always pinning the monotonic index and the irregular series'
-        time offsets, and without a values entry when the values column goes through
-        ``use_dictionary`` instead.
+        The ``column_encoding`` map. This map always pins the monotonic index and the irregular
+        series' time offsets. The map has no entry for the values column if the values column
+        uses ``use_dictionary`` instead.
     """
     column_encoding = {"chunk_idx": "DELTA_BINARY_PACKED", TIME_OFFSETS_COLUMN: "DELTA_BINARY_PACKED"}
     parquet_name = _PARQUET_COLUMN_ENCODING.get(value_encoding)
@@ -88,19 +93,22 @@ def shard_encoding(value_encoding: ValueEncoding) -> dict[str, str]:
 
 
 def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
-    """Report whether a footer's values-column encodings are the ones that were asked for.
+    """Report whether a footer's encodings for the values column match the requested encoding.
 
-    A dictionary column chunk lists a dictionary marker for its indices *and* PLAIN for the
-    dictionary page itself, so PLAIN alone is not evidence of a plain column. It is, however, all
-    that is left when Parquet abandons a dictionary that outgrew its page limit and finishes the
-    chunk plain, which is lossless and not the writer's choice, so the dictionary case accepts it.
+    A dictionary-encoded column chunk lists two encodings: a dictionary marker for its indices,
+    and PLAIN for the dictionary page itself. For this reason, PLAIN alone does not prove that a
+    column is plain-encoded. PLAIN alone can also mean this: Parquet abandoned a dictionary that
+    grew past its page limit. Parquet then finished the chunk in plain encoding. This fallback is
+    lossless. The writer does not control this fallback. For this reason, the check accepts
+    PLAIN for the dictionary case too.
 
     Args:
         value_encoding: The encoding the writer selected.
-        applied: Encoding names read from the finished file, via :func:`values_encoding_of`.
+        applied: Encoding names that :func:`values_encoding_of` reads from the finished file.
 
     Returns:
-        ``True`` if the selection landed (or fell back in a way Parquet permits).
+        ``True`` if the file's encoding matches the request, or Parquet applied an accepted
+        fallback.
     """
     if value_encoding is ValueEncoding.DICTIONARY:
         return bool(applied & (_DICTIONARY_MARKERS | {"PLAIN"}))
@@ -112,8 +120,10 @@ def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
 def task_dictionary(schema: pa.Schema) -> list[str]:
     """Return the categorical columns to dictionary-encode for a task partition.
 
-    Only string columns qualify: ``target`` is a float for a scalar prediction and a list of span structs
-    for a localization, and dictionary-encoding either buys nothing (or fails outright for the nested one).
+    Only string columns qualify for dictionary encoding. The ``target`` column has two possible
+    types. It is a float for a scalar prediction. It is a list of span structs for a localization.
+    For the float type, dictionary encoding gives no benefit. For the list-of-structs type,
+    dictionary encoding fails.
 
     Args:
         schema: The task partition's Arrow schema.
@@ -128,8 +138,8 @@ def task_dictionary(schema: pa.Schema) -> list[str]:
 class ParquetEncoding:
     """Encoding and compression options for one sharded parquet table.
 
-    Bundles the :func:`parquet_kwargs` inputs so a sharded-table writer takes one config object rather
-    than four parallel arguments.
+    This class bundles the :func:`parquet_kwargs` inputs into one config object. A sharded-table
+    writer can then take this one object, instead of four separate arguments.
     """
 
     dictionary_columns: list[str]
@@ -148,10 +158,11 @@ def parquet_kwargs(
     """Build the shared Parquet write options for one file.
 
     Args:
-        dictionary_columns: Columns to dictionary-encode (must be disjoint from ``column_encoding``).
-        column_encoding: Explicit per-column encodings (e.g. BYTE_STREAM_SPLIT on the values column).
+        dictionary_columns: Columns to dictionary-encode (must not overlap with ``column_encoding``).
+        column_encoding: Explicit per-column encodings, for example BYTE_STREAM_SPLIT on the
+            values column.
         compression: Codec name (``"zstd"``, ``"snappy"``, ``"none"``).
-        compression_level: Pinned level, applied only for zstd.
+        compression_level: Compression level, used only for the zstd codec.
 
     Returns:
         Keyword arguments for :class:`pyarrow.parquet.ParquetWriter` or ``write_table``.
@@ -164,8 +175,10 @@ def parquet_kwargs(
         "write_statistics": True,
         "write_page_index": True,
         "write_page_checksum": True,
-        # Content-defined chunking aligns data pages to content, so a re-curated or copy-on-write-edited
-        # version re-stores only the chunks that changed on a dedup backend (e.g. Xet). Requires pyarrow>=21.
+        # Content-defined chunking aligns data pages to the data's content. For this reason, a
+        # dedup backend (for example, Xet) needs to re-store only the chunks that changed. This
+        # happens when the writer stores a re-curated or copy-on-write-edited version. This
+        # feature needs pyarrow>=21.
         "use_content_defined_chunking": True,
     }
 
@@ -173,8 +186,10 @@ def parquet_kwargs(
 def values_encoding_of(path: str, column_path: str = "values.list.element") -> set[str]:
     """Return the encodings applied to one shard column.
 
-    Used as a writer self-check that the configured encoding was actually applied; pyarrow drops it
-    silently when the column path is wrong, which costs the compression with no error to notice.
+    The writer uses this function as a self-check. The check confirms that pyarrow actually
+    applied the configured encoding. If the column path is wrong, pyarrow silently drops the
+    encoding request. This silent failure costs the compression benefit, with no error to warn
+    the writer.
 
     Args:
         path: Path to a shard parquet file.
@@ -198,14 +213,15 @@ def values_encoding_of(path: str, column_path: str = "values.list.element") -> s
 def values_column_bytes(path: str) -> int:
     """Return the compressed on-disk size of a shard's ``values.list.element`` column.
 
-    The values plane is what an encoding choice moves; whole-file size also carries the id, index,
-    and statistics columns, which the choice does not touch.
+    An encoding choice changes the size of the values column. Whole-file size also includes the
+    id, index, and statistics columns. The encoding choice does not change the size of these
+    other columns.
 
     Args:
         path: Path to a shard parquet file.
 
     Returns:
-        Summed ``total_compressed_size`` of the values column across all row groups.
+        The sum of ``total_compressed_size`` for the values column, across all row groups.
     """
     meta = pq.ParquetFile(path).metadata
     total = 0

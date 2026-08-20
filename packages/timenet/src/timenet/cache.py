@@ -66,16 +66,16 @@ def raw_cache_size() -> int:
 def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
     """Delete cached data and return the bytes freed and the directories removed.
 
-    This always clears the download storage and the raw download cache. Both can be fetched again. It
-    removes the local registry (locally curated datasets) only when ``include_registry`` is set.
+    This always clears the download storage and the raw download cache. The caller can fetch both again.
+    It removes the local registry (locally curated datasets) only when the caller sets ``include_registry``.
 
     Args:
         include_registry: Also remove the local registry.
 
     Returns:
         A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone when this
-        returns. A tree that cannot be fully removed raises an ``OSError``. This stops the caller from
-        reporting space that was never freed.
+        returns. This raises an ``OSError`` if it cannot fully remove a tree. This stops the caller from
+        reporting space it never freed.
     """
     config = settings()
     targets = [config.storage_dir, config.cache_dir]

@@ -30,12 +30,12 @@ class TimeNetSettings(BaseSettings):
 
     @property
     def storage_dir(self) -> Path:
-        """Where loaded/downloaded datasets are cached (analog of ``HF_DATASETS_CACHE``)."""
+        """Where the client caches loaded or downloaded datasets (analog of ``HF_DATASETS_CACHE``)."""
         return (self.storage if self.storage is not None else self.home_dir / "storage").expanduser()
 
     @property
     def cache_dir(self) -> Path:
-        """Where raw curation sources and Hub downloads are cached (analog of ``HF_HUB_CACHE``)."""
+        """Where the client caches raw curation sources and Hub downloads (analog of ``HF_HUB_CACHE``)."""
         return (self.cache if self.cache is not None else self.home_dir / "cache").expanduser()
 
     @property
@@ -47,8 +47,8 @@ class TimeNetSettings(BaseSettings):
 def settings(**overrides: Any) -> TimeNetSettings:
     """Build settings so explicit non-``None`` overrides win over env vars and defaults.
 
-    A ``None`` override is dropped. A missing CLI flag then falls through to the environment, then the
-    default.
+    This function drops a ``None`` override. A missing CLI flag then falls through to the environment,
+    then the default.
 
     Args:
         **overrides: Field overrides (for example ``storage=...``, ``registry=...``).

@@ -1,6 +1,6 @@
 """Registry backed by an S3 (or S3-compatible) bucket.
 
-This registry is deferred, but the contract is fixed here. An ``s3://<bucket>/<prefix>`` root holds the
+This registry defers the implementation, but fixes the contract here. An ``s3://<bucket>/<prefix>`` root holds the
 same ``<dataset_id>/<version>/`` layout as a :class:`~timenet.registry.LocalRegistry`. Reads stream
 objects. :meth:`store` compiles a dataset to a local staging directory and uploads it. The
 implementation lands in a later change. For now the methods raise ``NotImplementedError``.

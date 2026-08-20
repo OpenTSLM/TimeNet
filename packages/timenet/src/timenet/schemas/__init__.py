@@ -2,9 +2,9 @@
 
 The schemas describe the wire formats, not the in-memory dataclasses. ``dataset-card.schema.json``
 validates the human-authored card YAML (via :meth:`~timenet.types.DatasetMetadata.from_yaml`).
-``manifest.schema.json`` is the published contract for the compiled ``manifest.json`` produced by
-:meth:`~timenet.manifest.Manifest.to_dict`. A drift test keeps their enum blocks in lockstep with
-the Python enums.
+``manifest.schema.json`` is the published contract for the compiled ``manifest.json`` that
+:meth:`~timenet.manifest.Manifest.to_dict` produces. A drift test keeps their enum blocks in lockstep
+with the Python enums.
 """
 
 from timenet.schemas._registry import (

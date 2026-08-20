@@ -1,12 +1,12 @@
 """Concurrent async HTTP downloads for connectors.
 
-:func:`download_http` fetches one URL; :func:`download_http_many` fetches a list of :class:`Artifact`
+:func:`download_http` fetches one URL. :func:`download_http_many` fetches a list of :class:`Artifact`
 with the number of parallel downloads bounded by ``max_concurrency``. Both stream responses to disk with
-``aiofiles`` (no whole-file buffering, so multi-GB archives stay off the heap) and write atomically:
-bytes land in a ``.part`` file that is renamed into place only on success, so an interrupted download
-never leaves a truncated file a later ``skip_existing`` check would trust. Each artifact carries its own
-headers and cookies, which merge over the batch-level ones, so one call can span hosts that need
-different auth.
+``aiofiles`` (no whole-file buffering, so multi-GB archives stay off the heap) and write atomically.
+The bytes land in a ``.part`` file, and a rename moves it into place only on success. So an interrupted
+download never leaves a truncated file that a later ``skip_existing`` check would trust. Each artifact
+carries its own headers and cookies, which merge over the batch-level ones, so one call can span hosts
+that need different auth.
 """
 
 import asyncio
@@ -32,8 +32,8 @@ _TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=60, sock_read=60)
 class Artifact:
     """One download: a URL, its destination, and optional headers, cookies, and a SHA-256 to verify.
 
-    The ``headers``, ``cookies``, and ``sha256`` apply to an HTTP download and are ignored for an
-    ``s3://`` URL.
+    The ``headers``, ``cookies``, and ``sha256`` apply to an HTTP download. An ``s3://`` URL
+    ignores them.
     """
 
     url: str
@@ -60,8 +60,8 @@ async def download_http(  # noqa: PLR0913
     Args:
         url: The source URL.
         dest: The destination file path.
-        headers: Request headers (e.g. auth).
-        cookies: Request cookies (e.g. auth).
+        headers: Request headers, such as an auth token.
+        cookies: Request cookies, such as an auth token.
         skip_existing: Return without downloading if ``dest`` already exists.
         sha256: Optional hex digest the downloaded bytes must match.
 
@@ -84,9 +84,9 @@ async def download_http_many(
 ) -> list[Path]:
     """Download many artifacts concurrently, bounded by ``max_concurrency``, failing fast.
 
-    Batch ``headers`` and ``cookies`` apply to every request; each artifact's own headers and cookies
-    merge over them. The first failure propagates (its message names the URL) and the destinations that
-    were still in flight are left clean.
+    Batch ``headers`` and ``cookies`` apply to every request. Each artifact's own headers and cookies
+    merge over them. The first failure propagates (its message names the URL). ``download_http_many``
+    leaves the destinations that were still in flight clean.
 
     Args:
         artifacts: The artifacts to download.
@@ -115,7 +115,7 @@ async def download_http_many(
 async def _download_one(session: aiohttp.ClientSession, artifact: Artifact, *, skip_existing: bool) -> None:
     """Stream one artifact to its destination via a ``.part`` temp file, renamed on success.
 
-    The artifact's headers and cookies are merged over the session's by aiohttp.
+    aiohttp merges the artifact's headers and cookies over the session's.
 
     Args:
         session: The shared client session.

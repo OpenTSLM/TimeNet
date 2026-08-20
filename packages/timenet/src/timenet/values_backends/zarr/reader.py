@@ -1,13 +1,14 @@
-"""Zarr values backend (reader side): resolve index rows to values via per-``spec_type`` Zarr arrays.
+"""Zarr values backend: reader side.
 
-The inverse of :class:`timenet.values_backends.zarr.writer.ZarrValuesBackend`. Each index row locates a run of
-values by ``(chunk_file = array path, chunk_major_idx = element start)``. A series is normally one row, so
-a read is one contiguous range; multi-row series coalesce contiguous rows into as few ranges as
-possible. Ranges are served from an LRU of decoded storage chunks — neighboring series share storage
-chunks, and without the cache every read would re-decode its full chunks (the same reason the Parquet
-reader caches decoded row groups). Opened arrays are cached for the reader's lifetime.
+This module resolves index rows to values through per-``spec_type`` Zarr arrays. It is the inverse of
+:class:`timenet.values_backends.zarr.writer.ZarrValuesBackend`. Each index row locates a run of values by
+``(chunk_file = array path, chunk_major_idx = element start)``. A series usually has one row, so a read is
+one contiguous range. For a series with multiple rows, the reader merges the contiguous rows into as few
+ranges as possible. The reader serves ranges from an LRU cache of decoded storage chunks. Neighboring
+series share storage chunks. Without the cache, each read decodes its full chunks again. This is the same
+reason the Parquet reader caches decoded row groups. The reader caches opened arrays for its own lifetime.
 
-Requires the ``zarr`` extra (``pip install 'timenet[zarr]'``); imported lazily.
+This module needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). The module imports it lazily.
 """
 
 from __future__ import annotations
@@ -29,17 +30,17 @@ if TYPE_CHECKING:
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
-#: Mirrors the writer's group names; see timenet.values_backends.zarr.writer.
+#: Mirrors the group names in the writer module. See timenet.values_backends.zarr.writer.
 _IRREGULAR_GROUP = "_irregular"
 _TIME_OFFSETS_GROUP = "_time_offsets"
 
 
 def _time_offsets_path(values_rel_path: str) -> str:
-    """Return the time offsets array path parallel to a values array path.
+    """Return the time offsets array path that is parallel to a values array path.
 
-    Substitutes the ``_irregular`` path *segment*, never a substring: a spec type may legitimately
-    contain that text (``foo_irregular_bar``), and a plain replace would resolve it to the wrong array
-    rather than failing.
+    This function replaces the ``_irregular`` path segment only, not any matching substring. A spec
+    type name can contain that text, for example ``foo_irregular_bar``. If the code uses a plain
+    string replace, it can match the wrong array instead of failing.
 
     Args:
         values_rel_path: The values array's path relative to the version directory.
@@ -60,16 +61,16 @@ def _time_offsets_path(values_rel_path: str) -> str:
 
 
 class ZarrValuesReader(BaseValuesReader):
-    """Reads values from per-``spec_type`` Zarr arrays through a decoded-chunk LRU."""
+    """Reads values from per-``spec_type`` Zarr arrays through an LRU cache of decoded chunks."""
 
     def __init__(self) -> None:
-        """Start with empty (per-process) array and chunk caches."""
+        """Start with empty array and chunk caches for this process."""
         self._array_cache: dict[str, Any] = {}
         self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
     def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
-        """Read a series' values (``chunk_major_idx`` = element start; length is ``n_values``).
+        """Read a series' values. ``chunk_major_idx`` is the element start, and ``n_values`` is the length.
 
         Args:
             version: The opened version handle.
@@ -85,7 +86,7 @@ class ZarrValuesReader(BaseValuesReader):
     def load_range(
         self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
-        """Read only the storage chunks intersecting a temporal step range.
+        """Read only the storage chunks that intersect a temporal step range.
 
         Returns:
             The requested steps in their canonical Arrow representation.
@@ -116,9 +117,9 @@ class ZarrValuesReader(BaseValuesReader):
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
-            One int64 microsecond time offset per value. :func:`_time_offsets_path` raises if a row's values do
-            not sit under the irregular group, which means it was tagged irregular but written without
-            a parallel time offsets array.
+            One int64 microsecond time offset for each value. :func:`_time_offsets_path` raises an error
+            if a row's values do not sit under the irregular group. This means the writer tagged
+            the row irregular but did not write a parallel time offsets array.
         """
         parts = [
             self._read_range(version, _time_offsets_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
@@ -127,7 +128,7 @@ class ZarrValuesReader(BaseValuesReader):
         return pa.array(combined.astype(np.int64, copy=False))
 
     def close(self) -> None:
-        """Drop cached arrays and decoded chunks (Zarr arrays hold no OS file handles to close)."""
+        """Drop cached arrays and decoded chunks. Zarr arrays hold no OS file handles to close."""
         self._array_cache.clear()
         self._chunk_cache.clear()
         self._chunk_cache_bytes = 0
@@ -157,7 +158,7 @@ class ZarrValuesReader(BaseValuesReader):
         return segments[0] if len(segments) == 1 else np.concatenate(segments)
 
     def _chunk(self, rel_path: str, array: Any, chunk_idx: int, chunk_len: int) -> Shaped[np.ndarray, " chunk *value"]:
-        """Return one decoded storage chunk, decoding each chunk at most once (LRU).
+        """Return one decoded storage chunk. The LRU cache decodes each chunk at most once.
 
         Args:
             rel_path: The array's path (the cache key namespace).
@@ -185,7 +186,7 @@ class ZarrValuesReader(BaseValuesReader):
         return data
 
     def _array(self, version: DatasetVersion, rel_path: str) -> Any:
-        """Open (and cache) the Zarr array for ``rel_path`` through the version's store.
+        """Open the Zarr array for ``rel_path`` through the version's store. Cache the array for later use.
 
         Args:
             version: The opened version handle.
@@ -212,8 +213,8 @@ class ZarrValuesReader(BaseValuesReader):
 def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
     """Merge adjacent index rows into contiguous ``(array path, start, stop)`` ranges.
 
-    Consecutive placements of one series are contiguous by construction, so this normally collapses to a
-    single range per series.
+    Consecutive placements of one series are contiguous by construction. Because of this, the merge
+    usually produces one range for each series.
 
     Args:
         rows: The series' index rows, sorted by ``chunk_idx``.
@@ -242,8 +243,9 @@ def _to_arrow(values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec) 
     if spec.value_shape:
         dim_names = spec.dimension_names or None
         if len(contiguous) == 0:
-            # pa.FixedShapeTensorArray.from_numpy_ndarray rejects a 0-length ndarray, which an empty
-            # range read (e.g. read_steps(n, n)) produces; build the empty tensor array from storage.
+            # pa.FixedShapeTensorArray.from_numpy_ndarray rejects a 0-length ndarray. An empty range
+            # read, for example read_steps(n, n), produces a 0-length ndarray. So the code builds the
+            # empty tensor array from storage instead.
             tensor_type = pa.fixed_shape_tensor(value_type, spec.value_shape, dim_names=dim_names)
             storage = pa.FixedSizeListArray.from_arrays(pa.array([], type=value_type), int(np.prod(spec.value_shape)))
             return pa.FixedShapeTensorArray.from_storage(tensor_type, storage)

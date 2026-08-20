@@ -27,7 +27,7 @@ from timenet.types import (
 
 
 class CountingLoader:
-    """A loader that records how many times it was called, for lazy-read assertions."""
+    """A loader that counts its own calls, for lazy-read assertions."""
 
     def __init__(self, values: Sequence[float]) -> None:
         """Store the values to return.
@@ -97,12 +97,12 @@ def _series(spec, channel, n, time_series_id, source_id, phase=0.0):  # noqa: PL
 def make_dataset() -> TimeFDataset:
     """Build a deterministic dataset that exercises every TimeF feature.
 
-    The dataset covers two modalities over a shared data source. One series is shared across two
-    samples. One long series exercises chunk splitting. One sample is windowed. It uses all three
-    annotation shapes, and one annotation is shared across samples. It chains a classification task
+    The dataset covers two modalities over a shared data source. Two samples share one series.
+    One long series exercises chunk splitting. One sample uses a windowed series. It uses all three
+    annotation shapes, and one annotation appears in two samples. It chains a classification task
     to an answer task, and the answer carries a rationale and an input annotation. It also adds a
     scoped classification, a scalar prediction, and a temporal localization whose target is a point
-    and an interval. All ids are fixed, so two calls produce equal datasets. This is the canonical
+    and an interval. The ids never change, so two calls produce equal datasets. This is the canonical
     writer and reader round-trip fixture.
 
     Returns:
@@ -170,7 +170,7 @@ def make_dataset() -> TimeFDataset:
         subject_ids=("subj-1",),
         sample_id="sample-1",
     )
-    sample1.add_annotation(cohort)  # same instance and id, so it is shared across samples
+    sample1.add_annotation(cohort)  # same instance and id, so two samples share it
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
     sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
@@ -232,7 +232,7 @@ def _assert_series_equal(sample_id: str, expected: tuple[TimeSeries, ...], actua
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare
-        # equal above. The stream is data and is compared as data, like the values.
+        # equal above. This function compares the stream as data, like the values.
         exp_time_offsets, act_time_offsets = exp_ts.time_offsets_loader, act_ts.time_offsets_loader
         assert (exp_time_offsets is None) == (act_time_offsets is None), (
             f"one side stores time offsets and the other does not for {series_id}"

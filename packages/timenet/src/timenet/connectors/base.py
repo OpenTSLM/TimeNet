@@ -27,16 +27,16 @@ class BaseConnector(ABC, Generic[TRaw]):
     Connectors take no constructor arguments.
     """
 
-    __test__ = False  # a connector named Test* (e.g. the test_mean dataset) is not a pytest test class
+    __test__ = False  # a connector named Test* (for example, the test_mean dataset) is not a pytest test class
 
     CARD: ClassVar[str | Path | None] = None
-    """Optional explicit path to the dataset card YAML. When ``None`` (the default), the card is read
-    from ``dataset.yaml`` in the connector's own folder."""
+    """Optional explicit path to the dataset card YAML. When ``None`` (the default), the connector
+    reads the card from ``dataset.yaml`` in its own folder."""
 
     def __init__(self) -> None:
         cls = type(self)
-        # download() is concrete (it bridges to download_async), so a subclass that overrides neither
-        # would instantiate and only fail deep in the engine; catch it at construction instead.
+        # download() is concrete because it bridges to download_async. A subclass that overrides
+        # neither would instantiate and only fail deep in the engine. Catch it at construction instead.
         if cls.download is BaseConnector.download and cls.download_async is BaseConnector.download_async:
             raise TypeError(f"{cls.__name__} must implement download() or download_async()")
 
@@ -55,7 +55,7 @@ class BaseConnector(ABC, Generic[TRaw]):
         """Return the dataset's descriptive identity, loaded and validated from its card YAML.
 
         Reads the card by convention (``dataset.yaml`` beside the connector, unless :attr:`CARD`
-        overrides it). Its ``dataset_id`` must match the id the connector is registered/curated under.
+        overrides it). Its ``dataset_id`` must match the id used to register or curate the connector.
 
         Returns:
             The dataset's :class:`~timenet.types.DatasetMetadata`.
@@ -81,8 +81,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     async def download_async(self, cache_dir: Path) -> list[TRaw]:
         """Async variant of :meth:`download` for connectors whose downloads are I/O-bound.
 
-        Override this to fetch artifacts concurrently (e.g. via the connector HTTP download helpers);
-        the default :meth:`download` runs it for you. Implement exactly one of the two.
+        Override this to fetch artifacts concurrently, for example with the connector HTTP download
+        helpers. The default :meth:`download` runs it for you. Implement exactly one of the two.
 
         Args:
             cache_dir: Directory to write downloaded files into (created by the engine).
@@ -91,7 +91,8 @@ class BaseConnector(ABC, Generic[TRaw]):
             Raw references passed directly to :meth:`convert`.
 
         Raises:
-            NotImplementedError: If neither :meth:`download` nor :meth:`download_async` is overridden.
+            NotImplementedError: If a subclass overrides neither :meth:`download` nor
+                :meth:`download_async`.
         """
         raise NotImplementedError(
             "a connector must implement download() (synchronous) or download_async() (asynchronous)"
@@ -101,7 +102,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
         """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
 
-        CPU-bound: no network I/O. Time-series values are attached as lazy loaders, not materialized.
+        CPU-bound: no network I/O. Attach time-series values as lazy loaders instead of materializing
+        them.
 
         Args:
             raw_refs: The references returned by :meth:`download`.

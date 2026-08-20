@@ -28,7 +28,7 @@ def _s3_client() -> Any:
         A boto3 S3 client.
 
     Raises:
-        ImportError: If ``boto3`` (the ``physionet`` extra) is not installed.
+        ImportError: If the caller has not installed ``boto3`` (the ``physionet`` extra).
     """
     try:
         import boto3  # noqa: PLC0415
@@ -46,8 +46,9 @@ def _s3_client() -> Any:
 def download_s3_object(s3_url: str, dest: Path) -> None:
     """Download an ``s3://bucket/key`` object to ``dest``, creating parent directories.
 
-    Writes atomically: bytes land in a ``.part`` temp file that is renamed into place only on success,
-    so an interrupted download never leaves a truncated file a later ``skip_existing`` check would trust.
+    Writes atomically. The bytes land in a ``.part`` temp file, and a rename moves it into place
+    only on success. So an interrupted download never leaves a truncated file that a later
+    ``skip_existing`` check would trust.
 
     Args:
         s3_url: The object URL, ``s3://<bucket>/<key>``.
@@ -63,12 +64,12 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"
     client = _s3_client()
-    # boto3 invokes the Callback from its own transfer worker threads, which don't inherit the ambient
-    # ContextVar sink, so capture it here on the calling thread and call it directly.
+    # boto3 invokes the Callback from its own transfer worker threads. These threads do not inherit
+    # the ambient ContextVar sink, so capture it here on the calling thread and call it directly.
     sink = current_sink()
     try:
         if sink is not None:
-            # boto3 reports bytes incrementally; a HEAD gives the total for a full progress figure.
+            # boto3 reports bytes incrementally. A HEAD gives the total for a full progress figure.
             total = client.head_object(Bucket=bucket, Key=key)["ContentLength"]
             transferred = 0
 

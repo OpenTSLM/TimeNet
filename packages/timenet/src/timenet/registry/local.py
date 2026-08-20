@@ -24,7 +24,7 @@ class LocalRegistry(WritableRegistry):
         """Open a local registry rooted at a directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts. ``~`` is expanded.
+            root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
         """
         self._root = Path(root).expanduser()
         # (dataset_id, version) -> (manifest mtime, parsed manifest). This avoids re-parsing on repeat
@@ -133,7 +133,7 @@ class LocalRegistry(WritableRegistry):
 
         Stream the dataset through a :class:`~timenet.writer.TimeFWriter`. The writer stages under
         ``<version>.tmp-*`` and publishes with a single atomic rename. It skips an already-committed
-        version unless ``force`` is set.
+        version unless the caller sets ``force``.
 
         Args:
             dataset: The populated dataset to store.
@@ -162,8 +162,8 @@ class LocalRegistry(WritableRegistry):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local, random-access handle.
 
-        Reuses the manifest :meth:`get_manifest` already parsed and validated (so a missing version or a
-        misplaced artifact is caught there) and roots the handle at the version's directory over a
+        Reuses the manifest :meth:`get_manifest` already parsed and validated, so a missing version or a
+        misplaced artifact surfaces there. Roots the handle at the version's directory over a
         :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable.
 
         Args:

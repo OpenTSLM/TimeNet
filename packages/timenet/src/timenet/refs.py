@@ -1,6 +1,6 @@
 """Parse dataset references of the form ``org/id@version``.
 
-A reference pins a version with ``@`` (``chengsenwang/tsqa@1.0.0``); with no ``@`` (or ``@latest``) it
+A reference pins a version with ``@`` (``chengsenwang/tsqa@1.0.0``). With no ``@`` (or ``@latest``) it
 resolves to the latest committed version.
 """
 
@@ -11,7 +11,7 @@ from timenet.types import Version
 def split_ref(ref: str) -> tuple[str, str | None]:
     """Split a dataset reference into its id and pinned version.
 
-    ``"org/id@1.0.0"`` -> ``("org/id", "1.0.0")``; ``"org/id@latest"`` or ``"org/id"`` -> ``("org/id", None)``.
+    ``"org/id@1.0.0"`` -> ``("org/id", "1.0.0")``. ``"org/id@latest"`` or ``"org/id"`` -> ``("org/id", None)``.
 
     Args:
         ref: A dataset id, optionally suffixed with ``@<version>`` or ``@latest``.

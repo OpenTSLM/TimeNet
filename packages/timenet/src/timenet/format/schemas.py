@@ -197,7 +197,7 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
             ("start_us", pa.int64()),  # microseconds in the seconds frame, a step ordinal in steps
             ("end_us", pa.int64()),  # null => the span is a point
             ("time_series_ids", pa.list_(id_types["time_series_id"])),  # a step span stores its one id here
-            ("frame", pa.string()),  # "seconds" or "steps"; null on a legacy partition => seconds
+            ("frame", pa.string()),  # "seconds" or "steps". Null on a legacy partition means seconds.
         ]
     )
 
@@ -264,8 +264,8 @@ def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Sche
 
     Args:
         task_type: The task type whose partition schema to build.
-        id_types: The resolved id storage types (defaults to all-``string``; the reader passes none
-            because it only reads the column names).
+        id_types: The resolved id storage types (defaults to all-``string``). The reader passes none,
+            because it only reads the column names.
 
     Returns:
         The Arrow schema (common columns plus the type's payload columns).
@@ -293,8 +293,8 @@ class IdCodec:
     """Convert ids between their in-memory strings and their on-disk form.
 
     This is the one place that holds the logical-id-per-column mapping and the ``bytes <-> str``
-    conversion. The writer and the reader both build a codec (:meth:`from_uuid16` /
-    :meth:`from_encoding`) and call it, so the two halves of the format contract cannot drift apart.
+    conversion. The writer and the reader each build a codec (:meth:`from_uuid16` or
+    :meth:`from_encoding`). Both call it, so the two halves of the format contract cannot drift apart.
     """
 
     uuid16: frozenset[str]

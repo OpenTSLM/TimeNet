@@ -5,22 +5,23 @@ This backend is an alternative to the default Parquet shard store. It uses Zarr'
 - The writer appends every series of a modality along time to one typed array in a ``time_series.zarr``
   group. Zarr chunks the storage itself, so a series is one index row (one placement spanning its full
   length), not a run of ``chunk_max_bytes`` logical chunks.
-- Arrays are partitioned by ``(spec_type, stores_time_offsets)``, not by ``spec_type`` alone. A series
+- The writer partitions arrays by ``(spec_type, stores_time_offsets)``, not by ``spec_type`` alone. A series
   that stores time offsets writes its values under ``_irregular/`` and its int64 time offsets under
   ``_time_offsets/``. The two arrays advance together because every series in that partition writes to
   both. That is what lets the index's single ``chunk_major_idx`` element offset address either one.
   Partitioning by ``spec_type`` alone gives the time offsets array only some of the series, so the two
   arrays drift apart with nothing to notice.
-- Appends are buffered per partition and flushed at shard-aligned boundaries, so every Zarr shard object
-  is written exactly once. A ``resize()``-per-series append rewrites the trailing shard for every series.
+- The writer buffers appends per partition and flushes them at shard-aligned boundaries, so it writes
+  every Zarr shard object exactly once. A ``resize()``-per-series append rewrites the trailing shard for
+  every series.
   The backend sorts series by partition, so only one partition is open at a time. An irregular partition
   keeps its values appender and its time offsets appender open together, so it buffers near two shards.
 
-A chunk is located by ``(array path, element start)``. The shared index carries that in its
+The ``(array path, element start)`` pair locates a chunk. The shared index carries that location in its
 backend-agnostic ``chunk_file`` / ``chunk_major_idx`` locator (``chunk_minor_idx`` is unused).
 
-This backend needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). It is imported lazily, so the
-Parquet core never needs it.
+This backend needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). This module imports zarr lazily,
+so the Parquet core never needs it.
 """
 
 from collections.abc import Callable
@@ -52,8 +53,9 @@ _MAX_PLACEMENT_VALUES = 2**30
 _BYTES_PER_TIME_OFFSET = 8
 
 
-#: Group that holds the values of series that store per-value time offsets. It is kept apart from the
-#: regular arrays so a partition's values and time offsets advance together and one offset addresses both.
+#: Group that holds the values of series that store per-value time offsets. The writer keeps it apart
+#: from the regular arrays so a partition's values and time offsets advance together and one offset
+#: addresses both.
 _IRREGULAR_GROUP = "_irregular"
 #: Group that holds those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
 _TIME_OFFSETS_GROUP = "_time_offsets"
@@ -284,7 +286,7 @@ class ZarrValuesBackend(BaseValuesBackend):
 class _Partition:
     """Hold one ``(spec_type, stores_time_offsets)`` partition: a values array and, when irregular, time offsets.
 
-    The pair is held together to keep the two arrays the same length. Every series in an irregular
+    The dataclass holds the pair together to keep the two arrays the same length. Every series in an irregular
     partition writes to both, so one element offset addresses either. A caller cannot append to one and
     forget the other.
     """
@@ -332,7 +334,7 @@ class _Partition:
 class _ArrayAppender:
     """Buffer appends to one Zarr array and flush at shard-aligned boundaries.
 
-    The appender writes only whole, aligned shards, so each shard object is created exactly once.
+    The appender writes only whole, aligned shards, so it creates each shard object exactly once.
     :meth:`finish` writes the single trailing partial shard. Without this buffer, every per-series append
     rewrites the trailing shard.
     """

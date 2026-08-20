@@ -1,11 +1,11 @@
 """Download-progress reporting for connectors.
 
-Downloads report progress through an ambient sink rather than a callback threaded down every layer. A
-caller (the ``timenet-curate`` CLI, or a test) installs a sink with :func:`progress_sink`; the download
-helpers deep in the stack call :func:`report_progress`, and the event surfaces without the connector,
-the engine, or any intermediate function growing a ``progress`` parameter. The sink is a
+Downloads report progress through an ambient sink rather than a callback threaded down every layer.
+A caller (the ``timenet-curate`` CLI, or a test) installs a sink with :func:`progress_sink`. The
+download helpers deep in the stack call :func:`report_progress`. The event then surfaces without the
+connector, the engine, or any intermediate function growing a ``progress`` parameter. The sink is a
 :class:`~contextvars.ContextVar`, so it propagates correctly across ``asyncio.run`` and into gathered
-tasks, and concurrent downloads on the single event-loop thread deliver their events serially.
+tasks. Concurrent downloads on the single event-loop thread deliver their events serially.
 """
 
 from collections.abc import Callable, Iterator
@@ -36,7 +36,7 @@ def progress_sink(callback: ProgressCallback | None) -> Iterator[None]:
         callback: The sink to receive :class:`DownloadProgress` events, or ``None`` to report nothing.
 
     Yields:
-        Nothing; the sink is active within the ``with`` block and restored on exit.
+        Nothing. The sink is active within the ``with`` block and restored on exit.
     """
     token = _sink.set(callback)
     try:
@@ -60,9 +60,10 @@ def current_sink() -> ProgressCallback | None:
     """Return the installed download-progress sink, or ``None`` if none is installed.
 
     A downloader captures this on its own thread before handing a callback to a library that reports
-    from worker threads (e.g. boto3), where the :class:`~contextvars.ContextVar` would not propagate,
-    and calls the returned sink directly. It also lets a downloader skip work it only needs for
-    reporting (an S3 ``HEAD`` for the total size) when the sink is ``None``.
+    from worker threads, for example boto3. The :class:`~contextvars.ContextVar` would not propagate
+    in that case, so the downloader calls the returned sink directly instead. It also lets a
+    downloader skip work needed only for reporting (for example, an S3 ``HEAD`` for the total size)
+    when the sink is ``None``.
 
     Returns:
         The current sink callback, or ``None`` if none is installed.

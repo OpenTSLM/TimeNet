@@ -2,9 +2,9 @@
 
 Subclasses set ``HF_REPO``, ship a ``dataset.yaml`` card beside the connector, and implement ``convert()``.
 Downloads read the Hub's auto-generated parquet ref. The Hub produces that ref for public and gated datasets.
-``huggingface_hub`` is imported lazily, so base users do not need it. Install the ``huggingface`` extra to get
-it. The base reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra wiring. Fully private
-datasets have no auto-parquet ref, and this base does not support them.
+The base imports ``huggingface_hub`` lazily, so its users do not need the package. Install the ``huggingface``
+extra to get it. The base reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra wiring.
+Fully private datasets have no auto-parquet ref, and this base does not support them.
 """
 
 from abc import ABC
@@ -33,13 +33,13 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
         source format the same way. For very large datasets the Hub conversion can be partial.
 
         Args:
-            cache_dir: Where Hub files are cached.
+            cache_dir: Directory where the connector caches Hub files.
 
         Returns:
             One dict per row across all parquet files.
 
         Raises:
-            ImportError: If the ``huggingface`` extra (``huggingface_hub``) is not installed.
+            ImportError: If the caller has not installed the ``huggingface`` extra (``huggingface_hub``).
             DatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
         try:

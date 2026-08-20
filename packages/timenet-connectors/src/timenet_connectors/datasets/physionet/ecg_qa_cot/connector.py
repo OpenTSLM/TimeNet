@@ -156,7 +156,7 @@ def _find_dir_containing(root: Path, relative: str) -> Path:
         The parent directory of the first match.
 
     Raises:
-        FileNotFoundError: If no match is found.
+        FileNotFoundError: If nothing matches.
     """
     for match in root.rglob(relative):
         return match.parent
@@ -175,16 +175,16 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
     async def download_async(self, cache_dir: Path) -> list[EcgQaCotRef]:
         """Fetch PTB-XL, the template answers, and the CoT CSVs, and resolve references.
 
-        PTB-XL is an S3 archive fetched synchronously (boto3 parallelizes the transfer internally); the
+        PTB-XL is an S3 archive fetched synchronously (boto3 parallelizes the transfer internally). The
         two HTTP artifacts, the template-answers CSV and the CoT archive, download concurrently.
 
         Args:
-            cache_dir: Directory downloaded archives are cached under.
+            cache_dir: The directory that holds downloaded archives.
 
         Returns:
             One reference per CoT row across all splits.
         """
-        # PTB-XL is an S3 archive; fetch it first (boto3 blocks the loop but parallelizes the transfer).
+        # PTB-XL is an S3 archive. Fetch it first (boto3 blocks the loop but parallelizes the transfer).
         ptbxl_root = _find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.

@@ -1,37 +1,38 @@
-"""Shared CLI presentation: emoji-prefixed status lines on stderr, with a quiet toggle.
+"""Shared CLI output: emoji-prefixed status lines on stderr, with a quiet mode.
 
-Both the consumer ``timenet`` CLI and the producer ``timenet-curate`` CLI report progress through the
-shared :data:`console` so their output reads the same. Status goes to stderr, leaving stdout for the
-machine-readable result (a path or id) that a script may capture or pipe. ``--quiet`` silences status
-while still surfacing warnings and errors. The console wraps a Rich :class:`~rich.console.Console`
-(exposed as :attr:`~_Console.rich`), so a live display mounted on it, such as download progress bars,
-coordinates with these status lines and renders them above the bars instead of corrupting the region.
+The ``timenet`` CLI and the ``timenet-curate`` CLI both report progress through the shared
+:data:`console`, so their output looks the same. Status messages go to stderr. Stdout stays free
+for the machine-readable result, for example a path or an id, that a script can capture or pipe.
+``--quiet`` hides status messages but still shows warnings and errors. The console wraps a Rich
+:class:`~rich.console.Console` object, available as :attr:`~_Console.rich`. Because of this, a live
+display on the console, for example a download progress bar, can show these status lines above it.
+This avoids corruption of the display area.
 """
 
 from rich.console import Console
 
 
 class _Console:
-    """Writes emoji status lines to stderr; stdout stays reserved for machine-readable output."""
+    """Writes emoji status lines to stderr. Stdout stays reserved for machine-readable output."""
 
     def __init__(self) -> None:
         self.quiet = False
         self.rich = Console(stderr=True)
 
     def status(self, emoji: str, message: str) -> None:
-        """Print an ``<emoji> <message>`` status line (suppressed when quiet)."""
+        """Prints an ``<emoji> <message>`` status line. Quiet mode suppresses this line."""
         self._emit(emoji, message)
 
     def success(self, message: str) -> None:
-        """Print a success line (suppressed when quiet)."""
+        """Prints a success line. Quiet mode suppresses this line."""
         self._emit("✅", message, style="green")
 
     def warn(self, message: str) -> None:
-        """Print a warning (shown even when quiet)."""
+        """Prints a warning line. Quiet mode does not suppress this line."""
         self._emit("⚠️", message, style="yellow", force=True)
 
     def error(self, message: str) -> None:
-        """Print an error (shown even when quiet)."""
+        """Prints an error line. Quiet mode does not suppress this line."""
         self._emit("❌", message, style="red", force=True)
 
     def _emit(self, emoji: str, message: str, *, style: str | None = None, force: bool = False) -> None:

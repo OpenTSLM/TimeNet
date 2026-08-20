@@ -1,7 +1,7 @@
 """The default reader-side values backend: reads float32 values from Parquet shards.
 
-Each shared row group is decoded at most once because chunks of different series can land in the same
-row group.
+The reader decodes each shared row group at most once because chunks of different series can land
+in the same row group.
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ class ParquetValuesReader(BaseValuesReader):
             One int64 microsecond time offset per value.
 
         Raises:
-            TimeFFormatError: If a chunk stores no time offsets. The row is tagged irregular but was
-                written without them.
+            TimeFFormatError: If a chunk stores no time offsets. The index tags the row irregular,
+                but the writer omitted them.
         """
         chunks = []
         for row in rows:

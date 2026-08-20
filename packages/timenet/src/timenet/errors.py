@@ -11,7 +11,7 @@ class TimeNetError(Exception):
 
 
 class RegistryError(TimeNetError):
-    """A registry could not be loaded, reached, or served a request."""
+    """TimeNet could not load or reach a registry, or the registry could not serve a request."""
 
 
 class DatasetNotFoundError(TimeNetError):
@@ -35,4 +35,4 @@ class TimeFFormatError(TimeNetError):
 
 
 class InvalidManifestError(TimeFFormatError, ValueError):
-    """A ``manifest.json`` is missing required blocks/fields or cannot be parsed."""
+    """A ``manifest.json`` is missing required blocks or fields, or TimeNet cannot parse it."""

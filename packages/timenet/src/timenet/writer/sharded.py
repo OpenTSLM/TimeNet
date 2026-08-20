@@ -1,7 +1,7 @@
 """The one sharding implementation: stream Arrow row groups into byte-budgeted parquet parts.
 
 :class:`RotatingPartWriter` is the shared core. The control-plane tables use it through
-:func:`write_sharded_table` here; the Parquet values plane uses it directly (see
+:func:`write_sharded_table` here. The Parquet values plane uses it directly (see
 ``values_backends.parquet.writer``), so both planes shard through one code path.
 """
 
@@ -19,10 +19,10 @@ class RotatingPartWriter:
     """Writes caller-provided row groups into byte-budgeted parquet parts, rotating parts by budget.
 
     The caller decides each row group's content (one Arrow table per :meth:`write`) and its size. This
-    opens a :class:`pyarrow.parquet.ParquetWriter` per part, writes each table as one row group,
-    rotates to a new numbered part once the current part's accumulated size exceeds the target, and
-    reports where each row group landed. Both the control plane and the values plane sit on it, so
-    there is one sharding implementation.
+    opens a :class:`pyarrow.parquet.ParquetWriter` per part and writes each table as one row group.
+    It rotates to a new numbered part once the current part's accumulated size exceeds the target,
+    and it reports where each row group landed. Both the control plane and the values plane sit on
+    it, so there is one sharding implementation.
     """
 
     def __init__(  # noqa: PLR0913
@@ -38,8 +38,8 @@ class RotatingPartWriter:
         """Bind the writer to its staging directory, schema, path template, and byte budget.
 
         Args:
-            staging_dir: The version's staging directory; parts are written under it.
-            schema: The Arrow schema every part is written with.
+            staging_dir: The version's staging directory. The writer writes parts under it.
+            schema: The Arrow schema the writer uses for every part.
             part_path: Maps a part index to its relative path.
             part_target_bytes: Rotate to a new part once a part's accumulated size exceeds this.
             parquet_kwargs: Keyword arguments for :class:`pyarrow.parquet.ParquetWriter`.
@@ -79,8 +79,8 @@ class RotatingPartWriter:
         """Close the current part and return every part written, in order.
 
         Args:
-            write_empty_part: If no row group was ever written, still write one empty part so the
-                schema stays on disk (the control tables need this; the values plane does not).
+            write_empty_part: If the caller never wrote a row group, still write one empty part so
+                the schema stays on disk. The control tables need this. The values plane does not.
 
         Returns:
             The relative paths of the parts written.
@@ -111,8 +111,9 @@ class RotatingPartWriter:
             self._on_part_closed(self.parts[-1], len(self.parts))
 
 
-# While the bytes-per-row rate is unknown, rows are measured one at a time; after this many the rate is
-# extrapolated from the sample, so the expensive per-row measurement stays bounded regardless of size.
+# While the bytes-per-row rate is unknown, the writer measures rows one at a time. After this many
+# rows, it extrapolates the rate from the sample, so the expensive per-row measurement stays
+# bounded regardless of size.
 _PROBE_ROWS = 1024
 
 
@@ -128,14 +129,15 @@ def write_sharded_table(  # noqa: PLR0913
 ) -> list[str]:
     """Write ``rows`` as one or more parquet parts through :class:`RotatingPartWriter`.
 
-    Rows are buffered into row groups; the part writer rotates a new part once a part reaches
-    ``control_target_bytes``, and a group is flushed once it reaches
-    ``min(row_group_target_bytes, control_target_bytes)``. Until the bytes-per-row rate is known each row
-    is measured, so the first group is sized exactly (a small table or a tiny target still shards); after
-    ``_PROBE_ROWS`` rows the rate is extrapolated from the sample and later groups are sized by row count,
-    re-measured for free at each flush. The table is ordered by a random id, so adjacent groups sample
-    the same size distribution and stay evenly sized, keeping each group's statistics tight enough to
-    prune on. An empty input still writes exactly one empty part so the schema stays on disk.
+    The writer buffers rows into row groups. The part writer rotates to a new part once a part
+    reaches ``control_target_bytes``. The writer flushes a group once it reaches
+    ``min(row_group_target_bytes, control_target_bytes)``. Until the bytes-per-row rate is known, the
+    writer measures each row. This way, it sizes the first group exactly, so even a small table or a
+    tiny target still shards. After ``_PROBE_ROWS`` rows, the writer extrapolates the rate from the
+    sample. It then sizes later groups by row count, and each flush re-measures the rate for free.
+    The table is ordered by a random id, so adjacent groups sample the same size distribution and
+    stay evenly sized. This keeps each group's statistics tight enough to prune on. An empty input
+    still writes exactly one empty part so the schema stays on disk.
 
     Args:
         rows: The already-encoded payload rows, consumed lazily.

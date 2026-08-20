@@ -5,7 +5,7 @@ A :class:`DataSource` describes the origin that produced it. Both are flat froze
 Connectors build them directly or subclass them with field defaults for reuse.
 :class:`~timenet.reader.TimeFReader` rebuilds the identical instances from the manifest, so they
 round-trip and pickle without any runtime class synthesis. The per-channel identifier lives on
-:class:`~timenet.dataset.TimeSeries`, not here, so one spec is shared across every channel of a modality.
+:class:`~timenet.dataset.TimeSeries`, not here, so every channel of a modality shares one spec.
 """
 
 from dataclasses import dataclass
@@ -58,7 +58,7 @@ class TimeSeriesSpec:
     """
 
     spec_type: str
-    """Type tag identifying the modality; used to filter datasets by spec type."""
+    """Type tag identifying the modality. Callers use it to filter datasets by spec type."""
     name: str
     """Human-readable display name of the modality."""
     unit_value: pint.Unit
@@ -68,7 +68,7 @@ class TimeSeriesSpec:
     dtype: str = "float32"
     """NumPy scalar dtype used for each value element."""
     value_shape: tuple[int, ...] = ()
-    """Shape of one timestep, excluding the leading time axis; empty means scalar values."""
+    """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[str, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
 

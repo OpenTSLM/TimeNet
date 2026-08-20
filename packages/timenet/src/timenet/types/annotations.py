@@ -57,7 +57,7 @@ class Annotation:
     unit: str | pint.Unit | None = None
     """Optional physical unit of ``value``. Give a unit string (for example ``"years"``) or a
     :class:`pint.Unit`. Construction validates the unit against the shared registry. An unrecognized
-    string raises ``ValueError``. A ``pint.Unit`` is stored as its canonical name."""
+    string raises ``ValueError``. Construction stores a ``pint.Unit`` as its canonical name."""
     description: str | None = None
     """Optional human-readable description of the annotation."""
     id: str = field(default_factory=new_id)
@@ -72,8 +72,8 @@ class Annotation:
         guarantee.
 
         Raises:
-            TimeFValidationError: If ``span`` is set to something that is not a span, or the
-                annotation has neither a value nor a span.
+            TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
+                the annotation has neither a value nor a span.
         """
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))

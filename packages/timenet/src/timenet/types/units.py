@@ -36,10 +36,10 @@ ureg.define("bpm = beat / minute")
 def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
     """Validate a unit against the shared registry, rejecting an unrecognized unit string.
 
-    A :class:`pint.Unit` is stored as its canonical name. A unit string is kept as written but
-    validated, and an unknown one raises. ``None`` passes through. The result is always a string or
-    ``None``, so serialization is unchanged. Every type that carries a unit uses this function, so
-    annotation values and scalar task targets accept and store units the same way.
+    A :class:`pint.Unit` becomes its canonical name. The function keeps a unit string as written but
+    validates it, and raises on an unknown one. ``None`` passes through. The result is always a
+    string or ``None``, so serialization is unchanged. Every type that carries a unit uses this
+    function, so annotation values and scalar task targets accept and store units the same way.
 
     Args:
         unit: A :class:`pint.Unit`, a unit string (for example ``"years"``), or ``None``.
@@ -72,8 +72,8 @@ def use_as_application_registry() -> None:
     Second, when you want units from :data:`ureg` to compare and convert against units another
     library built.
 
-    This function is not called on import. It replaces the process-wide registry, so a host with its
-    own registry can break. Call it once from application startup, where the decision is yours.
+    Importing this module does not call this function. It replaces the process-wide registry, so a host
+    with its own registry can break. Call it once from application startup, where the decision is yours.
 
     This is a global assignment, not a merge. The last call wins, and any custom units that a
     previously installed registry defined stop resolving.

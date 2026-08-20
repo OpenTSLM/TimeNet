@@ -85,8 +85,8 @@ class TimeFWriter:
         """Configure the writer.
 
         Args:
-            root: Parent directory; the writer creates ``<root>/<dataset_id>/<version>/``.
-            dataset: The populated dataset (its ``schema`` must be derived before writing).
+            root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
+            dataset: The populated dataset. Call ``derive_schema()`` on it before writing.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             control_shard_target_bytes: Split a control table (samples, annotations, index, tasks) into
                 a new part once the in-memory Arrow size of the emitted rows exceeds this.
@@ -96,9 +96,9 @@ class TimeFWriter:
             compression_level: Pinned level (applied for zstd) for reproducible output.
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
-                ``spec_type`` from the data; ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
-                forces one for every modality. Only the Parquet backend applies an encoding, so
-                forcing one on another backend is rejected.
+                ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
+                forces one for every modality. Only the Parquet backend applies an encoding, so the
+                writer rejects forcing one on another backend.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
             derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
                 another (for example ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
@@ -165,8 +165,8 @@ class TimeFWriter:
         """Remove abandoned ``<version>.tmp-*`` staging dirs left by a crashed build.
 
         A hard kill (SIGKILL or OOM) never reaches :meth:`abort`, so its staging directory lingers.
-        Clear any such sibling for this version before you write a fresh one. Concurrent writes of the
-        same version are not supported.
+        Clear any such sibling for this version before you write a fresh one. The writer does not
+        support concurrent writes of the same version.
         """
         parent = self._final_dir.parent
         if not parent.is_dir():
@@ -197,8 +197,8 @@ class TimeFWriter:
         """Serialize every artifact except the manifest into the staging directory.
 
         Raises:
-            TimeFValidationError: If the schema was not derived, a shared annotation id is not
-                field-equal across samples, or a series array violates the per-series contract.
+            TimeFValidationError: If the caller never derived the schema, a shared annotation id is
+                not field-equal across samples, or a series array violates the per-series contract.
         """
         if self._dataset.schema is None:
             raise TimeFValidationError("call dataset.derive_schema() before writing")
@@ -226,7 +226,7 @@ class TimeFWriter:
         if self._final_dir.exists():
             # Only reachable when the caller pre-created the target, or a previous run died between
             # this rmtree and the replace() below. run_pipeline returns early on a committed version
-            # and drops it itself on --force, so a committed dataset is never deleted here.
+            # and drops it itself on --force, so it never deletes a committed dataset here.
             shutil.rmtree(self._final_dir)
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
         self._staging_dir.replace(self._final_dir)
@@ -272,10 +272,10 @@ class TimeFWriter:
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> sample-ids map.
 
-        One series shared across samples is the supported dedupe path. Two different series that claim
-        one ``time_series_id`` is a contradiction. Only one of them can be written, so the other's
-        samples read back the wrong data. Series reached under the same id must describe the same
-        channel. The writer rejects a disagreement instead of keeping the first series.
+        Sharing one series across samples is the supported dedupe path. Two different series that
+        claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
+        the other's samples read back the wrong data. Two series that share an id must describe the
+        same channel. The writer rejects a disagreement instead of keeping the first series.
 
         Returns:
             The sorted unique series and a mapping from ``time_series_id`` to the ids of the samples
@@ -525,9 +525,10 @@ class TimeFWriter:
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
     ) -> None:
-        # Emit rows in encoded (sample_id, time_series_id, chunk_idx) order by nested iteration, so the
-        # parts stay globally sorted without ever materializing the whole index: the reader selects the
-        # parts a probe lands in and bisects each, which requires that global order across the split.
+        # Emit rows in encoded (sample_id, time_series_id, chunk_idx) order through nested iteration.
+        # This keeps the parts globally sorted and avoids materializing the whole index in memory.
+        # The reader selects the parts where a probe lands, then bisects each part. This approach
+        # requires global order across the split.
         codec = self._codec
         sample_to_series: dict[str, list[str]] = {}
         for time_series_id, sample_ids in series_to_samples.items():
@@ -675,7 +676,7 @@ def _series_identity(ts: TimeSeries) -> tuple:
 
 
 def _axis_columns(axis: TimeAxis) -> dict:
-    """Return the shape-specific axis columns, with every column the shape does not use set null.
+    """Return the shape-specific axis columns. Set every column the shape does not use to null.
 
     The dispatch is positive and ends in :func:`~typing.assert_never`. A new axis shape fails here at
     type-check time instead of writing a row of nulls under another shape's tag.

@@ -5,15 +5,15 @@ steps). The frame changes what the numbers mean, so the frame is the type. Shape
 twice, so it is a subtype within each frame.
 
 A time span reads its bounds as microseconds on the **source recording timeline**, the frame a series'
-axis places its values in, so it stays meaningful on a windowed sample that starts partway into the
+axis places its values in. This keeps it meaningful on a windowed sample that starts partway into the
 recording. It covers the whole sample, or a subset of series named by ``time_series_ids``.
 
 A step span reads its bounds as ordinal indices into one series' own array. A step index means nothing
 without a series to count on, so a step span names exactly one ``time_series_id``. Steps exist for a
 series that has no timeline at all: an ordinal sequence has positions but no clock.
 
-Which frame fits a series is decided by the series' axis, not by the caller. A timeline axis (regular or
-irregular) takes a time span; an ordinal axis takes a step span.
+The series' axis decides which frame fits it, not the caller. A timeline axis (regular or
+irregular) takes a time span. An ordinal axis takes a step span.
 :meth:`~timenet.dataset.TimeFDataset.add_task` checks a span against the axis of every series it names.
 
 Build a concrete leaf. The bases (:class:`Span`, :class:`TimeSpan`, :class:`StepSpan`) are abstract, so
@@ -37,7 +37,7 @@ def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
     Args:
         name: The field being checked, named in the error message.
         value: The bound to check.
-        unit: How the bound reads when it is not whole (e.g. ``"whole microseconds"``).
+        unit: How the bound reads when it is not whole, such as ``"whole microseconds"``.
         hint: Extra guidance appended to the not-whole message.
 
     Raises:
@@ -53,7 +53,7 @@ def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
 
 @dataclass(frozen=True, kw_only=True)
 class Span:
-    """Abstract base for every localized region. Not constructible; build a concrete leaf type.
+    """Abstract base for every localized region. Not constructible. Build a concrete leaf type.
 
     The concrete spans are :class:`TimePoint`, :class:`TimeInterval`, :class:`StepPoint`, and
     :class:`StepInterval`. Annotate with ``Span`` where any of them fits, and shared code reads them
@@ -100,14 +100,14 @@ class TimeSpan(Span):
     start_us: int
     """The position, or the start of the interval, in microseconds on the source recording timeline."""
     time_series_ids: tuple[str, ...] | None = None
-    """Series the span is scoped to; ``None`` covers every series in the sample."""
+    """Series the span is scoped to. ``None`` covers every series in the sample."""
 
     def __post_init__(self) -> None:
         """Validate the base, then the start bound and the series scope.
 
         Raises:
-            TimeFValidationError: If an abstract base is constructed; if ``start_us`` is not whole
-                microseconds; or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+            TimeFValidationError: If an abstract base is constructed, if ``start_us`` is not whole
+                microseconds, or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
         """
         super().__post_init__()
         _check_whole(
@@ -137,7 +137,7 @@ class TimePoint(TimeSpan):
 
         Args:
             at: The position, in recording seconds.
-            time_series_ids: Series the point is scoped to; ``None`` covers every series.
+            time_series_ids: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
             The point.
@@ -150,7 +150,7 @@ class TimePoint(TimeSpan):
 
         Args:
             at: The position, in microseconds.
-            time_series_ids: Series the point is scoped to; ``None`` covers every series.
+            time_series_ids: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
             The point.
@@ -194,7 +194,7 @@ class TimeInterval(TimeSpan):
         Args:
             start: Start of the interval, in recording seconds.
             end: End of the interval, exclusive, in recording seconds.
-            time_series_ids: Series the interval is scoped to; ``None`` covers every series.
+            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
             The interval.
@@ -208,7 +208,7 @@ class TimeInterval(TimeSpan):
         Args:
             start: Start of the interval, in microseconds.
             end: End of the interval, exclusive, in microseconds.
-            time_series_ids: Series the interval is scoped to; ``None`` covers every series.
+            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
             The interval.
@@ -236,7 +236,7 @@ class StepSpan(Span):
         """Validate the base, then the series id and the start ordinal.
 
         Raises:
-            TimeFValidationError: If an abstract base is constructed; if ``time_series_id`` is empty;
+            TimeFValidationError: If an abstract base is constructed, if ``time_series_id`` is empty,
                 or if ``start`` is not a whole ordinal ``>= 0``.
         """
         super().__post_init__()

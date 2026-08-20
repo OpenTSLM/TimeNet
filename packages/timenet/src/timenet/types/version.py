@@ -14,11 +14,11 @@ class Version:
     """
 
     major: int
-    """Major version. Incremented on breaking changes."""
+    """Major version. Increments on breaking changes."""
     minor: int
-    """Minor version. Incremented on backwards-compatible additions."""
+    """Minor version. Increments on backwards-compatible additions."""
     patch: int
-    """Patch version. Incremented on backwards-compatible fixes."""
+    """Patch version. Increments on backwards-compatible fixes."""
 
     def __post_init__(self) -> None:
         """Reject non-integer or negative components.
