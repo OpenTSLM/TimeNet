@@ -8,12 +8,12 @@ tags:
 
 # Tasks
 
-A task is a labeled training target that references one or more [samples](samples.md). The task **class
-is the type tag** (usable as a search filter, for example `search(task=ClassificationTask)`) and the
+A task is a labeled training target. It references one or more [samples](samples.md). The task **class
+is the type tag**. You can use it as a search filter, for example `search(task=ClassificationTask)`. The
 **instance carries the payload**.
 
-Every task is the same shape: *inputs -> one typed answer*. That shared frame lives on the base class, so
-every task — whatever its type — can carry these:
+Every task has the same shape: *inputs -> one typed answer*. This shared frame lives on the base class.
+Every task, whatever its type, can carry these fields:
 
 | Field | What it is |
 | --- | --- |
@@ -26,9 +26,9 @@ every task — whatever its type — can carry these:
 | `rationale` | A chain of thought to train on. |
 | `from_tasks` | Source tasks this one was derived from. |
 
-Because prompt and scope are shared, a task type is defined by **what kind of thing its answer is** — a
-category, free text, a number, a set of regions, or a produced series — and nothing else. There are eight
-concrete types.
+Because prompt and scope are shared, a task type is defined by only **what kind of thing its answer
+is**. The answer is a category, free text, a number, a set of regions, or a produced series. There are
+eight concrete types.
 
 ## The Span primitive
 
@@ -38,10 +38,10 @@ numbers mean, so the frame is the type. The four concrete leaves are `TimePoint`
 `StepPoint`, and `StepInterval`. `Span`, `TimeSpan`, and `StepSpan` are abstract bases you annotate with
 (`Span` for any span), not construct.
 
-A **time span** reads its bounds as whole microseconds on the **source recording timeline**, the same
-frame a series' axis places its values in, so it stays meaningful on a windowed sample that starts
-partway into the recording. It covers the whole sample when `time_series_ids` is `None`, or a subset of
-series when it names them (a tuple of ids).
+A **time span** reads its bounds as whole microseconds on the **source recording timeline**. This is
+the same frame a series' axis places its values in. So a time span stays meaningful on a windowed
+sample that starts partway into the recording. It covers the whole sample when `time_series_ids` is
+`None`, or a subset of series when it names them (a tuple of ids).
 
 ```python
 from timenet.types import TimeInterval, TimePoint
@@ -57,8 +57,8 @@ Besides `seconds`, both build from `micros` (whole microseconds). For a wall-clo
 `sample.time_point(at)` / `sample.time_interval(start, end)`, which read the sample's own `start_time`.
 
 A **step span** reads its bounds as ordinal indices into one series' own array. A step index means
-nothing without a series to count on, so a step span names exactly one series via `time_series_id` (a
-single str) and takes no unit builders, so construct it plainly. Steps exist for a series that has no
+nothing without a series to count on. So a step span names exactly one series via `time_series_id`
+(a single str). It takes no unit builders. Construct it plainly. Steps exist for a series that has no
 timeline at all: an ordinal sequence has positions but no clock. `TSQA` is such a series, an ordered
 sequence of values with no calendar time. Steps 132 to 143 of one are this step interval:
 
@@ -68,18 +68,18 @@ from timenet.types import StepInterval
 StepInterval(time_series_id="tsqa", start=132, stop=144)
 ```
 
-Which frame fits a series is decided by the series' **axis**, not by the caller: a timeline axis (regular
-or irregular) takes a time span, an ordinal axis takes a step span. `add_task` checks a span against the
-axis of every series it names and rejects a mismatch.
+The series' **axis** decides which frame fits, not the caller. A timeline axis (regular or irregular)
+takes a time span. An ordinal axis takes a step span. `add_task` checks a span against the axis of every
+series it names, and rejects a mismatch.
 
-Spans cover both directions of time localization: a `scope` is a region **given** to the model, and a
+Spans cover both directions of time localization. A `scope` is a region **given** to the model. A
 `TemporalLocalizationTask` target is a region the model must **find**.
 
 ## ClassificationTask
 
-One categorical label. With no `scope` it labels the whole sample; with one it labels that region. Those
-are the same question asked of different amounts of input, so they are one type. `target_schema` names
-the vocabulary the label belongs to.
+One categorical label. With no `scope`, the task labels the whole sample. With a `scope`, it labels that
+region. These are the same question asked of different amounts of input. So they are one type.
+`target_schema` names the vocabulary of the label.
 
 ```python
 from timenet.types import ClassificationTask, TimeInterval
@@ -103,7 +103,7 @@ ClassificationTask(
 
 ## AnswerTask
 
-Free-form text out. Unprompted, it is a caption; with a `prompt`, it is a question answered.
+Free-form text out. With no `prompt`, the task is a caption. With a `prompt`, it answers a question.
 
 ```python
 from timenet.types import AnswerTask
@@ -129,8 +129,8 @@ AnswerTask(
   ![A series and a question in, one answer out](../assets/figures/task-answer.svg)
 </figure>
 
-Add a `rationale` and the same task supervises the reasoning as well as the answer. The field is on the
-base, so this is not a separate type — **any** task can carry a chain of thought.
+If you add a `rationale`, the same task supervises the reasoning and the answer. The field is on the base
+class. So this is not a separate type: **any** task can carry a chain of thought.
 
 ```python
 from timenet.types import AnswerTask, ClassificationTask
@@ -156,9 +156,9 @@ AnswerTask(
 
 ## ScalarPredictionTask
 
-One number out, keeping the quantity and its physical unit as data. A regression target encoded as a
-string in an answer task loses its type; keeping it a `float` with a `unit` makes regression metrics,
-batching, and unit-aware conversion straightforward.
+One number out. The task keeps the quantity and its physical unit as data. A regression target encoded as
+a string in an answer task loses its type. A `float` with a `unit` keeps regression metrics, batching,
+and unit-aware conversion simple.
 
 ```python
 from timenet.types import ScalarPredictionTask, TimeInterval
@@ -177,14 +177,13 @@ ScalarPredictionTask(
 
 ## TemporalLocalizationTask
 
-Regions out: find where something happens, given a description of it. The inverse of a scoped
+Regions out: find where something happens, from a description of it. This task is the inverse of a scoped
 `ClassificationTask`, which supplies the region and asks for its label. One type covers event detection,
-segmentation, and change-point detection, because they share this target: a tuple of `TimePoint` or
+segmentation, and change-point detection. They share this target: a tuple of `TimePoint` or
 `TimeInterval` spans.
 
-`mode` says whether unmarked time is allowed. `SPARSE` means only the marked spans are claimed (R-peaks);
-`EXHAUSTIVE` means the spans are expected to tile the region of interest and a gap is an error (sleep
-staging).
+`mode` says whether unmarked time is allowed. `SPARSE` means only the marked spans are claimed (R-peaks).
+`EXHAUSTIVE` means the spans must tile the region of interest, and a gap is an error (sleep staging).
 
 ```python
 from timenet.types import LocalizationMode, TemporalLocalizationTask, TimePoint
@@ -217,9 +216,9 @@ TemporalLocalizationTask(
 ## ForecastingTask
 
 Continue the context into the future. The future is either a whole separate sample
-(`target_sample_id`) or a region of the sample the task is attached to (`target_span`): exactly one,
-never both and never neither. The sample-id form references ids rather than raw arrays, so context and
-horizon stay traceable to their dataset versions.
+(`target_sample_id`) or a region of the sample the task is attached to (`target_span`). The task sets
+exactly one, never both and never neither. The sample-id form references ids rather than raw arrays, so
+context and horizon stay traceable to their dataset versions.
 
 ```python
 from timenet.types import ForecastingTask
@@ -230,10 +229,10 @@ ForecastingTask(
 ```
 
 `target_span` lets a single unsplit series carry a horizon, so a dataset can ship the raw recording
-rather than a context/target pair. It is the region to predict, a `TimeInterval` on the recording
-timeline or a `StepInterval` on an ordinal series, and must be an interval, never a point (a point has
-no duration, so it names no values). It needs an explicit `scope` for the context, since the default
-`scope=None` means the whole sample, which would include the region to predict.
+rather than a context/target pair. It is the region to predict: a `TimeInterval` on the recording
+timeline, or a `StepInterval` on an ordinal series. It must be an interval, never a point. A point has
+no duration, so it names no values. It needs an explicit `scope` for the context. The default
+`scope=None` means the whole sample, which includes the region to predict.
 
 ```python
 from timenet.types import ForecastingTask, TimeInterval
@@ -245,8 +244,8 @@ ForecastingTask(
 )
 ```
 
-An ordinal series has no clock, so its horizon is named in steps instead. A purely ordinal sequence —
-order only, no calendar time — takes its last 12 steps as the horizon, given the first 132 as context:
+An ordinal series has no clock, so its horizon is named in steps instead. A purely ordinal sequence
+(order only, no calendar time) takes its last 12 steps as the horizon, given the first 132 as context:
 
 ```python
 from timenet.types import ForecastingTask, StepInterval
@@ -263,8 +262,8 @@ ForecastingTask(
 
 ## TSEditingTask
 
-A series out: transform the source sample into the target sample, as the `prompt` instructs. Covers
-denoising, filtering, and deliberate corruption; both sides of the edit are stored samples.
+A series out: transform the source sample into the target sample, as the `prompt` instructs. This task
+covers denoising, filtering, and deliberate corruption. Both sides of the edit are stored samples.
 
 ```python
 from timenet.types import TSEditingTask
@@ -299,8 +298,9 @@ TSGenerationTask(
 
 ## TSCorrespondenceTask
 
-Relate one series to others. The task's `sample_ids` are the query, `candidate_sample_ids` is the pool the
-answer is chosen from, and `target` names the correct one(s). Leave the pool empty to make it open-ended.
+Relate one series to others. The task's `sample_ids` are the query. `candidate_sample_ids` is the pool
+that the answer comes from. `target` names the correct one(s). If you leave the pool empty, the task is
+open-ended.
 
 ```python
 from timenet.types import TSCorrespondenceTask
@@ -318,17 +318,17 @@ TSCorrespondenceTask(
 
 ## Context or target
 
-An annotation can be used two ways in a task:
+You can use an annotation two ways in a task:
 
 - as **context**: something the model reads to help it answer (`input_annotation_ids`), or
-- as the **target**: the thing the model has to produce (`target_annotation_ids`).
+- as the **target**: the thing the model must produce (`target_annotation_ids`).
 
 The same annotation can be the context for one task and the target of another. A task gives its answer
-either inline in `target` **or** by reference in `target_annotation_ids` — never both, and `add_task`
-rejects a task that does. Pointing at stored annotations avoids duplicating, say, a night of sleep-stage
-intervals into a task row.
+either inline in `target` **or** by reference in `target_annotation_ids`, never both. `add_task` rejects a
+task that gives both. A pointer to stored annotations avoids a copy of, for example, a night of
+sleep-stage intervals in a task row.
 
-Tasks can also build on each other. With `from_tasks`, one task feeds into another, so a simple label can
+Tasks can also build on each other. With `from_tasks`, one task feeds into another. So a simple label can
 seed a harder task about the same sample. A few basic labels turn into many richer training examples.
 
 ```mermaid

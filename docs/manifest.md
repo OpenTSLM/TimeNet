@@ -8,18 +8,21 @@ tags:
 
 # Manifest
 
-The **Dataset Manifest** (`manifest.json`) is the compiled single source of truth the SDK reads: the
-card's metadata plus the schema derived from the data, counts, and file pointers. It is pure data with
-no file I/O. The [writer](timef-writer.md) writes it last (its presence marks a committed version) and
-the [reader](timef-reader.md) reads it first. Lives in `timenet.manifest`.
+The **Dataset Manifest** (`manifest.json`) is the compiled single source of truth that the SDK
+reads. It contains the card's metadata, the schema derived from the data, counts, and file
+pointers. It is pure data and does no file I/O. The [writer](timef-writer.md) writes it last, so
+its presence marks a committed version. The [reader](timef-reader.md) reads it first. The manifest
+lives in `timenet.manifest`.
 
-Because [`DatasetSchema`](types.md#datasetschema) already holds flat descriptors, the manifest's
-`schema` block is a direct serialization of it. There are no separate "entry" types to keep in sync.
+The [`DatasetSchema`](types.md#datasetschema) type already holds flat descriptors. The manifest's
+`schema` block is a direct serialization of this type. The manifest has no separate "entry" types
+to keep in sync.
 
-The on-disk shape is pinned by the packaged `manifest.schema.json` (JSON Schema draft 2020-12), the
-formal contract for external consumers. It is published as
-[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and available in
-Python as `timenet.schemas.MANIFEST_SCHEMA`; a test validates `to_dict()` output against it.
+The packaged `manifest.schema.json` (JSON Schema draft 2020-12) pins the on-disk shape. This file
+is the formal contract for external consumers. It is published as
+[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and is
+available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the output of
+`to_dict()` against this schema.
 
 ---
 
@@ -42,21 +45,23 @@ Manifest(
 )
 ```
 
-`id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as `binary(16)`;
-an absent entry means that id is a UTF-8 string. `values_backend` names the
-[values backend](timef-writer.md#values-backends) that wrote `files.time_series`; the reader dispatches
-on it, and a format-v2 manifest without the key reads as `"parquet"`. `derived_from` is set only on a version
-produced by a [copy-on-write edit](timef-writer.md#copy-on-write-edits).
+`id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as
+`binary(16)`. If an entry is absent, that id is a UTF-8 string. `values_backend` names the
+[values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The reader uses
+this value to choose the backend. A format-v2 manifest without this key reads as `"parquet"`. Only
+a version from a [copy-on-write edit](timef-writer.md#copy-on-write-edits) has `derived_from` set.
 
-`value_encoding` reports the [values encoding](timef-writer.md#values-encoding) each modality's shards
-were written with. Nothing dispatches on it: Parquet records the applied encoding in every file's footer,
-so it exists for a curator inspecting what a build chose. It is empty for a backend with no such choice.
+`value_encoding` reports the [values encoding](timef-writer.md#values-encoding) used to write each
+modality's shards. No code reads this field to make a decision: Parquet already records the applied
+encoding in each file's footer. The field exists so that a curator can inspect what a build chose.
+The field is empty for a backend that has no such choice.
 
-The backend-neutral values locator schema introduced in format v2 applies to both scalar and
-multidimensional datasets. Multidimensional specs also require v2 so older readers reject their
-incompatible values layout explicitly rather than attempting to interpret it as scalar data.
+Format v2 introduces a backend-neutral schema for the values locator. This schema applies to both
+scalar and multidimensional datasets. Multidimensional specs also require format v2. As a result, an
+older reader rejects the incompatible values layout. It does not try to read the layout as scalar
+data.
 
-Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_version` raises
+If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `InvalidManifestError`.
 
 ### Codec
@@ -66,34 +71,39 @@ Constructing a `Manifest` (or parsing one) with an unsupported `timef_format_ver
 | `to_dict()` / `to_json()` | Canonical serialization (all keys present, explicit nulls). |
 | `from_dict(data)` / `from_json(text)` | Parse, tolerating missing optional blocks. |
 
-`from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`; `schema` and
-`counts` default to empty. Unmodeled metadata keys are dropped. Malformed blocks raise
-`InvalidManifestError` naming the offending block.
+`from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema` and
+`counts` default to empty. The parser drops unmodeled metadata keys. A malformed block raises
+`InvalidManifestError`. This error names the offending block.
 
 ### Serialization notes
 
-- Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`) and back via the
-  shared registry.
-- A spec carries its data source inline, so nothing is resolved against a side table on read.
-- Tasks serialize as `{"task_type": ...}` and resolve on read against the built-in `TASKS` registry
-  (an unknown `task_type` raises `InvalidManifestError`); annotation `value_type` round-trips as a
-  string and is used by the reader to decode values.
+- Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). The shared
+  registry converts them back.
+- A spec carries its data source inline. As a result, the reader does not resolve it against a
+  side table.
+- Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
+  `TASKS` registry. An unknown `task_type` raises `InvalidManifestError`. The annotation
+  `value_type` round-trips as a string. The reader uses it to decode values.
 
 ---
 
 ## `ManifestCounts`
 
-`samples`, `annotations`, `tasks` (dict `task_type -> count`), `time_series_chunks`,
-`time_series_index_rows`, `time_series_specs` (dict `spec_type -> series count`). All default to
-`0` / `{}`.
+The fields are `samples`, `annotations`, `tasks` (a dict of `task_type -> count`),
+`time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
+`spec_type -> series count`). All fields default to `0` or `{}`.
 
 ## `ManifestFiles`
 
-File descriptors grouped by kind: `samples`, `annotations`, `time_series_index` (required), plus
-`tasks` and `time_series` (tuples, default empty). Readers use this list, never a directory glob. Each
-entry is a `FilePart` carrying the file's `path` (version-relative), its `checksum` (`sha256:`
-prefixed), and its `size` in bytes, so path and digest never live in separate structures. `all_files()`
-returns every descriptor; `all_parts()` returns just the paths.
+`ManifestFiles` groups file descriptors by kind: `samples`, `annotations`, and
+`time_series_index` (required), plus `tasks` and `time_series` (tuples, empty by default). A
+reader uses this list. It never uses a directory glob.
+
+Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
+`checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
+live in separate structures.
+
+`all_files()` returns every descriptor. `all_parts()` returns only the paths.
 
 ---
 

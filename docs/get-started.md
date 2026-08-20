@@ -9,12 +9,12 @@ tags:
 
 ## Install
 
-TimeNet needs Python 3.11 or newer. The core install stays lean; the CLI and PyTorch loader are
-extras you opt into.
+TimeNet needs Python 3.11 or newer. The core install stays small. The CLI and the PyTorch loader
+are extras. You can add them.
 
 === "uv (recommended)"
 
-    Add it to your project with [uv](https://docs.astral.sh/uv/):
+    Add TimeNet to your project with [uv](https://docs.astral.sh/uv/):
 
     ```bash
     uv add timenet                # core: TimeF format, reader/writer, registry
@@ -32,7 +32,7 @@ extras you opt into.
 
 === "Global CLI"
 
-    Install the CLIs anywhere, each in its own isolated environment:
+    Install the CLIs anywhere. Each CLI gets its own isolated environment:
 
     ```bash
     uv tool install 'timenet[cli]'       # the `timenet` command
@@ -40,8 +40,9 @@ extras you opt into.
     # or, with pipx:  pipx install 'timenet[cli]'
     ```
 
-The `torch` extra accepts any torch build. If you already have a CUDA torch (say, for training), it
-is reused as-is. For a small CPU-only torch, install it from the PyTorch CPU index first:
+The `torch` extra accepts any torch build. If you already have a CUDA torch (for example, for
+training), you keep it as-is. For a small CPU-only torch, install it from the PyTorch CPU index
+first:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -58,15 +59,15 @@ uv sync --all-groups --all-extras
 ## Load a dataset
 
 !!! info "No public registry yet"
-    There's no hosted registry to pull from, so build the offline `timenet/hello-world` dataset
-    into a local registry first. It needs no network and comes from `timenet-connectors`.
+    There is no hosted registry yet. First build the offline `timenet/hello-world` dataset into
+    a local registry. The build needs no network. The dataset comes from `timenet-connectors`.
 
 ```bash
 timenet-curate build timenet/hello-world
 ```
 
-That writes into your local registry, which is where the [`TimeNet`](client.md) client looks by
-default. Load the dataset:
+The build writes into your local registry. The [`TimeNet`](client.md) client looks there by
+default. Now load the dataset:
 
 ```python
 import pandas as pd
@@ -82,10 +83,10 @@ print(df.head())
 ```
 
 !!! tip "pandas is optional"
-    The DataFrame step uses pandas (`uv add pandas`). It isn't a TimeNet dependency. Drop it for a
-    pure-NumPy workflow.
+    The DataFrame step uses pandas (`uv add pandas`). pandas is not a TimeNet dependency. For a
+    pure-NumPy workflow, remove it.
 
-`load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values;
-`to_arrow()` / `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
-[Client](client.md) for search, version pinning, PyTorch, and the CLI, and
-[Connectors](connectors.md) / [Curation](curation.md) to build your own datasets.
+`load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values.
+`to_arrow()` and `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
+[Client](client.md) for search, version pinning, PyTorch, and the CLI. See
+[Connectors](connectors.md) and [Curation](curation.md) to build your own datasets.

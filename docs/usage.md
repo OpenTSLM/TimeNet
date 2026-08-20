@@ -11,12 +11,12 @@ tags:
 
 # Usage
 
-Every dataset loads the same way, then hands off to your framework of choice. Two entry points:
+Every dataset loads the same way. Then it hands off to your framework. There are two entry points:
 
 - `TimeNet().load("org/name")` returns an in-memory [`TimeFDataset`](timef-dataset.md) with lazy
   per-series values. Use it for single-node work (pandas, polars, torch).
 - `TimeNet().download("org/name")` returns the local TimeF version directory. Its control tables are
-  Parquet; its values plane is Parquet or Zarr, as recorded in the manifest.
+  Parquet. Its values plane is Parquet or Zarr, as recorded in the manifest.
 
 Example status:
 
@@ -25,9 +25,8 @@ Example status:
 - [x] PyTorch: `load_torch` plus a `DataLoader`
 - [ ] Spark: planned
 
-Each series carries its own `channel` and `time_axis`, and reads its values
-lazily through `to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded
-sample.
+Each series carries its own `channel` and `time_axis`. It reads its values lazily through
+`to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded sample.
 
 === "pandas"
 
@@ -77,7 +76,7 @@ sample.
     # needs: pip install 'timenet[torch]'
     ds = TimeNet().load_torch("chengsenwang/tsqa")
     item = ds[0]
-    series, question = item["series"][0], item["tasks"][0].question
+    series, prompt = item["series"][0], item["tasks"][0].prompt
 
     # Series lengths vary between samples, so batch with a collate_fn that picks
     # out what the model needs.
@@ -92,9 +91,9 @@ sample.
 
 ## Example: train a classifier end-to-end
 
-One script, the whole loop: curate a dataset, load it, train a model. The `timenet/test-mean` demo is
-deliberately simple. Each sample is one noisy signal, labeled `above_zero` or `below_zero` by whether
-its mean is positive, so a classifier only has to recover that sign.
+One script does the whole loop: curate a dataset, load it, train a model. The `timenet/test-mean`
+demo is simple. Each sample is one noisy signal. The label is `above_zero` or `below_zero`, by the
+sign of the mean. So a classifier only must recover that sign.
 
 ```python
 from sklearn.linear_model import LogisticRegression
@@ -119,16 +118,17 @@ model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
 print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 ```
 
-`to_features_and_targets` defers materialization: `output="arrow"` (the default) hands back a
-`FixedSizeListArray` and a string array with no NumPy copy; the example asks for `output="numpy"` because
-scikit-learn needs it. It also takes `features="series"` to return one variable-length sequence per
-sample (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix. `task` is inferred
-here because `test-mean` has a single task type; pass `task=...` when a dataset carries several.
+`to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
+`FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
+because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
+sequence per sample (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
+`test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
+tasks, pass `task=...`.
 
 The full runnable version is
 [`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
 
 !!! tip "scikit-learn is optional"
-    It backs this example only and isn't a TimeNet dependency: `pip install scikit-learn`, then
-    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow; the
+    It backs this example only. It is not a TimeNet dependency. Run `pip install scikit-learn`, then
+    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow. The
     model on top is your choice.

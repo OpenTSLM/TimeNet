@@ -8,11 +8,11 @@ tags:
 
 # TimeFReader
 
-Deserializes a committed TimeF version into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
-of [`TimeFWriter`](timef-writer.md), driven entirely by `manifest.json`: it never runs connector code.
-It reads through a [`DatasetVersion`](registry.md) handle (a manifest plus a filesystem-rooted view of
-the version's files), so a read never re-opens the registry nor re-parses the manifest. Lives in
-`timenet.reader`.
+`TimeFReader` converts a committed TimeF version into an in-memory [`TimeFDataset`](timef-dataset.md).
+It is the inverse of [`TimeFWriter`](timef-writer.md). It uses only `manifest.json` and never runs
+connector code. It reads through a [`DatasetVersion`](registry.md) handle, which holds the manifest
+and a view of the version's files on the file system. As a result, a read never opens the registry
+again or parses the manifest again. `TimeFReader` is in the `timenet.reader` module.
 
 ```python
 from timenet.reader import TimeFReader
@@ -28,41 +28,51 @@ with TimeFReader(version) as reader:
     values = dataset.samples[0].time_series[0].to_arrow()
 ```
 
-Use it as a context manager: `close()` (called by `__exit__`) releases the selected values backend's
-open handles and decoded-chunk caches.
+You can use `TimeFReader` as a context manager. Its `close()` method, called by `__exit__`, releases
+the open handles and decoded-chunk caches of the selected values backend.
 
 ## What is eager vs lazy
 
-`__init__` reads nothing: the handle already carries the parsed manifest, and every table resolves on
-first use. The time-series index and the annotations table are read a pruned row group at a time (only the
-groups a lookup's key statistics cannot rule out are decoded), tasks decode on first `.tasks` access, and
-per-series values and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with
-loader closures that pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called.
-`iter_samples(sample_ids=...)` filters on the stored id column, and streams samples one at a time without
-building a `TimeFDataset`.
+`__init__` reads nothing. The handle already has the parsed manifest. Every table resolves on first
+use.
 
-The index is held as Arrow and searched per lookup, rather than expanded into one Python object per
-row. That keeps opening a large dataset proportional to the index file rather than to a multiple of
-it: roughly 180 bytes of memory per index row, where a row is one `(sample, series, chunk)`.
+`TimeFReader` reads the time-series index and the annotations table one pruned row group at a time.
+It decodes only the row groups that a lookup's key statistics cannot rule out. Tasks decode on first
+access to `.tasks`. Per-series values and `Sample` construction stay lazy. `read()` and
+`iter_samples()` build samples with loader closures. When the code calls `to_arrow()`, `to_numpy()`,
+or `read_steps()`, these closures pull data from storage.
+
+`iter_samples(sample_ids=...)` filters on the stored id column. It streams samples one at a time and
+does not build a `TimeFDataset`.
+
+`TimeFReader` keeps the index as Arrow data and searches it per lookup. It does not expand the index
+into one Python object per row. As a result, when a large dataset opens, the memory it uses stays
+proportional to the size of the index file. It does not grow to a multiple of that size. Each index
+row uses about 180 bytes of memory. A row is one `(sample, series, chunk)` tuple.
 
 ## Type reconstruction
 
-Specs, data sources, and annotation metadata are read straight from the manifest's flat descriptors.
-There is no runtime class synthesis. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor for its
-`spec_type`; annotations are rebuilt as real `Annotation` instances (values decoded from JSON, the
-span rebuilt as a `TimePoint`, `TimeInterval`, `StepPoint`, or `StepInterval`); tasks are resolved
-against the built-in `TASKS` registry with `from_tasks` linked. Everything pickles and compares equal
-to the originals field-for-field, which is what makes multiprocessing `DataLoader` workers safe.
+`TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
+descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
+descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It
+decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
+`StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
+
+Everything pickles and compares equal to the original data, field by field. This equality is why
+multiprocessing `DataLoader` workers are safe.
 
 ## Value reads
 
-A series' loader resolves its index rows (sorted by `chunk_idx`) and dispatches through the manifest's
-`values_backend`. For Parquet, `chunk_file`, `chunk_major_idx`, and `chunk_minor_idx` identify the shard,
-row group, and row offset. For Zarr, they identify the array path and temporal start offset. Scalars
-use a primitive Arrow array; N-D values use `pa.FixedShapeTensorArray`, whose length is the number of
-timesteps. `to_numpy()` is the explicit framework conversion and preserves the spec's dtype and
-trailing shape. Range-aware reads select only the requested temporal chunks. Parquet handles and Zarr
-decoded chunks are cached for the reader's lifetime and released on `close()`.
+Each series' loader resolves its index rows, sorted by `chunk_idx`. The loader dispatches through the
+manifest's `values_backend`. For Parquet, `chunk_file`, `chunk_major_idx`, and `chunk_minor_idx`
+identify the shard, row group, and row offset. For Zarr, they identify the array path and the start
+offset in time.
+
+Scalars use a primitive Arrow array. N-D values use `pa.FixedShapeTensorArray`, whose length is the
+number of timesteps. `to_numpy()` is the explicit conversion to the array framework and keeps the
+spec's dtype and trailing shape. Range-aware reads select only the requested chunks in time.
+`TimeFReader` caches Parquet handles and decoded Zarr chunks for the life of the reader. When the code
+calls `close()`, it releases them.
 
 ## API
 
@@ -75,23 +85,27 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 ## Errors
 
-Building the handle (`DatasetVersion.open_local` or a registry's `open_version`) raises
-`FileNotFoundError` if the version directory has no `manifest.json`, and `TimeFFormatError` (an
-`InvalidManifestError`) if the manifest is malformed or an unsupported version. Opening the reader reads
-nothing else, so a missing or corrupt file is not caught on open. It surfaces on the first access that
-needs it: tasks on first `.tasks`, samples on iteration, the index and annotations on the first read that
-resolves them. A corrupt control-plane table raises `TimeFFormatError` with its context. Call `verify()`
-for a construction-time integrity check, which reopens every listed file through the handle and raises
-`TimeFFormatError` on a missing or mismatched one.
+`DatasetVersion.open_local` and a registry's `open_version` build the handle. If the version directory
+has no `manifest.json`, they raise `FileNotFoundError`. If the manifest is malformed or is an
+unsupported version, they raise `TimeFFormatError` (an `InvalidManifestError`).
+
+Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
+file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
+on first access to `.tasks`. Samples raise it on iteration. The index and annotations raise it on the
+first read that needs them.
+
+A corrupt control-plane table raises `TimeFFormatError` with its context. You can call `verify()` for
+an integrity check at construction time. It reopens every listed file through the handle and raises
+`TimeFFormatError` on a missing or mismatched file.
 
 ## Round-trip guarantee
 
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every sample's
-`sample_id`, `subject_ids`, `task_ids`, and annotations; each series' `spec`, `channel`,
-`source_id`, `time_series_id`, window, and exact dtype/shape-preserving values; and each task's payload
-and resolved `from_tasks`. `TimeSeries` object identity is not preserved. `time_series_id` is the
-durable handle.
+`sample_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
+`channel`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
+preserved. It restores each task's payload and resolved `from_tasks`. `TimeSeries` object identity is
+not preserved. `time_series_id` is the durable handle.
 
 ---
 
-See the [API reference for `timenet.reader`](api/reader.md) for the full symbol listing.
+The [API reference for `timenet.reader`](api/reader.md) has the full symbol listing.
