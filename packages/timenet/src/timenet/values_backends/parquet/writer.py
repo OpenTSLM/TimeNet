@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import TimeSeries
 from timenet.errors import TimeFValidationError
-from timenet.format.constants import SHARD_TEMPLATE
+from timenet.format.constants import SHARD_TEMPLATE, part_path
 from timenet.format.schemas import IdCodec, shard_schema
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.parquet.config import ParquetValuesConfig
@@ -312,7 +312,7 @@ class _ShardStream:
                     spec_type, [chunk.values for chunk in self._buffer]
                 )
             self._shard_encoding = self.encodings[spec_type]
-            rel = SHARD_TEMPLATE.format(self._shard_idx)
+            rel = part_path(SHARD_TEMPLATE, self._shard_idx)
             self.shard_paths.append(rel)
             shard = self._backend._new_shard_writer(rel, self._shard_encoding)
             self._shard = shard
