@@ -399,6 +399,8 @@ def _part_from_dict(entry: Any, key: str) -> FilePart:
     path, checksum, size = entry["path"], entry["checksum"], entry["size"]
     if not isinstance(path, str) or not path:
         raise TypeError(f"'files.{key}' path must be a non-empty string, got {path!r}")
+    if path.startswith("/") or any(segment == ".." for segment in path.split("/")):
+        raise ValueError(f"'files.{key}' path must stay within the dataset root, got {path!r}")
     if not isinstance(checksum, str) or not checksum.startswith("sha256:"):
         raise ValueError(f"'files.{key}' checksum must be 'sha256:<hex>', got {checksum!r}")
     if not isinstance(size, int) or isinstance(size, bool) or size < 0:

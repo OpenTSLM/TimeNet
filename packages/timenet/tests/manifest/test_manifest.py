@@ -169,6 +169,9 @@ def test_from_dict_requires_core_blocks(missing):
         {"path": "x", "checksum": "md5:whatever", "size": 10},  # checksum not sha256-prefixed
         {"path": "x", "checksum": "sha256:" + "a" * 64, "size": -1},  # negative size
         {"path": "x", "checksum": "sha256:" + "a" * 64, "size": True},  # bool masquerading as an int
+        {"path": "/etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # absolute path
+        {"path": "../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal above root
+        {"path": "samples/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
     ],
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
