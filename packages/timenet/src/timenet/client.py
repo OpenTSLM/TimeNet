@@ -185,17 +185,21 @@ class TimeNet:
         return target
 
     def load(self, dataset_id: str, version: str | None = None) -> TimeFDataset:
-        """Download if needed, then read the dataset into memory.
+        """Read the dataset into memory, reading in place through the registry's storage handle.
+
+        No whole-dataset download: the reader pulls each series lazily from the registry over the handle
+        :meth:`~timenet.registry.BaseRegistry.open_version` returns. Use :meth:`download` for an explicit
+        on-disk cache.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
 
         Returns:
-            The dataset with lazy per-series loaders backed by the local copy.
+            The dataset with lazy per-series loaders backed by the registry handle.
         """
-        target = self.download(dataset_id, version)
-        return TimeFReader(target).read()
+        dataset_id, version = _resolve_ref(dataset_id, version)
+        return TimeFReader(self._registry.open_version(dataset_id, version)).read()
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
         """Download if needed and return the dataset as a read-only PyTorch ``Dataset``.

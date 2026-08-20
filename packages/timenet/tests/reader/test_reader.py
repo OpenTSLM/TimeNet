@@ -10,6 +10,7 @@ from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     Annotation,
@@ -44,7 +45,7 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
     version_dir = _write(tmp_path, dataset=make_dataset(), values_backend=backend)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert isinstance(restored, TimeFDataset)
     assert_datasets_equal(original, restored)
@@ -56,7 +57,7 @@ def test_round_trip_with_chunk_splitting(tmp_path, backend):
     version_dir = _write(
         tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
     )
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(original, restored)
 
@@ -66,7 +67,7 @@ def test_read_steps_matches_full_series_slice(tmp_path, backend):
     version_dir = _write(
         tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
     )
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         series = next(iter(reader.iter_samples())).time_series[0]
         expected = series.to_arrow().slice(3, 7)
         assert series.read_steps(3, 10).equals(expected)
@@ -74,7 +75,7 @@ def test_read_steps_matches_full_series_slice(tmp_path, backend):
 
 def test_metadata_and_schema(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert reader.metadata.dataset_id == "timenet/hello-world"
         assert {s.spec_type for s in reader.schema.time_series_specs} == {"sine", "cosine"}
         assert ClassificationTask in reader.schema.tasks
@@ -82,7 +83,7 @@ def test_metadata_and_schema(tmp_path):
 
 def test_shared_series_distinct_objects_same_id(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         samples = {s.sample_id: s for s in reader.read().samples}
     a = next(ts for ts in samples["sample-0"].time_series if ts.time_series_id == "ts-shared")
     b = next(ts for ts in samples["sample-1"].time_series if ts.time_series_id == "ts-shared")
@@ -92,7 +93,7 @@ def test_shared_series_distinct_objects_same_id(tmp_path):
 
 def test_annotation_value_types_round_trip(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         samples = {s.sample_id: s for s in reader.read().samples}
     anns = {a.key: a for a in samples["sample-0"].annotations}
     assert anns["age"].span is None
@@ -106,7 +107,7 @@ def test_annotation_value_types_round_trip(tmp_path):
 
 def test_task_chain_round_trips(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {t.id: t for t in reader.tasks}
     answer = tasks["task-answer-0"]
     assert isinstance(answer, AnswerTask)
@@ -119,7 +120,7 @@ def test_shared_task_frame_round_trips(tmp_path):
     sample = dataset.samples[0]
     dataset.add_task(sample, AnswerTask(prompt="Any ectopy?", target="No.", id="task-answer-1"))  # rationale=None
     version_dir = _write(tmp_path, dataset=dataset)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {t.id: t for t in reader.tasks}
     with_rationale = tasks["task-answer-0"]
     assert isinstance(with_rationale, AnswerTask)
@@ -134,7 +135,7 @@ def test_shared_task_frame_round_trips(tmp_path):
 
 def test_scope_and_localization_spans_round_trip(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {t.id: t for t in reader.tasks}
     assert tasks["task-cls-2"].scope == TimeInterval.seconds(0.0, 0.25, time_series_ids=("ts-window-2",))
     localization = tasks["task-localize-0"]
@@ -148,7 +149,7 @@ def test_scope_and_localization_spans_round_trip(tmp_path):
 
 def test_scalar_target_round_trips_as_a_number(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = {t.id: t for t in reader.tasks}["task-scalar-0"]
     assert isinstance(task, ScalarPredictionTask)
     assert task.target == pytest.approx(62.0)
@@ -157,9 +158,9 @@ def test_scalar_target_round_trips_as_a_number(tmp_path):
 
 def test_iter_samples_matches_read(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         streamed = {s.sample_id for s in reader.iter_samples()}
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         read_ids = {s.sample_id for s in reader.read().samples}
     assert streamed == read_ids
 
@@ -176,7 +177,7 @@ def test_values_are_lazy(tmp_path, monkeypatch):
         opens["n"] += 1
         return original_open(*args, **kwargs)
 
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
         ts = dataset.samples[0].time_series[0]
@@ -190,7 +191,7 @@ def test_read_back_dataset_is_picklable(tmp_path, backend):
     # A multi-worker torch DataLoader pickles the dataset to each worker, so lazy loaders must pickle
     # even after values (and thus the backend's handles/caches) have been touched.
     version_dir = _write(tmp_path, values_backend=backend)
-    dataset = TimeFReader(version_dir).read()
+    dataset = TimeFReader(DatasetVersion.open_local(version_dir)).read()
     first = dataset.samples[0].time_series[0]
     original = first.to_arrow()  # populates the values backend's caches
 
@@ -198,18 +199,39 @@ def test_read_back_dataset_is_picklable(tmp_path, backend):
     assert restored.samples[0].time_series[0].to_arrow().equals(original)
 
 
+def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    reads: list[str] = []
+    original_read_table = pq.read_table
+
+    def counting_read_table(source, *args, **kwargs):
+        reads.append(str(source))
+        return original_read_table(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader._tasks is None
+        assert not [p for p in reads if "/tasks/" in p]  # construction decoded no task partition
+        first = reader.tasks
+        opened = [p for p in reads if "/tasks/" in p]
+        assert opened  # first access decodes the task partitions
+        assert reader.tasks is first  # second access reuses the cached tuple
+        assert [p for p in reads if "/tasks/" in p] == opened
+
+
 # ---- validation -------------------------------------------------------------------------------
 
 
 def test_missing_root_raises(tmp_path):
+    # Building the handle reads manifest.json; a directory that does not exist has no version to open.
     with pytest.raises(FileNotFoundError):
-        TimeFReader(tmp_path / "nope")
+        DatasetVersion.open_local(tmp_path / "nope")
 
 
 def test_missing_manifest_raises(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(FileNotFoundError):
-        TimeFReader(tmp_path / "empty")
+        DatasetVersion.open_local(tmp_path / "empty")
 
 
 @pytest.mark.parametrize("format_version", [2, 99])
@@ -220,7 +242,7 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     data["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(data))
     with pytest.raises(TimeFFormatError):
-        TimeFReader(version_dir)
+        TimeFReader(DatasetVersion.open_local(version_dir))
 
 
 def test_corrupt_index_locator_has_series_context(tmp_path):
@@ -232,7 +254,7 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     bogus = pa.array(["time_series/does-not-exist.parquet"] * table.num_rows)
     pq.write_table(table.set_column(table.schema.get_field_index("chunk_file"), "chunk_file", bogus), index_path)
 
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         sample = next(iter(reader.iter_samples()))
         series_id = sample.time_series[0].time_series_id
         with pytest.raises(
@@ -241,55 +263,77 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
             reader._load_values(sample.sample_id, series_id)
 
 
-def test_missing_listed_file_raises(tmp_path):
+def test_missing_eager_control_file_raises_on_open(tmp_path):
+    # The annotations table and the index are read on open, so a missing one surfaces at construction
+    # even though __init__ no longer stat-sweeps every file the manifest lists.
+    version_dir = _write(tmp_path)
+    (version_dir / "time_series_index/part-00000000.parquet").unlink()
+    with pytest.raises(FileNotFoundError):
+        TimeFReader(DatasetVersion.open_local(version_dir))
+
+
+def test_missing_lazy_samples_file_raises_on_iteration(tmp_path):
+    # Samples are read lazily, so a missing samples part surfaces when iterating, not at open.
     version_dir = _write(tmp_path)
     (version_dir / "samples/part-00000000.parquet").unlink()
+    reader = TimeFReader(DatasetVersion.open_local(version_dir))  # open is happy: it never touches samples
     with pytest.raises(FileNotFoundError):
-        TimeFReader(version_dir)
+        list(reader.iter_samples())
 
 
 def test_verify_passes_on_an_intact_dataset(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         reader.verify()  # must not raise
 
 
 def test_verify_detects_a_corrupted_shard(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         # a shard: read lazily, so __init__ still succeeds and verify() is what catches it
         rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
     target = version_dir / rel
     original = target.read_bytes()
     # Same size, flipped content: exercises the checksum check, not the size check verify() also does.
     target.write_bytes(original[:-1] + bytes([original[-1] ^ 0xFF]))
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="checksum mismatch"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="checksum mismatch"),
+    ):
         reader.verify()
 
 
 def test_verify_detects_a_size_mismatch(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
     target = version_dir / rel
     target.write_bytes(target.read_bytes()[:-1])  # truncate, so size disagrees before a checksum is even computed
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="size mismatch"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="size mismatch"),
+    ):
         reader.verify()
 
 
 def test_verify_detects_a_deleted_file(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
     (version_dir / rel).unlink()
-    # __init__ already refuses a manifest-listed file that is gone
-    with pytest.raises(FileNotFoundError):
-        TimeFReader(version_dir)
+    # A value shard is read lazily, so __init__ no longer stat-sweeps it; verify() reopens every listed
+    # file through the handle and is where a deleted one now surfaces.
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="missing file"),
+    ):
+        reader.verify()
 
 
-def test_corrupt_task_partition_raises_format_error(tmp_path):
+def test_corrupt_task_partition_raises_format_error_on_first_task_access(tmp_path):
     # An unknown task partition name is corrupt on-disk data, so it must surface as TimeFFormatError
-    # rather than the bare ValueError that TaskType() happens to raise.
+    # rather than the bare ValueError that TaskType() happens to raise. Tasks decode on first access,
+    # so that is where it surfaces; construction never touches the task partition.
     version_dir = _write(tmp_path)
     tasks_dir = next((version_dir / "tasks").iterdir())
     tasks_dir.rename(tasks_dir.parent / "task=not_a_real_task_type")
@@ -300,13 +344,14 @@ def test_corrupt_task_partition_raises_format_error(tmp_path):
         for part in manifest["files"]["tasks"]
     ]
     manifest_path.write_text(json.dumps(manifest))
+    reader = TimeFReader(DatasetVersion.open_local(version_dir))  # construction does not touch the task partition
     with pytest.raises(TimeFFormatError):
-        TimeFReader(version_dir)
+        _ = reader.tasks
 
 
 def test_start_time_round_trips_exactly(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         samples = {s.sample_id: s for s in reader.iter_samples()}
     # The fixture anchor is not representable in float64, so this catches any float coercion.
     assert samples["sample-0"].start_time == 9_007_199_254_740_993
@@ -319,7 +364,7 @@ def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
     samples_path = version_dir / "samples/part-00000000.parquet"
     table = pq.read_table(samples_path)
     pq.write_table(table.drop_columns(["start_time_us"]), samples_path)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert all(s.start_time is None for s in reader.iter_samples())
 
 
@@ -336,7 +381,10 @@ def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
     # The tag and the columns disagree: an ordinal series must have no period or start index.
     version_dir = _write(tmp_path)
     _corrupt_first_series(version_dir, "axis_type", "ordinal")
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="carries regular- or"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="carries regular- or"),
+    ):
         list(reader.iter_samples())
 
 
@@ -344,7 +392,10 @@ def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
     # A zero denominator would raise a raw ZeroDivisionError from Fraction; it must surface as format error.
     version_dir = _write(tmp_path)
     _corrupt_first_series(version_dir, "period_denominator", 0)
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="unbuildable regular axis"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="unbuildable regular axis"),
+    ):
         list(reader.iter_samples())
 
 
@@ -363,7 +414,7 @@ def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tm
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
     with pytest.raises(TimeFFormatError, match="decodes to shape"):
-        TimeFReader(version_dir)
+        TimeFReader(DatasetVersion.open_local(version_dir))
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
@@ -371,7 +422,7 @@ def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_err
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "age", "value_type", "str")
     with pytest.raises(TimeFFormatError, match="value type"):
-        TimeFReader(version_dir)
+        TimeFReader(DatasetVersion.open_local(version_dir))
 
 
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
@@ -385,7 +436,10 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
         if row["span"] is not None and row["span"]["end_us"] is not None:
             row["span"]["end_us"] = 10**15  # far past any series window
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="falls outside sample"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="falls outside sample"),
+    ):
         list(reader.iter_samples())
 
 
@@ -425,7 +479,10 @@ def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
     # as a format error, not the raw ValueError that validation raises.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_first_time_span(version_dir, {"start_us": 6_000_000, "end_us": 5_000_000, "time_series_ids": None})
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be > start"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="must be > start"),
+    ):
         list(reader.iter_samples())
 
 
@@ -434,5 +491,8 @@ def test_point_shaped_time_span_raises_format_error(tmp_path):
     # rejected as a format error, not left to reach the unscoped-span check and raise a bare TypeError.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_first_time_span(version_dir, {"start_us": 0, "end_us": None, "time_series_ids": None})
-    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="must be a TimeInterval"):
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="must be a TimeInterval"),
+    ):
         list(reader.iter_samples())

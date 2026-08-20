@@ -8,14 +8,22 @@ tags:
 
 # TimeFReader
 
-Deserializes a TimeF version directory into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
+Deserializes a committed TimeF version into an in-memory [`TimeFDataset`](timef-dataset.md). The inverse
 of [`TimeFWriter`](timef-writer.md), driven entirely by `manifest.json`: it never runs connector code.
-Lives in `timenet.reader`.
+It reads through a [`DatasetVersion`](registry.md) handle (a manifest plus a filesystem-rooted view of
+the version's files), so a read never re-opens the registry nor re-parses the manifest. Lives in
+`timenet.reader`.
 
 ```python
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion, open_registry
 
-with TimeFReader(version_dir) as reader:
+# From a registry (reads in place, no download):
+version = open_registry("~/timenet/registry").open_version("timenet/hello-world")
+# ...or from a version directory already on disk:
+version = DatasetVersion.open_local(version_dir)
+
+with TimeFReader(version) as reader:
     dataset = reader.read()
     values = dataset.samples[0].time_series[0].to_arrow()
 ```
@@ -25,7 +33,8 @@ open handles and decoded-chunk caches.
 
 ## What is eager vs lazy
 
-`__init__` reads the manifest, tasks, annotations, and the time-series index up front. Per-series values
+`__init__` does no stat sweep: the handle already carries the parsed manifest. It decodes the annotations
+table and the time-series index up front, and decodes tasks on first `.tasks` access. Per-series values
 and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with loader closures that
 pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called. `iter_samples()`
 streams samples one at a time without building a `TimeFDataset`.
@@ -64,11 +73,14 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 ## Errors
 
-`__init__` raises `FileNotFoundError` if `root`, its `manifest.json`, or any file the manifest lists is
-missing. A malformed or unsupported manifest, unreadable table, or disagreement between stored data
-and its manifest raises `TimeFFormatError` (with `InvalidManifestError` for manifest parsing itself).
-Lazy value-read failures retain their series context. `verify()` raises `TimeFFormatError` when a
-checksummed artifact is missing or its content does not match the manifest.
+Building the handle (`DatasetVersion.open_local` or a registry's `open_version`) raises
+`FileNotFoundError` if the version directory has no `manifest.json`, and `TimeFFormatError` (an
+`InvalidManifestError`) if the manifest is malformed or an unsupported version. `__init__` then decodes
+the annotations table and the index, so a missing one surfaces there as `FileNotFoundError` and a table
+that disagrees with the manifest as `TimeFFormatError`. Tasks surface on first `.tasks` access, samples
+on iteration, and values on read, each as a `TimeFFormatError` that keeps its context. `verify()` reopens
+every listed file through the handle and raises `TimeFFormatError` when one is missing or its content
+does not match the manifest.
 
 ## Round-trip guarantee
 

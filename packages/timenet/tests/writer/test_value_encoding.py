@@ -12,6 +12,7 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_ROW_GROUP_TARGET_BYTES
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 from timenet.writer.encodings import applied_matches, shard_dictionary, shard_encoding, values_encoding_of
@@ -259,7 +260,7 @@ def test_self_check_accepts_every_encoding(tmp_path, forced):
 def test_round_trip_is_bit_exact(tmp_path, forced):
     values = quantized()
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): values}), value_encoding=forced)
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read().samples[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
@@ -275,7 +276,7 @@ def test_reader_needs_no_encoding_hint(tmp_path):
     manifest_path.write_text(json.dumps(document, indent=2))
 
     assert Manifest.from_json(manifest_path.read_text()).value_encoding == {}
-    with TimeFReader(version_dir) as reader:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read().samples[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 

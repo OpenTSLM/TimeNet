@@ -36,7 +36,7 @@ sample.
     import pandas as pd
     from timenet.client import TimeNet
 
-    # download if needed, then read
+    # read in place through the registry (lazy per-series values)
     dataset = TimeNet().load("chengsenwang/tsqa")
     series = dataset.samples[0].time_series[0]
 
