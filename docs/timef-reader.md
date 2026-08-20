@@ -33,11 +33,13 @@ open handles and decoded-chunk caches.
 
 ## What is eager vs lazy
 
-`__init__` does no stat sweep: the handle already carries the parsed manifest. It decodes the annotations
-table and the time-series index up front, and decodes tasks on first `.tasks` access. Per-series values
-and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with loader closures that
-pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called. `iter_samples()`
-streams samples one at a time without building a `TimeFDataset`.
+`__init__` reads nothing: the handle already carries the parsed manifest, and every table resolves on
+first use. The time-series index and the annotations table are read a pruned row group at a time (only the
+groups a lookup's key statistics cannot rule out are decoded), tasks decode on first `.tasks` access, and
+per-series values and `Sample` construction stay lazy: `read()` / `iter_samples()` build samples with
+loader closures that pull from storage only when `to_arrow()` / `to_numpy()` / `read_steps()` is called.
+`iter_samples(sample_ids=...)` filters on the stored id column, and streams samples one at a time without
+building a `TimeFDataset`.
 
 The index is held as Arrow and searched per lookup, rather than expanded into one Python object per
 row. That keeps opening a large dataset proportional to the index file rather than to a multiple of
@@ -75,12 +77,12 @@ decoded chunks are cached for the reader's lifetime and released on `close()`.
 
 Building the handle (`DatasetVersion.open_local` or a registry's `open_version`) raises
 `FileNotFoundError` if the version directory has no `manifest.json`, and `TimeFFormatError` (an
-`InvalidManifestError`) if the manifest is malformed or an unsupported version. `__init__` then decodes
-the annotations table and the index, so a missing one surfaces there as `FileNotFoundError` and a table
-that disagrees with the manifest as `TimeFFormatError`. Tasks surface on first `.tasks` access, samples
-on iteration, and values on read, each as a `TimeFFormatError` that keeps its context. `verify()` reopens
-every listed file through the handle and raises `TimeFFormatError` when one is missing or its content
-does not match the manifest.
+`InvalidManifestError`) if the manifest is malformed or an unsupported version. Opening the reader reads
+nothing else, so a missing or corrupt file is not caught on open. It surfaces on the first access that
+needs it: tasks on first `.tasks`, samples on iteration, the index and annotations on the first read that
+resolves them. A corrupt control-plane table raises `TimeFFormatError` with its context. Call `verify()`
+for a construction-time integrity check, which reopens every listed file through the handle and raises
+`TimeFFormatError` on a missing or mismatched one.
 
 ## Round-trip guarantee
 

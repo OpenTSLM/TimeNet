@@ -1,16 +1,16 @@
 """``TimeFReader``: deserialize a TimeF version directory back into a :class:`TimeFDataset`.
 
-Driven entirely by ``manifest.json`` — the reader never runs connector code. It reads through a
-:class:`~timenet.registry.version.DatasetVersion` handle, loads the annotations table and the
-time-series index up front, decodes tasks on first access, and keeps per-series values and sample
-construction lazy. Types are reconstructed from the manifest's flat descriptors (no runtime class
-synthesis), so read-back objects pickle and match the originals field-for-field.
+Driven entirely by ``manifest.json`` — the reader never runs connector code. Opening a version reads
+only the manifest; tasks, annotations, the time-series index, and per-series values are all resolved on
+first use. Types are reconstructed from the manifest's flat descriptors (no runtime class synthesis), so
+read-back objects pickle and match the originals field-for-field.
 """
 
 from __future__ import annotations
 
 import bisect
-from collections.abc import Iterator
+from collections import OrderedDict
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
@@ -28,8 +29,8 @@ from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAx
 from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
+from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
 from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
-from timenet.manifest import FilePart
 from timenet.types import (
     TASKS,
     Annotation,
@@ -45,7 +46,195 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 if TYPE_CHECKING:
+    import pyarrow.fs as pafs
+
     from timenet.registry.version import DatasetVersion
+
+
+#: Rows per batch when streaming ``samples.parquet``.
+_SAMPLE_BATCH_ROWS = 4096
+
+#: Decoded annotations kept for reuse, so an annotation shared across samples is decoded once.
+_ANNOTATION_CACHE_SIZE = 4096
+
+#: Byte budget for decoded control-table row groups. Sized by total bytes, not group count, so shuffled
+#: reads do not thrash a small cache.
+_CONTROL_TABLE_CACHE_MAX_BYTES = 64 * 2**20
+
+#: An id in its stored form: the id string, or the 16 raw bytes of a ``uuid16`` column.
+_StoredId = str | bytes
+
+
+@dataclass(frozen=True)
+class _RowGroupStats:
+    """One row group of a sorted control table, and the stored-key range its statistics promise."""
+
+    part: str
+    """The table part's manifest-relative path."""
+    ordinal: int
+    """The row group's position within that part."""
+    min_key: _StoredId
+    """The lowest stored key in the group."""
+    max_key: _StoredId
+    """The highest stored key in the group."""
+
+    def may_hold(self, key: _StoredId) -> bool:
+        """Report whether this row group can contain a stored key.
+
+        Args:
+            key: The key in its stored form (a string, or 16 bytes for a ``uuid16`` column).
+
+        Returns:
+            ``False`` only when the statistics prove the key is outside the group.
+        """
+        return self.min_key <= key <= self.max_key  # ty: ignore[unsupported-operator]
+
+
+class _PrunedControlTable:
+    """A control-plane table sorted by one key column, read a row group at a time with pruning.
+
+    The reader never holds the whole table. It builds a row-group directory from the Parquet footers,
+    bisects it on the sorted key column's statistics to prune the groups a lookup cannot match, and
+    decodes the matching groups into a byte-bounded LRU. Within a decoded group it bisects a materialized
+    sorted list of the lookup-key column to slice the matching run. The time-series index (keyed by
+    ``sample_id``, many rows per key) and the annotations table (keyed by ``id``, one row per key) are
+    both served this one way; the key column is the leading entry of ``lookup_columns``.
+    """
+
+    def __init__(
+        self,
+        filesystem: pafs.FileSystem,
+        root: str,
+        parts: tuple[str, ...],
+        lookup_columns: tuple[str, ...],
+        *,
+        columns: list[str] | None = None,
+    ) -> None:
+        """Configure a pruned view over a sorted control table.
+
+        Args:
+            filesystem: The filesystem the version's files live on.
+            root: The version's root prefix on ``filesystem``.
+            parts: The table's manifest-relative part paths.
+            lookup_columns: The columns whose stored values a lookup matches on, as a tuple; the first is
+                the sorted key column the footer statistics prune on.
+            columns: The columns to decode per row group, or ``None`` for all of them.
+
+        """
+        self._fs = filesystem
+        self._root = root
+        self._parts = parts
+        self._lookup_columns = lookup_columns
+        self._key_column = lookup_columns[0]
+        self._columns = columns
+        self._files: dict[str, pq.ParquetFile] = {}
+        self._directory: list[_RowGroupStats] | None = None
+        self._cache: OrderedDict[tuple[str, int], tuple[pa.Table, list[tuple]]] = OrderedDict()
+        self._cache_bytes = 0
+
+    def close(self) -> None:
+        """Close the open Parquet handles and drop the directory and decoded-row-group cache."""
+        for handle in self._files.values():
+            handle.close()
+        self._files.clear()
+        self._directory = None
+        self._cache.clear()
+        self._cache_bytes = 0
+
+    def groups(self) -> list[_RowGroupStats]:
+        """Return the row-group directory: where each group lives and the stored keys it can hold.
+
+        Built from the Parquet footers on first lookup, so it is O(row groups), never O(rows). The
+        writer emits key-column statistics on every row group, so a lookup always bisects on the maxima.
+
+        Returns:
+            One entry per row group, in file order.
+        """
+        if self._directory is None:
+            directory: list[_RowGroupStats] = []
+            for rel in self._parts:
+                metadata = self._file(rel).metadata
+                column = metadata.schema.names.index(self._key_column)
+                for ordinal in range(metadata.num_row_groups):
+                    stats = metadata.row_group(ordinal).column(column).statistics
+                    directory.append(_RowGroupStats(part=rel, ordinal=ordinal, min_key=stats.min, max_key=stats.max))
+            self._directory = directory
+        return self._directory
+
+    def rows_for(self, lookup: tuple[_StoredId, ...]) -> list[dict]:
+        """Return the rows matching a stored lookup key, pruning the row groups that cannot hold it.
+
+        The prune key is ``lookup[0]`` (the sorted key column). The search bisects to the first group
+        that can hold it and stops at the first that cannot; the rows of one key are contiguous within a
+        group, and groups are visited in file order, so the writer's sort carries through to the result.
+
+        Args:
+            lookup: The stored values to match, one per ``lookup_columns`` entry, in that order.
+
+        Returns:
+            The matching rows as dicts, in stored order; empty if the key is absent.
+        """
+        key = lookup[0]
+        groups = self.groups()
+        first = bisect.bisect_left(groups, key, key=lambda group: group.max_key)
+        rows: list[dict] = []
+        for position in range(first, len(groups)):
+            group = groups[position]
+            if not group.may_hold(key):
+                break  # group maxima are sorted, so the first that cannot hold the key ends the search
+            table, keys = self._group_rows(group)
+            # The group is sorted by its lookup columns, so the matches are the half-open range
+            # [bisect_left, bisect_right). One key's rows are contiguous; a unique key is a run of one.
+            lo = bisect.bisect_left(keys, lookup)
+            hi = bisect.bisect_right(keys, lookup)
+            if hi > lo:
+                rows.extend(table.slice(lo, hi - lo).to_pylist())
+        return rows
+
+    def _file(self, rel: str) -> pq.ParquetFile:
+        """Return the open Parquet handle for one part, opening it on first use.
+
+        Args:
+            rel: The part's manifest-relative path.
+
+        Returns:
+            The cached handle.
+        """
+        handle = self._files.get(rel)
+        if handle is None:
+            handle = pq.ParquetFile(f"{self._root}/{rel}", filesystem=self._fs)
+            self._files[rel] = handle
+        return handle
+
+    def _group_rows(self, group: _RowGroupStats) -> tuple[pa.Table, list[tuple]]:
+        """Return one row group as Arrow, plus its lookup-key column as a sorted list to bisect.
+
+        The list is the group's lookup columns zipped into one tuple per row, in stored (sorted) order,
+        so :meth:`rows_for` bisects it with the stdlib.
+
+        Args:
+            group: The row group to decode.
+
+        Returns:
+            The row group's table and its per-row lookup-key tuples, in sorted order.
+        """
+        key = (group.part, group.ordinal)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self._cache.move_to_end(key)
+            return cached
+        table = self._file(group.part).read_row_group(group.ordinal, columns=self._columns)
+        columns = [table.column(name).to_pylist() for name in self._lookup_columns]
+        keys = list(zip(*columns, strict=True))
+        entry = (table, keys)
+        if table.nbytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
+            return entry  # a single group over budget is served without displacing the whole cache
+        self._cache[key] = entry
+        self._cache_bytes += table.nbytes
+        while self._cache_bytes > _CONTROL_TABLE_CACHE_MAX_BYTES:
+            _, evicted = self._cache.popitem(last=False)
+            self._cache_bytes -= evicted[0].nbytes
+        return entry
 
 
 class TimeFReader:
@@ -54,21 +243,20 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Open a committed dataset version through a storage handle.
 
-        Nothing is stat-swept here: the handle already carries the parsed manifest, and the filesystem
-        and root it wraps are the seam every read flows through. The annotations table and the
-        time-series index are decoded up front; tasks decode on first :attr:`tasks` access, and
-        per-series values and sample construction stay lazy. Build the handle with
+        Nothing is read here: the handle already carries the parsed manifest, and the filesystem and root
+        it wraps are the seam every read flows through. Tasks, annotations, the time-series index, and
+        per-series values all resolve on first use, so opening a version costs the same whether it has
+        three samples or three million.
+
+        Because the control plane is no longer decoded up front, and no file is stat-swept on open, a
+        structurally corrupt (or missing) file now fails on the first access that needs it (``.tasks``,
+        the first annotation, the first value read) rather than here. Call :meth:`verify` when you want a
+        construction-time integrity check. Build the handle with
         :meth:`~timenet.registry.BaseRegistry.open_version` or
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
         Args:
             version: The opened version handle: a manifest plus a filesystem-rooted view of its files.
-
-        Raises:
-            TimeFFormatError: If the annotations table or the time-series index is unreadable or
-                disagrees with the manifest (a column the schema does not declare, a dangling
-                reference). Corrupt bytes on disk are a format failure, not a caller error, so they do
-                not surface as the raw ``ValueError`` / ``KeyError`` the parsing happens to raise.
         """
         self._version = version
         # Aliases of the handle's fields for the read sites below; all three pickle, so a DataLoader
@@ -80,35 +268,29 @@ class TimeFReader:
         self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        self._tasks: tuple[Task, ...] | None = None  # decoded on first .tasks access, then cached
-        # The eager loaders parse the annotations table and the index against the manifest's schema.
-        # Anything they raise means the artifact is corrupt or disagrees with its manifest, which is a
-        # TimeFFormatError; letting a bare ValueError from pyarrow escape would contradict the contract.
-        try:
-            self._annotations = self._load_annotations()
-            self._load_index()
-        except TimeFFormatError:
-            raise
-        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
-            raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
-        self._values: BaseValuesReader | None = None  # built lazily; dropped on pickle, rebuilt per process
+        # Per-process scratch, built on demand and dropped on pickle; __getstate__ must stay in step.
+        self._tasks: tuple[Task, ...] | None = None
+        self._values: BaseValuesReader | None = None
+        self._samples_data: pads.Dataset | None = None
+        self._index: _PrunedControlTable | None = None
+        self._annotations: _PrunedControlTable | None = None
+        self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
 
     # ---- pickling ------------------------------------------------------------------------------
 
     def __getstate__(self) -> dict:
-        """Drop the values backend and decoded tasks so the reader (and its loaders) pickle.
-
-        The lazy loaders returned by :meth:`read` reference this reader, so a read-back dataset is
-        only picklable (e.g. for a multi-worker torch ``DataLoader``) if the reader is. The values
-        backend holds per-process scratch (file handles, decode caches) and the decoded tasks are a
-        per-process cache; both are rebuilt lazily after unpickling.
+        """Drop every on-demand cache so the reader (and its loaders) pickle small and safely.
 
         Returns:
-            The reader's state without its values backend or decoded tasks.
+            The reader's state with every on-demand cache emptied.
         """
         state = self.__dict__.copy()
         state["_values"] = None
         state["_tasks"] = None
+        state["_samples_data"] = None
+        state["_index"] = None
+        state["_annotations"] = None
+        state["_annotation_cache"] = OrderedDict()
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -127,10 +309,17 @@ class TimeFReader:
         self.close()
 
     def close(self) -> None:
-        """Close the values backend (its open handles and caches), if one was built."""
+        """Close the values backend and the control-table handles, releasing their decoded caches."""
         if self._values is not None:
             self._values.close()
             self._values = None
+        if self._index is not None:
+            self._index.close()
+            self._index = None
+        if self._annotations is not None:
+            self._annotations.close()
+            self._annotations = None
+        self._annotation_cache.clear()
 
     # ---- public API ----------------------------------------------------------------------------
 
@@ -140,8 +329,8 @@ class TimeFReader:
         Not done on open: hashing every shard would read the whole dataset and defeat the lazy read
         path this class exists to provide. Call it explicitly when integrity matters more than
         latency (after a download, before a long training run, in a fsck-style command). Each file is
-        reopened through the version's filesystem, so this is also where a missing file surfaces now
-        that ``__init__`` no longer stat-sweeps.
+        reopened through the version's filesystem, so this is also where a missing file surfaces now that
+        ``__init__`` no longer stat-sweeps.
 
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
@@ -199,13 +388,21 @@ class TimeFReader:
             schema=self._manifest.schema,
         )
 
-    def iter_samples(self) -> Iterator[Sample]:
-        """Yield each sample lazily without materializing a :class:`TimeFDataset`.
+    def iter_samples(self, sample_ids: Iterable[str] | None = None) -> Iterator[Sample]:
+        """Yield samples lazily without materializing a :class:`TimeFDataset`.
+
+        With ``sample_ids``, the read is filtered on the stored id column, which prunes the row groups
+        that cannot contain a requested id instead of scanning the file. Samples come back in stored
+        order (sorted by ``sample_id``), not in the order they were asked for, and an id the dataset
+        does not contain raises ``TimeFValidationError``.
+
+        Args:
+            sample_ids: The samples to yield; ``None`` yields every sample.
 
         Yields:
             Each reconstructed :class:`Sample`.
         """
-        for row in self._read_rows(self._manifest.files.samples):
+        for row in self._iter_sample_rows(sample_ids):
             yield self._build_sample(row)
 
     # ---- loading -------------------------------------------------------------------------------
@@ -213,6 +410,11 @@ class TimeFReader:
     @contextmanager
     def _as_format_error(self) -> Iterator[None]:
         """Re-raise a decode failure against the manifest's schema as a :class:`TimeFFormatError`.
+
+        The loaders parse on-disk control tables against the manifest's schema. Anything they raise
+        means the artifact is corrupt or disagrees with its manifest, which is a format failure; letting
+        a bare ``ValueError`` from ``TaskType()`` or an ``OSError`` from a corrupt data page escape would
+        contradict the reader's contract.
 
         Yields:
             Nothing; this only rewrites the exception type.
@@ -224,20 +426,42 @@ class TimeFReader:
             yield
         except TimeFFormatError:
             raise
-        except (ValueError, KeyError, TypeError, AttributeError, pa.ArrowInvalid) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
-    def _read_rows(self, parts: tuple[FilePart, ...]) -> Iterator[dict]:
-        """Yield every row across a multi-part artifact, in part order.
+    def _iter_sample_rows(self, sample_ids: Iterable[str] | None) -> Iterator[dict]:
+        """Stream ``samples.parquet`` in batches, optionally restricted to a set of ids.
 
         Args:
-            parts: The artifact's file descriptors from the manifest.
+            sample_ids: The samples to read, or ``None`` for all of them.
 
         Yields:
-            Each row as a dict, concatenated across parts.
+            Each sample row as a dict.
+
+        Raises:
+            TimeFValidationError: If ``sample_ids`` names an id the dataset does not contain, raised
+                once the iterator is fully consumed rather than on the offending id: a lazy reader
+                cannot know an id is absent until it has read every part.
         """
-        for part in parts:
-            yield from pq.read_table(self._version.path(part.path), filesystem=self._fs).to_pylist()
+        if self._samples_data is None:
+            parts = [self._version.path(part.path) for part in self._manifest.files.samples]
+            self._samples_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
+        data = self._samples_data
+        if sample_ids is None:
+            for batch in data.to_batches(batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
+                yield from batch.to_pylist()
+            return
+        stored = {self._codec.encode("sample_id", sid): sid for sid in dict.fromkeys(sample_ids)}
+        stored_type = data.schema.field("sample_id").type
+        expression = pads.field("sample_id").isin(pa.array(list(stored), type=stored_type))
+        for batch in data.to_batches(filter=expression, batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
+            for row in batch.to_pylist():
+                stored.pop(row["sample_id"], None)
+                yield row
+        if stored:
+            raise TimeFValidationError(
+                f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
+            )
 
     def _load_tasks(self) -> tuple[Task, ...]:
         by_id: dict[str, Task] = {}
@@ -273,71 +497,84 @@ class TimeFReader:
             by_id[task_id].from_tasks = tuple(resolved)
         return tuple(by_id.values())
 
-    def _load_annotations(self) -> dict[str, Annotation]:
-        annotations: dict[str, Annotation] = {}
-        for row in self._read_rows(self._manifest.files.annotations):
-            key = row["key"]
-            if key not in self._annotation_descriptors:
-                raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
-            descriptor = self._annotation_descriptors[key]
-            value = None if row["value"] is None else json.loads(row["value"])
-            annotation_id = self._codec.decode("annotation_id", row["id"])
-            fields: dict = {
-                "id": annotation_id,
-                "key": key,
-                "value": value,
-                "unit": descriptor.unit,
-                "description": descriptor.description,
-            }
-            span = self._codec.decode_span(row["span"])
-            if span is not None:
-                fields["span"] = span
-            annotation = Annotation(**fields)
-            # The descriptor is what a registry query filters on, so a decoded annotation whose shape
-            # or value type disagrees with it would answer those queries wrongly. That is corruption.
-            derived_type = annotation_type_of(annotation)
-            if derived_type != descriptor.annotation_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
-                    f"says {descriptor.annotation_type.value!r}"
-                )
-            derived_value_type = value_type_of(annotation.value)
-            if derived_value_type != descriptor.value_type:
-                raise TimeFFormatError(
-                    f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
-                    f"descriptor says {descriptor.value_type!r}"
-                )
-            annotations[annotation_id] = annotation
-        return annotations
+    def _annotations_table(self) -> _PrunedControlTable:
+        """Return the pruned view over the annotations table, built on first annotation access.
 
-    def _load_index(self) -> None:
-        """Load the index as Arrow plus one sorted key column, without a Python object per row.
+        Only the four columns a decode reads are pulled; ``sample_ids``, the widest column, is skipped.
 
-        The old shape built ``{(sample_id, time_series_id): [row dicts]}`` eagerly. That is O(rows) in
-        both time and memory whether a caller reads one sample or all of them, and a row dict costs far
-        more than the bytes it came from: measured at 936 MB and 32 s for a 1.2M-row index that is
-        4.6 MB on disk. Keeping the table in Arrow and bisecting a sorted key list is 83 MB and 2.9 s
-        for the same index, at a cost of about 19 us per lookup.
-
-        The keys are the ids as stored, still encoded, and they are compared as tuples. Both details
-        matter: :meth:`TimeFWriter._write_index` sorts rows by the encoded ``(sample_id,
-        time_series_id, chunk_idx)`` tuple, so bisecting anything else would search an order the file
-        was not written in. ``binary(16)`` ids compare as bytes and string ids as text, and a tuple
-        gets both right without a separator that either could contain.
+        Returns:
+            The cached pruned annotations view.
         """
-        parts = [
-            pq.read_table(self._version.path(part.path), filesystem=self._fs)
-            for part in self._manifest.files.time_series_index
-        ]
-        table = parts[0] if len(parts) == 1 else pa.concat_tables(parts)
-        self._index_table = table
-        self._index_keys: list[tuple] = list(
-            zip(
-                table.column("sample_id").to_pylist(),
-                table.column("time_series_id").to_pylist(),
-                strict=True,
+        if self._annotations is None:
+            key_column = ANNOTATIONS_SORT_KEY
+            self._annotations = _PrunedControlTable(
+                self._fs,
+                self._root,
+                tuple(part.path for part in self._manifest.files.annotations),
+                lookup_columns=(key_column,),
+                columns=["id", "key", "value", "span"],
             )
-        )
+        return self._annotations
+
+    def _decode_annotation(self, row: dict) -> Annotation:
+        """Rebuild one annotation from its stored row, checked against its manifest descriptor.
+
+        Args:
+            row: The stored annotation row (``id``, ``key``, ``value``, ``span``).
+
+        Returns:
+            The rebuilt annotation.
+
+        Raises:
+            TimeFFormatError: If the row's key is not in the schema, or the decoded annotation's shape
+                or value type disagrees with its descriptor.
+        """
+        key = row["key"]
+        if key not in self._annotation_descriptors:
+            raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
+        descriptor = self._annotation_descriptors[key]
+        fields: dict = {
+            "id": self._codec.decode("annotation_id", row["id"]),
+            "key": key,
+            "value": None if row["value"] is None else json.loads(row["value"]),
+            "unit": descriptor.unit,
+            "description": descriptor.description,
+        }
+        span = self._codec.decode_span(row["span"])
+        if span is not None:
+            fields["span"] = span
+        annotation = Annotation(**fields)
+        # The descriptor is what a registry query filters on, so a decoded annotation whose shape
+        # or value type disagrees with it would answer those queries wrongly. That is corruption.
+        derived_type = annotation_type_of(annotation)
+        if derived_type != descriptor.annotation_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to shape {derived_type.value!r} but its descriptor "
+                f"says {descriptor.annotation_type.value!r}"
+            )
+        derived_value_type = value_type_of(annotation.value)
+        if derived_value_type != descriptor.value_type:
+            raise TimeFFormatError(
+                f"annotation {key!r} decodes to value type {derived_value_type!r} but its "
+                f"descriptor says {descriptor.value_type!r}"
+            )
+        return annotation
+
+    def _index_table(self) -> _PrunedControlTable:
+        """Return the pruned view over the time-series index, built on first lookup.
+
+        Returns:
+            The cached pruned index view.
+        """
+        if self._index is None:
+            key_column = INDEX_SORT_KEY
+            self._index = _PrunedControlTable(
+                self._fs,
+                self._root,
+                tuple(part.path for part in self._manifest.files.time_series_index),
+                lookup_columns=(key_column, "time_series_id"),
+            )
+        return self._index
 
     def _index_rows(self, sample_id: str, time_series_id: str) -> list[dict]:
         """Return one series' index rows, in ``chunk_idx`` order.
@@ -349,14 +586,12 @@ class TimeFReader:
         Returns:
             The series' index rows, empty if it has none.
         """
-        probe = (
-            self._codec.encode("sample_id", sample_id),
-            self._codec.encode("time_series_id", time_series_id),
-        )
-        lo = bisect.bisect_left(self._index_keys, probe)
-        hi = bisect.bisect_right(self._index_keys, probe)
-        # Already sorted by chunk_idx within the key: the writer's sort key ends with it.
-        return self._index_table.slice(lo, hi - lo).to_pylist()
+        with self._as_format_error():
+            probe: tuple[_StoredId, ...] = (
+                cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, sample_id)),
+                cast(_StoredId, self._codec.encode("time_series_id", time_series_id)),
+            )
+            return self._index_table().rows_for(probe)
 
     # ---- sample construction -------------------------------------------------------------------
 
@@ -514,9 +749,35 @@ class TimeFReader:
             ) from exc
 
     def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
-        if annotation_id not in self._annotations:
-            raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
-        return self._annotations[annotation_id]
+        """Return one annotation, decoding it on first use and caching it in a bounded LRU.
+
+        The id is looked up through the pruned annotations table, so only the row group that can hold it
+        is decoded; a shared annotation is decoded once and served from the LRU thereafter.
+
+        Args:
+            sample_id: The referencing sample, for the error message.
+            annotation_id: The annotation to resolve.
+
+        Returns:
+            The decoded annotation.
+
+        Raises:
+            TimeFFormatError: If the dataset has no annotation with that id.
+        """
+        cached = self._annotation_cache.get(annotation_id)
+        if cached is not None:
+            self._annotation_cache.move_to_end(annotation_id)
+            return cached
+        with self._as_format_error():
+            probe = cast(_StoredId, self._codec.encode("annotation_id", annotation_id))
+            rows = self._annotations_table().rows_for((probe,))
+            if not rows:
+                raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
+            annotation = self._decode_annotation(rows[0])
+        self._annotation_cache[annotation_id] = annotation
+        if len(self._annotation_cache) > _ANNOTATION_CACHE_SIZE:
+            self._annotation_cache.popitem(last=False)
+        return annotation
 
     # ---- id decoding ---------------------------------------------------------------------------
 

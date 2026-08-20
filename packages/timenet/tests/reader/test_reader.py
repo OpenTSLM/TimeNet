@@ -1,14 +1,16 @@
 import json
 from pathlib import Path
 import pickle
+from typing import cast
 
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -219,6 +221,187 @@ def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
         assert [p for p in reads if "/tasks/" in p] == opened
 
 
+# ---- filtered sample reads --------------------------------------------------------------------
+
+
+def test_iter_samples_returns_only_the_requested_ids(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        selected = list(reader.iter_samples(sample_ids=["sample-2", "sample-0"]))
+    assert [s.sample_id for s in selected] == ["sample-0", "sample-2"]  # stored order, not asked order
+    assert selected[0].time_series[0].to_arrow() is not None
+
+
+def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_samples())).time_series}
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        (only,) = reader.iter_samples(sample_ids=["sample-0"])
+        assert {ts.time_series_id: ts.to_arrow() for ts in only.time_series}.keys() == expected.keys()
+        for ts in only.time_series:
+            assert ts.to_arrow().equals(expected[ts.time_series_id])
+
+
+def test_iter_samples_with_an_unknown_id_raises(tmp_path):
+    version_dir = _write(tmp_path)
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFValidationError, match="no such sample"),
+    ):
+        list(reader.iter_samples(sample_ids=["sample-0", "sample-nope"]))
+
+
+def test_iter_samples_with_an_empty_id_list_yields_nothing(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert list(reader.iter_samples(sample_ids=[])) == []
+
+
+def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
+    # The guarantee holds when the iterator is drained; an early-stopping consumer is served what
+    # exists and never reaches the check, which the docstring states explicitly.
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        got = next(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
+        assert got.sample_id == "sample-0"  # early stop: no raise
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFValidationError, match="no-such-sample"),
+    ):
+        list(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
+
+
+# ---- pruning ----------------------------------------------------------------------------------
+
+
+def _count_control_plane_reads(monkeypatch) -> list[str]:
+    """Record every file the reader opens or decodes, whole-table, filtered, or by handle."""
+    read: list[str] = []
+    original_read_table, original_dataset, original_file = pq.read_table, pads.dataset, pq.ParquetFile
+
+    def counting_read_table(source, *args, **kwargs):
+        read.append(str(source))
+        return original_read_table(source, *args, **kwargs)
+
+    def counting_dataset(source, *args, **kwargs):
+        read.extend(str(p) for p in source) if isinstance(source, list) else read.append(str(source))
+        return original_dataset(source, *args, **kwargs)
+
+    def counting_file(source, *args, **kwargs):
+        read.append(str(source))
+        return original_file(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    monkeypatch.setattr(pads, "dataset", counting_dataset)
+    monkeypatch.setattr(pq, "ParquetFile", counting_file)
+    return read
+
+
+def test_open_decodes_no_control_plane_table(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    reader = TimeFReader(DatasetVersion.open_local(version_dir))
+    assert read == []  # only manifest.json, which is plain JSON
+    assert reader._tasks is None
+    assert reader._annotations is None
+    assert reader._index is None
+    assert reader.metadata.dataset_id  # metadata comes from the manifest, still free
+
+
+def test_annotations_are_decoded_only_when_a_sample_resolves_them(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert not [p for p in read if "/annotations/" in p]
+        sample = next(iter(reader.iter_samples()))
+        assert sample.annotations
+        assert [p for p in read if "/annotations/" in p]
+
+
+def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
+    # A small row-group target splits the annotations, so the id statistics have something to rule out.
+    # Resolving one annotation id must decode only the group that can hold it, not the whole file.
+    version_dir = _write(tmp_path, row_group_target_bytes=64)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        annotations = reader._annotations_table()
+        total = len(annotations.groups())
+        assert total > 1, "the fixture must span several annotation row groups for this to mean anything"
+        assert reader._resolve_annotation("sample-0", "age-0").value == 64  # one id, one row group decoded
+        assert len(annotations._cache) < total
+
+
+def test_annotation_resolution_builds_no_whole_table_id_map(tmp_path):
+    # The old reader built a {id: Annotation} map over the whole table on open. The pruned reader visits
+    # only the row group(s) that can hold the id and caches just the decoded annotation, never the table.
+    # A small row-group target makes the pruning observable, so this cannot pass with pruning broken.
+    version_dir = _write(tmp_path, row_group_target_bytes=64)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        annotations = reader._annotations_table()
+        total = len(annotations.groups())
+        assert total > 1, "the fixture must span several annotation row groups for this to mean anything"
+        assert reader._resolve_annotation("sample-0", "age-0").value == 64
+        assert len(annotations._cache) < total  # only the matching group was decoded, not the whole table
+        assert list(reader._annotation_cache) == ["age-0"]  # one decoded annotation cached, not an id map
+        for table, keys in annotations._cache.values():
+            assert len(keys) == table.num_rows  # each cache entry is one group's rows, not a per-id map
+
+
+def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
+    # A small row-group target splits the index, so the sample_id statistics have something to rule out.
+    # Without pruning, one lookup would decode every row group in the file.
+    version_dir = _write(tmp_path, row_group_target_bytes=64)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        sample = next(iter(reader.iter_samples()))
+        for series in sample.time_series:
+            series.to_arrow()
+        index = reader._index_table()
+        total = len(index.groups())
+        assert total > 1, "the fixture must span several row groups for this to mean anything"
+        assert len(index._cache) < total
+
+
+def test_index_row_groups_are_pruned_by_their_statistics(tmp_path):
+    version_dir = _write(tmp_path, row_group_target_bytes=64)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        probe = cast("str | bytes", reader._codec.encode("sample_id", "sample-0"))  # the stored form pruned on
+        groups = reader._index_table().groups()
+        assert all(g.min_key is not None for g in groups), "the index must carry sample_id statistics"
+        assert [g.may_hold(probe) for g in groups].count(False) > 0  # some groups provably cannot match
+
+
+def test_getstate_drops_every_control_plane_cache(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        next(iter(reader.iter_samples())).time_series[0].to_arrow()
+        _ = reader.tasks
+        state = reader.__getstate__()
+    assert state["_tasks"] is None
+    assert state["_annotations"] is None
+    assert state["_annotation_cache"] == {}
+    assert state["_index"] is None
+    assert state["_samples_data"] is None
+    assert state["_values"] is None
+
+
+def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path):
+    # A byte-bounded index cache holds the same working set for in-order and shuffled reads. A
+    # count-bounded cache evicted and re-decoded a whole row group per lookup; this asserts the cache
+    # retains groups rather than timing anything.
+    version_dir = _write(tmp_path, row_group_target_bytes=64)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        sample_ids = [s.sample_id for s in reader.iter_samples()]
+        series = {s.sample_id: [ts.time_series_id for ts in s.time_series] for s in reader.iter_samples()}
+        index = reader._index_table()
+        assert len(index.groups()) > 1  # the small row-group target really did split the index
+
+        for sample_id in reversed(sample_ids):  # reverse order is the cheapest stand-in for shuffled
+            for series_id in series[sample_id]:
+                assert reader._index_rows(sample_id, series_id)
+        # every decoded group is still resident: nothing was evicted to serve the pass
+        assert len(index._cache) == len(index.groups())
+
+
 # ---- validation -------------------------------------------------------------------------------
 
 
@@ -263,17 +446,24 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
             reader._load_values(sample.sample_id, series_id)
 
 
-def test_missing_eager_control_file_raises_on_open(tmp_path):
-    # The annotations table and the index are read on open, so a missing one surfaces at construction
-    # even though __init__ no longer stat-sweeps every file the manifest lists.
+def test_corrupt_index_data_page_raises_format_error(tmp_path):
+    # A footer that parses but a garbage data page: the lazy index decode must surface as
+    # TimeFFormatError, not a raw OSError from pyarrow, or a caller catching corruption misses it.
     version_dir = _write(tmp_path)
-    (version_dir / "time_series_index/part-00000000.parquet").unlink()
-    with pytest.raises(FileNotFoundError):
-        TimeFReader(DatasetVersion.open_local(version_dir))
+    idx = version_dir / "time_series_index/part-00000000.parquet"
+    raw = bytearray(idx.read_bytes())
+    for i in range(4, min(64, len(raw) - 8)):
+        raw[i] = 0
+    idx.write_bytes(raw)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        sample = next(iter(reader.iter_samples()))
+        with pytest.raises(TimeFFormatError):
+            sample.time_series[0].to_arrow()
 
 
-def test_missing_lazy_samples_file_raises_on_iteration(tmp_path):
-    # Samples are read lazily, so a missing samples part surfaces when iterating, not at open.
+def test_missing_listed_file_fails_lazily_on_first_access(tmp_path):
+    # __init__ no longer stat-sweeps (an O(files) HEAD storm on an object store); a missing file now
+    # surfaces on the first read that touches it, which the lazy stack already accepts.
     version_dir = _write(tmp_path)
     (version_dir / "samples/part-00000000.parquet").unlink()
     reader = TimeFReader(DatasetVersion.open_local(version_dir))  # open is happy: it never touches samples
@@ -411,18 +601,25 @@ def _corrupt_descriptor(version_dir, key, field, value):
 
 def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
+    # Annotations decode when a sample resolves them, so that is where the disagreement surfaces.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
-    with pytest.raises(TimeFFormatError, match="decodes to shape"):
-        TimeFReader(DatasetVersion.open_local(version_dir))
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="decodes to shape"),
+    ):
+        list(reader.iter_samples())
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "age" is an int; a descriptor that calls it a str no longer matches the decoded value.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "age", "value_type", "str")
-    with pytest.raises(TimeFFormatError, match="value type"):
-        TimeFReader(DatasetVersion.open_local(version_dir))
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="value type"),
+    ):
+        list(reader.iter_samples())
 
 
 def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
