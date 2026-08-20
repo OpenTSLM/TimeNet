@@ -26,9 +26,9 @@ from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
-from timenet.engine import run_pipeline
-from timenet.errors import TimeNetRegistryError
-from timenet.registry import default_registry_path
+from timenet.engine import publish_pipeline, run_pipeline
+from timenet.errors import RegistryError
+from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import resolve
@@ -44,29 +44,37 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
     console.quiet = quiet
 
 
-def _default_root() -> Path:
-    """Return the registry directory a build writes to when ``--out`` is not given.
+def _resolve_target(out: str | None) -> WritableRegistry | Path:
+    """Resolve a build's output target: a writable registry for a remote URL, else a local directory.
 
-    This uses the same selection order as the consumer side. The CLI that writes a dataset and the
-    SDK that reads it land on the same directory.
+    The selection order matches the consumer side, so the CLI that writes a dataset and the SDK that
+    reads it agree on where it lands: the ``--out`` argument, then ``$TIMENET_REGISTRY``, then the
+    default local registry.
+
+    Args:
+        out: The ``--out`` value, or ``None`` to fall back to ``$TIMENET_REGISTRY`` then the default.
 
     Returns:
-        ``$TIMENET_REGISTRY`` when it names a local directory, else ``<home>/registry``.
-
-    Raises:
-        BadParameter: If ``$TIMENET_REGISTRY`` does not resolve to a local output directory.
+        A :class:`~timenet.registry.WritableRegistry` for a ``timenet://`` / ``http(s)://`` / ``s3://``
+        target, or the local directory ``Path`` for a plain path or ``file://`` URI.
     """
+    target = out if out is not None else settings().registry
+    if target is None:
+        return settings().registry_path
     try:
-        return default_registry_path()
-    except TimeNetRegistryError as exc:
-        raise typer.BadParameter(f"$TIMENET_REGISTRY: {exc}; pass --out <dir>") from exc
+        return local_registry_path(target)
+    except RegistryError:
+        return open_writable_registry(target)
 
 
 @app.command()
 def build(
     dataset_id: str,
     out: str | None = typer.Option(
-        None, "--out", help="Output registry directory (default: $TIMENET_REGISTRY, else the local registry)."
+        None,
+        "--out",
+        help="Output registry: a local directory or a timenet:// / http(s):// / s3:// URL "
+        "(default: $TIMENET_REGISTRY, else the local registry).",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
     keep_cache: bool = typer.Option(
@@ -78,45 +86,59 @@ def build(
         help="Run the build in an environment built from the connector's requirements.",
     ),
 ) -> None:
-    """Run a connector through the engine and write its dataset.
+    """Run a connector through the engine and write or publish its dataset.
 
-    This prints an emoji build summary to stderr and the version directory to stdout, so scripts can
-    capture it. If a built version already exists, the build reuses it unless you give ``--force``.
+    A local ``--out`` writes a dataset-layout directory and prints its path to stdout. A remote
+    ``--out`` (``timenet://`` / ``http(s)://`` / ``s3://``) publishes through the registry and prints
+    the version. Either way an emoji summary goes to stderr, so scripts can capture stdout. A curated
+    version is reused unless you give ``--force``.
 
     The build runs in an environment built from the connector's ``requirements.txt``. Pass
     ``--no-isolation`` (or set ``TIMENET_ISOLATION=off``) to run it in the current interpreter
     instead, which is what you want while writing a connector.
 
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector, or ``$TIMENET_REGISTRY`` is remote.
+        BadParameter: If ``dataset_id`` has no known connector.
     """
-    root = Path(out).expanduser() if out is not None else _default_root()
     # The flag is tri-state. An explicit --isolation wins over TIMENET_ISOLATION=off. An isolated
     # child exports that variable as its recursion guard and never forwards it as a flag.
     override = None if isolation is None else ("on" if isolation else "off")
     if settings(isolation=override).isolation == "on":
-        # The child is this same CLI and inherits stderr, so the child is the only narrator. It
-        # prints the status lines and the richer download and shard progress. This branch stays
-        # quiet and only relays the version directory the child printed on stdout.
-        # Do not call resolve() here. It imports the connector module, and that module needs the
-        # dependencies the child is about to install. run_isolated validates the id import-free.
+        # The child is this same CLI and inherits stderr, so it is the only narrator: it prints the
+        # status lines and the richer download and shard progress. This branch stays quiet and only
+        # relays what the child printed on stdout. Do not call resolve() here; it imports the connector
+        # module, which needs the dependencies the child is about to install. run_isolated validates the
+        # id import-free and forwards --out unchanged, so a remote target publishes from inside the
+        # environment exactly as a local one writes to a directory.
+        forwarded = out if out is not None else settings().registry
+        if forwarded is None:
+            forwarded = str(settings().registry_path)
         try:
-            version_dir = run_isolated(dataset_id, root, force=force, keep_cache=keep_cache, quiet=console.quiet)
+            version = run_isolated(dataset_id, forwarded, force=force, keep_cache=keep_cache, quiet=console.quiet)
         except LookupError as exc:
             raise typer.BadParameter(str(exc)) from exc
-    else:
-        console.status("🔧", f"Building '{dataset_id}'…")
-        try:
-            connector_cls = resolve(dataset_id)
-        except LookupError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        # A connector's downloads report through the ambient progress sink. _download_progress renders them.
-        with _download_progress():
+        typer.echo(version)
+        return
+    console.status("🔧", f"Building '{dataset_id}'…")
+    try:
+        connector_cls = resolve(dataset_id)
+    except LookupError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    target = _resolve_target(out)
+    # A connector's downloads report through the ambient progress sink. _download_progress renders them.
+    with _download_progress():
+        if isinstance(target, Path):
             version_dir = run_pipeline(
-                connector_cls(), root, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
+                connector_cls(), target, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
             )
-        console.success(f"Built '{dataset_id}' → {version_dir.name}")
-    typer.echo(str(version_dir))
+            console.success(f"Built '{dataset_id}' → {version_dir.name}")
+            typer.echo(str(version_dir))
+        else:
+            version = publish_pipeline(
+                connector_cls(), target, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
+            )
+            console.success(f"Published '{dataset_id}' → {version}")
+            typer.echo(version)
 
 
 def _report_progress(event: WriteProgressEvent) -> None:

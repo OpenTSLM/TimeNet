@@ -49,7 +49,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     if settings().isolation == "on":
         from timenet_connectors.builder.env import run_isolated  # noqa: PLC0415
 
-        return run_isolated(dataset_id, root, force=force)
+        return Path(run_isolated(dataset_id, root, force=force))
 
     from timenet.engine import run_pipeline  # noqa: PLC0415
     from timenet_connectors.discovery import resolve  # noqa: PLC0415

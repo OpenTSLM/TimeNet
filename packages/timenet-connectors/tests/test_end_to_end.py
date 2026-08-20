@@ -3,17 +3,17 @@ from pathlib import Path
 import platform
 
 import pytest
-import typer
 from typer.testing import CliRunner
 
 from timenet.client import TimeNet
 from timenet.config import settings
-from timenet.engine import run_pipeline
+from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import TimeFValidationError
 from timenet.provenance import build_env
+from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal
 from timenet_connectors import build, load
-from timenet_connectors.builder.cli import _default_root, app as build_app
+from timenet_connectors.curate.cli import _resolve_target, app as curate_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
 
@@ -96,13 +96,30 @@ def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
     assert not (tmp_path / "elsewhere").exists()
 
 
-def test_build_rejects_remote_timenet_registry(clean_env, monkeypatch):
+def test_resolve_target_routes_remote_url_to_registry(clean_env, tmp_path):
+    # A remote --out publishes through a writable registry (constructed offline, no network).
+    assert isinstance(_resolve_target("timenet://"), RemoteRegistry)
+    assert isinstance(_resolve_target("https://registry.dev.timenet.ai"), RemoteRegistry)
+    # A local --out writes a directory.
+    assert _resolve_target(str(tmp_path / "reg")) == tmp_path / "reg"
+
+
+def test_resolve_target_publishes_to_remote_timenet_registry(clean_env, monkeypatch):
+    # A bare build with a remote $TIMENET_REGISTRY now publishes to it instead of failing.
     monkeypatch.setenv("TIMENET_REGISTRY", "timenet://")
-    # A bare build into a remote registry is rejected with exit code 2. The message is a
-    # Rich-rendered error panel, so assert it on the raising helper, not the console output.
-    assert runner.invoke(build_app, ["build", "timenet/hello-world"]).exit_code == 2
-    with pytest.raises(typer.BadParameter, match="--out"):
-        _default_root()
+    assert isinstance(_resolve_target(None), RemoteRegistry)
+
+
+def test_publish_pipeline_stores_through_writable_registry(clean_env, tmp_path):
+    # publish_pipeline hands the converted dataset to registry.store; a LocalRegistry stands in for a
+    # remote one, so the publish path is exercised without a network round-trip.
+    registry = LocalRegistry(tmp_path / "registry")
+    assert publish_pipeline(HelloWorldConnector(), registry) == "1.0.0"
+
+    restored = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store").load("timenet/hello-world")
+    connector = HelloWorldConnector()
+    original = connector.convert(connector.download(Path("cache")))
+    assert_datasets_equal(original, restored)
 
 
 def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):
