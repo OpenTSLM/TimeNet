@@ -13,7 +13,6 @@ import logging
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from timenet.dataset import TimeSeries
 from timenet.errors import TimeFValidationError
@@ -28,6 +27,7 @@ from timenet.values_backends.writer import (
     ValuesWriteResult,
 )
 from timenet.writer import encodings
+from timenet.writer.sharded import RotatingPartWriter
 from timenet.writer.value_encoding import (
     DICT_MAX_CARDINALITY,
     ValueEncoding,
@@ -159,18 +159,12 @@ class ParquetValuesBackend(BaseValuesBackend):
         )
         return encoding
 
-    def _new_shard_writer(self, rel_path: str, value_encoding: ValueEncoding) -> pq.ParquetWriter:
-        path = self._staging_dir / rel_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return pq.ParquetWriter(
-            path,
-            self._shard_schema,
-            **encodings.parquet_kwargs(
-                dictionary_columns=encodings.shard_dictionary(value_encoding),
-                column_encoding=encodings.shard_encoding(value_encoding),
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
+    def _shard_parquet_kwargs(self, value_encoding: ValueEncoding) -> dict:
+        return encodings.parquet_kwargs(
+            dictionary_columns=encodings.shard_dictionary(value_encoding),
+            column_encoding=encodings.shard_encoding(value_encoding),
+            compression=self._compression,
+            compression_level=self._compression_level,
         )
 
     def _verify_values_encoding(self, rel_path: str, value_encoding: ValueEncoding) -> None:
@@ -229,11 +223,12 @@ class _Chunk:
 
 
 class _ShardStream:
-    """Buffers chunks into rotating shard files and records each chunk's on-disk placement.
+    """Buffers chunks into row groups and streams each modality through its own rotating-part writer.
 
     Shards are single-modality: the writer hands chunks over sorted by ``spec_type``, and the stream
-    rotates whenever that changes. A shard fixes its column encodings when it is opened, so keeping
-    one modality per shard is what lets each modality carry the encoding chosen for it.
+    starts a fresh :class:`RotatingPartWriter` whenever that changes, so each modality's shards carry
+    the values encoding chosen for it. Part numbers stay globally unique because each modality's writer
+    is offset by the shards already written.
     """
 
     def __init__(
@@ -246,7 +241,7 @@ class _ShardStream:
         """Bind the stream to its backend and the byte targets that trigger flush/rotation.
 
         Args:
-            backend: The owning backend, used to open shards and verify encoding.
+            backend: The owning backend, used for the shard schema, codec, encoding choice, and self-check.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             shard_target_bytes: Rotate to a new shard once a shard's written values exceed this.
             on_file_done: Progress callback invoked with the finalized shard count.
@@ -255,90 +250,90 @@ class _ShardStream:
         self._row_group_target_bytes = row_group_target_bytes
         self._shard_target_bytes = shard_target_bytes
         self._on_file_done = on_file_done
-        self._shard: pq.ParquetWriter | None = None
-        self._shard_encoding: ValueEncoding | None = None
-        self._shard_idx = 0
-        self._row_group = 0
-        self._shard_bytes = 0
+        self._core: RotatingPartWriter | None = None
         self._spec_type: str | None = None
+        self._shard_base = 0
         self._buffer: list[_Chunk] = []
         self._buffer_bytes = 0
-        self.shard_paths: list[str] = []
+        self._shard_paths: list[str] = []
         self.placements: dict[tuple[str, int], ChunkPlacement] = {}
         self.encodings: dict[str, ValueEncoding] = {}
         """The encoding settled on for each ``spec_type``, in first-seen order."""
 
+    @property
+    def shard_paths(self) -> list[str]:
+        """The shard part paths written so far, in order."""
+        return self._shard_paths
+
     def add(self, chunk: _Chunk) -> None:
-        """Buffer one chunk, flushing a row group and rotating shards as the boundaries are reached."""
+        """Buffer one chunk, closing the current modality's shards when the modality changes."""
         if self._spec_type is not None and chunk.spec_type != self._spec_type:
             self._flush()
-            self._rotate()
+            self._close_modality()
         self._spec_type = chunk.spec_type
         self._buffer.append(chunk)
         self._buffer_bytes += chunk.n_bytes
         if self._buffer_bytes >= self._row_group_target_bytes:
             self._flush()
-            if self._shard_bytes >= self._shard_target_bytes:
-                self._rotate()
 
     def finish(self) -> None:
         """Flush any remaining buffered chunks and close the final shard."""
         self._flush()
-        self._close_shard()
+        self._close_modality()
 
-    def _rotate(self) -> None:
-        """Close the open shard and start counting a fresh one.
+    def _open_modality(self) -> RotatingPartWriter:
+        """Open a rotating-part writer for the buffered modality, choosing its encoding on first sight.
 
-        A no-op when no shard is open: the previous rotation already advanced the index, and
-        advancing again would leave a gap that no file is ever written for.
+        Returns:
+            The rotating-part writer bound to this modality's encoding and shard-index offset.
         """
-        if self._shard is None:
+        spec_type = self._buffer[0].spec_type
+        if spec_type not in self.encodings:
+            self.encodings[spec_type] = self._backend.encoding_for(spec_type, [chunk.values for chunk in self._buffer])
+        encoding = self.encodings[spec_type]
+        base = self._shard_base
+
+        def on_part_closed(rel_path: str, parts_written: int) -> None:
+            self._backend._verify_values_encoding(rel_path, encoding)
+            self._on_file_done(base + parts_written)
+
+        self._core = RotatingPartWriter(
+            self._backend._staging_dir,
+            self._backend._shard_schema,
+            lambda index: part_path(SHARD_TEMPLATE, base + index),
+            part_target_bytes=self._shard_target_bytes,
+            parquet_kwargs=self._backend._shard_parquet_kwargs(encoding),
+            on_part_closed=on_part_closed,
+        )
+        return self._core
+
+    def _close_modality(self) -> None:
+        """Close the current modality's writer and advance the global shard index past its parts."""
+        if self._core is None:
             return
-        self._close_shard()
-        self._shard_idx += 1
-        self._row_group = 0
-        self._shard_bytes = 0
+        self._core.finish()
+        self._shard_paths.extend(self._core.parts)
+        self._shard_base += len(self._core.parts)
+        self._core = None
 
     def _flush(self) -> None:
         if not self._buffer:
             return
         if sum(chunk.n_values for chunk in self._buffer) >= MAX_ELEMENTS_PER_ROW_GROUP:
             raise TimeFValidationError("row group would exceed the 2^31 element limit")
-        shard = self._shard
-        if shard is None:
-            spec_type = self._buffer[0].spec_type
-            if spec_type not in self.encodings:
-                self.encodings[spec_type] = self._backend.encoding_for(
-                    spec_type, [chunk.values for chunk in self._buffer]
-                )
-            self._shard_encoding = self.encodings[spec_type]
-            rel = part_path(SHARD_TEMPLATE, self._shard_idx)
-            self.shard_paths.append(rel)
-            shard = self._backend._new_shard_writer(rel, self._shard_encoding)
-            self._shard = shard
-        shard.write_table(_shard_table(self._buffer, self._backend._shard_schema, self._backend._codec))
-        shard_path = self.shard_paths[self._shard_idx]
+        core = self._core if self._core is not None else self._open_modality()
+        table = _shard_table(self._buffer, self._backend._shard_schema, self._backend._codec)
+        shard_path, row_group = core.write(table, self._buffer_bytes)
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(
                 chunk_file=shard_path,
-                data_index=ChunkDataIndex(major_idx=self._row_group, minor_idx=offset),
+                data_index=ChunkDataIndex(major_idx=row_group, minor_idx=offset),
                 spec_type=chunk.spec_type,
                 channel=chunk.channel,
                 n_values=chunk.n_values,
             )
-        self._row_group += 1
-        self._shard_bytes += self._buffer_bytes
         self._buffer = []
         self._buffer_bytes = 0
-
-    def _close_shard(self) -> None:
-        if self._shard is None or self._shard_encoding is None:
-            return
-        self._shard.close()
-        self._backend._verify_values_encoding(self.shard_paths[self._shard_idx], self._shard_encoding)
-        self._on_file_done(self._shard_idx + 1)
-        self._shard = None
-        self._shard_encoding = None
 
 
 def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.Table:
