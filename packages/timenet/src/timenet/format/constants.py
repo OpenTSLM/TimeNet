@@ -37,6 +37,24 @@ DEFAULT_COMPRESSION = "zstd"
 DEFAULT_COMPRESSION_LEVEL = 3
 
 
+def check_relative_path(name: str, path: str) -> None:
+    """Reject a path that would resolve outside the dataset root it is meant to stay under.
+
+    A manifest file entry and a registry handle's ``relpath`` both get joined onto a root directory
+    (or filesystem prefix) as-is; an absolute path or a ``..`` segment would escape that root instead
+    of raising, letting a crafted manifest or caller read or write outside the intended directory.
+
+    Args:
+        name: The field being checked, used in the error message.
+        path: The path to check, expected to be relative and rooted inside the dataset.
+
+    Raises:
+        TimeFValidationError: If ``path`` is absolute, or has a ``..`` segment.
+    """
+    if path.startswith("/") or any(segment == ".." for segment in path.split("/")):
+        raise TimeFValidationError(f"{name} must stay within the dataset root, got {path!r}")
+
+
 def part_path(template: str, index: int, **fields: str) -> str:
     """Render a numbered part/shard path, refusing an index that would overflow the fixed width.
 
