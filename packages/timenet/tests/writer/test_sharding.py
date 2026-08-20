@@ -67,7 +67,7 @@ def _write(tmp_path, dataset, **targets):
 
 
 def _index_rows(version_dir, manifest):
-    return [r for rel in manifest.files.time_series_index for r in pq.read_table(version_dir / rel).to_pylist()]
+    return [r for part in manifest.files.time_series_index for r in pq.read_table(version_dir / part.path).to_pylist()]
 
 
 # ---- round trip ------------------------------------------------------------------------------
@@ -78,7 +78,7 @@ def test_all_artifact_types_shard_and_round_trip(tmp_path, n_samples, series_len
     original = _sharded_dataset(n_samples, series_len)
     version_dir = _write(tmp_path, _sharded_dataset(n_samples, series_len), **_SMALL_TARGETS)
     files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
-    classification_parts = [rel for rel in files.tasks if "task=classification" in rel]
+    classification_parts = [part for part in files.tasks if "task=classification" in part.path]
     assert len(files.samples) >= 3
     assert len(files.annotations) >= 3
     assert len(files.time_series_index) >= 3
@@ -110,7 +110,7 @@ def test_index_is_globally_sorted_across_parts(tmp_path):
 def test_index_metadata_locates_every_series_in_the_shards(tmp_path):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    shards = set(manifest.files.time_series)
+    shards = {part.path for part in manifest.files.time_series}
     row_group_counts = {rel: pq.ParquetFile(version_dir / rel).metadata.num_row_groups for rel in shards}
     rows = _index_rows(version_dir, manifest)
     assert len(rows) == manifest.counts.time_series_index_rows
@@ -139,7 +139,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     expected_shards = {r["chunk_file"] for r in _index_rows(version_dir, manifest) if r["time_series_id"] == series_id}
-    assert expected_shards <= set(manifest.files.time_series)
+    assert expected_shards <= {part.path for part in manifest.files.time_series}
     assert len(expected_shards) < len(manifest.files.time_series)  # the series lives in only some shards
 
     opened: list[str] = []

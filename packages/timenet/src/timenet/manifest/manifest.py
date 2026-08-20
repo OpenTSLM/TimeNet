@@ -10,8 +10,9 @@ import json
 from typing import Any, ClassVar
 
 from timenet.errors import InvalidManifestError
+from timenet.format.constants import check_relative_path
 from timenet.manifest.counts import ManifestCounts
-from timenet.manifest.files import ManifestFiles
+from timenet.manifest.files import FilePart, ManifestFiles
 from timenet.types import (
     TASKS,
     AnnotationDescriptor,
@@ -42,13 +43,11 @@ class Manifest:
     metadata: DatasetMetadata
     """Descriptive identity of the dataset (name, version, license, domains, tags)."""
     files: ManifestFiles
-    """Relative paths to every data artifact, grouped by kind."""
+    """Descriptor (path, checksum, size) for every data artifact, grouped by kind."""
     schema: DatasetSchema = field(default_factory=DatasetSchema)
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    checksums: dict[str, str] = field(default_factory=dict)
-    """Per-file checksums keyed by relative path, each ``sha256:`` prefixed."""
     id_encoding: dict[str, str] = field(default_factory=dict)
     """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``; absent entries are strings."""
     values_backend: str = ValuesBackend.PARQUET
@@ -106,7 +105,6 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
-            "checksums": dict(self.checksums),
             "id_encoding": dict(self.id_encoding),
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
@@ -137,7 +135,6 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise InvalidManifestError(f"manifest missing required key {required!r}")
-        checksums = _dict_block(data, "checksums")
         id_encoding = _dict_block(data, "id_encoding")
         derived_from = _optional_dict_block(data, "derived_from")
         return cls(
@@ -146,7 +143,6 @@ class Manifest:
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
-            checksums=checksums,
             id_encoding=id_encoding,
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
@@ -213,15 +209,6 @@ def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
         return dict(value)
     except (ValueError, TypeError) as exc:
         raise InvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
-
-
-def _str_tuple(value: Any, key: str) -> tuple[str, ...]:
-    # tuple("abc") silently yields ("a", "b", "c"), so a bare string where a list is expected would be
-    # accepted as corrupt data; require an actual list/tuple instead. The TypeError is caught by the
-    # callers' except clauses and re-raised as InvalidManifestError.
-    if not isinstance(value, list | tuple):
-        raise TypeError(f"{key!r} must be a list, got {type(value).__name__}")
-    return tuple(value)
 
 
 def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
@@ -363,41 +350,59 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
-        "samples": list(files.samples),
-        "annotations": list(files.annotations),
-        "time_series_index": list(files.time_series_index),
-        "tasks": list(files.tasks),
-        "time_series": list(files.time_series),
+        "samples": [_part_to_dict(part) for part in files.samples],
+        "annotations": [_part_to_dict(part) for part in files.annotations],
+        "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
+        "tasks": [_part_to_dict(part) for part in files.tasks],
+        "time_series": [_part_to_dict(part) for part in files.time_series],
     }
+
+
+def _part_to_dict(part: FilePart) -> dict[str, Any]:
+    return {"path": part.path, "checksum": part.checksum, "size": part.size}
 
 
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            samples=_parts(data, "samples"),
-            annotations=_parts(data, "annotations"),
-            time_series_index=_parts(data, "time_series_index"),
-            tasks=_str_tuple(data.get("tasks", ()), "tasks"),
-            time_series=_str_tuple(data.get("time_series", ()), "time_series"),
+            samples=_parts(data["samples"], "samples"),
+            annotations=_parts(data["annotations"], "annotations"),
+            time_series_index=_parts(data["time_series_index"], "time_series_index"),
+            tasks=_parts(data.get("tasks", ()), "tasks"),
+            time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise InvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
 
 
-def _parts(data: dict[str, Any], key: str) -> tuple[str, ...]:
-    """Read a required list-of-parts field, rejecting a bare string.
+def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
+    """Read one ``files`` field: a list of ``{path, checksum, size}`` objects, rejecting a bare string.
 
     Args:
-        data: The manifest ``files`` block.
-        key: The field to read.
+        value: The field's value from the manifest ``files`` block.
+        key: The field's name, for error messages.
 
     Returns:
-        The field's parts as a tuple.
+        The field's parts as a tuple of :class:`FilePart`. A missing ``path`` / ``checksum`` / ``size``
+        raises ``KeyError``, which the caller re-raises as ``InvalidManifestError``.
 
     Raises:
-        TypeError: If the field is a string rather than a list of paths.
+        TypeError: If the field is a string, or an entry is not an object.
     """
-    value = data[key]
     if isinstance(value, str):
-        raise TypeError(f"'files.{key}' must be a list of parts, not a string")
-    return tuple(value)
+        raise TypeError(f"'files.{key}' must be a list of file entries, not a string")
+    return tuple(_part_from_dict(entry, key) for entry in value)
+
+
+def _part_from_dict(entry: Any, key: str) -> FilePart:
+    if not isinstance(entry, dict):
+        raise TypeError(f"'files.{key}' entries must be objects, got {type(entry).__name__}")
+    path, checksum, size = entry["path"], entry["checksum"], entry["size"]
+    if not isinstance(path, str) or not path:
+        raise TypeError(f"'files.{key}' path must be a non-empty string, got {path!r}")
+    check_relative_path(f"'files.{key}' path", path)
+    if not isinstance(checksum, str) or not checksum.startswith("sha256:"):
+        raise ValueError(f"'files.{key}' checksum must be 'sha256:<hex>', got {checksum!r}")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise TypeError(f"'files.{key}' size must be a non-negative integer, got {size!r}")
+    return FilePart(path=path, checksum=checksum, size=size)

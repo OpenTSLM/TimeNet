@@ -1,7 +1,7 @@
 import jsonschema
 import pytest
 
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -57,11 +57,11 @@ def _manifest() -> Manifest:
             time_series_specs={"ecg": 2},
         ),
         files=ManifestFiles(
-            samples=("samples.parquet",),
-            annotations=("annotations.parquet",),
-            time_series_index=("time_series_index.parquet",),
-            tasks=("tasks/task=classification/part-0.parquet",),
-            time_series=("time_series/shard-00000.parquet",),
+            samples=(FilePart("samples.parquet", "sha256:" + "a" * 64, 10),),
+            annotations=(FilePart("annotations.parquet", "sha256:" + "b" * 64, 20),),
+            time_series_index=(FilePart("time_series_index.parquet", "sha256:" + "c" * 64, 30),),
+            tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:" + "d" * 64, 40),),
+            time_series=(FilePart("time_series/shard-00000.parquet", "sha256:" + "e" * 64, 50),),
         ),
     )
 
