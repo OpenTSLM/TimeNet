@@ -139,6 +139,11 @@ class TimeFReader:
             path = self._root / part.path
             if not path.exists():
                 raise TimeFFormatError(f"manifest lists a missing file: {part.path}")
+            actual_size = path.stat().st_size
+            if actual_size != part.size:
+                raise TimeFFormatError(
+                    f"size mismatch for {part.path}: manifest says {part.size}, file is {actual_size}"
+                )
             actual = file_checksum(path)
             if actual != part.checksum:
                 raise TimeFFormatError(

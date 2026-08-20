@@ -260,8 +260,20 @@ def test_verify_detects_a_corrupted_shard(tmp_path):
         # a shard: read lazily, so __init__ still succeeds and verify() is what catches it
         rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
     target = version_dir / rel
-    target.write_bytes(target.read_bytes() + b"corruption")
+    original = target.read_bytes()
+    # Same size, flipped content: exercises the checksum check, not the size check verify() also does.
+    target.write_bytes(original[:-1] + bytes([original[-1] ^ 0xFF]))
     with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="checksum mismatch"):
+        reader.verify()
+
+
+def test_verify_detects_a_size_mismatch(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(version_dir) as reader:
+        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
+    target = version_dir / rel
+    target.write_bytes(target.read_bytes()[:-1])  # truncate, so size disagrees before a checksum is even computed
+    with TimeFReader(version_dir) as reader, pytest.raises(TimeFFormatError, match="size mismatch"):
         reader.verify()
 
 
