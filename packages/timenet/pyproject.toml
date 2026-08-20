@@ -43,8 +43,14 @@ curation = [
 zarr = [
     "zarr>=3",
 ]
+# The S3 registry backend (store/download against an s3:// bucket). boto3 is imported lazily and raises a
+# clear "install timenet[s3]" message when the extra is absent; pyarrow (already a core dep) supplies the
+# S3FileSystem for lazy range reads.
+s3 = [
+    "boto3>=1.34",
+]
 all = [
-    "timenet[cli,torch,curation,zarr]",
+    "timenet[cli,torch,curation,zarr,s3]",
 ]
 
 [project.scripts]

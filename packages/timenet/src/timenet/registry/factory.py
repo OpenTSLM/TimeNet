@@ -46,7 +46,7 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
     if text.startswith(("http://", "https://")):
         return RemoteRegistry(text, cache_dir=cache_dir)
     if text.startswith("s3://"):
-        return S3Registry(text)
+        return S3Registry(text, cache_dir=cache_dir)
     if text.startswith("file://"):
         parsed = urlparse(text)
         if parsed.netloc:

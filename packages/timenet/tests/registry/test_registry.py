@@ -313,14 +313,13 @@ def test_store_force_overwrites(tmp_path):
     registry.store(make_dataset(), force=True)  # must not raise
 
 
-# ---- remote / s3 stubs ------------------------------------------------------------------------
+# ---- s3 catalog -------------------------------------------------------------------------------
 
 
-def test_s3_registry_is_deferred():
+def test_s3_registry_has_no_catalog():
+    # The S3 backend does store + download by explicit id, but has no catalog: list/search raise.
     s3 = S3Registry("s3://bucket/registry")
     with pytest.raises(NotImplementedError):
         s3.list_datasets()
     with pytest.raises(NotImplementedError):
-        s3.open_version("demo/ecg")
-    with pytest.raises(NotImplementedError):
-        s3.store(make_dataset())
+        s3.search()

@@ -10,6 +10,7 @@ required-version = ">=0.10.10"
 # packages' extras, installed for dev/test/CI via `make sync`.
 dev = [
     "hypothesis>=6.140",
+    "moto[server]>=5",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",

@@ -28,17 +28,17 @@ registry = open_registry("./local_registry")
 | Scheme | Backend |
 | --- | --- |
 | `file://`, plain path | `LocalRegistry` |
-| `s3://` | `S3Registry` (deferred) |
-| `http(s)://` | `RemoteRegistry` (deferred) |
+| `s3://` | `S3Registry` |
+| `http(s)://` | `RemoteRegistry` |
 | `timenet://` | `RemoteRegistry`, an alias for the hosted `https://registry.timenet.ai` |
 
 An unrecognized scheme, for example `gs://` or `az://`, raises `ValueError` instead of becoming a
 local path. `open_registry` expands `~` in a local path or a `file://` URI.
 
-!!! note "What works today"
-    `LocalRegistry` and the `http(s)://` / `timenet://` `RemoteRegistry` serve reads, and both publish
-    with `store` (remote publishing needs a writer token). The `s3://` backend still raises
-    `NotImplementedError` until it lands.
+!!! note "Catalog support"
+    Every backend serves reads and publishes with `store` (remote publishing needs a writer token; the
+    S3 backend reads AWS credentials from the environment). The S3 backend has no catalog, so `list` and
+    `search` are unsupported there.
 
 ### Remote registries
 
@@ -55,6 +55,23 @@ Set it to reach private datasets or to write:
 export TIMENET_TOKEN=your-token
 ```
 
+### S3 registries
+
+An `s3://bucket/prefix` URI opens an `S3Registry`. boto3 reads credentials, region, and an optional
+endpoint override from the environment (`AWS_*` vars, `AWS_PROFILE`, `AWS_ENDPOINT_URL`), so nothing is
+hardcoded. Install the extra:
+
+```bash
+pip install 'timenet[s3]'
+```
+
+The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
+data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
+(`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
+a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
+`download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
+fetch by an explicit `org/name@version`.
+
 ## `BaseRegistry`
 
 Every backend implements this contract: four data-access methods and one shared `search` method.
@@ -69,8 +86,8 @@ Every backend implements this contract: four data-access methods and one shared 
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
 over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}/{version}/manifest`,
-`.../download/{relpath}`); `S3Registry` targets the same layout under an S3 prefix and still raises
-`NotImplementedError`.
+`.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
+S3 backend has no catalog, so `list_datasets` and `search` raise `NotImplementedError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds these ids at any depth. Use
@@ -88,7 +105,8 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
 which stages under `<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` runs
-the [publish flow](#remote-publishing) below. `S3Registry` is still a write stub.
+the [publish flow](#remote-publishing) below. `S3Registry` uploads to a temporary prefix and moves each
+object into place (`manifest.json` last).
 `open_writable_registry(uri)` resolves a URI like `open_registry` but returns a `WritableRegistry`.
 
 ```python
