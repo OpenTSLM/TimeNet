@@ -1,9 +1,12 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
 from collections.abc import Callable, Iterable
+from pathlib import Path
+import sys
 from typing import TypeVar
 
 from rich.console import Console
+from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TimeRemainingColumn, TransferSpeedColumn
 from rich.table import Table
 import typer
 
@@ -151,9 +154,45 @@ def download(
     storage: str | None = typer.Option(None, "--storage", help="Local storage dir (else $TIMENET_STORAGE)."),
 ) -> None:
     """Fetch a complete TimeF version to local storage. Prints its directory to stdout."""
-    target = TimeNet(registry, storage_path=storage).download(dataset_id, version)
+    client = TimeNet(registry, storage_path=storage)
+    manifest = client.get(dataset_id, version)
+    files = list(manifest.files.all_files())
+    total = sum(part.size for part in files)
+    ui.status("⬇️", f"Downloading '{dataset_id}' ({len(files)} files, {human_bytes(total)})…")
+    target = _download(client, dataset_id, version, total)
     ui.success(f"Downloaded '{dataset_id}' ({target.name})")
     typer.echo(str(target))
+
+
+def _download(client: TimeNet, dataset_id: str, version: str | None, total: int) -> Path:
+    """Download a version, rendering a live progress bar on stderr when the terminal supports it.
+
+    Args:
+        client: The client to download through.
+        dataset_id: The dataset id.
+        version: The version string, or ``None`` for the latest.
+        total: The total byte size of the version's files, for the bar's scale.
+
+    Returns:
+        The local version directory.
+    """
+    if ui.quiet or not sys.stderr.isatty():
+        return client.download(dataset_id, version)
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=None),
+        "[progress.percentage]{task.percentage:>3.0f}%",
+        "•",
+        DownloadColumn(),
+        "•",
+        TransferSpeedColumn(),
+        "•",
+        TimeRemainingColumn(),
+        console=ui.rich,
+    )
+    with progress:
+        task = progress.add_task("downloading", total=total)
+        return client.download(dataset_id, version, progress_cb=lambda n: progress.advance(task, n))
 
 
 cache_app = typer.Typer(help="Inspect and clear the local cache.", no_args_is_help=True)

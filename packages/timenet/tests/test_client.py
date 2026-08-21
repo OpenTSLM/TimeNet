@@ -65,6 +65,15 @@ def test_download_copies_into_storage(registry_root, tmp_path):
     assert list(version_dir.glob("time_series/part-*.parquet"))
 
 
+def test_download_reports_progress(registry_root, tmp_path):
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    reported: list[int] = []
+    client.download("timenet/hello-world", progress_cb=reported.append)
+    expected = sum(part.size for part in client.get("timenet/hello-world").files.all_files())
+    assert reported  # the callback fired
+    assert sum(reported) == expected  # summed to the version's total byte size
+
+
 def test_download_rejects_path_traversal(registry_root, tmp_path):
     # a corrupt manifest relpath must not let a download write outside the target directory
     client = TimeNet(registry_root, storage_path=tmp_path / "store")

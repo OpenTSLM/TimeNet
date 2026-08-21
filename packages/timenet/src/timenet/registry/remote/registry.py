@@ -18,7 +18,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import RegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
-from timenet.registry.remote._download import materialize_version
+from timenet.registry.remote._download import ProgressCallback, materialize_version
 from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
@@ -121,7 +121,7 @@ class RemoteRegistry(WritableRegistry):
             self.download_version(dataset_id, resolved, dest, manifest=manifest)
         return DatasetVersion.open_local(dest)
 
-    def download_version(
+    def download_version(  # noqa: PLR0913
         self,
         dataset_id: str,
         version: str,
@@ -129,6 +129,7 @@ class RemoteRegistry(WritableRegistry):
         *,
         force: bool = False,
         manifest: Manifest | None = None,
+        progress_cb: ProgressCallback | None = None,
     ) -> None:
         """Download a version's files into ``dest_dir`` (used by ``TimeNet.download`` for remotes).
 
@@ -138,10 +139,13 @@ class RemoteRegistry(WritableRegistry):
             dest_dir: The target ``<...>/<id>/<version>`` directory.
             force: Re-download even if a copy already exists.
             manifest: The already-parsed manifest, passed to avoid re-fetching it; fetched if ``None``.
+            progress_cb: Called with each chunk's byte count as it is written, for a progress display.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        download_version_files(self._http, manifest, dataset_id, version, Path(dest_dir), force=force)
+        materialize_version(
+            self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
+        )
 
     def store(
         self,

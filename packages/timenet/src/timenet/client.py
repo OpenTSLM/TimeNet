@@ -22,6 +22,7 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry.base import ProgressCallback
 from timenet.types import DatasetMetadata, Domain, License, Task
 
 
@@ -144,13 +145,21 @@ class TimeNet:
             limit=limit,
         )
 
-    def download(self, dataset_id: str, version: str | None = None, *, force: bool = False) -> Path:
+    def download(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        force: bool = False,
+        progress_cb: ProgressCallback | None = None,
+    ) -> Path:
         """Fetch a dataset version's files into local storage. Return its directory.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
             force: Download again, even if an up-to-date copy already exists.
+            progress_cb: Called with each file's byte count as it lands, for a progress display.
 
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
@@ -161,7 +170,9 @@ class TimeNet:
         target = self._storage / dataset_id / resolved
         # The registry owns the fetch: the base implementation stages each file and swaps atomically,
         # and a remote registry overrides it to resolve and stream every file in parallel.
-        self._registry.download_version(dataset_id, resolved, target, force=force, manifest=manifest)
+        self._registry.download_version(
+            dataset_id, resolved, target, force=force, manifest=manifest, progress_cb=progress_cb
+        )
         return target
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
