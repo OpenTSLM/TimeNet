@@ -1,10 +1,18 @@
-.PHONY: sync test check install-hooks lint-fix build docs docs-serve docs-preview docs-datasets docs-api clean
+.PHONY: sync test test-connectors check install-hooks lint-fix build docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
 	uv sync --all-groups --all-extras
 
+# Core tests in the dev environment. Each connector declares its own dependencies in a
+# requirements.txt, so a connector's tests do not run here. They run in per-connector environments
+# through `make test-connectors`.
 test:
-	uv run pytest
+	uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
+
+# Each connector's tests and type-check run in an environment built from that connector's own
+# requirements, the same way curation runs. See scripts/check_connectors.py.
+test-connectors:
+	uv run scripts/check_connectors.py
 
 build:
 	uv build --package timenet
