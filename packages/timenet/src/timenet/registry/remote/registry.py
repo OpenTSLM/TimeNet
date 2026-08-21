@@ -130,7 +130,9 @@ class RemoteRegistry(WritableRegistry):
                 filesystem=remote_version_filesystem(self._http, dataset_id, resolved, sizes),
                 root=remote_version_root(dataset_id, resolved),
             )
-        materialize_version(self._http, manifest, dataset_id, resolved, dest)
+        # Full mode and TimeNet.download() both materialize a version; route through the one method so
+        # there is a single download path (download_version owns the materialize_version call).
+        self.download_version(dataset_id, resolved, dest, manifest=manifest)
         return DatasetVersion.open_local(dest)
 
     def download_version(
