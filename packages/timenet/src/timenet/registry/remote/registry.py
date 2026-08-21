@@ -1,8 +1,8 @@
 """A registry backed by the hosted TimeNet HTTP service.
 
 Talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`: lists and
-searches the catalog, fetches manifests, streams files, downloads or lazily range-reads versions, and
-publishes datasets. Artifact bytes never pass through the API — the service hands back presigned URLs.
+searches the catalog, fetches manifests, streams files, downloads versions, and publishes datasets.
+Artifact bytes never pass through the API — the service hands back presigned URLs.
 """
 
 from collections.abc import Callable
@@ -18,7 +18,6 @@ from timenet.dataset import TimeFDataset
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import materialize_version
-from timenet.registry.remote._fs import remote_version_filesystem, remote_version_root
 from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
@@ -35,7 +34,6 @@ class RemoteRegistry(WritableRegistry):
         *,
         token: str | None = None,
         cache_dir: str | Path | None = None,
-        download_mode: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         """Open a remote registry.
@@ -44,14 +42,12 @@ class RemoteRegistry(WritableRegistry):
             base_url: The service root, e.g. ``https://registry.dev.timenet.ai``.
             token: Bearer token; defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
-            download_mode: ``"full"`` or ``"on_demand"``; defaults to ``$TIMENET_DOWNLOAD_MODE``.
             transport: An httpx transport for testing; ``None`` uses the network.
         """
         cfg = settings()
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
         self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
-        self._mode = download_mode or cfg.download_mode
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
@@ -103,13 +99,15 @@ class RemoteRegistry(WritableRegistry):
         buffer.seek(0)
         return buffer
 
-    def open_version(self, dataset_id: str, version: str | None = None, *, mode: str | None = None) -> DatasetVersion:
-        """Open a committed version as a random-access handle.
+    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
+        """Open a committed version as a local handle, materializing it on first use.
+
+        A remote version is downloaded in full and then read from local disk, like the local and S3
+        backends. On-demand range reads are a separate follow-up.
 
         Args:
             dataset_id: The ``org/name`` id.
             version: The version string, or ``None`` for the latest.
-            mode: ``"full"`` or ``"on_demand"``; defaults to the registry's configured mode.
 
         Returns:
             A handle to the committed version's manifest and files.
@@ -117,22 +115,9 @@ class RemoteRegistry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         dest = self._cache_dir / dataset_id / resolved
-        # A fully downloaded version is read from local disk, like the local and S3 backends.
-        if (dest / MANIFEST_FILE).exists():
-            return DatasetVersion.open_local(dest)
-        chosen = mode or self._mode
-        # Zarr opens from a store URI it drives directly, which does not map onto presigned range reads,
-        # so a remote zarr version always takes the full-download path.
-        if chosen == "on_demand" and manifest.values_backend == "parquet":
-            sizes = {part.path: part.size for part in manifest.files.all_files()}
-            return DatasetVersion(
-                manifest=manifest,
-                filesystem=remote_version_filesystem(self._http, dataset_id, resolved, sizes),
-                root=remote_version_root(dataset_id, resolved),
-            )
-        # Full mode and TimeNet.download() both materialize a version; route through the one method so
-        # there is a single download path (download_version owns the materialize_version call).
-        self.download_version(dataset_id, resolved, dest, manifest=manifest)
+        if not (dest / MANIFEST_FILE).exists():
+            # download_version owns the one materialize path, so TimeNet.download() and open share it.
+            self.download_version(dataset_id, resolved, dest, manifest=manifest)
         return DatasetVersion.open_local(dest)
 
     def download_version(
