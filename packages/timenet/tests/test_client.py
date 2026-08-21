@@ -62,7 +62,7 @@ def test_download_copies_into_storage(registry_root, tmp_path):
     version_dir = client.download("timenet/hello-world")
     assert version_dir == storage / "timenet/hello-world" / "1.0.0"
     assert (version_dir / "manifest.json").exists()
-    assert list(version_dir.glob("time_series/shard-*.parquet"))
+    assert list(version_dir.glob("time_series/part-*.parquet"))
 
 
 def test_download_rejects_path_traversal(registry_root, tmp_path):

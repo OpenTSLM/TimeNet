@@ -6,7 +6,7 @@ from timenet.errors import TimeFValidationError
 MANIFEST_FILE = "manifest.json"
 
 SHARD_DIR = "time_series"
-SHARD_TEMPLATE = "time_series/shard-{:08d}.parquet"
+SHARD_TEMPLATE = "time_series/part-{:08d}.parquet"
 
 TASKS_DIR = "tasks"
 TASK_PART_TEMPLATE = "tasks/task={task_type}/part-{:08d}.parquet"

@@ -94,7 +94,7 @@ def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
     index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").schema
     assert index.field("sample_id").type == pa.binary(16)
     assert index.field("time_series_id").type == pa.binary(16)
-    shard = next(version_dir.glob("time_series/shard-*.parquet"))
+    shard = next(version_dir.glob("time_series/part-*.parquet"))
     assert pq.read_table(shard).schema.field("time_series_id").type == pa.binary(16)
     annotations = pq.read_table(version_dir / "annotations/part-00000000.parquet").schema
     assert annotations.field("id").type == pa.binary(16)

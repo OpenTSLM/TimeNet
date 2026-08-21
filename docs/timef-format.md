@@ -36,8 +36,8 @@ version: the parsed manifest plus a filesystem-rooted view of its files.
 │   ├── task=classification/part-00000000.parquet
 │   └── task=answer/part-00000000.parquet
 └── time_series/        # the values plane (default Parquet backend)
-    ├── shard-00000000.parquet
-    └── shard-00000001.parquet
+    ├── part-00000000.parquet
+    └── part-00000001.parquet
 ```
 
 The reader does not glob these paths. The manifest's `files` block lists every part, so a table can
@@ -145,7 +145,7 @@ columns. A classification task adds `target` and `target_schema`. A scalar predi
 The waveform values live outside the sample table, in the values plane. The default backend writes
 rotating Parquet shards.
 
-### shard-00000000.parquet
+### part-00000000.parquet
 
 | Column | Type | Meaning |
 | --- | --- | --- |

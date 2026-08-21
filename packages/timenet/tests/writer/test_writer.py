@@ -100,7 +100,7 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
 
 def test_shard_has_time_series_id_column(tmp_path):
     version_dir = _written(tmp_path)
-    shard = next(version_dir.glob("time_series/shard-*.parquet"))
+    shard = next(version_dir.glob("time_series/part-*.parquet"))
     names = set(pq.ParquetFile(shard).schema_arrow.names)
     assert "time_series_id" in names  # self-describing shards (re-indexable)
     assert "values" in names
@@ -110,7 +110,7 @@ def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.value_encoding, "the manifest should record what each modality was encoded with"
-    for shard in version_dir.glob("time_series/shard-*.parquet"):
+    for shard in version_dir.glob("time_series/part-*.parquet"):
         pf = pq.ParquetFile(shard)
         spec_types = set(pf.read(columns=["spec_type"]).column("spec_type").to_pylist())
         assert len(spec_types) == 1, "shards are single-modality so one encoding always fits"
@@ -273,7 +273,7 @@ def test_shared_series_stored_once(tmp_path):
     # the shared series has one chunk row in the shards, but two index rows (one per sample)
     shard_rows = [
         r
-        for shard in version_dir.glob("time_series/shard-*.parquet")
+        for shard in version_dir.glob("time_series/part-*.parquet")
         for r in pq.read_table(shard).to_pylist()
         if r["time_series_id"] == "ts-shared"
     ]

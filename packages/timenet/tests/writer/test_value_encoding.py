@@ -163,7 +163,7 @@ def test_shards_are_single_modality(tmp_path):
         tmp_path,
         _dataset({("ecg", "I"): quantized(), ("embedding", "e"): continuous(n=SAMPLE_MAX_VALUES)}),
     )
-    shards = sorted(version_dir.glob("time_series/shard-*.parquet"))
+    shards = sorted(version_dir.glob("time_series/part-*.parquet"))
     assert len(shards) == 2, "one modality per shard, so one encoding per shard is always right"
     for shard in shards:
         spec_types = set(pq.read_table(shard, columns=["spec_type"]).column("spec_type").to_pylist())
@@ -252,7 +252,7 @@ def test_forced_mode_logs_the_encoding(tmp_path, caplog):
 @pytest.mark.parametrize("forced", [e.value for e in ValueEncoding])
 def test_self_check_accepts_every_encoding(tmp_path, forced):
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): quantized()}), value_encoding=forced)
-    shard = next(version_dir.glob("time_series/shard-*.parquet"))
+    shard = next(version_dir.glob("time_series/part-*.parquet"))
     assert applied_matches(ValueEncoding(forced), values_encoding_of(str(shard)))
 
 

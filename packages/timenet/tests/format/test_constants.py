@@ -11,7 +11,7 @@ from timenet.format.constants import (
 
 
 def test_part_path_zero_pads_the_index():
-    assert part_path(SHARD_TEMPLATE, 42) == "time_series/shard-00000042.parquet"
+    assert part_path(SHARD_TEMPLATE, 42) == "time_series/part-00000042.parquet"
 
 
 def test_part_path_fills_named_template_fields():
@@ -19,7 +19,7 @@ def test_part_path_fills_named_template_fields():
 
 
 def test_part_path_allows_the_largest_eight_digit_index():
-    assert part_path(SHARD_TEMPLATE, MAX_PART_INDEX) == "time_series/shard-99999999.parquet"
+    assert part_path(SHARD_TEMPLATE, MAX_PART_INDEX) == "time_series/part-99999999.parquet"
 
 
 def test_part_path_rejects_an_index_that_needs_a_ninth_digit():
