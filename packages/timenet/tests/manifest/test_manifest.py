@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from hypothesis import given, strategies as st
 import pint
 import pytest
@@ -300,3 +302,19 @@ def test_bad_dict_block_names_itself(block):
     d[block] = "oops"
     with pytest.raises(TimeNetInvalidManifestError, match=block):
         Manifest.from_dict(d)
+
+
+def test_build_env_defaults_to_none():
+    assert _manifest().build_env is None
+
+
+def test_build_env_round_trips():
+    m = replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}})
+    assert Manifest.from_dict(m.to_dict()).build_env == m.build_env
+
+
+def test_to_dict_copies_build_env():
+    build_env = {"python": "3.11.9", "packages": {"timenet": "0.1.0"}}
+    d = replace(_manifest(), build_env=build_env).to_dict()
+    d["build_env"]["python"] = "2.7.0"
+    assert build_env["python"] == "3.11.9"

@@ -48,6 +48,7 @@ from timenet.format.schemas import (
     task_schema,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.provenance import build_env
 from timenet.types import Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -590,6 +591,7 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             derived_from=self._derived_from,
+            build_env=build_env(),
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
