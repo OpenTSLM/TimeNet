@@ -76,18 +76,35 @@ annotations, by `id`.
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
 concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
 names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
-beside it. As a result, `timenet-curate build <org>/<name>` imports only that package. Reusable bases
-live under `bases/`. Each connector declares its own id in `metadata()`. An id is a lowercase
-`org/name` pair.
+beside it, next to a `requirements.txt` when the connector needs libraries of its own. As a result,
+`timenet-curate build <org>/<name>` imports only that package. Reusable bases live under `bases/`.
+Each connector declares its own id in `metadata()`. An id is a lowercase `org/name` pair.
 
-## Optional dependencies and credentials
+## Dependencies and credentials
 
-A connector can need libraries or credentials that its source requires. Declare heavy libraries as an
-**optional extra**. Import them lazily inside the connector, so that base users do not have to install
-them. A missing library must raise a clear error. Credentials come from the environment. For the
-HuggingFace Hub, the connector reads a token from `HF_TOKEN` automatically. Only gated or private
-sources need this token. Downloaded source files cache under `<TIMENET_CACHE>` (see
-[client config](client.md#configuration)).
+A connector declares the libraries its source needs in a `requirements.txt` beside its
+`dataset.yaml`. It is a plain pip requirements file:
+
+```text
+# Downloads the source dataset from the HuggingFace Hub.
+huggingface_hub>=0.24
+```
+
+Curation runs the connector in an environment built from that file. That environment is layered over
+the same `timenet` and `timenet-connectors` that you run (see [Curate & publish](curation.md)).
+Curation installs nothing into your own environment. Two connectors that need incompatible libraries
+do not collide.
+
+Import those libraries lazily inside the connector anyway. If one is missing, raise a clear error.
+That guard keeps `--no-isolation` usable while you write a connector.
+
+List every dependency the connector needs, even one that another connector already names. There are
+no shared requirement fragments. If several connectors share one file, an edit to that file can break
+a connector that you did not check.
+
+Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
+automatically (needed only for gated or private sources). Downloaded source files cache under
+`<TIMENET_CACHE>` (see [client config](client.md#configuration)).
 
 ## Downloading artifacts
 
@@ -104,7 +121,7 @@ the URL. As a result, a connector never has to branch on `s3://` versus `http(s)
 Each `Artifact` takes optional `headers`, `cookies`, and a `sha256` value to validate the download.
 `fetch_files` also takes batch-level `headers` and `cookies`. These apply to every HTTP request. The
 per-artifact values merge over the batch-level values. S3 ignores all of these. HTTP downloads use
-`aiohttp` and `aiofiles`, both base dependencies. They stream to disk and write atomically, through a
+`httpx` and `aiofiles`, both base dependencies. They stream to disk and write atomically, through a
 `.part` temporary file. If the SHA-256 value does not match, the download raises an error and leaves
 nothing behind. HTTP downloads skip an existing destination. S3 downloads use boto3 and stay
 synchronous. boto3 already parallelizes the transfer of a single object. `ensure_archive` also takes a
@@ -147,8 +164,8 @@ pull their database archive.
   and a scoped classification. Its dataset card, `dataset.yaml`, sits beside it in
   `datasets/timenet/hello_world/`.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `TimeSeries`, and each
-  row's question and answer become an `AnswerTask`. This connector needs the `huggingface` extra
-  (`pip install 'timenet-connectors[huggingface]'`), because it downloads data from the Hub.
+  row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
+  `requirements.txt` names `huggingface_hub`.
 
 ```bash
 timenet-curate build timenet/hello-world             # offline, synthetic
@@ -161,8 +178,8 @@ build needs the sources only during conversion. To keep the sources, pass `--kee
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. As a result, a test can hand it a checked-in fixture and
-skip `download` entirely. See `packages/timenet-connectors/tests/fixtures/` and the `_convert()`
-helpers next to them.
+skip `download` entirely. See each connector's `tests/fixtures/` directory (for example
+`datasets/chengsenwang/tsqa/tests/fixtures/`) and the `_convert()` helpers next to them.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per

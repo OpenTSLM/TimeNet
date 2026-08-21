@@ -42,8 +42,8 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 ### 3. Pick the base connector
 - Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, inherit `download`, implement only
   `convert`.
-- PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `_ensure_archive` /
-  `_stream_download`) and `convert` (use `_read_header` / `_lead_loader`).
+- PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
+  `fetch_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
 
 ### 4. Determine the task and sketch an example row
@@ -71,16 +71,22 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
   `description`, `license`, `domains`, `tags`.
 - `connector.py`, the `BaseConnector` subclass, ending with a module-level `CONNECTOR = <YourClass>`.
 - `__init__.py`, re-exporting `CONNECTOR` (and the class) from `connector.py`.
+- `requirements.txt`, when the connector needs a library outside `timenet-connectors`' core
+  dependencies. Import it lazily inside the connector. If it is missing, raise a clear error. Curation
+  installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
+  usable while you write the connector.
 
-Add the org namespace `__init__.py` if the org is new. If you introduce a new base dependency, add the
-matching package extra (`huggingface` or `physionet`) in `packages/timenet-connectors/pyproject.toml`.
-Keep `download` I/O-only and `convert` CPU-only with lazy value loaders (never materialize arrays in
-`convert`). See the worked example in `references/connector-anatomy.md`.
+Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert` CPU-only
+with lazy value loaders (never materialize arrays in `convert`). See the worked example in
+`references/connector-anatomy.md`.
 
 ### 7. Verify
-- Add a fixture-based test mirroring `packages/timenet-connectors/tests/test_tsqa.py`: check in a tiny
-  sample of the raw shape and call `convert()` on it directly (no network). The `TIMENET_TESTING` /
-  `TIMENET_ROW_LIMIT` env vars mentioned in some docs are **not implemented**, so don't rely on them.
+- Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at
+  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny sample of the raw shape and call
+  `convert()` on it directly (no network). The `TIMENET_TESTING` / `TIMENET_ROW_LIMIT` env vars mentioned
+  in some docs are **not implemented**, so don't rely on them.
+- If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
+  environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
 - Round-trip end to end: `uv run timenet-curate build <id> --out <tmp-dir>`, then
   `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
