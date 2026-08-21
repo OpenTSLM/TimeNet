@@ -1,7 +1,9 @@
 import dataclasses
+from pathlib import Path
 
 import pytest
 
+from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
@@ -175,3 +177,43 @@ def test_version_given_twice_raises(versioned_registry, tmp_path):
     client = TimeNet(versioned_registry, storage_path=tmp_path / "store")
     with pytest.raises(ValueError, match="twice"):
         client.get("timenet/hello-world@1.0.0", "1.1.0")
+
+
+def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_root, tmp_path, monkeypatch):
+    # The curator builds only the version its connector declares, so a pin it cannot satisfy must
+    # say which version it does build instead of repeating the bare "no manifest" miss.
+    class _Curator:
+        def knows(self, dataset_id):
+            return True
+
+        def build(self, dataset_id, root, *, force=False):
+            return Path(root) / dataset_id / "1.0.0"
+
+    monkeypatch.setattr(client_module, "find_curator", lambda dataset_id: _Curator())
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+
+    with pytest.raises(DatasetNotFoundError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+        client.load("timenet/hello-world@9.9.9")
+
+
+@pytest.mark.parametrize("pin", [None, "latest", ""])
+def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, pin):
+    # Every registry reads "latest" and "" as the latest version, so they are not pins the build
+    # can miss: the version the curator just committed satisfies them.
+    class _Curator:
+        def knows(self, dataset_id):
+            return True
+
+        def build(self, dataset_id, root, *, force=False):
+            dataset = make_dataset()
+            dataset.derive_schema()
+            with TimeFWriter(Path(root), dataset) as writer:
+                writer.write()
+            return Path(root) / dataset_id / "1.0.0"
+
+    empty_root = tmp_path / "reg"
+    empty_root.mkdir()
+    monkeypatch.setattr(client_module, "find_curator", lambda dataset_id: _Curator())
+    client = TimeNet(empty_root, storage_path=tmp_path / "store")
+
+    assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"

@@ -17,7 +17,8 @@ for per-component detail.
 
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
 **client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
-The values plane can be Parquet or Zarr. The client never runs connector code.
+The values plane can be Parquet or Zarr. Reading never runs connector code. Against a local registry,
+`load` can first build a dataset that the registry does not have from an installed connector.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
