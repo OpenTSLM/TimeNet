@@ -103,10 +103,10 @@ markers = [
 python-version = "3.13"
 
 [[tool.ty.overrides]]
-# examples/** imports scikit-learn, and .github/scripts/** declares its deps inline (PEP 723) and runs
-# standalone under `uv run`. Neither is a project dependency, so don't fail type-checking on their
-# unresolved imports.
-include = ["examples/**", ".github/scripts/**"]
+# examples/** imports scikit-learn; .github/scripts/** and docs/scripts/** declare their deps inline
+# (PEP 723) and run standalone under `uv run` (PyGithub for the CI report, matplotlib for the figure
+# generator). None is a project dependency, so don't fail type-checking on their unresolved imports.
+include = ["examples/**", ".github/scripts/**", "docs/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
