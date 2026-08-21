@@ -1,0 +1,4 @@
+# wfdb reads PhysioNet WFDB records. boto3 pulls the archive from the
+# physionet-open S3 bucket.
+wfdb>=4.1
+boto3>=1.34
