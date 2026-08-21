@@ -59,8 +59,7 @@ The field is empty for a backend that has no such choice.
 
 `build_env` records the environment that produced the version: the interpreter version and every
 installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only, so no code reads it to interpret the data. It is
-`null` on a manifest written before the field existed.
+`value_encoding`, `build_env` is provenance only, so no code reads it to interpret the data.
 
 Format v2 introduces a backend-neutral schema for the values locator. This schema applies to both
 scalar and multidimensional datasets. Multidimensional specs also require format v2. As a result, an

@@ -304,8 +304,8 @@ def test_bad_dict_block_names_itself(block):
         Manifest.from_dict(d)
 
 
-def test_build_env_defaults_to_none():
-    assert _manifest().build_env is None
+def test_build_env_defaults_to_empty():
+    assert _manifest().build_env == {}
 
 
 def test_build_env_round_trips():
