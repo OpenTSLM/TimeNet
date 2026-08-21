@@ -21,7 +21,7 @@ from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
-from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry import BaseRegistry, LocalRegistry, RemoteRegistry, open_registry
 from timenet.registry.base import ProgressCallback
 from timenet.types import DatasetMetadata, Domain, License, Task
 
@@ -175,12 +175,15 @@ class TimeNet:
         )
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
+    def load(
+        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download: str | None = None
+    ) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+        This method does not download the whole dataset. The reader loads each series only
+        when code uses it. It loads data from the registry through the handle that
+        :meth:`~timenet.registry.BaseRegistry.open_version` returns. To get an on-disk cache,
+        use :meth:`download`.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -190,6 +193,8 @@ class TimeNet:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                fetch mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
@@ -201,8 +206,11 @@ class TimeNet:
         """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         try:
-            handle = self._registry.open_version(dataset_id, version)
-        except TimeNetDatasetNotFoundError as miss:
+            if download is not None and isinstance(self._registry, RemoteRegistry):
+                handle = self._registry.open_version(dataset_id, version, mode=download)
+            else:
+                handle = self._registry.open_version(dataset_id, version)
+        except DatasetNotFoundError as miss:
             if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
             builder = find_builder(dataset_id)
@@ -236,4 +244,6 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
+        # Force the full download: a DataLoader pickles the handle to its workers, and the on-demand
+        # handle wraps a live httpx client that cannot pickle; only the local-filesystem handle survives.
+        return TimeFTorchDataset(self.load(dataset_id, version, download="full"))
