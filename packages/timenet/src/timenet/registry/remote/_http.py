@@ -7,8 +7,9 @@ leaking the token to object storage. It maps HTTP status codes onto TimeNet erro
 :class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import importlib.metadata
+import time
 from typing import Any, BinaryIO, cast
 
 import httpx
@@ -18,6 +19,56 @@ from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 
 API_PREFIX = "/api/v1"
 _STREAM_CHUNK_BYTES = 1 << 20
+
+# 429 retry: the service rate-limits, so a burst of calls (per-file presign resolves during a
+# download) can be told to back off. Retry a bounded number of times, waiting the Retry-After the
+# service asks for, capped so a hostile header cannot stall the client indefinitely.
+_MAX_RETRIES = 5
+_MAX_RETRY_WAIT_SECONDS = 30.0
+_DEFAULT_BACKOFF_SECONDS = 1.0
+
+
+def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
+    """Return how long to wait before retrying a 429, from ``Retry-After`` or exponential backoff.
+
+    Args:
+        response: The 429 response.
+        attempt: The zero-based retry attempt, used for the backoff when no header is present.
+
+    Returns:
+        The delay in seconds, clamped to at most :data:`_MAX_RETRY_WAIT_SECONDS`.
+    """
+    header = response.headers.get("retry-after")
+    delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt
+    if header is not None:
+        try:
+            delay = float(header)  # the service sends an integer number of seconds
+        except ValueError:
+            delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt  # an HTTP-date form: fall back to backoff
+    return min(delay, _MAX_RETRY_WAIT_SECONDS)
+
+
+def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
+    """Issue a request, retrying while the service answers 429, honoring Retry-After.
+
+    Args:
+        send: Issues the request and returns the response; called again for each retry.
+
+    Returns:
+        The first non-429 response, or the last 429 once the retry budget is spent (so the caller's
+        :func:`_raise_for_status` still surfaces it).
+    """
+    waited = 0.0
+    for attempt in range(_MAX_RETRIES):
+        response = send()
+        if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
+            return response
+        delay = _retry_after_seconds(response, attempt)
+        if waited + delay > _MAX_RETRY_WAIT_SECONDS:
+            return response
+        time.sleep(delay)
+        waited += delay
+    return send()
 
 
 def timenet_user_agent() -> str:
@@ -148,7 +199,9 @@ class RegistryHttpClient:
         Returns:
             The decoded JSON.
         """
-        response = self._client.get(f"{API_PREFIX}{path}", params=params, headers=self.api_headers())
+        response = _send_with_retry(
+            lambda: self._client.get(f"{API_PREFIX}{path}", params=params, headers=self.api_headers())
+        )
         _raise_for_status(response)
         return response.json()
 
@@ -161,7 +214,7 @@ class RegistryHttpClient:
         Returns:
             The response text.
         """
-        response = self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers())
+        response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
         _raise_for_status(response)
         return response.text
 
@@ -176,7 +229,9 @@ class RegistryHttpClient:
         Returns:
             The raw response (already status-checked).
         """
-        response = self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
+        response = _send_with_retry(
+            lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
+        )
         _raise_for_status(response)
         return response
 
@@ -195,7 +250,7 @@ class RegistryHttpClient:
             TimeNetRegistryError: If the download endpoint does not redirect.
         """  # noqa: DOC502 - raised by _redirect_target
         path = _download_path(dataset_id, version, relpath)
-        response = self._client.get(path, headers=self.api_headers(), follow_redirects=False)
+        response = _send_with_retry(lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False))
         return _redirect_target(response, path)
 
     def stream_to(self, url: str, sink: BinaryIO) -> None:
