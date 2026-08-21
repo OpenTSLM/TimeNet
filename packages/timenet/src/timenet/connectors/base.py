@@ -2,7 +2,8 @@
 
 A connector fetches raw data and converts it into a :class:`~timenet.dataset.TimeFDataset`. It has no
 knowledge of the registry, engine, or any other connector. The engine drives it
-``download -> convert``, then stores the result itself. The consumer SDK never runs connector code.
+``download -> convert``, then stores the result itself. The consumer SDK never imports connector
+code: it builds only through the ``timenet.curators`` entry point.
 """
 
 from abc import ABC, abstractmethod

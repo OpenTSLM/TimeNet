@@ -28,6 +28,9 @@ physionet = ["wfdb>=4.1", "boto3>=1.34"]
 [project.scripts]
 timenet-curate = "timenet_connectors.curate.cli:main"
 
+[project.entry-points."timenet.curators"]
+connectors = "timenet_connectors.curate.backend:ConnectorCurator"
+
 [tool.uv.sources]
 # Dev-time override so the workspace resolves timenet locally. This is uv-only
 # and never reaches published metadata; Requires-Dist comes from the floor above.

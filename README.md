@@ -18,8 +18,8 @@ Full documentation: <https://docs.timenet.ai/>
 ![TimeNet architecture diagram](docs/assets/architecture.svg)
 
 A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
-client reads the manifest from the registry and loads the data. The client never runs connector
-code, so everything a consumer needs to interpret the parquet lives in the manifest.
+client reads the manifest from the registry and loads the data. Reading never runs connector code,
+so everything a consumer needs to interpret the parquet lives in the manifest.
 
 - `BaseConnector` is the only contract a new data source must satisfy.
 - `TimeFDataset` is the in-memory model a connector populates during `convert()`.

@@ -31,6 +31,11 @@ class LocalRegistry(WritableRegistry):
         # reads, for example list_datasets then search's schema filter. An mtime change invalidates it.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}
 
+    @property
+    def root(self) -> Path:
+        """The directory this registry reads from and writes to."""
+        return self._root
+
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
