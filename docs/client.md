@@ -18,7 +18,7 @@ runs connector code. The module `timenet.client` contains `TimeNet`.
 from timenet.client import TimeNet
 from timenet.types import Domain
 
-client = TimeNet()   # default local registry (~/.cache/timenet/registry)
+client = TimeNet()   # the hosted registry (timenet://)
 
 for meta in client.search(domain=Domain.CARDIOLOGY):
     print(meta.dataset_id)
@@ -35,17 +35,17 @@ TimeNet(registry=None, *, storage_path=None)
 ```
 
 TimeNet selects the registry in this order: the `registry` argument, then the environment variable
-`$TIMENET_REGISTRY`, then the local default registry (`<home>/registry`). The `registry` argument
-can accept a `BaseRegistry` object, a local path, a `file://` URI, an `s3://` URI, or a hosted
+`$TIMENET_REGISTRY`, then the hosted TimeNet registry (`timenet://`). The `registry` argument can
+accept a `BaseRegistry` object, a local path, a `file://` URI, an `s3://` URI, or a hosted
 `timenet://` or `http(s)://` URL:
 
 ```python
+client = TimeNet()                     # the hosted registry (timenet://)
 client = TimeNet("./local_registry")   # any directory a build wrote to
 ```
 
-A `timenet://` or `http(s)://` URL opens a `RemoteRegistry`, which serves reads
-(`list`/`search`/`get`/`download`/`load`). Only remote `store` and the `s3://` backend still raise
-`NotImplementedError`; see [Registry](registry.md).
+A `timenet-curate build` writes to a local registry, so set `$TIMENET_REGISTRY` (or pass the path)
+to load a local build back.
 
 ## Configuration
 

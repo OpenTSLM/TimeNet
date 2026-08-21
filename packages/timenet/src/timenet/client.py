@@ -66,7 +66,7 @@ class TimeNet:
         """Open a client for a registry.
 
         The client selects the registry in this order: the ``registry`` argument, then
-        ``$TIMENET_REGISTRY``, then the local default registry (``<TIMENET_HOME>/registry``).
+        ``$TIMENET_REGISTRY``, then the hosted TimeNet registry (``timenet://``).
 
         Args:
             registry: A registry instance, URL, ``file://`` URI, or local path.
@@ -83,7 +83,7 @@ class TimeNet:
         elif cfg.registry is not None:
             self._registry = open_registry(cfg.registry, cache_dir=cfg.storage_dir)
         else:
-            self._registry = LocalRegistry(cfg.registry_path)
+            self._registry = open_registry("timenet://", cache_dir=cfg.storage_dir)
         self._storage = cfg.storage_dir
 
     def list(self) -> _Metadatas:
