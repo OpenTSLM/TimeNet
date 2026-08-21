@@ -10,12 +10,17 @@ dependencies and a pooled install never happens. A connector with no ``requireme
 plain dev environment.
 """
 
+import os
 from pathlib import Path
 import subprocess  # noqa: S404 - the commands are fixed argument vectors, never a shell string
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASETS = ROOT / "packages" / "timenet-connectors" / "src" / "timenet_connectors" / "datasets"
+
+# Drop VIRTUAL_ENV so uv does not warn about ignoring an active env: each connector runs in its
+# own overlay, not the caller's venv.
+_ENV = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
 
 
 def _connectors() -> list[Path]:
@@ -59,7 +64,7 @@ def main() -> int:
         name = connector.relative_to(DATASETS)
         print(f"\n=== {name} ===", flush=True)
         for command in (["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]):
-            result = subprocess.run(_overlay(connector, command), cwd=ROOT, check=False)  # noqa: S603
+            result = subprocess.run(_overlay(connector, command), cwd=ROOT, env=_ENV, check=False)  # noqa: S603
             if result.returncode != 0:
                 failures.append(f"{name}: {command[0]}")
     if failures:
