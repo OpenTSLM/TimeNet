@@ -304,7 +304,13 @@ class TimeFWriter:
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
                     series_to_samples.setdefault(ts.time_series_id, []).append(sample.sample_id)
-        ordered = sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, ts.channel, ts.time_series_id))
+        # Group a recording's series together (source_id) before splitting by channel, so all leads of
+        # one record are contiguous: the writer reads the record's source once, and a reader pulls a
+        # sample's series from one place instead of scattered across channel-ordered shards. Falls back
+        # to channel order when source_id is unset (one series per sample), matching the prior layout.
+        ordered = sorted(
+            unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.channel, ts.time_series_id)
+        )
         return ordered, series_to_samples
 
     def _write_values(self, unique_series: list[TimeSeries]) -> dict[tuple[str, int], ChunkPlacement]:

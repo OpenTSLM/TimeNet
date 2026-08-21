@@ -92,7 +92,11 @@ def test_answer_options_come_from_template():
     assert options == ["yes", "no", "not sure"]  # template_id 0 in the fixture CSV
 
 
-def test_missing_wfdb_raises_helpful_error(monkeypatch):
-    monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError
-    with pytest.raises(ImportError, match=r"requirements\.txt"):
-        EcgQaCotConnector().convert(_refs())
+def test_convert_needs_no_wfdb_for_format16(monkeypatch):
+    # Format-16 records are read straight from the .hea/.dat, so convert and lead loading work with no
+    # wfdb installed. wfdb is only a fallback for other signal formats.
+    monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
+    dataset = EcgQaCotConnector().convert(_refs())
+    assert dataset.samples
+    values = dataset.samples[0].time_series[0].to_numpy()  # runs the direct loader, no wfdb
+    assert len(values)
