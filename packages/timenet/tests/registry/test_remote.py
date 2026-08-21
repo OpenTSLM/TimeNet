@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from _fake_registry import build_fake, build_publish_fake, range_server
+from _fake_registry import build_fake, build_publish_fake
 import pytest
 
 from timenet.client import TimeNet
@@ -88,35 +88,8 @@ def test_load_full_round_trips(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id, download_mode="full")
+    loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
     assert_datasets_equal(make_dataset(), loaded)
-
-
-def test_load_on_demand_round_trips(version_dir, tmp_path):
-    directory, manifest = version_dir
-    # fsspec reads presigned URLs over aiohttp, which a MockTransport can't serve, so point the download
-    # redirect at a real range-capable server. The lazy reads run during the assert, so keep it inside.
-    with range_server(directory) as blob_base:
-        transport, _ = build_fake(directory, blob_base=blob_base)
-        registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
-        client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-        loaded = client.load(manifest.metadata.dataset_id, download_mode="on_demand")
-        assert_datasets_equal(make_dataset(), loaded)
-
-
-def test_on_demand_serves_from_cache_without_network(version_dir, tmp_path):
-    registry, requests = _remote(version_dir, tmp_path)
-    _, manifest = version_dir
-    dataset_id = manifest.metadata.dataset_id
-    version = str(manifest.metadata.dataset_version)
-    # Prime the cache with a full download.
-    registry.download_version(dataset_id, version, registry._cache_dir / dataset_id / version)
-    requests.clear()
-    handle = registry.open_version(dataset_id, version, mode="on_demand")
-    import timenet.reader as reader_mod  # noqa: PLC0415
-
-    _ = reader_mod.TimeFReader(handle).read().samples  # force reads
-    assert not any(r.url.host == "blob.local" for r in requests)  # every read came from cache
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):
@@ -132,7 +105,7 @@ def test_store_publishes_uploads_and_finalizes(tmp_path):
 
 def test_remote_registry_uses_client_storage_path(tmp_path):
     # A URL-configured remote registry must cache under the client's storage_path, so download() and
-    # on-demand load() share one cache-first directory.
+    # load() share one cache-first directory.
     client = TimeNet(registry="https://registry.example.test", storage_path=tmp_path / "store")
     assert isinstance(client._registry, RemoteRegistry)
     assert client._registry._cache_dir == client._storage == tmp_path / "store"
