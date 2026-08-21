@@ -62,9 +62,8 @@ class Manifest:
     """
     derived_from: dict[str, str] | None = None
     """Copy-on-write lineage (base version and operation), or ``None`` for a newly built version."""
-    build_env: dict[str, Any] | None = None
-    """The Python version and package set that produced this version, or ``None`` for a manifest
-    written before this was recorded.
+    build_env: dict[str, Any] = field(default_factory=dict)
+    """The Python version and package set that produced this version.
 
     Provenance only: nothing reads it to interpret the data. It is here so a curator can answer what
     produced a dataset version without re-deriving it from a build log.
@@ -156,7 +155,7 @@ class Manifest:
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
             derived_from=derived_from,
-            build_env=data.get("build_env"),
+            build_env=data.get("build_env", {}),
             timef_format_version=data["timef_format_version"],
         )
 
