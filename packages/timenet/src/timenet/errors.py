@@ -30,6 +30,10 @@ class InvalidCardError(TimeNetError, ValueError):
     """A dataset card YAML is malformed or fails schema validation (raised while curating)."""
 
 
+class CurationError(TimeNetError):
+    """A curation run failed: the connector build, or the environment it needed."""
+
+
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
 

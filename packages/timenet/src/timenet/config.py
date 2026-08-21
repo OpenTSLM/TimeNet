@@ -26,6 +26,12 @@ class TimeNetSettings(BaseSettings):
     """Bearer token for a remote registry (``TIMENET_TOKEN``); ``None`` is anonymous."""
     download_mode: Literal["full", "on_demand"] = "on_demand"
     """How a remote ``load`` fetches bytes: ``"on_demand"`` (lazy range reads) or ``"full"``."""
+    isolation: Literal["on", "off"] = "on"
+    """Whether a curation build runs in an environment built from the connector's requirements.
+
+    ``"off"`` runs it in the current interpreter. The isolated child sets this to ``"off"`` in its own
+    environment, which is what stops it re-execing forever.
+    """
 
     @property
     def home_dir(self) -> Path:
