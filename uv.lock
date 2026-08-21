@@ -792,11 +792,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
 ]
 
-[package.optional-dependencies]
-http = [
-    { name = "aiohttp" },
-]
-
 [[package]]
 name = "ghp-import"
 version = "2.1.0"
@@ -2676,7 +2671,6 @@ name = "timenet"
 version = "0.1.0"
 source = { editable = "packages/timenet" }
 dependencies = [
-    { name = "fsspec", extra = ["http"] },
     { name = "httpx" },
     { name = "jaxtyping" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -2722,7 +2716,6 @@ zarr = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34" },
     { name = "fsspec", extras = ["http"], specifier = ">=2024.6" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jaxtyping", specifier = ">=0.3" },

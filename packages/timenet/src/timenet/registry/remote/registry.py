@@ -15,6 +15,7 @@ import httpx
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
+from timenet.errors import RegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import materialize_version
@@ -164,6 +165,9 @@ class RemoteRegistry(WritableRegistry):
 
         Returns:
             The stored version string.
+
+        Raises:
+            RegistryError: If the service requests a file that was not produced locally.
         """
         if dataset.schema is None:
             dataset.derive_schema()
@@ -178,6 +182,11 @@ class RemoteRegistry(WritableRegistry):
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             files = self._http.post(f"/datasets/{dataset_id}/{version}/publish", content=manifest_bytes).json()["files"]
+            # The service returns which files to upload. Confirm each was produced locally before we
+            # start, so a mismatch fails loudly here instead of partway through the upload.
+            missing = [relpath for relpath in files if not (version_dir / relpath).is_file()]
+            if missing:
+                raise RegistryError(f"publish for {dataset_id}@{version} requested unknown files: {missing}")
             for relpath in files:
                 self._upload_file(dataset_id, version, version_dir, relpath)
             self._http.post(f"/datasets/{dataset_id}/{version}/finalize")

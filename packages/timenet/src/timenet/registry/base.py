@@ -114,11 +114,10 @@ class BaseRegistry(ABC):
             return  # already downloaded and current
         parent = target.parent
         parent.mkdir(parents=True, exist_ok=True)
-        # A hard kill (SIGKILL/power loss) skips the finally below, so its staging dir lingers. Sweep any
-        # stale <version>.tmp-* sibling before staging a fresh copy (mirrors the remote download path).
-        for stale in parent.glob(f"{target.name}.tmp-*"):
-            if stale.is_dir():
-                shutil.rmtree(stale, ignore_errors=True)
+        # Each download stages into a unique dir and removes it in the finally below. A hard kill
+        # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here:
+        # a concurrent download of the same version has a live staging dir with the same prefix, and
+        # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
         staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
         try:
             for relpath in (*manifest.files.all_parts(), "manifest.json"):
