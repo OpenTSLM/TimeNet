@@ -25,7 +25,7 @@ install is enough to build them. Clone the repository only to *author* a connect
 
 ```bash
 timenet-curate [--quiet] build <dataset_id> \
-    [--out <dir>] [--force] [--keep-cache]
+    [--out <dir>] [--force] [--keep-cache] [--no-isolation]
 ```
 
 This command runs the connector for `<dataset_id>` through the pipeline: download, convert,
@@ -37,6 +37,7 @@ derive_schema, store. Then it writes the dataset into the output registry.
 | `--out <dir>` | `$TIMENET_REGISTRY`, else `<home>/registry` | Where to write. If the directory is absent, the tool creates it. |
 | `--force`, `-f` | off | Rebuild a version that is already curated instead of reusing it. |
 | `--keep-cache` | off | Keep the raw download cache. The tool removes it after a successful build. |
+| `--isolation` / `--no-isolation` | on | Build in an environment made from the connector's `requirements.txt`. `--no-isolation` (or `TIMENET_ISOLATION=off`) builds in the current interpreter. |
 | `--quiet`, `-q` | off | Suppress status output. Belongs to `timenet-curate`, not to `build`. |
 
 !!! warning "`--quiet` goes before the subcommand"
