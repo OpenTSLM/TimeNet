@@ -49,7 +49,7 @@ from timenet.format.schemas import (
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types import Task
+from timenet.types import Annotation, Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -60,7 +60,7 @@ from timenet.values_backends.writer import (
 )
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.sharded import write_sharded_table
+from timenet.writer.sharded import ShardedTableWriter
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
@@ -255,8 +255,17 @@ class TimeFWriter:
                     values["source_id"].append(ts.source_id)
             for ann in sample.annotations:
                 values["annotation_id"].append(ann.id)
-        for task in self._dataset.tasks:
-            values["task_id"].append(task.id)
+        for ann in self._dataset.registered_annotations:  # task-referenced, carried by no sample
+            values["annotation_id"].append(ann.id)
+        if self._dataset.has_task_stream:
+            # Streamed tasks are not materialized; their ids are homogeneous by construction, so one
+            # peeked id decides binary(16)-vs-string storage without draining millions of tasks.
+            first = next(iter(self._dataset.iter_tasks()), None)
+            if first is not None:
+                values["task_id"].append(first.id)
+        else:
+            for task in self._dataset.tasks:
+                values["task_id"].append(task.id)
 
         id_types: IdTypes = {}
         for name in LOGICAL_IDS:
@@ -441,17 +450,28 @@ class TimeFWriter:
 
     # ---- metadata tables -----------------------------------------------------------------------
 
-    def _write_control_table(
+    def _control_sink(
         self,
-        rows: Iterable[dict],
         schema: pa.Schema,
         part_path: Callable[[int], str],
         *,
         dictionary_columns: list[str],
         column_encoding: dict[str, str] | None = None,
-    ) -> list[str]:
-        return write_sharded_table(
-            rows,
+    ) -> ShardedTableWriter:
+        """Open a control-table sink wired to this writer's staging dir, byte budgets, and compression.
+
+        One place owns that wiring, so the materialized tables and the streamed task write share it.
+
+        Args:
+            schema: The Arrow schema for the table.
+            part_path: Maps a part index to its relative path.
+            dictionary_columns: Columns to dictionary-encode.
+            column_encoding: Optional per-column encoding overrides.
+
+        Returns:
+            A sink ready to accept rows via :meth:`ShardedTableWriter.add`.
+        """
+        return ShardedTableWriter(
             schema,
             part_path,
             staging_dir=self._staging_dir,
@@ -464,6 +484,22 @@ class TimeFWriter:
                 compression_level=self._compression_level,
             ),
         )
+
+    def _write_control_table(
+        self,
+        rows: Iterable[dict],
+        schema: pa.Schema,
+        part_path: Callable[[int], str],
+        *,
+        dictionary_columns: list[str],
+        column_encoding: dict[str, str] | None = None,
+    ) -> list[str]:
+        sink = self._control_sink(
+            schema, part_path, dictionary_columns=dictionary_columns, column_encoding=column_encoding
+        )
+        for row in rows:
+            sink.add(row)
+        return sink.finish(write_empty_part=True)
 
     def _write_samples(self) -> None:
         codec = self._codec
@@ -487,22 +523,36 @@ class TimeFWriter:
             dictionary_columns=encodings.SAMPLES_DICTIONARY,
         )
 
+    def _annotation_row(self, ann: Annotation) -> dict:
+        """Build an annotation's stored row with an empty ``sample_ids`` for the caller to fill.
+
+        Args:
+            ann: The annotation to encode.
+
+        Returns:
+            The row dict; a sample-carried annotation appends its sample ids, a registered one leaves
+            the list empty.
+        """
+        codec = self._codec
+        return {
+            "id": codec.encode("annotation_id", ann.id),
+            "key": ann.key,
+            "value": None if ann.value is None else json.dumps(ann.value),
+            "span": codec.encode_span(ann.span),
+            "sample_ids": [],
+        }
+
     def _write_annotations(self) -> None:
         codec = self._codec
         by_id: dict[str, dict] = {}
         for sample in self._dataset.samples:
             for ann in sample.annotations:
-                row = by_id.setdefault(
-                    ann.id,
-                    {
-                        "id": codec.encode("annotation_id", ann.id),
-                        "key": ann.key,
-                        "value": None if ann.value is None else json.dumps(ann.value),
-                        "span": codec.encode_span(ann.span),
-                        "sample_ids": [],
-                    },
-                )
+                row = by_id.setdefault(ann.id, self._annotation_row(ann))
                 row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
+        for ann in self._dataset.registered_annotations:
+            # A registered annotation that no sample carries writes with an empty sample_ids: tasks
+            # reference it by id, and the reader resolves it from the table, not through a sample.
+            by_id.setdefault(ann.id, self._annotation_row(ann))
         rows = sorted(by_id.values(), key=lambda r: r["id"])
         self._annotation_parts = self._write_control_table(
             iter(rows),
@@ -512,22 +562,29 @@ class TimeFWriter:
         )
 
     def _write_tasks(self) -> None:
+        # Route tasks to a byte-budgeted sink per type, created on first sight of a type, so they reach
+        # disk in row-group batches without the whole list ever living in memory. iter_tasks() yields a
+        # materialized dataset's tasks and a streamed one's identically, so one path serves both.
+        # _task_type_counts feeds the manifest counts, tallied here so the tasks are never iterated twice.
         self._task_files: list[str] = []
-        by_type: dict[str, list[Task]] = {}
-        for task in self._dataset.tasks:
-            by_type.setdefault(str(task.task_type), []).append(task)
-        for task_type_str, tasks in sorted(by_type.items()):
-            schema = task_schema(tasks[0].task_type, self._id_types)
-            rows = [_task_row(task, schema, self._codec) for task in tasks]
-            parts = self._write_control_table(
-                iter(rows),
-                schema,
-                lambda index, task_type_str=task_type_str: part_path(
-                    TASK_PART_TEMPLATE, index, task_type=task_type_str
-                ),
-                dictionary_columns=encodings.task_dictionary(schema),
-            )
-            self._task_files.extend(parts)
+        self._task_type_counts: dict[str, int] = {}
+        sinks: dict[str, ShardedTableWriter] = {}
+        schemas: dict[str, pa.Schema] = {}
+        for task in self._dataset.iter_tasks():
+            task_type_str = str(task.task_type)
+            schema = schemas.get(task_type_str)
+            if schema is None:
+                schema = task_schema(task.task_type, self._id_types)
+                schemas[task_type_str] = schema
+                sinks[task_type_str] = self._control_sink(
+                    schema,
+                    lambda index, tt=task_type_str: part_path(TASK_PART_TEMPLATE, index, task_type=tt),
+                    dictionary_columns=encodings.task_dictionary(schema),
+                )
+            sinks[task_type_str].add(_task_row(task, schema, self._codec))
+            self._task_type_counts[task_type_str] = self._task_type_counts.get(task_type_str, 0) + 1
+        for task_type_str in sorted(sinks):  # stable file order regardless of the type interleaving
+            self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
 
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
@@ -604,35 +661,45 @@ class TimeFWriter:
     # ---- helpers -------------------------------------------------------------------------------
 
     def _validate_shared_annotations(self) -> None:
-        """Check annotations sharing an id across samples are field-equal.
+        """Check annotations sharing an id across samples are field-equal, and registered ids are distinct.
 
         Raises:
-            TimeFValidationError: If two annotations share an id but are not equal.
+            TimeFValidationError: If two annotations share an id but are not equal, or an id is both
+                registered and carried by a sample. The reader restores a registered annotation from its
+                empty ``sample_ids``, so an id that is also sample-carried writes non-empty and is lost on
+                read; reject it here instead of silently dropping it.
         """
+        sample_ann_ids = {ann.id for sample in self._dataset.samples for ann in sample.annotations}
+        overlap = sorted(sample_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
+        if overlap:
+            raise TimeFValidationError(
+                f"annotation id(s) {overlap} are both registered and carried by a sample; a registered "
+                f"annotation must be one no sample carries"
+            )
         seen: dict[str, object] = {}
-        for sample in self._dataset.samples:
-            for ann in sample.annotations:
-                if ann.id in seen and seen[ann.id] != ann:
-                    raise TimeFValidationError(
-                        f"annotation id {ann.id!r} is shared across samples but instances are not equal"
-                    )
-                seen[ann.id] = ann
+        sample_annotations = (ann for sample in self._dataset.samples for ann in sample.annotations)
+        for ann in (*sample_annotations, *self._dataset.registered_annotations):
+            if ann.id in seen and seen[ann.id] != ann:
+                raise TimeFValidationError(
+                    f"annotation id {ann.id!r} is shared across samples but instances are not equal"
+                )
+            seen[ann.id] = ann
 
     def _build_counts(
         self,
         unique_series: list[TimeSeries],
         placements: dict[tuple[str, int], ChunkPlacement],
     ) -> ManifestCounts:
-        tasks_by_type: dict[str, int] = {}
-        for task in self._dataset.tasks:
-            tasks_by_type[str(task.task_type)] = tasks_by_type.get(str(task.task_type), 0) + 1
+        tasks_by_type = self._task_type_counts  # tallied while streaming/writing the tasks
         specs_by_type: dict[str, int] = {}
         for ts in unique_series:
             specs_by_type[ts.spec.spec_type] = specs_by_type.get(ts.spec.spec_type, 0) + 1
         annotation_ids = {ann.id for sample in self._dataset.samples for ann in sample.annotations}
+        annotation_ids |= {ann.id for ann in self._dataset.registered_annotations}
         return ManifestCounts(
             samples=len(self._dataset.samples),
             annotations=len(annotation_ids),
+            registered_annotations=len(self._dataset.registered_annotations),
             tasks=tasks_by_type,
             time_series_chunks=len(placements),
             time_series_index_rows=self._index_rows,

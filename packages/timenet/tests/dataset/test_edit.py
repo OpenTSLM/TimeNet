@@ -9,8 +9,22 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
-from timenet.types import TSCorrespondenceTask, TSEditingTask, Version
+from timenet.types import Annotation, TSCorrespondenceTask, TSEditingTask, Version
 from timenet.writer import TimeFWriter
+
+
+def test_remove_samples_preserves_registered_annotations_and_their_refs():
+    # A registered annotation no sample carries, and the task refs to it, must survive a sample removal.
+    dataset = make_dataset()
+    dataset.register_annotations([Annotation(key="answer_options", value=["yes", "no"], id="opts-shared")])
+    answer = next(task for task in dataset.tasks if task.id == "task-answer-0")
+    answer.input_annotation_ids = (*answer.input_annotation_ids, "opts-shared")
+
+    edited = remove_samples(dataset, ["sample-2"], cascade=True)  # sample-2's own task cascades out
+
+    assert [ann.id for ann in edited.registered_annotations] == ["opts-shared"]  # not dropped by from_parts
+    kept = next(task for task in edited.tasks if task.id == "task-answer-0")
+    assert "opts-shared" in kept.input_annotation_ids  # registered = always reachable, so the ref is not stripped
 
 
 def _base(tmp_path, dataset=None):

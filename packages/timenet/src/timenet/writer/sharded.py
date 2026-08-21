@@ -117,6 +117,96 @@ class RotatingPartWriter:
 _PROBE_ROWS = 1024
 
 
+class ShardedTableWriter:
+    """Accepts control-table rows one at a time and streams them into byte-budgeted parquet parts.
+
+    This is the streaming core behind :func:`write_sharded_table`. It buffers rows into row groups,
+    flushes a group once it reaches ``min(row_group_target_bytes, control_target_bytes)``, and rotates
+    to a new part once a part reaches ``control_target_bytes``. Until the bytes-per-row rate is known,
+    it measures each row, so it sizes the first group exactly even for a small table or a tiny target.
+    After ``_PROBE_ROWS`` rows it extrapolates the rate from the sample and sizes later groups by row
+    count, re-measuring the rate at each flush. Rows never all live in memory at once, so a caller can
+    feed millions of rows from a stream. :meth:`finish` closes the last part.
+    """
+
+    def __init__(  # noqa: PLR0913
+        self,
+        schema: pa.Schema,
+        part_path: Callable[[int], str],
+        *,
+        staging_dir: Path,
+        control_target_bytes: int,
+        row_group_target_bytes: int,
+        encoding: encodings.ParquetEncoding,
+    ) -> None:
+        """Bind the writer to its schema, path template, byte budgets, and encoding.
+
+        Args:
+            schema: The Arrow schema for the table.
+            part_path: Maps a part index to its relative path.
+            staging_dir: The version's staging directory.
+            control_target_bytes: Rotate to a new part once a part's estimated size exceeds this.
+            row_group_target_bytes: Target size of one row group inside a part.
+            encoding: Dictionary/column encodings and compression applied to every part.
+        """
+        self._schema = schema
+        self._core = RotatingPartWriter(
+            staging_dir,
+            schema,
+            part_path,
+            part_target_bytes=control_target_bytes,
+            parquet_kwargs=encodings.parquet_kwargs(
+                dictionary_columns=encoding.dictionary_columns,
+                column_encoding=encoding.column_encoding,
+                compression=encoding.compression,
+                compression_level=encoding.compression_level,
+            ),
+        )
+        self._row_group_bytes = min(row_group_target_bytes, control_target_bytes)
+        self._buffer: list[dict] = []
+        self._buffer_bytes = 0  # measured per row while the bytes-per-row rate is still unknown
+        self._bytes_per_row = 0  # set once a group is measured, then re-set from every flush
+
+    def _flush(self) -> None:
+        table = pa.Table.from_pylist(self._buffer, schema=self._schema)
+        self._core.write(table, table.nbytes)
+        self._bytes_per_row = max(1, table.nbytes // len(self._buffer))
+        self._buffer.clear()
+
+    def add(self, row: dict) -> None:
+        """Append one row, flushing a row group when it fills.
+
+        Args:
+            row: The already-encoded payload row, matching the schema.
+        """
+        self._buffer.append(row)
+        if self._bytes_per_row:
+            # Rate known: size groups by row count, re-measured at each flush.
+            if len(self._buffer) >= max(1, self._row_group_bytes // self._bytes_per_row):
+                self._flush()
+        else:
+            # Learning: measure each row until a group fills or the probe is large enough to extrapolate.
+            self._buffer_bytes += pa.Table.from_pylist([row], schema=self._schema).nbytes
+            if self._buffer_bytes >= self._row_group_bytes:
+                self._flush()
+            elif len(self._buffer) >= _PROBE_ROWS:
+                self._bytes_per_row = max(1, self._buffer_bytes // len(self._buffer))
+
+    def finish(self, *, write_empty_part: bool = False) -> list[str]:
+        """Flush any buffered rows, close the last part, and return every part written.
+
+        Args:
+            write_empty_part: Write one empty part when no row was ever added, so the schema stays
+                on disk. The control tables need this.
+
+        Returns:
+            The relative paths of the parts written, in order.
+        """
+        if self._buffer:
+            self._flush()
+        return self._core.finish(write_empty_part=write_empty_part)
+
+
 def write_sharded_table(  # noqa: PLR0913
     rows: Iterable[dict],
     schema: pa.Schema,
@@ -127,14 +217,8 @@ def write_sharded_table(  # noqa: PLR0913
     row_group_target_bytes: int,
     encoding: encodings.ParquetEncoding,
 ) -> list[str]:
-    """Write ``rows`` as one or more parquet parts through :class:`RotatingPartWriter`.
+    """Write ``rows`` as one or more parquet parts through a :class:`ShardedTableWriter`.
 
-    The writer buffers rows into row groups. The part writer rotates to a new part once a part
-    reaches ``control_target_bytes``. The writer flushes a group once it reaches
-    ``min(row_group_target_bytes, control_target_bytes)``. Until the bytes-per-row rate is known, the
-    writer measures each row. This way, it sizes the first group exactly, so even a small table or a
-    tiny target still shards. After ``_PROBE_ROWS`` rows, the writer extrapolates the rate from the
-    sample. It then sizes later groups by row count, and each flush re-measures the rate for free.
     The table is ordered by a random id, so adjacent groups sample the same size distribution and
     stay evenly sized. This keeps each group's statistics tight enough to prune on. An empty input
     still writes exactly one empty part so the schema stays on disk.
@@ -151,43 +235,14 @@ def write_sharded_table(  # noqa: PLR0913
     Returns:
         The relative paths of the parts written, in order.
     """
-    core = RotatingPartWriter(
-        staging_dir,
+    writer = ShardedTableWriter(
         schema,
         part_path,
-        part_target_bytes=control_target_bytes,
-        parquet_kwargs=encodings.parquet_kwargs(
-            dictionary_columns=encoding.dictionary_columns,
-            column_encoding=encoding.column_encoding,
-            compression=encoding.compression,
-            compression_level=encoding.compression_level,
-        ),
+        staging_dir=staging_dir,
+        control_target_bytes=control_target_bytes,
+        row_group_target_bytes=row_group_target_bytes,
+        encoding=encoding,
     )
-    row_group_bytes = min(row_group_target_bytes, control_target_bytes)
-    buffer: list[dict] = []
-    buffer_bytes = 0  # measured per row while the bytes-per-row rate is still unknown
-    bytes_per_row = 0  # set once a group is measured, then re-set from every flush
-
-    def flush() -> int:
-        table = pa.Table.from_pylist(buffer, schema=schema)
-        core.write(table, table.nbytes)
-        rate = max(1, table.nbytes // len(buffer))
-        buffer.clear()
-        return rate
-
     for row in rows:
-        buffer.append(row)
-        if bytes_per_row:
-            # Rate known: size groups by row count, re-measured at each flush.
-            if len(buffer) >= max(1, row_group_bytes // bytes_per_row):
-                bytes_per_row = flush()
-        else:
-            # Learning: measure each row until a group fills or the probe is large enough to extrapolate.
-            buffer_bytes += pa.Table.from_pylist([row], schema=schema).nbytes
-            if buffer_bytes >= row_group_bytes:
-                bytes_per_row = flush()
-            elif len(buffer) >= _PROBE_ROWS:
-                bytes_per_row = max(1, buffer_bytes // len(buffer))
-    if buffer:
-        flush()
-    return core.finish(write_empty_part=True)
+        writer.add(row)
+    return writer.finish(write_empty_part=True)

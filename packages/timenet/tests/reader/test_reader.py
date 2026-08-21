@@ -1,3 +1,4 @@
+from fractions import Fraction
 import json
 from pathlib import Path
 import pickle
@@ -19,6 +20,7 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    Domain,
     License,
     LocalizationMode,
     ScalarPredictionTask,
@@ -51,6 +53,151 @@ def test_full_round_trip(tmp_path, backend):
         restored = reader.read()
     assert isinstance(restored, TimeFDataset)
     assert_datasets_equal(original, restored)
+
+
+def _registered_annotation_dataset() -> TimeFDataset:
+    """A recording-as-sample dataset whose task references an annotation no sample carries.
+
+    Two calls produce equal datasets (fixed ids), so it works as a round-trip fixture.
+
+    Returns:
+        The dataset.
+    """
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/registered-annotation",
+            dataset_version=Version(1, 0, 0),
+            name="Registered",
+            description="A task references an annotation no sample carries.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
+    dataset.register_annotations([options])
+    dataset.add_task(
+        sample,
+        AnswerTask(prompt="Rhythm?", target="yes", input_annotation_ids=(options.id,), id="qa-0"),
+    )
+    return dataset
+
+
+def test_registered_annotation_round_trips(tmp_path):
+    original = _registered_annotation_dataset()
+    version_dir = _write(tmp_path, dataset=_registered_annotation_dataset())
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+    assert_datasets_equal(original, restored)  # compares registered_annotations too
+    assert [ann.id for ann in restored.registered_annotations] == ["opts-yesno"]
+    assert restored.tasks[0].input_annotation_ids == ("opts-yesno",)  # the ref survived, resolves in the table
+
+
+def test_write_rejects_an_annotation_both_registered_and_sample_carried(tmp_path):
+    # A registered annotation writes with empty sample_ids and the reader restores it from that; an id
+    # also carried by a sample would write non-empty and be lost on read, so the writer rejects it.
+    dataset = _registered_annotation_dataset()
+    dataset.samples[0].add_annotations([Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")])
+    dataset.derive_schema()
+    with pytest.raises(TimeFValidationError, match="both registered and carried by a sample"):
+        _write(tmp_path, dataset=dataset)
+
+
+def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
+    """A recording-as-sample dataset whose QA tasks are added batched or via a stream (same content).
+
+    Args:
+        streaming: Feed the tasks through :meth:`TimeFDataset.set_task_stream` when true, else
+            :meth:`add_tasks`.
+
+    Returns:
+        The dataset.
+    """
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/streamed-tasks",
+            dataset_version=Version(1, 0, 0),
+            name="Streamed",
+            description="Many QA tasks over one recording.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
+    dataset.register_annotations([options])
+    prompts = [f"Question {i}?" for i in range(5)]
+    if streaming:
+        tasks = [
+            AnswerTask(
+                prompt=prompt,
+                target="yes",
+                rationale=f"reason {i}",
+                input_annotation_ids=(options.id,),
+                id=f"qa-{i}",
+                sample_ids=(sample.sample_id,),  # streamed tasks carry their own sample_ids
+            )
+            for i, prompt in enumerate(prompts)
+        ]
+        dataset.set_task_stream([AnswerTask], lambda tasks=tasks: iter(tasks))
+    else:
+        dataset.add_tasks(
+            sample,
+            [
+                AnswerTask(
+                    prompt=prompt,
+                    target="yes",
+                    rationale=f"reason {i}",
+                    input_annotation_ids=(options.id,),
+                    id=f"qa-{i}",
+                )
+                for i, prompt in enumerate(prompts)
+            ],
+        )
+    return dataset
+
+
+def _read(version_dir: Path) -> TimeFDataset:
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        return reader.read()
+
+
+def test_streaming_tasks_round_trip(tmp_path):
+    restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
+    assert len(restored.tasks) == 5
+    task = next(t for t in restored.tasks if t.id == "qa-3")
+    assert task.prompt == "Question 3?"
+    assert task.target == "yes"
+    assert task.rationale == "reason 3"
+    assert task.sample_ids == ("rec-0",)
+    assert task.input_annotation_ids == ("opts-yesno",)
+    assert [ann.id for ann in restored.registered_annotations] == ["opts-yesno"]
+    assert restored.samples[0].task_ids == ()  # streamed tasks do not back-populate the sample
+
+
+def test_streaming_tasks_match_batched(tmp_path):
+    # The same tasks, added batched vs streamed, read back to the same tasks.
+    batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
+    streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)))
+    assert {t.id: t for t in batched.tasks} == {t.id: t for t in streamed.tasks}
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])

@@ -397,6 +397,7 @@ class TimeFReader:
             samples=list(self.iter_samples()),
             tasks=self.tasks,
             schema=self._manifest.schema,
+            registered_annotations=self._read_registered_annotations(),
         )
 
     def iter_samples(self, sample_ids: Iterable[str] | None = None) -> Iterator[Sample]:
@@ -572,6 +573,32 @@ class TimeFReader:
                 f"descriptor says {descriptor.value_type!r}"
             )
         return annotation
+
+    def _read_registered_annotations(self) -> tuple[Annotation, ...]:
+        """Rebuild annotations that no sample carries: they exist only for tasks to reference.
+
+        These rows store an empty ``sample_ids``. :meth:`iter_samples` never reaches them, since no
+        sample lists them, so :meth:`read` pulls them here to restore the dataset's registered
+        annotations. The manifest count gates the scan, so a dataset with none (the common case) pays
+        nothing.
+
+        Returns:
+            The registered annotations, in stored order.
+        """
+        if self._manifest.counts.registered_annotations == 0:
+            return ()
+        registered: list[Annotation] = []
+        with self._as_format_error():
+            for part in self._manifest.files.annotations:
+                table = pq.read_table(
+                    self._version.path(part.path),
+                    filesystem=self._fs,
+                    columns=["id", "key", "value", "span", "sample_ids"],
+                )
+                for row in table.to_pylist():
+                    if not row["sample_ids"]:
+                        registered.append(self._decode_annotation(row))
+        return tuple(registered)
 
     def _index_table(self) -> _PrunedControlTable:
         """Return the pruned view over the time-series index, built on first lookup.

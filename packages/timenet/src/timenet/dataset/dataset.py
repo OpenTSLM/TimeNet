@@ -1,6 +1,6 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import datetime
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -13,6 +13,7 @@ from timenet.dataset.sample import Sample, check_span_within_window
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
+    Annotation,
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
@@ -39,6 +40,14 @@ class TimeFDataset:
         self._metadata = metadata
         self._samples: list[Sample] = []
         self._tasks: list[Task] = []
+        # Annotations that tasks reference but no sample carries, deduped by id. A task's metadata
+        # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
+        # instead of being copied onto every sample the tasks are about.
+        self._registered_annotations: dict[str, Annotation] = {}
+        # An optional re-iterable task source. When set, tasks stream past the dataset instead of
+        # accumulating in _tasks, so a dataset with millions of tasks over few samples still fits.
+        self._task_stream: Callable[[], Iterator[Task]] | None = None
+        self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
     def add_sample(
@@ -174,6 +183,69 @@ class TimeFDataset:
         batch = tuple(tasks)
         return self._register_batch(batch, targets)
 
+    def register_annotations(self, annotations: Iterable[Annotation]) -> None:
+        """Register annotations that tasks reference but no sample carries.
+
+        Deduped by id, so many tasks can share one annotation without copying it. The writer persists
+        these alongside the sample annotations, so a task's ``input_annotation_ids`` /
+        ``target_annotation_ids`` resolve without the annotation being attached to a sample. Register
+        an annotation before the task that references it (:meth:`add_task` checks the reference).
+
+        Args:
+            annotations: The annotations to register. A repeated id must map to an equal annotation.
+
+        Raises:
+            TimeFValidationError: If two annotations share an id but are not equal.
+        """
+        for annotation in annotations:
+            existing = self._registered_annotations.get(annotation.id)
+            if existing is not None and existing != annotation:
+                raise TimeFValidationError(
+                    f"annotation id {annotation.id!r} is registered twice with different values: "
+                    f"{existing!r} and {annotation!r}"
+                )
+            self._registered_annotations[annotation.id] = annotation
+
+    def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
+        """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
+
+        For a dataset with far more tasks than samples (many questions over few recordings), holding
+        every task in memory is the scaling wall. A streaming connector builds the bounded samples and
+        registered annotations, then hands the tasks over through ``source``; the writer streams them to
+        disk without a list. Streamed tasks are trusted, not validated the way :meth:`add_task` validates
+        them: each must already have its ``sample_ids`` set and reference only registered annotations and
+        existing samples. Streamed tasks do not populate ``Sample.task_ids``.
+
+        Args:
+            task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
+                Every yielded task must be one of these types.
+            source: A callable returning a fresh iterator over the tasks each time it is called. The
+                writer calls it more than once (a peek for id storage, then the write), so it must
+                re-read its source rather than exhaust a one-shot generator.
+
+        Raises:
+            TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
+                streams its tasks or materializes them, never both, or the writer would drop one set.
+        """
+        if self._tasks:
+            raise TimeFValidationError(
+                "set_task_stream cannot follow add_task/add_tasks: a dataset either streams its tasks or "
+                "materializes them, not both"
+            )
+        self._streamed_task_types = tuple(task_types)
+        self._task_stream = source
+
+    def iter_tasks(self) -> Iterator[Task]:
+        """Yield the dataset's tasks, from the stream when one is set, else the materialized list.
+
+        Yields:
+            Each task. A streamed dataset re-reads its source on every call.
+        """
+        if self._task_stream is not None:
+            yield from self._task_stream()
+        else:
+            yield from self._tasks
+
     def _register_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> tuple[Task, ...]:
         """Validate a whole batch of tasks, then attach all of it or none of it.
 
@@ -193,7 +265,11 @@ class TimeFDataset:
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
-        """  # noqa: DOC502 (_validate_task_batch raises this error, not this method)
+        """
+        if self._task_stream is not None:
+            raise TimeFValidationError(
+                "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
+            )
         self._validate_task_batch(batch, targets)
         for task in batch:
             task.sample_ids = tuple(sample.sample_id for sample in targets)
@@ -301,6 +377,7 @@ class TimeFDataset:
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
+        sample_annotations = (annotation for sample in self._samples for annotation in sample.annotations)
         annotations = self._ordered_unique(
             AnnotationDescriptor(
                 key=annotation.key,
@@ -311,8 +388,9 @@ class TimeFDataset:
                 unit=cast("str | None", annotation.unit),
                 description=annotation.description,
             )
-            for sample in self._samples
-            for annotation in sample.annotations
+            # Registered (task-referenced) annotations carry descriptors too, so their key/type reach
+            # the schema even though no sample carries them.
+            for annotation in (*sample_annotations, *self._registered_annotations.values())
         )
         by_key: dict[str, AnnotationDescriptor] = {}
         for descriptor in annotations:
@@ -323,7 +401,10 @@ class TimeFDataset:
                     f"{existing!r} and {descriptor!r}"
                 )
             by_key[descriptor.key] = descriptor
-        tasks = self._ordered_unique(type(task) for task in self._tasks)
+        # A streamed dataset declares its task types up front, so the schema records them without
+        # draining the stream just to collect them.
+        streamed = self._ordered_unique(self._streamed_task_types)
+        tasks = streamed if self._task_stream is not None else self._ordered_unique(type(task) for task in self._tasks)
         self._schema = DatasetSchema(
             time_series_specs=tuple(specs),
             annotations=tuple(annotations),
@@ -339,6 +420,7 @@ class TimeFDataset:
         samples: Iterable[Sample],
         tasks: Iterable[Task],
         schema: DatasetSchema,
+        registered_annotations: Iterable[Annotation] = (),
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -349,6 +431,8 @@ class TimeFDataset:
             samples: Fully built samples. Their loaders pull data from disk.
             tasks: Fully built tasks, with their ``from_tasks`` references resolved.
             schema: The schema reconstructed from the manifest.
+            registered_annotations: Annotations that tasks reference but no sample carries (see
+                :meth:`register_annotations`).
 
         Returns:
             The dataset, built from these parts.
@@ -356,6 +440,7 @@ class TimeFDataset:
         dataset = cls(metadata=metadata)
         dataset._samples = list(samples)
         dataset._tasks = list(tasks)
+        dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._schema = schema
         return dataset
 
@@ -382,24 +467,26 @@ class TimeFDataset:
                 f"{name} needs an answer: pass target=, or target_annotation_ids= to point at stored annotations"
             )
 
-    @staticmethod
-    def _check_annotation_refs(task: Task, samples: tuple[Sample, ...]) -> None:
-        """Reject an input or target annotation id that none of the task's samples carries.
+    def _check_annotation_refs(self, task: Task, samples: tuple[Sample, ...]) -> None:
+        """Reject an input or target annotation id that no target sample carries and none is registered.
 
         Args:
             task: The task to register.
             samples: The samples that the task attaches to.
 
         Raises:
-            TimeFValidationError: If a referenced annotation id is not attached to any target sample.
+            TimeFValidationError: If a referenced annotation id is neither attached to a target
+                sample nor registered with :meth:`register_annotations`.
         """
         known = {annotation.id for sample in samples for annotation in sample.annotations}
+        known |= self._registered_annotations.keys()
         for field_name in ("input_annotation_ids", "target_annotation_ids"):
             for annotation_id in getattr(task, field_name):
                 if annotation_id not in known:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} references annotation {annotation_id!r}, "
-                        f"which is not attached to any of samples {[s.sample_id for s in samples]}"
+                        f"which no target sample {[s.sample_id for s in samples]} carries and which is not "
+                        f"registered with register_annotations"
                     )
 
     def _check_sample_refs(self, task: Task) -> None:
@@ -440,6 +527,16 @@ class TimeFDataset:
     def tasks(self) -> tuple[Task, ...]:
         """All tasks in insertion order."""
         return tuple(self._tasks)
+
+    @property
+    def registered_annotations(self) -> tuple[Annotation, ...]:
+        """Annotations registered for tasks to reference, which no sample carries (registration order)."""
+        return tuple(self._registered_annotations.values())
+
+    @property
+    def has_task_stream(self) -> bool:
+        """Whether tasks stream from a source (see :meth:`set_task_stream`) rather than the ``_tasks`` list."""
+        return self._task_stream is not None
 
     @property
     def schema(self) -> DatasetSchema | None:

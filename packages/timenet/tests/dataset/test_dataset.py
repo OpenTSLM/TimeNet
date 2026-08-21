@@ -277,8 +277,41 @@ def test_add_task_accepts_an_answer_stored_by_reference(make_series):
 def test_add_task_rejects_an_annotation_ref_the_samples_do_not_carry(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(),))
-    with pytest.raises(TimeFValidationError, match="not attached to any"):
+    with pytest.raises(TimeFValidationError, match="not registered with register_annotations"):
         dataset.add_task(sample, ClassificationTask(target="a", input_annotation_ids=("nope",)))
+
+
+def test_add_task_accepts_a_registered_annotation_ref(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),))
+    options = Annotation(key="answer_options", value=["yes", "no"], id="opts-0")
+    dataset.register_annotations([options])
+    task = dataset.add_task(sample, AnswerTask(prompt="Q?", target="yes", input_annotation_ids=(options.id,)))
+    assert task.input_annotation_ids == ("opts-0",)
+    assert dataset.registered_annotations == (options,)  # carried by no sample
+
+
+def test_register_annotations_rejects_an_inconsistent_duplicate_id():
+    dataset = _dataset()
+    dataset.register_annotations([Annotation(key="answer_options", value=["yes"], id="opts-0")])
+    with pytest.raises(TimeFValidationError, match="registered twice with different values"):
+        dataset.register_annotations([Annotation(key="answer_options", value=["no"], id="opts-0")])
+
+
+def test_set_task_stream_rejects_after_add_task(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),))
+    dataset.add_task(sample, ClassificationTask(target="a"))
+    with pytest.raises(TimeFValidationError, match="either streams its tasks or"):
+        dataset.set_task_stream([ClassificationTask], lambda: iter(()))
+
+
+def test_add_task_rejects_on_a_streamed_dataset(make_series):
+    dataset = _dataset()
+    sample = dataset.add_sample(time_series=(make_series(),))
+    dataset.set_task_stream([AnswerTask], lambda: iter(()))
+    with pytest.raises(TimeFValidationError, match="streamed dataset"):
+        dataset.add_task(sample, AnswerTask(prompt="q", target="a"))
 
 
 def test_add_task_accepts_a_series_answer_without_a_target(make_series):
