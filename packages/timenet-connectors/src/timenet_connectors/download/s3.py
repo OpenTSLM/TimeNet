@@ -1,12 +1,14 @@
 """Download an ``s3://bucket/key`` object for connectors.
 
 This helper downloads an ``s3://bucket/key`` object to a local path with boto3, which runs the transfer
-in parallel with multipart downloads. The client uses boto3's own credential resolution (environment,
-``AWS_PROFILE`` / the shared ``~/.aws`` config / SSO, container and instance roles). It honors the
-caller's AWS configuration. The code imports ``boto3`` lazily, so users who build only offline
+in parallel with multipart downloads. When AWS credentials are configured (environment, ``AWS_PROFILE``
+/ the shared ``~/.aws`` config / SSO, container and instance roles), the client uses them, so a private
+source stays reachable. When none are configured, it reads anonymously, which is what a public bucket
+such as physionet-open needs. The code imports ``boto3`` lazily, so users who curate only offline
 datasets do not need it.
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -15,13 +17,18 @@ from timenet.errors import TimeFValidationError, TimeNetBuildError
 from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
 
 
+_LOG = logging.getLogger(__name__)
+
+
 def _s3_client() -> Any:
-    """Build a boto3 S3 client using boto3's own credential resolution.
+    """Build a boto3 S3 client, using credentials when available and anonymous access otherwise.
 
     boto3 resolves credentials through its full chain: environment variables, ``AWS_PROFILE`` and the
-    shared ``~/.aws`` config (including SSO), and container or instance roles. This honors the
-    caller's AWS configuration, rather than special-casing a couple of environment variables. The
-    code imports ``boto3`` lazily, so users who build only offline datasets do not need it.
+    shared ``~/.aws`` config (including SSO), and container or instance roles. When that yields
+    credentials, the client uses them, so a private source stays reachable. When no credentials are
+    configured, or the provider chain fails to load (for example an SSO profile missing an optional
+    dependency), the client falls back to anonymous access, which is what a public bucket such as
+    physionet-open needs.
 
     Returns:
         A boto3 S3 client.
@@ -31,12 +38,25 @@ def _s3_client() -> Any:
     """
     try:
         import boto3  # noqa: PLC0415
+        from botocore import UNSIGNED  # noqa: PLC0415
+        from botocore.config import Config  # noqa: PLC0415
+        from botocore.exceptions import BotoCoreError  # noqa: PLC0415
     except ImportError as exc:
         raise TimeNetBuildError(
             "downloading from S3 needs boto3, declared in the connector's requirements.txt. "
             "Run the build without --no-isolation, or install it yourself"
         ) from exc
-    return boto3.client("s3")
+    session = boto3.session.Session()
+    try:
+        credentials = session.get_credentials()
+    except BotoCoreError:
+        # A broken or incomplete credential provider (for example an SSO profile missing an optional
+        # dependency) must not stop an anonymous read of a public bucket.
+        credentials = None
+    if credentials is not None:
+        return session.client("s3")
+    _LOG.info("no usable AWS credentials; reading S3 with unsigned (anonymous) requests")
+    return session.client("s3", config=Config(signature_version=UNSIGNED))
 
 
 def download_s3_object(s3_url: str, dest: Path) -> None:

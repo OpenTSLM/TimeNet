@@ -3,6 +3,8 @@ import sys
 import threading
 
 import boto3
+from botocore import UNSIGNED
+from botocore.exceptions import BotoCoreError
 import pytest
 
 from timenet.errors import TimeNetBuildError
@@ -11,38 +13,48 @@ from timenet_connectors.download.progress import progress_sink
 from timenet_connectors.download.s3 import _s3_client, download_s3_object
 
 
-def _spy_client(monkeypatch) -> dict:
-    # Capture what _s3_client passes to boto3.client, without building a real (credential-resolving)
-    # client that would touch the machine's AWS config.
+def _spy_session(monkeypatch, *, credentials, fail: bool = False) -> dict:
+    # Capture what _s3_client passes to Session.client, and control credential resolution, without
+    # touching the machine's AWS config.
     captured: dict = {}
 
-    def fake_client(service, **kwargs):
-        captured["service"] = service
-        captured["kwargs"] = kwargs
-        return object()
+    class _FakeSession:
+        def get_credentials(self):
+            if fail:
+                raise BotoCoreError()
+            return credentials
 
-    monkeypatch.setattr(boto3, "client", fake_client)
+        def client(self, service, **kwargs):
+            captured["service"] = service
+            captured["kwargs"] = kwargs
+            return object()
+
+    monkeypatch.setattr(boto3.session, "Session", _FakeSession)
     return captured
 
 
-def test_s3_client_uses_default_resolution_without_env_credentials(monkeypatch):
-    # No env credentials: the client still uses boto3's own resolution (no forced UNSIGNED config), so a
-    # configured profile / shared config / SSO / instance role is honored.
-    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-    captured = _spy_client(monkeypatch)
+def test_s3_client_reads_unsigned_without_credentials(monkeypatch):
+    # No credentials resolve: read public data anonymously with a forced UNSIGNED signature.
+    captured = _spy_session(monkeypatch, credentials=None)
     _s3_client()
     assert captured["service"] == "s3"
-    assert captured["kwargs"] == {}  # a plain default client, boto3 resolves credentials itself
+    assert captured["kwargs"]["config"].signature_version is UNSIGNED
 
 
-def test_s3_client_is_a_plain_default_client_with_env_credentials(monkeypatch):
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
-    captured = _spy_client(monkeypatch)
+def test_s3_client_uses_credentials_when_available(monkeypatch):
+    # Credentials resolve (env / profile / SSO / instance role): use them, with no forced UNSIGNED.
+    captured = _spy_session(monkeypatch, credentials=object())
     _s3_client()
     assert captured["service"] == "s3"
-    assert captured["kwargs"] == {}  # boto3 picks up the env credentials on its own
+    assert captured["kwargs"] == {}
+
+
+def test_s3_client_falls_back_to_unsigned_on_credential_error(monkeypatch):
+    # A broken credential provider (for example an SSO profile missing an optional dependency) must not
+    # stop an anonymous read of a public bucket.
+    captured = _spy_session(monkeypatch, credentials=None, fail=True)
+    _s3_client()
+    assert captured["kwargs"]["config"].signature_version is UNSIGNED
 
 
 def test_download_s3_object_rejects_non_s3_url():
