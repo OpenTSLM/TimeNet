@@ -2,8 +2,9 @@
 
 Subclasses set ``HF_REPO``, ship a ``dataset.yaml`` card beside the connector, and implement ``convert()``.
 Downloads read the Hub's auto-generated parquet ref. The Hub produces that ref for public and gated datasets.
-The base imports ``huggingface_hub`` lazily, so its users do not need the package. Install the ``huggingface``
-extra to get it. The base reads ``HF_TOKEN`` from the environment, so gated datasets work with no extra wiring.
+``huggingface_hub`` is declared in the connector's ``requirements.txt`` and installed into the environment the
+build runs in; the base imports it lazily, which is what keeps ``--no-isolation`` usable. The base reads
+``HF_TOKEN`` from the environment, so gated datasets work with no extra wiring.
 Fully private datasets have no auto-parquet ref, and this base does not support them.
 """
 
@@ -39,14 +40,15 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
             One dict per row across all parquet files.
 
         Raises:
-            ImportError: If the caller has not installed the ``huggingface`` extra (``huggingface_hub``).
+            ImportError: If ``huggingface_hub``, declared in this connector's requirements, is missing.
             DatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
         try:
             from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
-                f"reading {self.HF_REPO!r} needs the huggingface extra: pip install 'timenet-connectors[huggingface]'"
+                f"reading {self.HF_REPO!r} needs huggingface_hub, declared in this connector's "
+                "requirements.txt. Run the build without --no-isolation, or install it yourself"
             ) from exc
         import pyarrow.parquet as pq  # noqa: PLC0415
 

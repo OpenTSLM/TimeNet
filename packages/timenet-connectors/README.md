@@ -19,4 +19,6 @@ timenet-curate build timenet/hello-world        # synthetic demo
 timenet-curate build chengsenwang/tsqa          # a real dataset
 ```
 
-Some connectors need optional extras, e.g. `pip install 'timenet-connectors[huggingface]'`.
+A connector declares the libraries that its source needs in a `requirements.txt` beside its
+`dataset.yaml`. Curation installs them into the environment where the build runs. This keeps
+`timenet-connectors` small.

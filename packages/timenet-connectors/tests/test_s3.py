@@ -5,7 +5,6 @@ import threading
 import boto3
 import pytest
 
-from timenet.errors import TimeNetError
 from timenet_connectors.download import s3
 from timenet_connectors.download.progress import progress_sink
 from timenet_connectors.download.s3 import _s3_client, download_s3_object
@@ -52,8 +51,7 @@ def test_download_s3_object_rejects_non_s3_url():
 
 def test_missing_boto3_raises_helpful_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", None)  # `import boto3` -> ImportError
-    # Raised as a TimeNetError so the curate CLI prints one clean line, not a traceback.
-    with pytest.raises(TimeNetError, match="physionet"):
+    with pytest.raises(ImportError, match=r"requirements\.txt"):
         download_s3_object("s3://bucket/key.zip", Path("dest"))
 
 

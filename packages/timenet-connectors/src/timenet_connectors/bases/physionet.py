@@ -1,9 +1,10 @@
 """A reusable base class for connectors that read WFDB records from PhysioNet.
 
 A subclass downloads a PhysioNet database archive with :func:`~timenet_connectors.download.ensure_archive`
-and reads the records with `wfdb <https://wfdb.readthedocs.io>`_. The base class imports ``wfdb`` lazily,
-so a base user who only curates offline datasets does not need it. To use ``wfdb``, install the
-``physionet`` extra. If ``wfdb`` is missing, the base class raises an error that states the fix.
+and reads the records with `wfdb <https://wfdb.readthedocs.io>`_. ``wfdb`` is declared in the connector's
+``requirements.txt`` and installed into the environment the build runs in; the base class imports it lazily,
+which is what keeps ``--no-isolation`` usable. If ``wfdb`` is missing, the base class raises an error that
+states the fix.
 """
 
 from abc import ABC
@@ -24,19 +25,20 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
     @staticmethod
     def _wfdb() -> Any:
-        """Import ``wfdb`` lazily. Raise an error that states the fix if the extra is missing.
+        """Import ``wfdb`` lazily. Raise an error that states the fix if ``wfdb`` is missing.
 
         Returns:
             The imported ``wfdb`` module.
 
         Raises:
-            ImportError: If ``wfdb`` (the ``physionet`` extra) is not installed.
+            ImportError: If ``wfdb``, declared in this connector's requirements, is not installed.
         """
         try:
             import wfdb  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
-                "reading PhysioNet records needs the physionet extra: pip install 'timenet-connectors[physionet]'"
+                "reading PhysioNet records needs wfdb, declared in this connector's "
+                "requirements.txt. Run the build without --no-isolation, or install it yourself"
             ) from exc
         return wfdb
 

@@ -12,9 +12,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-env:
-  UV_SYNC_ARGS: --all-groups --all-extras
-
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -35,7 +32,10 @@ jobs:
         path: ~/.cache/pre-commit
         key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
     - name: Install dependencies
-      run: uv sync $UV_SYNC_ARGS
+      # `make sync` so CI and a local checkout share one definition of the dev environment: the
+      # workspace extras. Connector dependencies are not installed here; each connector's tests run
+      # in their own environment through `make test-connectors`.
+      run: make sync
     # The three checks below run to completion even when one fails, so the report lists every
     # outcome instead of stopping at the first. The final step decides the job's verdict.
     - name: Run pre-commit hooks
@@ -52,7 +52,13 @@ jobs:
     - name: Test with pytest (Python 3.13)
       id: pytest
       continue-on-error: true
-      run: uv run pytest
+      run: make test
+    - name: Test connectors in per-connector environments (Python 3.13)
+      # Each connector's tests and type-check run in an environment built from its own
+      # requirements.txt, the same way curation runs. Runs once, on 3.13.
+      id: connectors
+      continue-on-error: true
+      run: make test-connectors
     - name: Test with pytest (Python 3.11)
       # Guard the minimum supported Python; the steps above run on 3.13. Re-syncs the venv, so it
       # has to come after the 3.13 run.
@@ -63,7 +69,8 @@ jobs:
       # below losing its per-step granularity. Accepted deliberately: keep the one job.
       id: pytestmin
       continue-on-error: true
-      run: uv sync $UV_SYNC_ARGS --python 3.11 && uv run --python 3.11 pytest
+      # UV_PYTHON threads the interpreter through `make sync` and `make test`.
+      run: UV_PYTHON=3.11 make sync && UV_PYTHON=3.11 make test
     - name: Report
       # Skipped on forks, whose token has no pull-requests: write. A transient comment-API error
       # must never turn a passing run red, hence continue-on-error; the verdict is the step below.
@@ -78,5 +85,5 @@ jobs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: uv run .github/scripts/ci_report.py
     - name: Fail if any check failed
-      if: steps.precommit.outcome == 'failure' || steps.pytest.outcome == 'failure' || steps.pytestmin.outcome == 'failure'
+      if: steps.precommit.outcome == 'failure' || steps.pytest.outcome == 'failure' || steps.pytestmin.outcome == 'failure' || steps.connectors.outcome == 'failure'
       run: exit 1

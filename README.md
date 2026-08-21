@@ -60,7 +60,7 @@ Clone the repo and set up the environment with uv:
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-make sync           # uv sync --all-groups --all-extras
+make sync           # install the dev environment (workspace + extras)
 make install-hooks  # set up pre-commit hooks (run once after cloning)
 ```
 
@@ -71,8 +71,9 @@ for linting and formatting, [ty](https://github.com/astral-sh/ty) for type check
 ### Make targets
 
 ```bash
-make sync           # install all deps incl. CPU torch (uv sync --all-groups --all-extras)
-make test           # run pytest
+make sync           # install the dev environment (workspace + extras, CPU torch)
+make test           # core tests in the dev environment
+make test-connectors # each connector's tests in its own environment
 make check          # format + lint + typecheck (ruff format, ruff check, ty check)
 make lint-fix       # auto-fix lint issues with ruff
 make build          # build both packages with uv

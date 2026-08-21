@@ -53,7 +53,7 @@ To work on TimeNet or author connectors, clone the repo and sync with uv:
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-uv sync --all-groups --all-extras
+make sync  # install the dev environment (workspace + extras)
 ```
 
 ## Load a dataset

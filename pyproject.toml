@@ -6,8 +6,8 @@ default-groups = ["dev"]
 required-version = ">=0.10.10"
 
 [dependency-groups]
-# Optional runtime deps (torch, typer/rich, huggingface-hub) are NOT duplicated here: they come from the
-# packages' extras, installed for dev/test/CI via `make sync`.
+# Optional runtime deps are NOT duplicated here: torch and typer/rich come from the packages' extras,
+# connector libraries from each connector's requirements.txt. `make sync` installs both for dev/test/CI.
 dev = [
     "hypothesis>=6.140",
     "moto[server]>=5",
@@ -102,6 +102,22 @@ markers = [
 
 [tool.ty.environment]
 python-version = "3.11"
+
+[[tool.ty.overrides]]
+# The physionet and chengsenwang connectors, and the PhysioNet / HuggingFace base classes they use,
+# import wfdb and huggingface_hub. Those libraries are per-connector requirements, not dev-environment
+# dependencies, so the dev-environment check ignores the unresolved import. The rest of the code still
+# type-checks. `make test-connectors` re-checks each connector in an environment that has its
+# requirements, where the import resolves and every other diagnostic still applies.
+include = [
+    "packages/timenet-connectors/src/timenet_connectors/datasets/physionet/**",
+    "packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/**",
+    "packages/timenet-connectors/src/timenet_connectors/bases/physionet.py",
+    "packages/timenet-connectors/src/timenet_connectors/bases/huggingface.py",
+]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [[tool.ty.overrides]]
 # The example imports scikit-learn, which is intentionally not a project dependency (install it
