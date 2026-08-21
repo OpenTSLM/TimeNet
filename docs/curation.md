@@ -16,6 +16,17 @@ explains what happens underneath.
 
 ## The pipeline
 
+Each build runs in its own environment. Before the pipeline starts, `timenet-curate` resolves the
+connector's `requirements.txt` (see [Connectors](connectors.md)). Then it re-runs itself under `uv`.
+The build environment layers those requirements over the same `timenet` and `timenet-connectors`
+that the parent runs. Two connectors that need incompatible libraries no longer collide. The
+[manifest](manifest.md) records the build environment as `build_env`.
+
+To run the pipeline in the current interpreter instead, pass `--no-isolation` or set
+`TIMENET_ISOLATION=off`. Use this while you write a connector. The programmatic entry point
+`timenet_connectors.build()` works the same way. It is isolated by default. It runs in-process when
+`TIMENET_ISOLATION=off`.
+
 The engine runs one connector through four stages in `timenet.engine.run_pipeline`:
 
 ```python
