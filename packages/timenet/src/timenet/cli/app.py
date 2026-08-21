@@ -134,6 +134,13 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
     table.add_row("annotations", str(counts.annotations))
     table.add_row("chunks", str(counts.time_series_chunks))
     console.print(table)
+    if counts.tasks:
+        tasks = Table(title="Tasks", title_justify="left", title_style="bold")
+        tasks.add_column("type", style="cyan")
+        tasks.add_column("count", justify="right")
+        for task_type, count in sorted(counts.tasks.items()):
+            tasks.add_row(task_type, str(count))
+        console.print(tasks)
 
 
 @app.command()
