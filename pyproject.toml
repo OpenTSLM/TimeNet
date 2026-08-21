@@ -128,9 +128,10 @@ include = ["examples/**"]
 unresolved-import = "ignore"
 
 [[tool.ty.overrides]]
-# The CI report script declares its dependencies inline (PEP 723) and runs standalone under
-# `uv run`, so PyGithub is deliberately not a project dependency either.
-include = [".github/scripts/**"]
+# These scripts declare their dependencies inline (PEP 723) and run standalone under `uv run`, so
+# their libraries (PyGithub for the CI report, matplotlib for the figure generator) are deliberately
+# not project dependencies.
+include = [".github/scripts/**", "docs/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
