@@ -48,9 +48,15 @@ def test_open_registry_timenet_scheme_aliases_hosted_remote():
     assert registry._base_url == TIMENET_REGISTRY_URL
 
 
-def test_open_registry_timenet_scheme_ignores_any_path():
-    # A path after timenet:// must not be folded into the API base url (it would 404 every call).
-    registry = open_registry("timenet://chengsenwang/tsqa")
+def test_open_registry_timenet_scheme_rejects_a_path():
+    # A path after timenet:// used to be dropped silently; now it is rejected, so a mistyped registry
+    # URI fails loudly instead of hitting the default host.
+    with pytest.raises(ValueError, match="timenet:// takes no path"):
+        open_registry("timenet://chengsenwang/tsqa")
+
+
+def test_open_registry_bare_timenet_scheme():
+    registry = open_registry("timenet://")
     assert isinstance(registry, RemoteRegistry)
     assert registry._base_url == TIMENET_REGISTRY_URL
 

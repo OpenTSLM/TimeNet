@@ -96,16 +96,18 @@ def test_force_redownload_replaces_atomically(registry_root, tmp_path):
     assert not list(again.parent.glob("*.tmp-*"))  # staging dir cleaned up
 
 
-def test_download_sweeps_stale_staging(registry_root, tmp_path):
+def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path):
     storage = tmp_path / "store"
     client = TimeNet(registry_root, storage_path=storage)
-    # A hard-killed download skips the cleanup finally, leaking a <version>.tmp-* dir.
-    stale = storage / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
-    stale.mkdir(parents=True)
-    (stale / "junk.parquet").write_text("partial")
+    # A concurrent download of the same version has a live <version>.tmp-* dir. download() must not
+    # delete a sibling staging dir: sweeping siblings would corrupt that other download mid-write.
+    sibling = storage / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
+    sibling.mkdir(parents=True)
+    (sibling / "inflight.parquet").write_text("partial")
 
-    client.download("timenet/hello-world")
-    assert not list((storage / "timenet/hello-world").glob("*.tmp-*"))  # swept before staging a fresh copy
+    version_dir = client.download("timenet/hello-world")
+    assert sibling.exists()  # left alone, not swept
+    assert (version_dir / "manifest.json").exists()  # the download still completed
 
 
 def test_load_round_trips(registry_root, tmp_path):

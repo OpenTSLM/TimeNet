@@ -35,13 +35,17 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
         The matching registry backend.
 
     Raises:
-        ValueError: If ``uri`` carries a scheme no backend handles. Also if ``uri`` is a ``file://``
-            URI with a host component, because this function drops the host without notice.
+        ValueError: If ``uri`` carries a scheme no backend handles, if a ``timenet://`` URI carries a
+            path, or if ``uri`` is a ``file://`` URI with a host component (the host would be dropped
+            without notice).
     """
     text = str(uri)
     if text.startswith("timenet://"):
-        # timenet:// is a bare alias for the hosted service root; any path after it is NOT part of the
-        # base URL (dataset ids are passed to the client methods, not folded into the registry URI).
+        # timenet:// is a bare alias for the hosted service root; it takes no path (dataset ids are
+        # passed to the client methods, not folded into the registry URI). Reject a stray remainder
+        # rather than drop it silently, so a mistyped URI fails loudly instead of hitting the default host.
+        if text[len("timenet://") :].strip("/"):
+            raise ValueError(f"timenet:// takes no path; got {text!r}")
         return RemoteRegistry(TIMENET_REGISTRY_URL, cache_dir=cache_dir)
     if text.startswith(("http://", "https://")):
         return RemoteRegistry(text, cache_dir=cache_dir)
