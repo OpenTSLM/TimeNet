@@ -46,6 +46,16 @@ def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
     assert_datasets_equal(make_dataset(), loaded)
 
 
+def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
+    # Keys sit under <prefix>/datasets/... so the bucket matches the hosted registry's layout and can
+    # hold other top-level prefixes beside the datasets.
+    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
+    registry.store(make_dataset())
+    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test")["Contents"]]
+    assert keys  # something was stored
+    assert all(key.startswith("registry/datasets/") for key in keys)
+
+
 def test_store_skips_committed_unless_forced(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     version = str(make_dataset().metadata.dataset_version)

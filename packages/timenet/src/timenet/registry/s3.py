@@ -1,7 +1,9 @@
 """A registry backed by an S3 (or S3-compatible) bucket.
 
-An ``s3://<bucket>/<prefix>`` root holds the same ``<dataset_id>/<version>/`` layout as a
-:class:`~timenet.registry.LocalRegistry`. Credentials, region, and an optional endpoint override come
+An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/<version>/``. This
+matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
+the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
+optional endpoint override come
 from the environment through boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
 ``AWS_ENDPOINT_URL``), so nothing is hardcoded. A read is served lazily through a
 :class:`pyarrow.fs.S3FileSystem` with range reads and no whole-version download. A version already
@@ -33,6 +35,11 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 if TYPE_CHECKING:
     import pyarrow.fs as pafs
+
+
+# Dataset objects live under a ``datasets/`` prefix, matching the hosted registry's bucket layout, so
+# it can sit beside other top-level prefixes (a catalog, say) without colliding.
+_DATASETS_PREFIX = "datasets"
 
 
 class S3Registry(WritableRegistry):
@@ -247,8 +254,8 @@ class S3Registry(WritableRegistry):
         return pafs.S3FileSystem(**kwargs)
 
     def _key(self, *parts: str) -> str:
-        """Build a bucket-relative key by joining the prefix with the given path parts."""  # noqa: DOC201
-        segments = [self._prefix, *parts] if self._prefix else list(parts)
+        """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""  # noqa: DOC201
+        segments = [self._prefix, _DATASETS_PREFIX, *parts]
         return "/".join(segment.strip("/") for segment in segments if segment)
 
     def _display_root(self) -> str:
