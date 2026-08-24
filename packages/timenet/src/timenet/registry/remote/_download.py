@@ -1,9 +1,10 @@
 """Parallel, atomic download of a whole dataset version into a local directory.
 
-Resolves each file's presigned URL and streams it concurrently (bounded by a semaphore) into a staging
-directory, then swaps the staging directory into place with a single rename so an interrupted download
-never replaces a good copy. Async under the hood (httpx ``AsyncClient``); :func:`materialize_version` is
-the synchronous entry point and runs the coroutine even from inside a running event loop.
+Resolves each file's presigned URL and streams it concurrently into a staging directory, bounded by a
+semaphore. A single rename then swaps the staging directory into place, so an interrupted download
+never replaces a good copy. The download is async under the hood (httpx ``AsyncClient``).
+:func:`materialize_version` is the synchronous entry point. It runs the coroutine even from inside a
+running event loop.
 """
 
 import asyncio

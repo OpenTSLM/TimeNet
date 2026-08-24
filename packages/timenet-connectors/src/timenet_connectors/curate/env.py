@@ -1,9 +1,10 @@
 """Run a connector's curation in an environment built from its own requirements.
 
 The parent resolves the connector's ``requirements.txt`` without importing the connector (see
-:func:`timenet_connectors.discovery.requirements_for`), layers it over a base pinned to the parent's
-own ``timenet`` and ``timenet-connectors``, and runs ``timenet-curate build`` in that environment.
-uv owns resolution and caching; a repeat build with an unchanged requirement set is a cache hit.
+:func:`timenet_connectors.discovery.requirements_for`). It layers that over a base pinned to the
+parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-curate build`` in that
+environment. uv owns resolution and caching. A repeat build with an unchanged requirement set is a
+cache hit.
 """
 
 from collections.abc import Sequence
@@ -62,7 +63,7 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     """Build the uv command that runs ``argv`` inside the described environment.
 
     Both halves of the isolation are load-bearing. ``--no-project`` stops uv from discovering and
-    syncing whatever project the parent runs in, and ``spec.python`` points outside any virtualenv
+    syncing whatever project the parent runs in. ``spec.python`` points outside any virtualenv,
     so uv has nothing to layer the environment over.
 
     Args:
@@ -137,7 +138,7 @@ def _base_interpreter() -> str:
     """Return this process's interpreter, stepping out of a virtualenv if it is in one.
 
     uv reads a virtualenv passed as ``--python`` as the *base* of the ephemeral environment and
-    layers the ``--with`` overlay on top of it: every parent site-package stays importable in the
+    layers the ``--with`` overlay on top of it. Every parent site-package stays importable in the
     child, and a package the parent already has silently satisfies a connector requirement instead
     of being resolved. The venv's own base interpreter carries none of that.
 
@@ -177,7 +178,7 @@ def _local_source_path(dist: Distribution) -> Path | None:
     """Return the on-disk project directory an editable or local path install points at.
 
     ``direct_url.json`` records how a distribution was installed. An editable install carries
-    ``dir_info.editable``; a plain path install (``pip install ./packages/timenet``) records a
+    ``dir_info.editable``. A plain path install (``pip install ./packages/timenet``) records a
     ``file://`` URL to the same source tree without that flag. Both let the child build against the
     parent's on-disk source, so both return the directory. An index or wheel install has no
     ``file://`` directory and returns ``None``, leaving the caller to pin the exact version.

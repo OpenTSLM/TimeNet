@@ -88,9 +88,9 @@ def requirements_for(dataset_id: str) -> Path | None:
 def _known_ids() -> list[str]:
     """List the dataset ids declared by the connector cards on disk, importing nothing.
 
-    :func:`available` answers the same question by importing every connector, which the
-    unknown-id error path cannot afford: those dependencies live in each connector's own
-    environment, not this one.
+    :func:`available` answers the same question by importing every connector. The unknown-id error
+    path cannot afford that: those dependencies live in each connector's own environment, not this
+    one.
 
     Returns:
         The declared dataset ids, sorted.

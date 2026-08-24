@@ -1,8 +1,8 @@
 """A registry backed by the hosted TimeNet HTTP service.
 
-Talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`: lists and
+Talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`. It lists and
 searches the catalog, fetches manifests, streams files, downloads or lazily range-reads versions, and
-publishes datasets. Artifact bytes never pass through the API — the service hands back presigned URLs.
+publishes datasets. Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
 from collections.abc import Callable
@@ -42,9 +42,9 @@ class RemoteRegistry(WritableRegistry):
 
         Args:
             base_url: The service root, e.g. ``https://registry.dev.timenet.ai``.
-            token: Bearer token; defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
+            token: Bearer token. Defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
-            download_mode: ``"full"`` or ``"on_demand"``; defaults to ``$TIMENET_DOWNLOAD_MODE``.
+            download_mode: ``"full"`` or ``"on_demand"``. Defaults to ``$TIMENET_DOWNLOAD_MODE``.
             transport: An httpx transport for testing; ``None`` uses the network.
         """
         cfg = settings()

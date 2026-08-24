@@ -1,9 +1,9 @@
 """Guard version-relative manifest paths against directory traversal.
 
-Manifest file paths come from a registry (a hosted service, an object store, a local directory) and are
-therefore untrusted: a crafted or corrupt manifest could name an absolute path or one with ``..`` that
-resolves outside the version directory. Every place that joins a manifest-declared relpath onto a local
-base goes through :func:`safe_version_path`.
+Manifest file paths come from a registry (a hosted service, an object store, or a local
+directory), so they are untrusted. A crafted or corrupt manifest can name an absolute path, or one
+with ``..`` that resolves outside the version directory. Every place that joins a manifest-declared
+relpath onto a local base goes through :func:`safe_version_path`.
 """
 
 from pathlib import Path

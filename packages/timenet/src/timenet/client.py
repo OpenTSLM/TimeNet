@@ -162,7 +162,7 @@ class TimeNet:
         return target
 
     def load(self, dataset_id: str, version: str | None = None, *, download: str | None = None) -> TimeFDataset:
-        """Read the dataset into memory. This method reads data in place through the registry's storage handle.
+        """Read the dataset into memory through the registry's storage handle.
 
         This method does not download the whole dataset. The reader loads each series only
         when code uses it. It loads data from the registry through the handle that

@@ -2,9 +2,9 @@
 
 This helper downloads an ``s3://bucket/key`` object to a local path with boto3, which runs the transfer
 in parallel with multipart downloads. The client uses boto3's own credential resolution (environment,
-``AWS_PROFILE`` / the shared ``~/.aws`` config / SSO, container and instance roles), so however the
-caller has configured AWS is honored. The code imports ``boto3`` lazily, so users who curate only
-offline datasets do not need it.
+``AWS_PROFILE`` / the shared ``~/.aws`` config / SSO, container and instance roles). It honors the
+caller's AWS configuration. The code imports ``boto3`` lazily, so users who curate only offline
+datasets do not need it.
 """
 
 from pathlib import Path
@@ -19,9 +19,9 @@ def _s3_client() -> Any:
     """Build a boto3 S3 client using boto3's own credential resolution.
 
     boto3 resolves credentials through its full chain: environment variables, ``AWS_PROFILE`` and the
-    shared ``~/.aws`` config (including SSO), and container or instance roles. So however the caller has
-    configured AWS is honored, rather than special-casing a couple of environment variables. The code
-    imports ``boto3`` lazily, so users who curate only offline datasets do not need it.
+    shared ``~/.aws`` config (including SSO), and container or instance roles. This honors the
+    caller's AWS configuration, rather than special-casing a couple of environment variables. The
+    code imports ``boto3`` lazily, so users who curate only offline datasets do not need it.
 
     Returns:
         A boto3 S3 client.

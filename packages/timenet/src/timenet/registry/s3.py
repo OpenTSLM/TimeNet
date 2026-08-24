@@ -1,14 +1,14 @@
 """A registry backed by an S3 (or S3-compatible) bucket.
 
 An ``s3://<bucket>/<prefix>`` root holds the same ``<dataset_id>/<version>/`` layout as a
-:class:`~timenet.registry.LocalRegistry`. Credentials, region, and an optional endpoint override are read
+:class:`~timenet.registry.LocalRegistry`. Credentials, region, and an optional endpoint override come
 from the environment through boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
 ``AWS_ENDPOINT_URL``), so nothing is hardcoded. A read is served lazily through a
-:class:`pyarrow.fs.S3FileSystem` (range reads, no whole-version download) unless the version is already
-cached on local disk, in which case it is read from there. The backend has no catalog, so listing and
-search are unsupported: use it to ``store`` and to fetch by an explicit ``org/name@version``.
+:class:`pyarrow.fs.S3FileSystem` with range reads and no whole-version download. A version already
+cached on local disk is read from there instead. The backend has no catalog, so listing and search are
+unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
 
-boto3 is optional; install the ``timenet[s3]`` extra to use this backend.
+boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
 
 from collections.abc import Callable
@@ -127,7 +127,7 @@ class S3Registry(WritableRegistry):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a random-access handle.
 
-        A version already downloaded to the local cache is served from disk; otherwise the handle reads
+        A version already downloaded to the local cache is served from disk. Otherwise the handle reads
         lazily from S3 through a :class:`pyarrow.fs.S3FileSystem` (range reads, no whole-version fetch).
 
         Args:
@@ -155,9 +155,9 @@ class S3Registry(WritableRegistry):
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
 
-        Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first, then moves each object
-        into the final ``<version>/`` prefix (server-side copy) with ``manifest.json`` last as the commit
-        marker, so a failed publish never leaves a partial version a reader would trust. An
+        Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then moves each object
+        into the final ``<version>/`` prefix with a server-side copy, writing ``manifest.json`` last as
+        the commit marker. A failed publish then never leaves a partial version a reader can trust. An
         already-committed version is skipped unless ``force``.
 
         Args:

@@ -95,17 +95,18 @@ class BaseRegistry(ABC):
     ) -> None:
         """Download a version's files into ``dest_dir``, swapping the directory in atomically.
 
-        Fetches every file through :meth:`open_file` (``manifest.json`` last, as the commit marker) into
-        a sibling ``<version>.tmp-*`` staging directory, then renames it over ``dest_dir`` in one step,
-        so an interrupted download never leaves a half-written copy in place. Subclasses may override
-        with a faster path (e.g. concurrent streaming from a remote service).
+        Fetches every file through :meth:`open_file` into a sibling ``<version>.tmp-*`` staging
+        directory, with ``manifest.json`` last as the commit marker. It then renames the staging
+        directory over ``dest_dir`` in one step. An interrupted download never leaves a half-written
+        copy in place. Subclasses can override this method with a faster path, such as concurrent
+        streaming from a remote service.
 
         Args:
             dataset_id: The dataset id.
             version: The version string.
             dest_dir: The target ``<...>/<id>/<version>`` directory.
             force: Re-download even if a copy already exists.
-            manifest: The parsed manifest, passed to avoid re-fetching it; fetched if ``None``.
+            manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)

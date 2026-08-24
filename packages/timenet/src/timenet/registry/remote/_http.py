@@ -1,10 +1,10 @@
 """The HTTP transport for :class:`~timenet.registry.RemoteRegistry`.
 
-Owns how the SDK talks to the hosted registry: it prefixes ``/api/v1``, attaches the bearer token and a
-``timenet/<version>`` User-Agent to API calls, resolves presigned download URLs (without leaking the
-token to object storage), and maps HTTP status codes onto TimeNet errors. A sync :class:`httpx.Client`
-serves the control plane; :meth:`new_async_client` hands out an :class:`httpx.AsyncClient` sharing the
-same configuration for the parallel downloader.
+Owns how the SDK talks to the hosted registry. It prefixes ``/api/v1`` and attaches the bearer token
+and a ``timenet/<version>`` User-Agent to API calls. It resolves presigned download URLs without
+leaking the token to object storage. It maps HTTP status codes onto TimeNet errors. A sync
+:class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
+:class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
 from collections.abc import Mapping
@@ -102,10 +102,10 @@ class RegistryHttpClient:
 
         Args:
             base_url: The service root, e.g. ``https://registry.dev.timenet.ai``. A trailing slash is
-                stripped; the ``/api/v1`` prefix is added per request.
+                stripped. The ``/api/v1`` prefix is added per request.
             token: Bearer token, or ``None`` for anonymous.
             timeout: Per-request timeout in seconds.
-            transport: An httpx transport for testing (e.g. ``httpx.MockTransport``); ``None`` uses the
+            transport: An httpx transport for testing (e.g. ``httpx.MockTransport``). ``None`` uses the
                 default network transport.
         """
         self._base_url = base_url.rstrip("/")

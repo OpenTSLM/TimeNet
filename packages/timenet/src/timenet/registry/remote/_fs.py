@@ -1,11 +1,11 @@
 """A pyarrow filesystem over a remote version's presigned URLs, via fsspec.
 
-The reader drives ``DatasetVersion.filesystem``. For an on-demand remote load that filesystem is a
-:class:`pyarrow.fs.PyFileSystem` wrapping :class:`_PresignedHTTPFileSystem`, an fsspec ``HTTPFileSystem``
-that maps each version-relative path to a presigned object URL (resolved once, on first open) and
-range-reads it directly. File sizes and existence come from the manifest, so no HEAD probe is issued: a
-presigned GET URL rejects HEAD. A fully cached version is read from local disk instead, so this only
-ever serves an uncached on-demand read.
+The reader drives ``DatasetVersion.filesystem``. For an on-demand remote load, that filesystem is a
+:class:`pyarrow.fs.PyFileSystem` wrapping :class:`_PresignedHTTPFileSystem`. That handler is an fsspec
+``HTTPFileSystem`` that maps each version-relative path to a presigned object URL and range-reads it
+directly. It resolves the URL once, on first open. File sizes and existence come from the manifest, so
+no HEAD probe is issued. A presigned GET URL rejects HEAD. A fully cached version is read from local
+disk instead, so this only ever serves an uncached on-demand read.
 """
 
 from typing import Any

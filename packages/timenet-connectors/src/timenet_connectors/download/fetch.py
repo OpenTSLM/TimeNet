@@ -2,7 +2,7 @@
 
 :func:`fetch_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
 backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself. A
-single file is just a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
+single file is a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
 it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
 (:mod:`~timenet_connectors.download.http`). Both are async so they compose with a connector's
 ``download_async``. The S3 branch is a plain blocking call, because boto3 already parallelizes a single

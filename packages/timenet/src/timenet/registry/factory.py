@@ -28,7 +28,7 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
 
     Args:
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
-        cache_dir: Where a remote backend caches downloads; ignored by the local backend. Defaults to
+        cache_dir: Where a remote backend caches downloads. The local backend ignores it. Defaults to
             the configured storage directory when ``None``.
 
     Returns:
