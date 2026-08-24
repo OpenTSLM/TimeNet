@@ -90,6 +90,23 @@ def test_store_publishes_uploads_and_finalizes(tmp_path):
     assert set(state["store"]) == set(state["published"])
 
 
+def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
+    import httpx  # noqa: PLC0415
+
+    def handler(request):
+        # The service omits every declared file from its upload list. store() must reject that before
+        # uploading, rather than publish an incomplete version.
+        if request.url.path.endswith("/publish"):
+            return httpx.Response(200, json={"files": []})
+        return httpx.Response(200, json={})
+
+    registry = RemoteRegistry(
+        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
+    )
+    with pytest.raises(RegistryError, match="disagrees with the manifest"):
+        registry.store(make_dataset(), force=True)
+
+
 def test_remote_registry_uses_client_storage_path(tmp_path):
     # A URL-configured remote registry must cache under the client's storage_path, so download() and
     # load() share one cache-first directory.

@@ -185,12 +185,18 @@ class RemoteRegistry(WritableRegistry):
                 writer.write()
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
+            declared = {part.path for part in Manifest.from_json(manifest_bytes.decode()).files.all_files()}
             files = self._http.post(f"/datasets/{dataset_id}/{version}/publish", content=manifest_bytes).json()["files"]
-            # The service returns which files to upload. Confirm each was produced locally before we
-            # start, so a mismatch fails loudly here instead of partway through the upload.
+            # Cross-check the service's upload list against the manifest before uploading. A manifest file
+            # the service omits would publish an incomplete version; a requested file we did not produce is
+            # not ours to upload. Both fail loudly here instead of partway through the upload.
+            unrequested = sorted(declared - set(files))
             missing = [relpath for relpath in files if not (version_dir / relpath).is_file()]
-            if missing:
-                raise RegistryError(f"publish for {dataset_id}@{version} requested unknown files: {missing}")
+            if unrequested or missing:
+                raise RegistryError(
+                    f"publish for {dataset_id}@{version} disagrees with the manifest: "
+                    f"service did not request {unrequested}, requested files not produced locally {missing}"
+                )
             for relpath in files:
                 self._upload_file(dataset_id, version, version_dir, relpath)
             self._http.post(f"/datasets/{dataset_id}/{version}/finalize")
