@@ -19,6 +19,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
+from timenet.errors import TimeFFormatError
 
 
 TRaw = TypeVar("TRaw")
@@ -103,6 +104,10 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
         Returns:
             The parsed header.
+
+        Raises:
+            TimeFFormatError: If the header is malformed: an unparseable gain, a signal line with no
+                channel name, or fewer signal lines than the record declares.
         """
         text = Path(f"{record_base}.hea").read_text(encoding="utf-8")
         lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
@@ -113,15 +118,22 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             fields = line.split()
             raw_format = fields[1]  # <fmt>[x<spf>][:<skew>]
             match = _GAIN_RE.match(fields[2])
-            gain = float(match["gain"]) if match else 0.0
+            if match is None:
+                raise TimeFFormatError(f"{record_base}.hea: cannot parse the gain field {fields[2]!r}")
+            if len(fields) <= _DESCRIPTION_FIELD:
+                raise TimeFFormatError(f"{record_base}.hea: signal line names no channel: {line!r}")
+            gain = float(match["gain"])
             dat_names.append(fields[0])
             raw_formats.append(raw_format)
             formats.append(raw_format.partition("x")[0].partition(":")[0])
-            gains.append(gain if gain != 0 else 200.0)  # WFDB's default gain when unspecified
+            # WFDB reads a gain of 0 as "unspecified" and uses 200 adu/mV as the default (WFDB spec).
+            gains.append(gain if gain != 0 else 200.0)
             # A missing (baseline) defaults to adc_zero (field index 4 on the signal line).
-            baselines.append(int(match["baseline"]) if match and match["baseline"] is not None else int(fields[4]))
-            # The signal description is the optional trailing field; it can hold spaces, so keep all of it.
-            sig_name.append(" ".join(fields[_DESCRIPTION_FIELD:]) if len(fields) > _DESCRIPTION_FIELD else fields[-1])
+            baselines.append(int(match["baseline"]) if match["baseline"] is not None else int(fields[4]))
+            # The signal description can hold spaces, so keep all of it.
+            sig_name.append(" ".join(fields[_DESCRIPTION_FIELD:]))
+        if len(sig_name) != n_sig:
+            raise TimeFFormatError(f"{record_base}.hea declares {n_sig} signals but has {len(sig_name)} signal lines")
         # The direct reader interleaves one .dat as (-1, n_sig) int16, so it is valid only when every
         # signal is plainly "16" (no "16x2" frames, no "16:5" skew) and they share a single file. Any
         # other shape (multi-.dat, samples-per-frame > 1, skew, byte offset) routes to wfdb instead of
