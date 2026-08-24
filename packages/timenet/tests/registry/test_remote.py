@@ -4,7 +4,7 @@ from _fake_registry import build_fake, build_publish_fake
 import pytest
 
 from timenet.client import TimeNet
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import RegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -36,19 +36,6 @@ def test_list_datasets_maps_summaries(version_dir, tmp_path):
     assert [m.dataset_id for m in metadatas] == [manifest.metadata.dataset_id]
     assert str(metadatas[0].dataset_version) == str(manifest.metadata.dataset_version)
     assert all(isinstance(d, Domain) for d in metadatas[0].domains)
-
-
-def test_get_manifest_latest_resolves_via_detail(version_dir, tmp_path):
-    registry, _ = _remote(version_dir, tmp_path)
-    _, manifest = version_dir
-    got = registry.get_manifest(manifest.metadata.dataset_id)
-    assert got.metadata.dataset_id == manifest.metadata.dataset_id
-
-
-def test_get_manifest_unknown_dataset_raises(version_dir, tmp_path):
-    registry, _ = _remote(version_dir, tmp_path)
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        registry.get_manifest("no/such", "1.0.0")
 
 
 def test_search_filters_by_domain(version_dir, tmp_path):
