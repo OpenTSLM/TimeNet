@@ -141,14 +141,14 @@ def test_run_isolated_raises_on_a_failed_child(monkeypatch, tmp_path):
         run_isolated("timenet/hello-world", tmp_path)
 
 
-def test_run_isolated_failure_message_points_at_the_isolation_escape_hatch(monkeypatch, tmp_path):
+def test_run_isolated_failure_message_points_at_the_child_output(monkeypatch, tmp_path):
     class _Result:
         returncode = 1
         stdout = ""
 
     monkeypatch.setattr(env_module.subprocess, "run", lambda command, **kwargs: _Result())
 
-    with pytest.raises(CurationError, match="TIMENET_ISOLATION=off"):
+    with pytest.raises(CurationError, match="See the output above"):
         run_isolated("timenet/hello-world", tmp_path)
 
 

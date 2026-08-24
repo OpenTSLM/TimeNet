@@ -79,6 +79,22 @@ def test_missing_dataset_raises(s3_root, tmp_path):
         registry.get_manifest("no/such", "1.0.0")
 
 
+def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
+    # A missing object returns None, but any other S3 error (auth, throttling) must surface, not hide.
+    import botocore.exceptions  # noqa: PLC0415
+
+    registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
+    denied = botocore.exceptions.ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
+
+    class _Denying:
+        def get_object(self, **kwargs):
+            raise denied
+
+    monkeypatch.setattr(registry, "_client", _Denying)
+    with pytest.raises(RegistryError, match="cannot read s3://"):
+        registry._get_bytes("datasets/o/n/1.0.0/manifest.json")
+
+
 def test_list_and_search_are_unsupported(tmp_path):
     registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
     with pytest.raises(NotImplementedError):

@@ -267,14 +267,20 @@ class S3Registry(WritableRegistry):
                 client.delete_objects(Bucket=self._bucket, Delete={"Objects": objects})
 
     def _get_bytes(self, key: str) -> bytes | None:
-        """Return an object's bytes, or ``None`` if it does not exist."""
+        """Return an object's bytes, or ``None`` if the object does not exist.
+
+        Raises:
+            RegistryError: If S3 fails for a reason other than a missing object.
+        """
         import botocore.exceptions  # noqa: PLC0415
 
         client = self._client()
         try:
             response = client.get_object(Bucket=self._bucket, Key=key)
-        except botocore.exceptions.ClientError:
-            return None
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
+                return None  # a genuinely absent object
+            raise RegistryError(f"cannot read s3://{self._bucket}/{key}: {exc}") from exc
         return response["Body"].read()
 
     def _latest_version(self, dataset_id: str) -> str | None:

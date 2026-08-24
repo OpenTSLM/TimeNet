@@ -124,9 +124,8 @@ def run_isolated(
     )
     if result.returncode != 0:
         raise CurationError(
-            f"curating {dataset_id!r} failed with exit code {result.returncode}: {shlex.join(command)}. "
-            "uv cannot build the isolated environment for these versions. "
-            "Build in this interpreter with TIMENET_ISOLATION=off."
+            f"curating {dataset_id!r} failed with exit code {result.returncode}. "
+            f"See the output above for the cause. Command: {shlex.join(command)}."
         )
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not lines:

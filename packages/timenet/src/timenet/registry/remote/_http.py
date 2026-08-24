@@ -241,15 +241,3 @@ class RegistryHttpClient:
             timeout=self._timeout,
             follow_redirects=True,  # follow a presigned object-store 3xx redirect to the bytes
         )
-
-    def close(self) -> None:
-        """Close the underlying sync client."""
-        self._client.close()
-
-    def __enter__(self) -> "RegistryHttpClient":
-        """Return self for use as a context manager."""
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        """Close the client on context exit."""
-        self.close()
