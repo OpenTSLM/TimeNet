@@ -314,6 +314,26 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
         dataset.add_task(sample, AnswerTask(prompt="q", target="a"))
 
 
+def test_streamed_task_validation_rejects_an_unknown_sample(make_series):
+    dataset = _dataset()
+    dataset.add_sample(time_series=(make_series(),), sample_id="s-0")
+    task = AnswerTask(prompt="q", target="a")
+    task.sample_ids = ("missing",)
+    dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
+    with pytest.raises(TimeFValidationError, match="unknown sample"):
+        list(dataset.iter_streamed_tasks_validated())
+
+
+def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
+    dataset = _dataset()
+    dataset.add_sample(time_series=(make_series(),), sample_id="s-0")
+    task = ClassificationTask(target="a")
+    task.sample_ids = ("s-0",)
+    dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
+    with pytest.raises(TimeFValidationError, match="not one of the declared"):
+        list(dataset.iter_streamed_tasks_validated())
+
+
 def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     # A forecast's answer is the produced sample, so the target/target_annotation_ids rule does not apply.
     dataset = _dataset()

@@ -246,6 +246,62 @@ class TimeFDataset:
         else:
             yield from self._tasks
 
+    def iter_streamed_tasks_validated(self) -> Iterator[Task]:
+        """Yield the streamed tasks, validating each against the dataset before it is written.
+
+        Streamed tasks skip :meth:`add_task`'s checks, so validate each here as it passes through: an
+        undeclared type, an attachment to an unknown sample, a dangling reference, a bad answer, or an
+        out-of-window span raises before the task reaches disk. The dataset holds no task list, so the
+        cross-task checks (duplicate ids, ``from_tasks`` derivations) that need every task at once do
+        not run for a stream.
+
+        Yields:
+            Each validated task, in the source's order.
+
+        Raises:
+            TimeFValidationError: If a streamed task fails one of the per-task checks.
+        """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
+        by_id = {sample.sample_id: sample for sample in self._samples}
+        declared = set(self._streamed_task_types)
+        for task in self.iter_tasks():
+            self._validate_streamed_task(task, by_id, declared)
+            yield task
+
+    def _validate_streamed_task(self, task: Task, by_id: dict[str, Sample], declared: set[type[Task]]) -> None:
+        """Run the per-task checks a streamed task must pass, without cross-task state.
+
+        Args:
+            task: The streamed task.
+            by_id: The dataset's samples, keyed by ``sample_id``.
+            declared: The task types :meth:`set_task_stream` declared.
+
+        Raises:
+            TimeFValidationError: If the task's type, sample attachment, references, answer, or spans
+                are invalid.
+        """
+        if type(task) not in declared:
+            raise TimeFValidationError(
+                f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
+                f"{sorted(t.__name__ for t in declared)}"
+            )
+        targets = []
+        for sample_id in task.sample_ids:
+            sample = by_id.get(sample_id)
+            if sample is None:
+                raise TimeFValidationError(
+                    f"{type(task).__name__} {task.id!r} attaches to unknown sample {sample_id!r}"
+                )
+            targets.append(sample)
+        task.check_against_scope()
+        self._check_task_answer(task)
+        self._check_sample_refs(task)
+        for sample in targets:
+            for span in task.spans():
+                check_span_within_window(
+                    f"{type(task).__name__} span", span, sample.time_series, sample.sample_id, sample.time_span
+                )
+        self._check_annotation_refs(task, tuple(targets))
+
     def _register_batch(self, batch: tuple[Task, ...], targets: tuple[Sample, ...]) -> tuple[Task, ...]:
         """Validate a whole batch of tasks, then attach all of it or none of it.
 

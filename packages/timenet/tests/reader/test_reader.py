@@ -190,7 +190,12 @@ def test_streaming_tasks_round_trip(tmp_path):
     assert task.sample_ids == ("rec-0",)
     assert task.input_annotation_ids == ("opts-yesno",)
     assert [ann.id for ann in restored.registered_annotations] == ["opts-yesno"]
-    assert restored.samples[0].task_ids == ()  # streamed tasks do not back-populate the sample
+    # After read(), streamed tasks back-populate their samples, so tasks_for() resolves them (this is
+    # what tasks_for and the torch view rely on).
+    rec0 = restored.samples[0]
+    expected = {t.id for t in restored.tasks if rec0.sample_id in t.sample_ids}
+    assert expected  # the sample really does carry streamed tasks
+    assert {t.id for t in restored.tasks_for(rec0)} == expected
 
 
 def test_streaming_tasks_match_batched(tmp_path):
@@ -198,6 +203,16 @@ def test_streaming_tasks_match_batched(tmp_path):
     batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
     streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)))
     assert {t.id: t for t in batched.tasks} == {t.id: t for t in streamed.tasks}
+
+
+def test_streaming_writer_writes_a_single_task_from_a_one_shot_source(tmp_path):
+    # A source that hands out one non-re-iterable iterator (against the contract) must still write its
+    # only task: iterating twice would let the peek consume it and the write find nothing.
+    dataset = _tasks_dataset(streaming=True)
+    one_shot = iter(list(dataset.iter_tasks())[:1])
+    dataset._task_stream = lambda: one_shot
+    restored = _read(_write(tmp_path, dataset=dataset))
+    assert len(restored.tasks) == 1
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])

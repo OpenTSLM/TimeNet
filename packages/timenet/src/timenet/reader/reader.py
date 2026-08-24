@@ -392,10 +392,22 @@ class TimeFReader:
         Returns:
             A :class:`TimeFDataset` with lazy per-series loaders and the reconstructed schema/tasks.
         """
+        samples = list(self.iter_samples())
+        tasks = self.tasks
+        # A streamed-written dataset stores empty sample.task_ids: its tasks were never held in memory
+        # to populate them. read() materializes every task, so rebuild the reverse map here, or
+        # tasks_for() and the torch view would return no tasks. This is idempotent for a materialized
+        # dataset, whose task_ids already round-trip through the sample rows.
+        by_id = {sample.sample_id: sample for sample in samples}
+        for task in tasks:
+            for sample_id in task.sample_ids:
+                sample = by_id.get(sample_id)
+                if sample is not None and task.id not in sample.task_ids:
+                    sample.task_ids = (*sample.task_ids, task.id)
         return TimeFDataset.from_parts(
             metadata=self._manifest.metadata,
-            samples=list(self.iter_samples()),
-            tasks=self.tasks,
+            samples=samples,
+            tasks=tasks,
             schema=self._manifest.schema,
             registered_annotations=self._read_registered_annotations(),
         )

@@ -6,8 +6,9 @@ The writer stages everything in a temporary directory and publishes it with a si
 A ``manifest.json`` in the version directory marks a committed version.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
+import itertools
 import json
 from pathlib import Path
 import shutil
@@ -144,6 +145,9 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
+        # A streamed dataset's task iterator, peeked once for id types and reused for the write.
+        self._task_iter: Iterator[Task] = iter(())
+        self._first_task: Task | None = None
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -258,11 +262,13 @@ class TimeFWriter:
         for ann in self._dataset.registered_annotations:  # task-referenced, carried by no sample
             values["annotation_id"].append(ann.id)
         if self._dataset.has_task_stream:
-            # Streamed tasks are not materialized; their ids are homogeneous by construction, so one
-            # peeked id decides binary(16)-vs-string storage without draining millions of tasks.
-            first = next(iter(self._dataset.iter_tasks()), None)
-            if first is not None:
-                values["task_id"].append(first.id)
+            # Streamed tasks are not materialized; one peeked id decides binary(16)-vs-string storage
+            # without draining millions of tasks. Keep the validating iterator so _write_tasks reuses
+            # it: the source is consumed (and validated) exactly once, even a one-shot generator.
+            self._task_iter = self._dataset.iter_streamed_tasks_validated()
+            self._first_task = next(self._task_iter, None)
+            if self._first_task is not None:
+                values["task_id"].append(self._first_task.id)
         else:
             for task in self._dataset.tasks:
                 values["task_id"].append(task.id)
@@ -570,7 +576,16 @@ class TimeFWriter:
         self._task_type_counts: dict[str, int] = {}
         sinks: dict[str, ShardedTableWriter] = {}
         schemas: dict[str, pa.Schema] = {}
-        for task in self._dataset.iter_tasks():
+        if self._dataset.has_task_stream:
+            # Reuse the iterator the id-type peek started: the source is consumed and validated once.
+            # The peek already pulled the first task, so chain it back ahead of the rest.
+            if self._first_task is None:
+                tasks: Iterable[Task] = ()
+            else:
+                tasks = itertools.chain((self._first_task,), self._task_iter)
+        else:
+            tasks = self._dataset.iter_tasks()
+        for task in tasks:
             task_type_str = str(task.task_type)
             schema = schemas.get(task_type_str)
             if schema is None:
