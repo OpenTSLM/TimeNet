@@ -58,9 +58,15 @@ def main() -> int:
 
     Returns:
         ``0`` if every connector passed, ``1`` otherwise.
+
+    Raises:
+        RuntimeError: If no connector with a tests directory is found.
     """
+    connectors = _connectors()
+    if not connectors:
+        raise RuntimeError(f"found no connectors with a tests directory under {DATASETS}")
     failures: list[str] = []
-    for connector in _connectors():
+    for connector in connectors:
         name = connector.relative_to(DATASETS)
         print(f"\n=== {name} ===", flush=True)
         for command in (["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]):
