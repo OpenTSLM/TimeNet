@@ -170,7 +170,9 @@ class TimeNet:
         self._registry.download_version(dataset_id, resolved, target, force=force, manifest=manifest)
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, download_mode: str | None = None) -> TimeFDataset:
+    def load(
+        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download: str | None = None
+    ) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
         This method does not download the whole dataset. The reader loads each series only
@@ -179,39 +181,43 @@ class TimeNet:
         use :meth:`download`.
 
         Against a local registry, a dataset the registry does not have is built first, if some
-        installed package registers a connector for its id. A remote registry raises as before.
+        installed package registers a connector for its id. Set ``auto_build`` false to fail fast
+        instead of starting a download and a curation. A remote registry raises as before.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the
-                default download mode; ignored for local/S3 registries.
+            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                fetch mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
 
         Raises:
-            DatasetNotFoundError: If the version is absent and nothing can build it, or the
-                connector builds a different version than the one asked for.
+            DatasetNotFoundError: If the version is absent and nothing builds it, or the connector
+                declares a different version than the one asked for.
             CurationError: If the build runs but fails.
         """  # noqa: DOC502 (CurationError comes from the curator, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         try:
             handle = self._open_version(dataset_id, version, download)
         except DatasetNotFoundError as miss:
-            if not isinstance(self._registry, LocalRegistry):
+            if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
             curator = find_curator(dataset_id)
             if curator is None:
                 raise
-            built = curator.build(dataset_id, self._registry.root)
-            # A connector produces one declared version. If the requested pin does not match, the
-            # connector will never produce it. The registries read the sentinels as "latest".
-            # Sentinels are not pins, so the fresh build satisfies them.
-            if version not in {None, "", "latest"} and version != built.name:
-                raise DatasetNotFoundError(
-                    f"the connector for {dataset_id!r} builds version {built.name}, not the requested {version}"
-                ) from miss
+            # A connector produces one declared version. Reject a pin it cannot satisfy before the
+            # build runs, so a wrong pin fails fast instead of after a full curation. Sentinels are
+            # not pins, so a fresh build satisfies them.
+            if version not in {None, "", "latest"}:
+                declared = curator.declared_version(dataset_id)
+                if declared is not None and version != declared:
+                    raise DatasetNotFoundError(
+                        f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
+                    ) from miss
+            curator.build(dataset_id, self._registry.root)
             handle = self._open_version(dataset_id, version, download)
         return TimeFReader(handle).read()
 

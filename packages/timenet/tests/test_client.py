@@ -180,20 +180,28 @@ def test_version_given_twice_raises(versioned_registry, tmp_path):
 
 
 def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_root, tmp_path, monkeypatch):
-    # The curator builds only the version its connector declares, so a pin it cannot satisfy must
-    # say which version it does build instead of repeating the bare "no manifest" miss.
+    # The curator declares only one version, so a pin it cannot satisfy must say which version it
+    # builds, and must fail before the expensive build rather than after it.
     class _Curator:
+        built = False
+
         def knows(self, dataset_id):
             return True
 
+        def declared_version(self, dataset_id):
+            return "1.0.0"
+
         def build(self, dataset_id, root, *, force=False):
+            self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
-    monkeypatch.setattr(client_module, "find_curator", lambda dataset_id: _Curator())
+    curator = _Curator()
+    monkeypatch.setattr(client_module, "find_curator", lambda dataset_id: curator)
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
     with pytest.raises(DatasetNotFoundError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
         client.load("timenet/hello-world@9.9.9")
+    assert not curator.built  # the pin was rejected before the build ran
 
 
 @pytest.mark.parametrize("pin", [None, "latest", ""])
@@ -203,6 +211,9 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
     class _Curator:
         def knows(self, dataset_id):
             return True
+
+        def declared_version(self, dataset_id):
+            return "1.0.0"
 
         def build(self, dataset_id, root, *, force=False):
             dataset = make_dataset()
@@ -217,3 +228,28 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
     client = TimeNet(empty_root, storage_path=tmp_path / "store")
 
     assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
+
+
+def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, monkeypatch):
+    # A caller can opt out of the build-on-miss, so a notebook load fails fast instead of starting a
+    # multi-GB download and a curation.
+    class _Curator:
+        built = False
+
+        def knows(self, dataset_id):
+            return True
+
+        def declared_version(self, dataset_id):
+            return "1.0.0"
+
+        def build(self, dataset_id, root, *, force=False):
+            self.built = True
+            return Path(root) / dataset_id / "1.0.0"
+
+    curator = _Curator()
+    monkeypatch.setattr(client_module, "find_curator", lambda dataset_id: curator)
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+
+    with pytest.raises(DatasetNotFoundError):
+        client.load("timenet/hello-world@9.9.9", auto_build=False)
+    assert not curator.built  # auto_build=False skips the connector entirely

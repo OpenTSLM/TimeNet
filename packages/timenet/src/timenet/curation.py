@@ -31,6 +31,21 @@ class CuratorBackend(Protocol):
         """
         ...
 
+    def declared_version(self, dataset_id: str) -> str | None:
+        """Return the version the connector declares, without importing or building it.
+
+        A caller checks a version pin against this before the build runs, so a pin the connector
+        cannot satisfy fails fast instead of after a full curation. Answer without importing the
+        connector, like :meth:`knows`.
+
+        Args:
+            dataset_id: The dataset id.
+
+        Returns:
+            The declared version string, or ``None`` if it cannot be read.
+        """
+        ...
+
     def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
         """Build the dataset into a registry directory.
 
