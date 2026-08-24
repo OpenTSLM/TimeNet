@@ -76,8 +76,7 @@ def test_retries_a_429_then_succeeds(monkeypatch):
 
     slept: list[float] = []
     monkeypatch.setattr("timenet.registry.remote._http.time.sleep", slept.append)
-    with _client(handler) as client:
-        assert client.get_json("/datasets") == {"ok": True}
+    assert _client(handler).get_json("/datasets") == {"ok": True}
     assert calls["n"] == 2  # one retry after the 429
     assert slept == [2.0]  # waited exactly the Retry-After the service asked for
 
@@ -89,8 +88,8 @@ def test_gives_up_after_the_retry_budget_and_raises():
         calls["n"] += 1
         return httpx.Response(429, json={"detail": "always"})
 
-    with _client(handler) as client, pytest.raises(RegistryError, match="429"):
-        client.get_json("/datasets")
+    with pytest.raises(RegistryError, match="429"):
+        _client(handler).get_json("/datasets")
     assert calls["n"] > 1  # retried before giving up
 
 
