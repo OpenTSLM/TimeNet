@@ -5,8 +5,8 @@
 *.swp
 *~
 
-# Claude Code local worktrees (ephemeral; not project source)
-.claude/worktrees/
+# Claude Code local config and worktrees (not project source)
+.claude/
 
 # Python
 __pycache__/
