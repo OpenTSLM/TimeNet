@@ -77,7 +77,7 @@ The system finds connectors lazily, by dataset id. There is no central registry 
 concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
 names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
 beside it, next to a `requirements.txt` when the connector needs libraries of its own. As a result,
-`timenet-curate build <org>/<name>` imports only that package. Reusable bases live under `bases/`.
+`timenet-build build <org>/<name>` imports only that package. Reusable bases live under `bases/`.
 Each connector declares its own id in `metadata()`. An id is a lowercase `org/name` pair.
 
 ## Dependencies and credentials
@@ -90,9 +90,9 @@ A connector declares the libraries its source needs in a `requirements.txt` besi
 huggingface_hub>=0.24
 ```
 
-Curation runs the connector in an environment built from that file. That environment is layered over
-the same `timenet` and `timenet-connectors` that you run (see [Curate & publish](curation.md)).
-Curation installs nothing into your own environment. Two connectors that need incompatible libraries
+A build runs the connector in an environment built from that file. That environment is layered over
+the same `timenet` and `timenet-connectors` that you run (see [Build & publish](build.md)).
+A build installs nothing into your own environment. Two connectors that need incompatible libraries
 do not collide.
 
 Import those libraries lazily inside the connector anyway. If one is missing, raise a clear error.

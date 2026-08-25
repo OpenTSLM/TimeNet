@@ -85,7 +85,7 @@ write the connector:
 - `_lead_loader(record_base, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for one lead's
   physical signal.
 
-The base does not fetch the archive. Call `ensure_archive` / `fetch_files` from
+The base does not fetch the archive. Call `ensure_archive` / `download_files` from
 `timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
 its download path needs. `physionet/ecg_qa_cot` pulls PTB-XL from `s3://physionet-open/`, which goes
 through boto3, so it names `boto3` too.
@@ -201,7 +201,7 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
 Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `ensure_archive` / `fetch_files` and returns refs; `convert` shares the 12-lead
+`download` calls `ensure_archive` / `download_files` and returns refs; `convert` shares the 12-lead
 ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
 whole-sample `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
 `AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for

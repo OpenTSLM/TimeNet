@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from timenet.errors import CurationError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetBuildError
 from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
 
 
@@ -27,12 +27,12 @@ def _s3_client() -> Any:
         A boto3 S3 client.
 
     Raises:
-        CurationError: If ``boto3``, declared in the connector's requirements, is not installed.
+        TimeNetBuildError: If ``boto3``, declared in the connector's requirements, is not installed.
     """
     try:
         import boto3  # noqa: PLC0415
     except ImportError as exc:
-        raise CurationError(
+        raise TimeNetBuildError(
             "downloading from S3 needs boto3, declared in the connector's requirements.txt. "
             "Run the build without --no-isolation, or install it yourself"
         ) from exc

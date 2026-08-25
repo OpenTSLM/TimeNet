@@ -41,7 +41,7 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
 
         Raises:
             ImportError: If ``huggingface_hub``, declared in this connector's requirements, is missing.
-            DatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
+            TimeNetDatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
         try:
             from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415

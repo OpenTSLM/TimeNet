@@ -55,7 +55,7 @@ jobs:
       run: make test
     - name: Test connectors in per-connector environments (Python 3.13)
       # Each connector's tests and type-check run in an environment built from its own
-      # requirements.txt, the same way curation runs. Runs once, on 3.13.
+      # requirements.txt, the same way a build runs. Runs once, on 3.13.
       id: connectors
       continue-on-error: true
       run: make test-connectors

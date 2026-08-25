@@ -43,7 +43,7 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 - Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, inherit `download`, implement only
   `convert`.
 - PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
-  `fetch_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
+  `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
 
 ### 4. Determine the task and sketch an example row
@@ -72,7 +72,7 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
 - `connector.py`, the `BaseConnector` subclass, ending with a module-level `CONNECTOR = <YourClass>`.
 - `__init__.py`, re-exporting `CONNECTOR` (and the class) from `connector.py`.
 - `requirements.txt`, when the connector needs a library outside `timenet-connectors`' core
-  dependencies. Import it lazily inside the connector. If it is missing, raise a clear error. Curation
+  dependencies. Import it lazily inside the connector. If it is missing, raise a clear error. A build
   installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
   usable while you write the connector.
 
@@ -87,7 +87,7 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
   in some docs are **not implemented**, so don't rely on them.
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
   environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
-- Round-trip end to end: `uv run timenet-curate build <id> --out <tmp-dir>`, then
+- Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
   `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
 

@@ -10,7 +10,7 @@ test:
 	uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
 
 # Each connector's tests and type-check run in an environment built from that connector's own
-# requirements, the same way curation runs. See scripts/check_connectors.py.
+# requirements, the same way a build runs. See scripts/check_connectors.py.
 test-connectors:
 	uv run scripts/check_connectors.py
 
