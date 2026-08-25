@@ -230,6 +230,10 @@ def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
         "domains": [str(domain) for domain in metadata.domains],
         "tags": list(metadata.tags),
         "source_url": metadata.source_url,
+        "license_url": metadata.license_url,
+        "citation": metadata.citation,
+        "access": str(metadata.access),
+        "access_url": metadata.access_url,
         "yaml_schema_version": metadata.yaml_schema_version,
     }
 

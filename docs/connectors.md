@@ -106,6 +106,12 @@ Credentials come from the environment. For the HuggingFace Hub, a token is read 
 automatically (needed only for gated or private sources). Downloaded source files cache under
 `<TIMENET_CACHE>` (see [client config](client.md#configuration)).
 
+A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
+and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
+at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
+works), and run `timenet-build build <id>` yourself. A `load` or `download` of a credentialed
+dataset from a hosted registry raises with the `access_url` instead of serving bytes.
+
 ## Downloading artifacts
 
 `timenet_connectors.download` has two async helpers. Each helper picks the backend from the scheme of

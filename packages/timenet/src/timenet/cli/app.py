@@ -129,6 +129,13 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
     table.add_row("version", str(manifest.metadata.dataset_version))
     table.add_row("name", manifest.metadata.name)
     table.add_row("license", str(manifest.metadata.license))
+    if manifest.metadata.license_url:
+        table.add_row("license_url", manifest.metadata.license_url)
+    table.add_row("access", str(manifest.metadata.access))
+    if manifest.metadata.access_url:
+        table.add_row("access_url", manifest.metadata.access_url)
+    if manifest.metadata.citation:
+        table.add_row("citation", manifest.metadata.citation)
     table.add_row("domains", ", ".join(str(domain) for domain in manifest.metadata.domains) or "-")
     table.add_row("specs", ", ".join(spec.spec_type for spec in manifest.schema.time_series_specs) or "-")
     table.add_row("tasks", ", ".join(str(task.task_type) for task in manifest.schema.tasks) or "-")

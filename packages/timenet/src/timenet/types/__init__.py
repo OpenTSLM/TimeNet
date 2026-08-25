@@ -1,5 +1,6 @@
 """TimeF value types and type system: versions, units, enums, specs, annotations, tasks, metadata."""
 
+from timenet.types.access import Access
 from timenet.types.annotations import (
     Annotation,
     AnnotationDescriptor,
@@ -44,6 +45,7 @@ from timenet.types.version import Version
 __all__ = [
     "TASKS",
     "US_PER_S",
+    "Access",
     "Annotation",
     "AnnotationDescriptor",
     "AnnotationType",

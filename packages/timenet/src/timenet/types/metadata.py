@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from timenet.errors import TimeFValidationError
+from timenet.types.access import Access
 from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
@@ -72,6 +73,14 @@ class DatasetMetadata:
     """Free-form tags for search and grouping."""
     source_url: str | None = None
     """Link to the dataset's origin, if any."""
+    license_url: str | None = None
+    """Where to read the full license text. Required when ``license`` is :attr:`License.OTHER`."""
+    citation: str | None = None
+    """How to cite the dataset, when the source asks for attribution."""
+    access: Access = Access.OPEN
+    """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
+    access_url: str | None = None
+    """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
     yaml_schema_version: int = 1
     """Version of the card's own field schema."""
 
@@ -82,8 +91,16 @@ class DatasetMetadata:
         dataset ids into filesystem paths. A ``.`` or ``..`` segment can escape the registry or
         storage root. A leading-dot name like ``.git`` writes to disk, but discovery skips it
         because discovery drops hidden directories.
+
+        Raises:
+            TimeFValidationError: If ``license`` is ``License.OTHER`` without a ``license_url``, or
+                ``access`` is not open without an ``access_url``.
         """
         validate_dataset_id(self.dataset_id)
+        if self.license is License.OTHER and not self.license_url:
+            raise TimeFValidationError("license_url is required when license is License.OTHER")
+        if self.access is not Access.OPEN and not self.access_url:
+            raise TimeFValidationError(f"access_url is required when access is {self.access.value!r}")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DatasetMetadata":
@@ -110,6 +127,10 @@ class DatasetMetadata:
             domains=tuple(Domain(domain) for domain in _str_tuple(data.get("domains", ()), "domains")),
             tags=_str_tuple(data.get("tags", ()), "tags"),
             source_url=data.get("source_url"),
+            license_url=data.get("license_url"),
+            citation=data.get("citation"),
+            access=Access(data.get("access", Access.OPEN)),
+            access_url=data.get("access_url"),
             yaml_schema_version=data.get("yaml_schema_version", 1),
         )
 

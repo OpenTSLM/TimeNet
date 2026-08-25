@@ -24,3 +24,5 @@ class License(StrEnum):
     CC_BY_NC_4_0 = "CC-BY-NC-4.0"
     ODC_BY_1_0 = "ODC-By-1.0"
     ODBL_1_0 = "ODbL-1.0"
+    OTHER = "other"
+    """Escape hatch for a license outside this list; requires a ``license_url`` on the card."""

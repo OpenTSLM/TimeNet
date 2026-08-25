@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 from timenet.builders import find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.types import Access, DatasetMetadata, Domain, License, Task
 
 
 if TYPE_CHECKING:
@@ -165,6 +165,7 @@ class TimeNet:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
+        self._reject_unhosted_access(dataset_id, version)
         manifest = self._registry.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         target = self._storage / dataset_id / resolved
@@ -200,6 +201,7 @@ class TimeNet:
             TimeNetBuildError: If the build runs but fails.
         """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
+        self._reject_unhosted_access(dataset_id, version)
         try:
             handle = self._registry.open_version(dataset_id, version)
         except TimeNetDatasetNotFoundError as miss:
@@ -220,6 +222,30 @@ class TimeNet:
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
         return TimeFReader(handle).read()
+
+    def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
+        """Raise for a non-open dataset read from a registry that does not host its data.
+
+        Credentialed and restricted datasets cannot be redistributed, so TimeNet never serves their
+        bytes. Such a dataset is build-your-own: a local registry holds only what the user built, so a
+        local read is fine, but a hosted registry can only point the user at where to obtain access.
+
+        Args:
+            dataset_id: The bare dataset id.
+            version: The resolved version, or ``None`` for the latest.
+
+        Raises:
+            TimeNetAccessError: If the dataset is not open and the registry is not a local one.
+        """
+        if isinstance(self._registry, LocalRegistry):
+            return
+        metadata = self._registry.get_manifest(dataset_id, version).metadata
+        if metadata.access is Access.OPEN:
+            return
+        raise TimeNetAccessError(
+            f"{dataset_id!r} is {metadata.access.value}: TimeNet does not host its data. Get access at "
+            f"{metadata.access_url}, then build it locally with `timenet-build build {dataset_id}`."
+        )
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
         """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.

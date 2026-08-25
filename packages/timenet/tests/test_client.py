@@ -6,12 +6,12 @@ import pytest
 from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Domain, Version
+from timenet.types import Access, DatasetMetadata, Domain, License, Version
 from timenet.writer import TimeFWriter
 
 
@@ -273,3 +273,26 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
     with pytest.raises(TimeNetDatasetNotFoundError):
         client.load("timenet/hello-world@9.9.9", auto_build=False)
     assert not builder.built  # auto_build=False skips the connector entirely
+
+
+def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
+    client = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store")
+    meta = DatasetMetadata(
+        dataset_id="org/gated",
+        dataset_version=Version(1, 0, 0),
+        name="Gated",
+        description="A credentialed dataset.",
+        license=License.CC_BY_4_0,
+        access=Access.CREDENTIALED,
+        access_url="https://physionet.example/dua",
+    )
+
+    class _Hosted:  # not a LocalRegistry, so the build-your-own gate applies
+        def get_manifest(self, dataset_id, version=None):
+            return type("_M", (), {"metadata": meta})()
+
+    client._registry = _Hosted()  # ty: ignore[invalid-assignment]
+    with pytest.raises(TimeNetAccessError, match="build it locally"):
+        client.load("org/gated")
+    with pytest.raises(TimeNetAccessError, match="Get access at"):
+        client.download("org/gated")
