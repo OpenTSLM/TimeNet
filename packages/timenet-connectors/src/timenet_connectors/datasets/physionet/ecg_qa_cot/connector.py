@@ -252,7 +252,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
                 spec=_ECG,
                 channel=name,
                 time_axis=axis,
-                loader=self._lead_loader(ref.record_base, lead_idx),
+                loader=self._lead_loader(ref.record_base, header, lead_idx),
                 source_id=f"ptbxl-{ref.ecg_id}",
                 time_series_id=f"ecg-{ref.ecg_id}-{name}",
                 n_values=int(header.sig_len),
