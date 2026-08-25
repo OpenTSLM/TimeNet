@@ -7,6 +7,7 @@ the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type f
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 import shutil
 from typing import BinaryIO, TypeVar
@@ -19,6 +20,10 @@ from timenet.types import DatasetMetadata, Domain, License, Task
 
 
 T = TypeVar("T")
+
+# Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_version``
+# implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
+ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
@@ -84,7 +89,7 @@ class BaseRegistry(ABC):
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
-    def download_version(
+    def download_version(  # noqa: PLR0913
         self,
         dataset_id: str,
         version: str,
@@ -92,6 +97,7 @@ class BaseRegistry(ABC):
         *,
         force: bool = False,
         manifest: Manifest | None = None,
+        progress_cb: ProgressCallback | None = None,
     ) -> None:
         """Download a version's files into ``dest_dir``, swapping the directory in atomically.
 
@@ -107,6 +113,7 @@ class BaseRegistry(ABC):
             dest_dir: The target ``<...>/<id>/<version>`` directory.
             force: Re-download even if a copy already exists.
             manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
+            progress_cb: Called with each staged file's byte count, for a progress display.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
@@ -115,15 +122,16 @@ class BaseRegistry(ABC):
             return  # already downloaded and current
         parent = target.parent
         parent.mkdir(parents=True, exist_ok=True)
-        # A hard kill (SIGKILL/power loss) skips the finally below, so its staging dir lingers. Sweep any
-        # stale <version>.tmp-* sibling before staging a fresh copy (mirrors the remote download path).
-        for stale in parent.glob(f"{target.name}.tmp-*"):
-            if stale.is_dir():
-                shutil.rmtree(stale, ignore_errors=True)
+        # Each download stages into a unique dir and removes it in the finally below. A hard kill
+        # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here:
+        # a concurrent download of the same version has a live staging dir with the same prefix, and
+        # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
         staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
         try:
             for relpath in (*manifest.files.all_parts(), "manifest.json"):
                 self._stage_file(dataset_id, version, relpath, staging)
+                if progress_cb is not None and relpath != "manifest.json":
+                    progress_cb((staging / relpath).stat().st_size)
             if target.exists():
                 shutil.rmtree(target)
             staging.replace(target)

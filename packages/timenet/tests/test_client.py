@@ -65,6 +65,15 @@ def test_download_copies_into_storage(registry_root, tmp_path):
     assert list(version_dir.glob("time_series/part-*.parquet"))
 
 
+def test_download_reports_progress(registry_root, tmp_path):
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    reported: list[int] = []
+    client.download("timenet/hello-world", progress_cb=reported.append)
+    expected = sum(part.size for part in client.get("timenet/hello-world").files.all_files())
+    assert reported  # the callback fired
+    assert sum(reported) == expected  # summed to the version's total byte size
+
+
 def test_download_rejects_path_traversal(registry_root, tmp_path):
     # a corrupt manifest relpath must not let a download write outside the target directory
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
@@ -96,16 +105,18 @@ def test_force_redownload_replaces_atomically(registry_root, tmp_path):
     assert not list(again.parent.glob("*.tmp-*"))  # staging dir cleaned up
 
 
-def test_download_sweeps_stale_staging(registry_root, tmp_path):
+def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path):
     storage = tmp_path / "store"
     client = TimeNet(registry_root, storage_path=storage)
-    # A hard-killed download skips the cleanup finally, leaking a <version>.tmp-* dir.
-    stale = storage / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
-    stale.mkdir(parents=True)
-    (stale / "junk.parquet").write_text("partial")
+    # A concurrent download of the same version has a live <version>.tmp-* dir. download() must not
+    # delete a sibling staging dir: sweeping siblings would corrupt that other download mid-write.
+    sibling = storage / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
+    sibling.mkdir(parents=True)
+    (sibling / "inflight.parquet").write_text("partial")
 
-    client.download("timenet/hello-world")
-    assert not list((storage / "timenet/hello-world").glob("*.tmp-*"))  # swept before staging a fresh copy
+    version_dir = client.download("timenet/hello-world")
+    assert sibling.exists()  # left alone, not swept
+    assert (version_dir / "manifest.json").exists()  # the download still completed
 
 
 def test_load_round_trips(registry_root, tmp_path):

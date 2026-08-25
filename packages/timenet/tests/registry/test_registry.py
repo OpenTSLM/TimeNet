@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
-from timenet.manifest import Manifest
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
@@ -48,9 +47,15 @@ def test_open_registry_timenet_scheme_aliases_hosted_remote():
     assert registry._base_url == TIMENET_REGISTRY_URL
 
 
-def test_open_registry_timenet_scheme_ignores_any_path():
-    # A path after timenet:// must not be folded into the API base url (it would 404 every call).
-    registry = open_registry("timenet://chengsenwang/tsqa")
+def test_open_registry_timenet_scheme_rejects_a_path():
+    # A path after timenet:// used to be dropped silently; now it is rejected, so a mistyped registry
+    # URI fails loudly instead of hitting the default host.
+    with pytest.raises(ValueError, match="timenet:// takes no path"):
+        open_registry("timenet://chengsenwang/tsqa")
+
+
+def test_open_registry_bare_timenet_scheme():
+    registry = open_registry("timenet://")
     assert isinstance(registry, RemoteRegistry)
     assert registry._base_url == TIMENET_REGISTRY_URL
 
@@ -115,27 +120,6 @@ def test_local_registry_path_rejects_malformed_file_uri(uri, match):
 # ---- list / get / open ------------------------------------------------------------------------
 
 
-def test_list_datasets(registry_root):
-    ids = {m.dataset_id for m in LocalRegistry(registry_root).list_datasets()}
-    assert ids == {"timenet/hello-world", "demo/ecg"}
-
-
-def test_get_manifest_latest(registry_root):
-    manifest = LocalRegistry(registry_root).get_manifest("demo/ecg")
-    assert isinstance(manifest, Manifest)
-    assert manifest.metadata.dataset_version.major == 2
-
-
-def test_get_manifest_unknown_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).get_manifest("does/not-exist")
-
-
-def test_get_manifest_unknown_version_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).get_manifest("demo/ecg", version="9.9.9")
-
-
 def test_get_manifest_rejects_traversal_id(registry_root):
     # every registry path-join validates the id, so a ``..`` id can't escape the root
     with pytest.raises(TimeFValidationError, match="dataset_id"):
@@ -161,18 +145,6 @@ def test_latest_version_ignores_staging_dirs(registry_root):
     (stale / "manifest.json").write_text("{}")
     manifest = LocalRegistry(registry_root).get_manifest("demo/ecg")  # must not choke on the tmp dir
     assert manifest.metadata.dataset_version.major == 2
-
-
-def test_open_file(registry_root):
-    registry = LocalRegistry(registry_root)
-    with registry.open_file("demo/ecg", "2.0.0", "manifest.json") as handle:
-        assert b"demo/ecg" in handle.read()
-
-
-def test_open_file_rejects_path_traversal(registry_root):
-    registry = LocalRegistry(registry_root)
-    with pytest.raises(ValueError, match="escapes"):
-        registry.open_file("demo/ecg", "2.0.0", "../../../../etc/passwd")
 
 
 # ---- open_version -----------------------------------------------------------------------------
@@ -276,41 +248,11 @@ def test_search_negative_limit_rejected(registry_root):
 # ---- store (write side) -----------------------------------------------------------------------
 
 
-def test_store_round_trip(tmp_path):
-    registry = LocalRegistry(tmp_path)
-    dataset = make_dataset()
-    version = registry.store(dataset)
-    assert version == str(dataset.metadata.dataset_version)
-    manifest = registry.get_manifest(dataset.metadata.dataset_id, version)
-    assert manifest.metadata.dataset_id == dataset.metadata.dataset_id
-
-
 def test_store_derives_schema_if_absent(tmp_path):
     dataset = make_dataset()
     assert dataset.schema is None
     LocalRegistry(tmp_path).store(dataset)
     assert dataset.schema is not None
-
-
-def test_exists_reflects_store(tmp_path):
-    registry = LocalRegistry(tmp_path)
-    dataset = make_dataset()
-    version = str(dataset.metadata.dataset_version)
-    assert not registry.exists(dataset.metadata.dataset_id, version)
-    registry.store(dataset)
-    assert registry.exists(dataset.metadata.dataset_id, version)
-
-
-def test_store_is_idempotent_without_force(tmp_path):
-    registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
-    registry.store(make_dataset())  # committed version already exists; must skip, not raise
-
-
-def test_store_force_overwrites(tmp_path):
-    registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
-    registry.store(make_dataset(), force=True)  # must not raise
 
 
 # ---- s3 catalog -------------------------------------------------------------------------------

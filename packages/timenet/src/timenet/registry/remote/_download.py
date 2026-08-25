@@ -22,6 +22,7 @@ from timenet.errors import TimeFFormatError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
+from timenet.registry.base import ProgressCallback
 from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
 
 
@@ -37,6 +38,7 @@ def download_version_files(  # noqa: PLR0913
     *,
     force: bool = False,
     max_concurrency: int = 8,
+    progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Download every file of a version into ``dest_dir`` atomically.
 
@@ -48,6 +50,7 @@ def download_version_files(  # noqa: PLR0913
         dest_dir: The target ``<...>/<id>/<version>`` directory.
         force: Re-download even if ``dest_dir/manifest.json`` already exists.
         max_concurrency: Maximum concurrent file downloads.
+        progress_cb: Called with each chunk's byte count as it is written, for a progress display.
 
     Returns:
         ``dest_dir``.
@@ -58,14 +61,13 @@ def download_version_files(  # noqa: PLR0913
     files = list(manifest.files.all_files())
     parent = dest_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
-    # A hard kill (SIGKILL/power loss) skips the finally below, so its staging dir lingers. Sweep any
-    # stale <version>.tmp-* sibling before staging a fresh copy (mirrors the local download path).
-    for stale in parent.glob(f"{dest_dir.name}.tmp-*"):
-        if stale.is_dir():
-            shutil.rmtree(stale, ignore_errors=True)
+    # Each download stages into a unique dir and removes it in the finally below. A hard kill
+    # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here: a
+    # concurrent download of the same version has a live staging dir with the same prefix, and sweeping
+    # it would break that download mid-write. A rare orphaned dir is the lesser evil.
     staging = parent / f"{dest_dir.name}.tmp-{uuid.uuid4().hex}"
     try:
-        _run(_download_all(http, dataset_id, version, files, staging, max_concurrency))
+        _run(_download_all(http, dataset_id, version, files, staging, max_concurrency, progress_cb))
         (staging / "manifest.json").write_text(manifest.to_json())  # already parsed; no extra round trip
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
@@ -76,7 +78,13 @@ def download_version_files(  # noqa: PLR0913
 
 
 async def _download_all(  # noqa: PLR0913, PLR0917
-    http: RegistryHttpClient, dataset_id: str, version: str, files: list[FilePart], staging: Path, max_concurrency: int
+    http: RegistryHttpClient,
+    dataset_id: str,
+    version: str,
+    files: list[FilePart],
+    staging: Path,
+    max_concurrency: int,
+    progress_cb: ProgressCallback | None,
 ) -> None:
     """Download all files concurrently into the staging directory.
 
@@ -87,6 +95,7 @@ async def _download_all(  # noqa: PLR0913, PLR0917
         files: The manifest file descriptors (path + checksum) to download.
         staging: The staging directory to write into.
         max_concurrency: Maximum concurrent file downloads.
+        progress_cb: Called with each chunk's byte count as it is written, or ``None``.
     """
     semaphore = asyncio.Semaphore(max_concurrency)
     headers = http.api_headers()
@@ -97,7 +106,7 @@ async def _download_all(  # noqa: PLR0913, PLR0917
                 # Reject a manifest path that would escape the staging dir before writing anything.
                 dest = safe_version_path(staging, part.path)
                 url = await _resolve(client, headers, dataset_id, version, part.path)
-                await _stream_one(client, url, dest, expected_checksum=part.checksum)
+                await _stream_one(client, url, dest, expected_checksum=part.checksum, progress_cb=progress_cb)
 
         await asyncio.gather(*(one(part) for part in files))
 
@@ -123,7 +132,14 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
     return _redirect_target(response, path)
 
 
-async def _stream_one(client: httpx.AsyncClient, url: str, dest: Path, *, expected_checksum: str | None = None) -> None:
+async def _stream_one(
+    client: httpx.AsyncClient,
+    url: str,
+    dest: Path,
+    *,
+    expected_checksum: str | None = None,
+    progress_cb: ProgressCallback | None = None,
+) -> None:
     """Stream one presigned URL to ``dest`` via a ``.part`` temp file, renamed on success.
 
     Args:
@@ -131,6 +147,7 @@ async def _stream_one(client: httpx.AsyncClient, url: str, dest: Path, *, expect
         url: The presigned URL.
         dest: The target file path.
         expected_checksum: The manifest's ``sha256:<hex>`` digest to verify the bytes against.
+        progress_cb: Called with each chunk's byte count as it is written, or ``None``.
 
     Raises:
         TimeFFormatError: If ``expected_checksum`` is set and the downloaded bytes do not match it.
@@ -148,6 +165,8 @@ async def _stream_one(client: httpx.AsyncClient, url: str, dest: Path, *, expect
                     handle.write(chunk)  # buffered write: a fast memcpy, the OS flushes lazily
                     if digest is not None:
                         digest.update(chunk)
+                    if progress_cb is not None:
+                        progress_cb(len(chunk))
         if digest is not None and f"sha256:{digest.hexdigest()}" != expected_checksum:
             raise TimeFFormatError(f"checksum mismatch for {dest.name!r}: expected {expected_checksum}")
         part.replace(dest)

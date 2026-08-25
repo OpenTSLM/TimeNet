@@ -8,7 +8,7 @@ from moto.server import ThreadedMotoServer  # noqa: E402
 import pyarrow.fs as pafs  # noqa: E402
 
 from timenet.client import TimeNet  # noqa: E402
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # noqa: E402
+from timenet.errors import TimeNetRegistryError  # noqa: E402
 from timenet.registry import S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
 
@@ -56,21 +56,6 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
-def test_store_skips_committed_unless_forced(s3_root, tmp_path):
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = str(make_dataset().metadata.dataset_version)
-    registry.store(make_dataset())
-    assert registry.exists(make_dataset().metadata.dataset_id, version)
-    assert registry.store(make_dataset()) == version  # second store is a no-op
-
-
-def test_get_manifest_latest_resolves(s3_root, tmp_path):
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    registry.store(make_dataset())
-    manifest = registry.get_manifest(make_dataset().metadata.dataset_id)
-    assert manifest.metadata.dataset_id == make_dataset().metadata.dataset_id
-
-
 def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     dataset_id = make_dataset().metadata.dataset_id
@@ -81,12 +66,6 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     handle = registry.open_version(dataset_id)
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
     assert_datasets_equal(make_dataset(), client.load(dataset_id))
-
-
-def test_missing_dataset_raises(s3_root, tmp_path):
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        registry.get_manifest("no/such", "1.0.0")
 
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):

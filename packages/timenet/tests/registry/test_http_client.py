@@ -11,6 +11,12 @@ def _client(handler, *, token=None):
     return RegistryHttpClient("http://api.local/", token=token, transport=httpx.MockTransport(handler))
 
 
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """Make 429 retries instant so tests never wait on real backoff."""
+    monkeypatch.setattr("timenet.registry.remote._http.time.sleep", lambda _seconds: None)
+
+
 def test_user_agent_is_timenet_versioned():
     assert timenet_user_agent().startswith("timenet/")
 
@@ -57,6 +63,34 @@ def test_error_statuses_map_to_registry_error(status):
 
     with pytest.raises(TimeNetRegistryError):
         _client(handler).get_json("/datasets")
+
+
+def test_retries_a_429_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"}, json={"detail": "slow down"})
+        return httpx.Response(200, json={"ok": True})
+
+    slept: list[float] = []
+    monkeypatch.setattr("timenet.registry.remote._http.time.sleep", slept.append)
+    assert _client(handler).get_json("/datasets") == {"ok": True}
+    assert calls["n"] == 2  # one retry after the 429
+    assert slept == [2.0]  # waited exactly the Retry-After the service asked for
+
+
+def test_gives_up_after_the_retry_budget_and_raises():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(429, json={"detail": "always"})
+
+    with pytest.raises(TimeNetRegistryError, match="429"):
+        _client(handler).get_json("/datasets")
+    assert calls["n"] > 1  # retried before giving up
 
 
 def test_resolve_presigned_reads_location_without_following():
