@@ -498,7 +498,7 @@ class TimeFReader:
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
             for row in pq.read_table(self._version.path(rel), filesystem=self._fs).to_pylist():
                 payload = {
-                    name: self._codec.decode_payload(cls.refs, name, _as_tuple_if_list(row[name]))
+                    name: self._codec.decode_payload(cls.refs, name, _as_tuple_if_list(row.get(name)))
                     for name in payload_cols
                 }
                 task = cls(
