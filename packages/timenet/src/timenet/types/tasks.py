@@ -76,6 +76,8 @@ class TaskRefs:
 
     sample_id_fields: tuple[str, ...] = ()
     """Payload fields that hold a sample id or a tuple of them. If one id is lost, the task is not valid."""
+    time_series_id_fields: tuple[str, ...] = ()
+    """Payload fields that hold a time-series id or a tuple of them, resolved against the task's samples."""
     span_fields: tuple[str, ...] = ()
     """Payload fields that hold a :class:`~timenet.types.spans.Span` or a tuple of them."""
 
@@ -92,6 +94,9 @@ class Task:
     """The subclass's stable type tag. Deliberately absent here: the base is not a task."""
     refs: ClassVar[TaskRefs] = TaskRefs()
     """Which payload fields hold sample ids or spans (see :class:`TaskRefs`)."""
+    answer_fields: ClassVar[tuple[str, ...]] = ("target",)
+    """The payload fields holding the inline answer. A subclass whose answer is not (only) ``target``
+    overrides this, so the answer-exclusivity check stays generic instead of hardcoding ``target``."""
     answer_is_sample: ClassVar[bool] = False
     """True when the answer is a produced series, found by a payload sample id and not ``target``."""
     target_is_scalar: ClassVar[bool] = False
@@ -437,23 +442,32 @@ class TSCorrespondenceTask(Task):
     """
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
-    refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("candidate_sample_ids", "target"))
+    refs: ClassVar[TaskRefs] = TaskRefs(
+        sample_id_fields=("candidate_sample_ids", "target"),
+        time_series_id_fields=("target_time_series_ids",),
+    )
+    answer_fields: ClassVar[tuple[str, ...]] = ("target", "target_time_series_ids")
     candidate_sample_ids: tuple[str, ...] = ()
     """Ids of the samples that supply the answer. Empty means the pool has no limit."""
     target: tuple[str, ...] | None = None
     """Ids of the corresponding sample(s), which must be in ``candidate_sample_ids`` when it is set."""
+    target_time_series_ids: tuple[str, ...] | None = None
+    """Ids of the corresponding series, when the answer names channels rather than whole samples (for
+    example "which channels correlate with X"). Each id must resolve to a series on the task's samples."""
 
     def __post_init__(self) -> None:
-        """Reject an empty ``target``, or a ``target`` that names a sample outside the candidate pool.
+        """Reject an empty ``target``/``target_time_series_ids``, or a ``target`` outside the pool.
 
         Raises:
-            TimeFValidationError: If ``target`` is ``()`` rather than ``None`` or non-empty. Also if it
-                names a sample that the non-empty candidate pool does not contain.
+            TimeFValidationError: If ``target`` or ``target_time_series_ids`` is ``()`` rather than
+                ``None`` or non-empty. Also if ``target`` names a sample the candidate pool lacks.
         """
         if self.target is not None and not self.target:
             raise TimeFValidationError(
                 "TSCorrespondenceTask target must be None (answer stored by reference) or non-empty, got ()"
             )
+        if self.target_time_series_ids is not None and not self.target_time_series_ids:
+            raise TimeFValidationError("TSCorrespondenceTask target_time_series_ids must be None or non-empty, got ()")
         if not self.candidate_sample_ids:  # no limit on the pool: any sample can be the answer
             return
         outside = tuple(sid for sid in self.target or () if sid not in self.candidate_sample_ids)

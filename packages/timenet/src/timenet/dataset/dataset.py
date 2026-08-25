@@ -295,6 +295,7 @@ class TimeFDataset:
         task.check_against_scope()
         self._check_task_answer(task)
         self._check_sample_refs(task)
+        self._check_time_series_refs(task, tuple(targets))
         for sample in targets:
             for span in task.spans():
                 check_span_within_window(
@@ -373,6 +374,7 @@ class TimeFDataset:
             task.check_against_scope()
             self._check_task_answer(task)
             self._check_sample_refs(task)
+            self._check_time_series_refs(task, tuple(targets))
             for sample in targets:
                 for span in task.spans():
                     check_span_within_window(
@@ -513,14 +515,16 @@ class TimeFDataset:
                 not a produced series.
         """
         name = type(task).__name__
-        if task.target is not None and task.target_annotation_ids:
+        inline = [field_name for field_name in type(task).answer_fields if getattr(task, field_name) is not None]
+        if inline and task.target_annotation_ids:
             raise TimeFValidationError(
-                f"{name} sets both target={task.target!r} and target_annotation_ids "
+                f"{name} sets an inline answer ({', '.join(inline)}) and target_annotation_ids "
                 f"{list(task.target_annotation_ids)}; the answer is either inline or by reference, not both"
             )
-        if not type(task).answer_is_sample and task.target is None and not task.target_annotation_ids:
+        if not type(task).answer_is_sample and not inline and not task.target_annotation_ids:
             raise TimeFValidationError(
-                f"{name} needs an answer: pass target=, or target_annotation_ids= to point at stored annotations"
+                f"{name} needs an answer: set one of {list(type(task).answer_fields)}, or "
+                f"target_annotation_ids= to point at stored annotations"
             )
 
     def _check_annotation_refs(self, task: Task, samples: tuple[Sample, ...]) -> None:
@@ -562,6 +566,27 @@ class TimeFDataset:
                 if sample_id not in known:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} references unknown sample {sample_id!r}"
+                    )
+
+    @staticmethod
+    def _check_time_series_refs(task: Task, samples: tuple[Sample, ...]) -> None:
+        """Reject a payload time-series id that no target sample carries.
+
+        Args:
+            task: The task to register.
+            samples: The samples the task attaches to.
+
+        Raises:
+            TimeFValidationError: If a payload reference names a series absent from every target sample.
+        """
+        known = {ts.time_series_id for sample in samples for ts in sample.time_series}
+        for field_name in type(task).refs.time_series_id_fields:
+            value = getattr(task, field_name)
+            series_ids = (value,) if isinstance(value, str) else value or ()
+            for series_id in series_ids:
+                if series_id not in known:
+                    raise TimeFValidationError(
+                        f"{type(task).__name__} {field_name} references series {series_id!r} not on its samples"
                     )
 
     @staticmethod

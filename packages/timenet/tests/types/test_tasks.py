@@ -310,3 +310,13 @@ def test_forecasting_scope_and_target_span_must_share_a_frame():
             scope=TimeInterval.seconds(0.0, 132.0),
             target_span=StepInterval(time_series_id="passengers", start=132, stop=144),
         )
+
+
+def test_correspondence_answers_with_time_series_ids():
+    task = TSCorrespondenceTask(sample_ids=("rec-0",), target_time_series_ids=("rec-0-c2", "rec-0-c5"))
+    assert task.target_time_series_ids == ("rec-0-c2", "rec-0-c5")
+
+
+def test_correspondence_rejects_an_explicitly_empty_time_series_target():
+    with pytest.raises(TimeFValidationError, match="target_time_series_ids must be None or non-empty"):
+        TSCorrespondenceTask(target_time_series_ids=())

@@ -28,6 +28,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
     TimeSeriesSpec,
+    TSCorrespondenceTask,
     Version,
     ureg,
 )
@@ -1027,3 +1028,32 @@ def test_temporal_localization_empty_target_round_trips(tmp_path):
     task = restored.tasks[0]
     assert isinstance(task, TemporalLocalizationTask)
     assert task.target == ()
+
+
+def test_correspondence_time_series_answer_round_trips(tmp_path):
+    """A correspondence task that answers with series ids round-trips those ids, resolved on the sample."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/correspondence",
+            dataset_version=Version(1, 0, 0),
+            name="Correspondence",
+            description="Which channels correspond, answered with time-series ids.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    dataset.add_task(sample, TSCorrespondenceTask(target_time_series_ids=("ecg-rec-0-I",), id="corr-0"))
+    restored = _read(_write(tmp_path, dataset=dataset))
+    task = restored.tasks[0]
+    assert isinstance(task, TSCorrespondenceTask)
+    assert task.target_time_series_ids == ("ecg-rec-0-I",)

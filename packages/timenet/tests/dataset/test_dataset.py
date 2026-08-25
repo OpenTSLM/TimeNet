@@ -19,6 +19,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
     TimeSeriesSpec,
+    TSCorrespondenceTask,
     Version,
     ureg,
 )
@@ -646,3 +647,18 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 
     (task,) = ds.add_tasks(sample, gen())
     assert task.input_annotation_ids == (sample.annotations[0].id,)
+
+
+def test_add_task_rejects_a_time_series_ref_not_on_the_sample(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    with pytest.raises(TimeFValidationError, match="not on its samples"):
+        ds.add_task(sample, TSCorrespondenceTask(target_time_series_ids=("no-such-series",)))
+
+
+def test_add_task_accepts_a_time_series_ref_on_the_sample(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    series_id = sample.time_series[0].time_series_id
+    task = ds.add_task(sample, TSCorrespondenceTask(target_time_series_ids=(series_id,)))
+    assert task.target_time_series_ids == (series_id,)
