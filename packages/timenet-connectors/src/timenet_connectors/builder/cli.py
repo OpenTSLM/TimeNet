@@ -27,7 +27,7 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import publish_pipeline, run_pipeline
-from timenet.errors import RegistryError
+from timenet.errors import TimeNetRegistryError
 from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
@@ -63,7 +63,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
         return settings().registry_path
     try:
         return local_registry_path(target)
-    except RegistryError:
+    except TimeNetRegistryError:
         return open_writable_registry(target)
 
 
@@ -90,7 +90,7 @@ def build(
 
     A local ``--out`` writes a dataset-layout directory and prints its path to stdout. A remote
     ``--out`` (``timenet://`` / ``http(s)://`` / ``s3://``) publishes through the registry and prints
-    the version. Either way an emoji summary goes to stderr, so scripts can capture stdout. A curated
+    the version. Either way an emoji summary goes to stderr, so scripts can capture stdout. A built
     version is reused unless you give ``--force``.
 
     The build runs in an environment built from the connector's ``requirements.txt``. Pass

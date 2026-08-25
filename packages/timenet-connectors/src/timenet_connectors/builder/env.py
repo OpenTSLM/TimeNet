@@ -105,7 +105,7 @@ def run_isolated(
         dataset_id: The dataset id.
         out: The output target, forwarded to the child's ``--out``: a local directory or a
             ``timenet://`` / ``http(s)://`` / ``s3://`` URL.
-        force: Rebuild even if the version is already curated.
+        force: Rebuild even if the version is already built.
         keep_cache: Keep the raw download cache after building.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
 
@@ -113,11 +113,11 @@ def run_isolated(
         The child's last non-empty stdout line: a version directory or a published version.
 
     Raises:
-        CurationError: If the child failed, or printed nothing.
+        TimeNetBuildError: If the child failed, or printed nothing.
         LookupError: If no connector exists for the id.
     """  # noqa: DOC502 (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-curate, not to build, so it goes before the subcommand.
-    argv = ["timenet-curate", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
+    # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
     if force:
         argv.append("--force")
     if keep_cache:
@@ -134,7 +134,7 @@ def run_isolated(
         )
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
-        raise CurationError(f"curating {dataset_id!r} printed no version")
+        raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
     return lines[-1]
 
 

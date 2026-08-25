@@ -44,7 +44,7 @@ client = TimeNet()                     # the hosted registry (timenet://)
 client = TimeNet("./local_registry")   # any directory a build wrote to
 ```
 
-A `timenet-curate build` writes to a local registry, so set `$TIMENET_REGISTRY` (or pass the path)
+A `timenet-build build` writes to a local registry, so set `$TIMENET_REGISTRY` (or pass the path)
 to load a local build back.
 
 ## Configuration

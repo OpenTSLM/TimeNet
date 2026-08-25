@@ -141,7 +141,7 @@ def test_run_isolated_failure_message_includes_the_child_stderr(monkeypatch, tmp
 def test_run_isolated_raises_when_the_child_prints_no_directory(monkeypatch, tmp_path):
     monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("\n", "", 0))
 
-    with pytest.raises(CurationError, match="no version"):
+    with pytest.raises(TimeNetBuildError, match="no version"):
         run_isolated("timenet/hello-world", tmp_path)
 
 

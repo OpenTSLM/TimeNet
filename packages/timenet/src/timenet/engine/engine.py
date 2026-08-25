@@ -85,7 +85,7 @@ def publish_pipeline(  # noqa: PLR0913
     already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
 
     Args:
-        connector: The connector to curate.
+        connector: The connector to build.
         registry: The writable registry to publish into (local, remote, or S3).
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
         clean_cache: Remove the cache directory after publishing.

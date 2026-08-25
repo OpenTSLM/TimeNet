@@ -4,7 +4,7 @@ This helper downloads an ``s3://bucket/key`` object to a local path with boto3, 
 in parallel with multipart downloads. When AWS credentials are configured (environment, ``AWS_PROFILE``
 / the shared ``~/.aws`` config / SSO, container and instance roles), the client uses them, so a private
 source stays reachable. When none are configured, it reads anonymously, which is what a public bucket
-such as physionet-open needs. The code imports ``boto3`` lazily, so users who curate only offline
+such as physionet-open needs. The code imports ``boto3`` lazily, so users who build only offline
 datasets do not need it.
 """
 

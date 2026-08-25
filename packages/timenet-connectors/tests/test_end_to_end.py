@@ -13,7 +13,7 @@ from timenet.provenance import build_env
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal
 from timenet_connectors import build, load
-from timenet_connectors.curate.cli import _resolve_target, app as curate_app
+from timenet_connectors.builder.cli import _resolve_target, app as build_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
 
