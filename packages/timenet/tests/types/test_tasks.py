@@ -80,9 +80,11 @@ def test_localization_mode_is_coerced_so_a_read_back_task_compares_equal():
     assert task.mode is LocalizationMode.EXHAUSTIVE
 
 
-def test_localization_rejects_an_explicitly_empty_target():
-    with pytest.raises(TimeFValidationError, match="non-empty"):
-        TemporalLocalizationTask(prompt="Locate all R-peaks.", target=())
+def test_localization_accepts_an_explicitly_empty_target():
+    # An empty target is a positive "searched, found nothing here", distinct from None (the answer is
+    # stored by reference in target_annotation_ids).
+    task = TemporalLocalizationTask(prompt="Locate all R-peaks.", target=())
+    assert task.target == ()
 
 
 def test_localization_rejects_a_step_framed_target():

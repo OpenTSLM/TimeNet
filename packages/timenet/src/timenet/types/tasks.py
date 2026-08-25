@@ -223,17 +223,17 @@ class TemporalLocalizationTask(Task):
     task_type: ClassVar[TaskType] = TaskType.TEMPORAL_LOCALIZATION
     refs: ClassVar[TaskRefs] = TaskRefs(span_fields=("target",))
     target: tuple[TimePoint | TimeInterval, ...] | None = None
-    """The regions to find, or ``None`` when they are stored as ``target_annotation_ids``."""
+    """The regions to find. ``None`` means the answer is stored by reference in
+    ``target_annotation_ids``; ``()`` is a positive answer that nothing was found in scope."""
     mode: LocalizationMode = LocalizationMode.SPARSE
     """Whether the spans must cover the region of interest (see :class:`LocalizationMode`)."""
 
     def __post_init__(self) -> None:
-        """Coerce ``mode`` to the enum, reject an empty ``target``, and reject a step-framed target.
+        """Coerce ``mode`` to the enum and reject a step-framed target.
 
         Raises:
-            TimeFValidationError: If ``mode`` is unknown. If ``target`` is ``()`` rather than ``None``
-                or non-empty. If a target span counts in steps, which has no place on the recording
-                timeline localization reports against.
+            TimeFValidationError: If ``mode`` is unknown. If a target span counts in steps, which has
+                no place on the recording timeline localization reports against.
         """
         try:
             self.mode = LocalizationMode(self.mode)
@@ -241,10 +241,6 @@ class TemporalLocalizationTask(Task):
             raise TimeFValidationError(
                 f"unknown localization mode {self.mode!r}. Expected one of {[mode.value for mode in LocalizationMode]}"
             ) from exc
-        if self.target is not None and not self.target:
-            raise TimeFValidationError(
-                "TemporalLocalizationTask target must be None (answer stored by reference) or non-empty, got ()"
-            )
         for span in self.target or ():
             if isinstance(span, StepSpan):
                 raise TimeFValidationError(
