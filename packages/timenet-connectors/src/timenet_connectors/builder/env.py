@@ -91,30 +91,33 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
 
 
 def run_isolated(
-    dataset_id: str, root: Path, *, force: bool = False, keep_cache: bool = False, quiet: bool = False
-) -> Path:
-    """Build a dataset in its own environment and return the committed version directory.
+    dataset_id: str, out: str | Path, *, force: bool = False, keep_cache: bool = False, quiet: bool = False
+) -> str:
+    """Build a dataset in its own environment and return what the child printed on stdout.
 
     The child's stderr is streamed live (a long download still shows progress) and also captured, so
     a failed build's message carries the child's own error. Its stdout is captured, because the last
-    line is the version directory.
+    line is the build's result: the committed version directory for a local ``out``, or the published
+    version for a remote one. ``out`` is forwarded to the child's ``--out`` unchanged, so it publishes
+    or writes exactly as a direct build would.
 
     Args:
         dataset_id: The dataset id.
-        root: The output registry directory.
+        out: The output target, forwarded to the child's ``--out``: a local directory or a
+            ``timenet://`` / ``http(s)://`` / ``s3://`` URL.
         force: Rebuild even if the version is already built.
         keep_cache: Keep the raw download cache after building.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
 
     Returns:
-        The committed version directory.
+        The child's last non-empty stdout line: a version directory or a published version.
 
     Raises:
-        TimeNetBuildError: If the child failed, or printed no version directory.
+        TimeNetBuildError: If the child failed, or printed nothing.
         LookupError: If no connector exists for the id.
     """  # noqa: DOC502 (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(root)]
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
     if force:
         argv.append("--force")
     if keep_cache:
@@ -131,8 +134,8 @@ def run_isolated(
         )
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
-        raise TimeNetBuildError(f"building {dataset_id!r} printed no version directory")
-    return Path(lines[-1])
+        raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
+    return lines[-1]
 
 
 def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:

@@ -18,8 +18,10 @@ def _unexpected_resolve(*args, **kwargs):
 
 
 def test_build_then_load_round_trip(monkeypatch, tmp_path):
-    # timenet_connectors.builder/load anchor on the same default registry, so a build here loads back.
+    # timenet_connectors.build/load anchor on the same registry, so a build here loads back. The
+    # consumer default is the hosted service, so point both at a local registry for this round trip.
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path))
+    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "registry"))
     # In-process, so the round trip stays in this interpreter instead of shelling out to uv.
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
 

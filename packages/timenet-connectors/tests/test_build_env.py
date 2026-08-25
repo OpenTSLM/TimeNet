@@ -121,7 +121,7 @@ def test_run_isolated_returns_the_version_directory(monkeypatch, tmp_path):
     stdout = f"noise\n{tmp_path}/timenet/hello-world/1.0.0\n"
     monkeypatch.setattr(env_module, "_run_build", lambda command, env: (stdout, "", 0))
 
-    assert run_isolated("timenet/hello-world", tmp_path) == tmp_path / "timenet/hello-world/1.0.0"
+    assert run_isolated("timenet/hello-world", tmp_path) == f"{tmp_path}/timenet/hello-world/1.0.0"
 
 
 def test_run_isolated_raises_on_a_failed_child(monkeypatch, tmp_path):
@@ -141,7 +141,7 @@ def test_run_isolated_failure_message_includes_the_child_stderr(monkeypatch, tmp
 def test_run_isolated_raises_when_the_child_prints_no_directory(monkeypatch, tmp_path):
     monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("\n", "", 0))
 
-    with pytest.raises(TimeNetBuildError, match="no version directory"):
+    with pytest.raises(TimeNetBuildError, match="no version"):
         run_isolated("timenet/hello-world", tmp_path)
 
 

@@ -9,6 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
+from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Domain, Version
 from timenet.writer import TimeFWriter
@@ -29,13 +30,21 @@ def registry_root(tmp_path):
     return tmp_path / "reg"
 
 
-def test_no_args_uses_local_home_registry(tmp_path, monkeypatch):
+def test_no_args_defaults_to_the_hosted_registry(monkeypatch):
+    monkeypatch.delenv("TIMENET_REGISTRY", raising=False)
+    client = TimeNet()  # no registry, no storage
+    assert isinstance(client._registry, RemoteRegistry)
+    assert client._registry._base_url == TIMENET_REGISTRY_URL
+
+
+def test_timenet_registry_env_selects_a_local_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "home" / "registry"))
     dataset = make_dataset()
     dataset.derive_schema()
-    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:  # the default local registry
+    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:
         writer.write()
-    client = TimeNet()  # no registry, no storage
+    client = TimeNet()  # registry comes from $TIMENET_REGISTRY
     assert {m.dataset_id for m in client.list()} == {"timenet/hello-world"}
     assert client.download("timenet/hello-world") == tmp_path / "home" / "storage" / "timenet/hello-world" / "1.0.0"
 

@@ -8,6 +8,7 @@ from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry.writable import WritableRegistry
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -66,6 +67,49 @@ def run_pipeline(  # noqa: PLR0913
     if clean_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version_dir
+
+
+def publish_pipeline(  # noqa: PLR0913
+    connector: BaseConnector,
+    registry: WritableRegistry,
+    *,
+    cache_dir: Path | None = None,
+    clean_cache: bool = False,
+    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+    force: bool = False,
+) -> str:
+    """Run one connector and publish the result through a writable registry.
+
+    Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.store`` instead of
+    written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
+    already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
+
+    Args:
+        connector: The connector to build.
+        registry: The writable registry to publish into (local, remote, or S3).
+        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
+        clean_cache: Remove the cache directory after publishing.
+        progress_cb: Optional writer progress callback.
+        force: Republish even if the version is already committed.
+
+    Returns:
+        The published version string.
+    """
+    metadata = connector.metadata()
+    dataset_id = metadata.dataset_id
+    version = str(metadata.dataset_version)
+    if not force and registry.exists(dataset_id, version):
+        return version
+
+    cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
+    cache.mkdir(parents=True, exist_ok=True)
+
+    dataset = connector.convert(connector.download(cache))
+    dataset.derive_schema()
+    registry.store(dataset, force=force, progress_cb=progress_cb)
+    if clean_cache and cache_dir is None and cache.is_dir():
+        shutil.rmtree(cache)
+    return version
 
 
 def store_dataset(

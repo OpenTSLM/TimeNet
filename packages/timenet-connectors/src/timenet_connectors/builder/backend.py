@@ -57,4 +57,4 @@ class ConnectorBuilder:
         """
         if settings().isolation == "off":
             return run_pipeline(resolve(dataset_id)(), root, force=force)
-        return run_isolated(dataset_id, root, force=force)
+        return Path(run_isolated(dataset_id, root, force=force))
