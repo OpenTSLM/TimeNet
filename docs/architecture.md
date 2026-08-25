@@ -1,6 +1,6 @@
 ---
 icon: lucide/box
-description: "How TimeNet's packages, registries, and curation fit together."
+description: "How TimeNet's packages, registries, and build fit together."
 tags:
   - guide
   - architecture
@@ -8,22 +8,22 @@ tags:
 
 # Architecture
 
-How TimeNet's packages, registries, and curation fit together. This page is the map. Follow the links
+How TimeNet's packages, registries, and build fit together. This page is the map. Follow the links
 for per-component detail.
 
 ---
 
 ## The big picture
 
-TimeNet splits into three parts. A **connector** curates a raw source into a TimeF version. The
+TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
 **client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
 The values plane can be Parquet or Zarr. The client never runs connector code.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
 | **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (`pip install timenet`) |
-| **registry** | a served location | compiled TimeF versions | the SDK reads it and curation publishes to it |
-| **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-curate` CLI | connector authors (clone it) |
+| **registry** | a served location | compiled TimeF versions | the SDK reads it and build publishes to it |
+| **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-build` CLI | connector authors (clone it) |
 
 There can be several registries: one public, private internal ones, or a local directory.
 
@@ -52,20 +52,20 @@ everything a consumer needs to interpret either values backend lives in the mani
 
 ---
 
-## Curation roles: connector, engine, curator
+## Build roles: connector, engine, builder
 
 Three producer-side pieces, each with one job:
 
 | Role | What it is | Job |
 | --- | --- | --- |
 | **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
-| **Engine** | `run_pipeline` ([curate & publish](curation.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
-| **Curator** | the `timenet-curate` CLI ([curation](curation.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
+| **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
+| **Builder** | the `timenet-build` CLI ([build](build.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
 
 ```
-timenet-curate build org/name
+timenet-build build org/name
   │
-  ├─ curator  discovery.resolve("org/name") -> Connector class
+  ├─ builder  discovery.resolve("org/name") -> Connector class
   │             datasets/<org>/<name>/ exposes CONNECTOR
   │
   └─ engine   run_pipeline(connector, <registry>)
@@ -86,7 +86,7 @@ flow reads it straight back.
 | TimeF format, types, `TimeFDataset`, manifest | `timenet` | shared |
 | CLI, SDK, registry client, `TimeFReader` | `timenet` | consumer |
 | Engine, `TimeFWriter`, `BaseConnector` | `timenet` | producer |
-| Connector recipes + cards, `timenet-curate` | `timenet-connectors` | producer |
+| Connector recipes + cards, `timenet-build` | `timenet-connectors` | producer |
 
 ---
 
@@ -116,7 +116,7 @@ flow reads it straight back.
 
 1. **Author** a connector at `datasets/<org>/<name>/` (its `__init__.py` exposes `CONNECTOR`) with its
    `dataset.yaml` card beside it, in `timenet-connectors`.
-2. **Curate**: `timenet-curate build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
+2. **Build**: `timenet-build build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
 3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: `timenet download <id>` reads the manifest and fetches every file it lists.

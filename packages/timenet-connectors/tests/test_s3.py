@@ -52,7 +52,7 @@ def test_download_s3_object_rejects_non_s3_url():
 
 def test_missing_boto3_raises_helpful_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", None)  # `import boto3` -> ImportError
-    # Raised as a TimeNetError so the curate CLI prints one clean line, not a traceback.
+    # Raised as a TimeNetError so the build CLI prints one clean line, not a traceback.
     with pytest.raises(TimeNetError, match="physionet"):
         download_s3_object("s3://bucket/key.zip", Path("dest"))
 

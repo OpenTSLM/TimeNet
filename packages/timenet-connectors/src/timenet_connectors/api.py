@@ -1,4 +1,4 @@
-"""Producer-side shortcuts to curate and load a dataset from local code.
+"""Producer-side shortcuts to build and load a dataset from local code.
 
 :func:`build` runs a connector through the engine into the shared local registry. :func:`load` runs
 build and reads the result back. The writer and reader stacks are heavy, so they load lazily. This
@@ -14,9 +14,9 @@ if TYPE_CHECKING:
 
 
 def build(dataset_id: str, *, version: str | None = None, out: str | Path | None = None, force: bool = False) -> Path:
-    """Curate a dataset into a local registry by connector id.
+    """Build a dataset into a local registry by connector id.
 
-    This is the producer-side one-liner over the engine. The build reuses an already-curated version
+    This is the producer-side one-liner over the engine. The build reuses an already-built version
     unless the caller sets ``force``. The default output is the shared local registry
     (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
     here loads at once with ``TimeNet().load(dataset_id)``.
@@ -27,7 +27,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
             value is a guard. If it does not match the connector's metadata, the build stops before it
             runs. ``None`` builds the version that the connector declares.
         out: Output registry directory. Defaults to the shared local registry.
-        force: Rebuild even if the registry already has a curated version.
+        force: Rebuild even if the registry already has a built version.
 
     Returns:
         The committed version directory.
@@ -53,7 +53,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
 
 
 def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
-    """Curate a dataset if needed, then load it into memory.
+    """Build a dataset if needed, then load it into memory.
 
     This is the one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a
     clear producer and consumer split, call :func:`build` and ``TimeNet().load`` yourself.

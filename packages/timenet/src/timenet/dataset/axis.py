@@ -256,7 +256,7 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 class IrregularAxis:
     """A placement no formula produces, so this axis writes down every time offset beside the values.
 
-    This axis holds only the pair a curator can state and the writer can verify without a read. That
+    This axis holds only the pair a builder can state and the writer can verify without a read. That
     pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
     them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
 

@@ -83,8 +83,8 @@ def unix_us(moment: datetime | int) -> int:
 
     Raises:
         TimeFValidationError: If ``moment`` is a float, any other type, or a naive datetime. A naive
-            datetime reads in the local zone of the curating machine. That anchors the same recording
-            differently for each curator.
+            datetime reads in the local zone of the building machine. That anchors the same recording
+            differently for each builder.
     """
     if isinstance(moment, (bool, float)):
         raise TimeFValidationError(

@@ -4,7 +4,7 @@ import pytest
 
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -167,7 +167,7 @@ def test_version_ref_download_pins(versioned_registry, tmp_path):
 
 def test_version_ref_missing_pin_raises(versioned_registry, tmp_path):
     client = TimeNet(versioned_registry, storage_path=tmp_path / "store")
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         client.get("timenet/hello-world@9.9.9")
 
 

@@ -10,11 +10,11 @@ class TimeNetError(Exception):
     """Base class for all TimeNet errors."""
 
 
-class RegistryError(TimeNetError):
+class TimeNetRegistryError(TimeNetError):
     """TimeNet could not load or reach a registry, or the registry could not serve a request."""
 
 
-class DatasetNotFoundError(TimeNetError):
+class TimeNetDatasetNotFoundError(TimeNetError):
     """A requested dataset id or version is not present in a registry or on disk."""
 
 
@@ -26,17 +26,17 @@ class TimeFEditError(TimeFValidationError):
     """An edit would leave a dataset referentially inconsistent (for example, a dangling reference)."""
 
 
-class InvalidCardError(TimeNetError, ValueError):
-    """A dataset card YAML is malformed or fails schema validation (raised while curating)."""
+class TimeNetInvalidCardError(TimeNetError, ValueError):
+    """A dataset card YAML is malformed or fails schema validation (raised while building)."""
 
 
-class CurationError(TimeNetError):
-    """A curation run failed: the connector build, or the environment it needed."""
+class TimeNetBuildError(TimeNetError):
+    """A build run failed: the connector build, or the environment it needed."""
 
 
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
 
 
-class InvalidManifestError(TimeFFormatError, ValueError):
+class TimeNetInvalidManifestError(TimeFFormatError, ValueError):
     """A ``manifest.json`` is missing required blocks or fields, or TimeNet cannot parse it."""

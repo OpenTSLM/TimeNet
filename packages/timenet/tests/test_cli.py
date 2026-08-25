@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from timenet.cache import cached_datasets, raw_cache_size
 from timenet.cli.app import _enum_list, app
 from timenet.client import TimeNet
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.testing import make_dataset
 from timenet.types import Domain
 from timenet.writer import TimeFWriter
@@ -113,7 +113,7 @@ def test_search_rejects_unknown_filter_value(registry_root):
 
 def test_main_reports_expected_errors_without_traceback(monkeypatch, capsys):
     def raise_expected() -> None:
-        raise DatasetNotFoundError("no such dataset")
+        raise TimeNetDatasetNotFoundError("no such dataset")
 
     monkeypatch.setattr(_cli_module, "app", raise_expected)
     monkeypatch.setattr(sys, "argv", ["timenet"])

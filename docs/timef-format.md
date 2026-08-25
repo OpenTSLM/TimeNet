@@ -185,7 +185,7 @@ sample objects lazy, so a large dataset opens without reading every shard.
 ## Encodings
 
 The writer pins each column's Parquet encoding by its data role, rather than leaving the choice to
-pyarrow. Pinned encodings keep a re-curated version byte-stable.
+pyarrow. Pinned encodings keep a re-built version byte-stable.
 
 | Column role | Encoding |
 | --- | --- |
@@ -195,7 +195,7 @@ pyarrow. Pinned encodings keep a re-curated version byte-stable.
 | Id columns | Plain, stored as raw bytes or a string (see [Id storage](#id-storage)). |
 
 Every file also carries column statistics, a page index, and per-page checksums. Every file uses
-content-defined chunking, which aligns data pages to content. A re-curated or edited version then
+content-defined chunking, which aligns data pages to content. A re-built or edited version then
 re-stores only the pages that changed on a deduplicating backend such as Xet.
 
 ### Choosing the values encoding
@@ -209,7 +209,7 @@ patterns, and picks:
 
 `plain` is never chosen automatically. It stays reachable as a manual override. The writer takes one
 decision per `spec_type`, before that modality's first shard opens. The decision reads only buffered
-data, so re-curating an unchanged source reaches the same encoding and writes the same bytes.
+data, so re-building an unchanged source reaches the same encoding and writes the same bytes.
 
 The rule follows the measurements. On real data, at zstd level 3, the values column measures:
 

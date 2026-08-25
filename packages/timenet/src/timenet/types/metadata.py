@@ -120,7 +120,7 @@ class DatasetMetadata:
         This method validates the card against the packaged ``dataset-card.schema.json`` before
         construction. Authoring mistakes then surface as clear, aggregated messages instead of a stack
         trace from deep inside coercion. PyYAML and jsonschema are optional. This method imports them
-        lazily, so the types package does not depend on them. Install the ``timenet[curation]`` extra
+        lazily, so the types package does not depend on them. Install the ``timenet[build]`` extra
         to use this.
 
         Args:
@@ -130,18 +130,18 @@ class DatasetMetadata:
             The constructed :class:`DatasetMetadata`.
 
         Raises:
-            InvalidCardError: If the curation extra is missing, or the card is unreadable, is not a
+            TimeNetInvalidCardError: If the build extra is missing, or the card is unreadable, is not a
                 mapping, fails schema validation, or has an invalid field value.
         """
-        from timenet.errors import InvalidCardError  # noqa: PLC0415
+        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
 
         card_path = Path(path)
         try:
             import jsonschema  # noqa: PLC0415
             import yaml  # noqa: PLC0415
         except ModuleNotFoundError as exc:
-            raise InvalidCardError(
-                "reading a dataset card needs PyYAML and jsonschema; install the 'timenet[curation]' extra"
+            raise TimeNetInvalidCardError(
+                "reading a dataset card needs PyYAML and jsonschema; install the 'timenet[build]' extra"
             ) from exc
 
         from timenet.schemas import DATASET_CARD_SCHEMA  # noqa: PLC0415
@@ -149,9 +149,9 @@ class DatasetMetadata:
         try:
             raw = yaml.safe_load(card_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError) as exc:
-            raise InvalidCardError(f"could not read dataset card {card_path}: {exc}") from exc
+            raise TimeNetInvalidCardError(f"could not read dataset card {card_path}: {exc}") from exc
         if not isinstance(raw, dict):
-            raise InvalidCardError(f"dataset card {card_path} must be a YAML mapping, got {type(raw).__name__}")
+            raise TimeNetInvalidCardError(f"dataset card {card_path} must be a YAML mapping, got {type(raw).__name__}")
 
         errors = sorted(
             jsonschema.Draft202012Validator(DATASET_CARD_SCHEMA).iter_errors(raw),
@@ -161,12 +161,12 @@ class DatasetMetadata:
             detail = "; ".join(
                 f"{'/'.join(str(part) for part in error.path) or '<root>'}: {error.message}" for error in errors
             )
-            raise InvalidCardError(f"dataset card {card_path} failed validation: {detail}")
+            raise TimeNetInvalidCardError(f"dataset card {card_path} failed validation: {detail}")
 
         try:
             return cls.from_dict(raw)
         except (KeyError, ValueError, TypeError, AttributeError) as exc:
-            raise InvalidCardError(f"dataset card {card_path} is invalid: {exc}") from exc
+            raise TimeNetInvalidCardError(f"dataset card {card_path} is invalid: {exc}") from exc
 
 
 @dataclass(frozen=True)

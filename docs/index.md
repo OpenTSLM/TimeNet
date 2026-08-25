@@ -33,5 +33,5 @@ client never runs connector code.
 ## Where next
 
 - [Get started](get-started.md): install TimeNet and load your first dataset.
-- [Architecture](architecture.md): how the packages, registries, and curation flow fit together.
-- [Datasets](catalog/datasets.md): the datasets already curated into the registry.
+- [Architecture](architecture.md): how the packages, registries, and build flow fit together.
+- [Datasets](catalog/datasets.md): the datasets already built into the registry.

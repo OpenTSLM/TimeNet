@@ -22,7 +22,7 @@ with TimeFWriter(root, dataset) as writer:
 ```
 
 Most connectors do not use `TimeFWriter` directly. `BaseConnector.store()` and the
-[engine](curation.md) wrap it.
+[engine](build.md) wrap it.
 
 ---
 
@@ -106,7 +106,7 @@ byte-based flush keeps the row group well under this limit.
 ## Encodings
 
 The writer pins each encoding by data role. It does not leave the choice to pyarrow heuristics. As a
-result, re-curated versions stay stable:
+result, re-built versions stay stable:
 
 - `time_offsets_us.list.element` -> **DELTA_BINARY_PACKED** + zstd, for the irregular series that
   carry one time offset per value. A monotonic stream stores as small deltas instead of full int64
@@ -121,7 +121,7 @@ result, re-curated versions stay stable:
 
 The writer turns on `write_statistics`, `write_page_index`, `write_page_checksum`, and
 **`use_content_defined_chunking`** for every file. Content-defined chunking aligns data pages to
-content. As a result, a re-curated or [edited](#copy-on-write-edits) version re-stores only the
+content. As a result, a re-built or [edited](#copy-on-write-edits) version re-stores only the
 changed chunks, on a deduplicating backend such as Xet. The reader treats the files as ordinary
 Parquet.
 
@@ -149,7 +149,7 @@ writer selects `dictionary`. If it has more, the writer selects `byte_stream_spl
 selects `plain` automatically. The sample is the values already buffered for the first row group of a
 modality. As a result, the decision costs only a distinct-value count, with no extra reads. The writer
 makes one decision per `spec_type`, before it opens the first shard for that type. The decision is
-deterministic in the data. As a result, re-curating an unchanged source reaches the same encoding.
+deterministic in the data. As a result, re-building an unchanged source reaches the same encoding.
 
 The manifest records the choice as `value_encoding`, a `spec_type` -> encoding map. This record is
 provenance, not a contract. Parquet records the applied encoding in the footer of every file. As a

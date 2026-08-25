@@ -190,14 +190,14 @@ def _cache_table(datasets: list[CachedDataset]) -> Table:
 
 @cache_app.command("clear")
 def cache_clear(
-    all_: bool = typer.Option(False, "--all", help="Also remove the local registry (curated datasets)."),
+    all_: bool = typer.Option(False, "--all", help="Also remove the local registry (built datasets)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes curated datasets."""
+    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes built datasets."""
     if not yes:
         what = "downloaded datasets and the raw cache"
         if all_:
-            what += " and the local registry (curated datasets)"
+            what += " and the local registry (built datasets)"
         typer.confirm(f"Remove {what}?", abort=True)
     freed, removed = clear_cache(include_registry=all_)
     typer.echo(f"Freed {human_bytes(freed)} from {len(removed)} location(s).")

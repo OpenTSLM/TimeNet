@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
@@ -102,13 +102,13 @@ def test_local_registry_path_expands_user(monkeypatch, tmp_path):
     "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
 )
 def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(RegistryError, match="remote"):
+    with pytest.raises(TimeNetRegistryError, match="remote"):
         local_registry_path(uri)
 
 
 @pytest.mark.parametrize(("uri", "match"), [("file://host/reg", "three slashes"), ("file://", "absolute path")])
 def test_local_registry_path_rejects_malformed_file_uri(uri, match):
-    with pytest.raises(RegistryError, match=match):
+    with pytest.raises(TimeNetRegistryError, match=match):
         local_registry_path(uri)
 
 
@@ -127,12 +127,12 @@ def test_get_manifest_latest(registry_root):
 
 
 def test_get_manifest_unknown_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).get_manifest("does/not-exist")
 
 
 def test_get_manifest_unknown_version_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).get_manifest("demo/ecg", version="9.9.9")
 
 
@@ -198,12 +198,12 @@ def test_open_version_filesystem_reads_a_file(registry_root):
 
 
 def test_open_version_unknown_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).open_version("does/not-exist")
 
 
 def test_open_version_unknown_version_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).open_version("demo/ecg", version="9.9.9")
 
 

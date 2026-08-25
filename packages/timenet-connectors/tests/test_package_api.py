@@ -3,7 +3,7 @@ import timenet_connectors
 
 
 def test_build_then_load_round_trip(monkeypatch, tmp_path):
-    # timenet_connectors.build/load anchor on the same default registry, so a build here loads back.
+    # timenet_connectors.builder/load anchor on the same default registry, so a build here loads back.
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path))
 
     version_dir = timenet_connectors.build("timenet/test-mean")

@@ -2,7 +2,7 @@
 
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
 (the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
-``load``. This class never runs connector code. The curation side produces datasets.
+``load``. This class never runs connector code. The build side produces datasets.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -161,7 +161,7 @@ class TimeNet:
         self._registry.download_version(dataset_id, resolved, target, force=force, manifest=manifest)
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, download: str | None = None) -> TimeFDataset:
+    def load(self, dataset_id: str, version: str | None = None, *, download_mode: str | None = None) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
         This method does not download the whole dataset. The reader loads each series only
@@ -172,15 +172,15 @@ class TimeNet:
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
-                fetch mode; ignored for local/S3 registries.
+            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the
+                default download mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
-        if download is not None and isinstance(self._registry, RemoteRegistry):
-            handle = self._registry.open_version(dataset_id, version, mode=download)
+        if download_mode is not None and isinstance(self._registry, RemoteRegistry):
+            handle = self._registry.open_version(dataset_id, version, mode=download_mode)
         else:
             handle = self._registry.open_version(dataset_id, version)
         return TimeFReader(handle).read()
@@ -202,4 +202,4 @@ class TimeNet:
 
         # Force the full download: a DataLoader pickles the handle to its workers, and the on-demand
         # handle wraps a live httpx client that cannot pickle; only the local-filesystem handle survives.
-        return TimeFTorchDataset(self.load(dataset_id, version, download="full"))
+        return TimeFTorchDataset(self.load(dataset_id, version, download_mode="full"))

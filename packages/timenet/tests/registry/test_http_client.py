@@ -3,7 +3,7 @@ import io
 import httpx
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.registry.remote._http import RegistryHttpClient, timenet_user_agent
 
 
@@ -46,7 +46,7 @@ def test_404_maps_to_dataset_not_found():
     def handler(request):
         return httpx.Response(404, json={"detail": "nope"})
 
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         _client(handler).get_json("/datasets/o/n")
 
 
@@ -55,7 +55,7 @@ def test_error_statuses_map_to_registry_error(status):
     def handler(request):
         return httpx.Response(status, json={"detail": "x"})
 
-    with pytest.raises(RegistryError):
+    with pytest.raises(TimeNetRegistryError):
         _client(handler).get_json("/datasets")
 
 
@@ -95,9 +95,9 @@ def test_blob_reads_send_no_authorization():
 
 def test_stream_to_maps_error_status_on_unread_body():
     # An iterator body makes the response streaming, so .text raises ResponseNotRead until it is
-    # read; the error mapping must still surface as a RegistryError.
+    # read; the error mapping must still surface as a TimeNetRegistryError.
     def handler(request):
         return httpx.Response(403, content=iter([b"denied"]))
 
-    with pytest.raises(RegistryError):
+    with pytest.raises(TimeNetRegistryError):
         _client(handler).stream_to("http://blob.local/obj/a", io.BytesIO())

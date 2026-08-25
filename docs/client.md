@@ -54,9 +54,9 @@ precedence for any value is **CLI flag / argument > environment variable > defau
 | Env var | Default | What |
 | --- | --- | --- |
 | `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-curate build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
+| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-build build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
 | `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
-| `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during curation (removed after a successful build). |
+| `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
 | `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
 | `TIMENET_DOWNLOAD_MODE` | `on_demand` | How a remote `load` fetches bytes: `on_demand` (lazy range reads, cache-first) or `full` (download the whole version first). |
 
@@ -90,7 +90,7 @@ client = TimeNet("timenet://")
 # Uses $TIMENET_DOWNLOAD_MODE (on_demand by default).
 client.load("chengsenwang/tsqa")
 # Force a full download, then read locally.
-client.load("chengsenwang/tsqa", download="full")
+client.load("chengsenwang/tsqa", download_mode="full")
 ```
 
 A Zarr-backed version always takes the `full` path: its store driver can't range-read presigned URLs.
@@ -111,7 +111,7 @@ client.load("chengsenwang/tsqa@latest")  # latest, explicit
 
 The methods `get`, `download`, `load`, and `load_torch` also accept an explicit `version=`
 argument. If you pass both a `@version` reference and `version=`, TimeNet raises an error. If you
-pin a version that is not committed, TimeNet raises `DatasetNotFoundError`. The methods `list` and
+pin a version that is not committed, TimeNet raises `TimeNetDatasetNotFoundError`. The methods `list` and
 `search` always report the latest version.
 
 ## PyTorch

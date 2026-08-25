@@ -27,7 +27,7 @@ class TimeNetSettings(BaseSettings):
     download_mode: Literal["full", "on_demand"] = "on_demand"
     """How a remote ``load`` fetches bytes: ``"on_demand"`` (lazy range reads) or ``"full"``."""
     isolation: Literal["on", "off"] = "on"
-    """Whether a curation build runs in an environment built from the connector's requirements.
+    """Whether a build runs in an environment built from the connector's requirements.
 
     ``"off"`` runs it in the current interpreter. The isolated child sets this to ``"off"`` in its own
     environment, which is what stops it re-execing forever.
@@ -45,7 +45,7 @@ class TimeNetSettings(BaseSettings):
 
     @property
     def cache_dir(self) -> Path:
-        """Where the client caches raw curation sources and Hub downloads (analog of ``HF_HUB_CACHE``)."""
+        """Where the client caches raw build sources and Hub downloads (analog of ``HF_HUB_CACHE``)."""
         return (self.cache if self.cache is not None else self.home_dir / "cache").expanduser()
 
     @property

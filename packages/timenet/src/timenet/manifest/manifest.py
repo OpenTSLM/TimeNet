@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any, ClassVar
 
-from timenet.errors import InvalidManifestError
+from timenet.errors import TimeNetInvalidManifestError
 from timenet.format.constants import check_relative_path
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import FilePart, ManifestFiles
@@ -34,7 +34,7 @@ class Manifest:
     """The single source of truth a consumer reads to interpret a dataset version.
 
     Raises:
-        InvalidManifestError: If ``timef_format_version`` is not a supported version.
+        TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
@@ -57,7 +57,7 @@ class Manifest:
     """``spec_type`` -> the values-column encoding that its shards carry.
 
     This field exists only for provenance. Parquet already records the applied encoding in each
-    file's footer, so a reader does not need this field. The field lets a curator see what a build
+    file's footer, so a reader does not need this field. The field lets a builder see what a build
     chose without opening a shard. The field is empty for a backend with no such choice.
     """
     derived_from: dict[str, str] | None = None
@@ -72,21 +72,21 @@ class Manifest:
         without parsing the metadata block. The two values must match.
 
         Raises:
-            InvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
+            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
                 not match ``metadata.dataset_id``.
         """
         if self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS:
-            raise InvalidManifestError(
+            raise TimeNetInvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
             )
         if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
-            raise InvalidManifestError(
+            raise TimeNetInvalidManifestError(
                 f"unsupported values_backend {self.values_backend!r}; "
                 f"supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
             )
         if self.dataset_id != self.metadata.dataset_id:
-            raise InvalidManifestError(
+            raise TimeNetInvalidManifestError(
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
@@ -131,11 +131,11 @@ class Manifest:
             The parsed :class:`Manifest`.
 
         Raises:
-            InvalidManifestError: If a required key is missing or a block is invalid.
+            TimeNetInvalidManifestError: If a required key is missing or a block is invalid.
         """
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
-                raise InvalidManifestError(f"manifest missing required key {required!r}")
+                raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
         id_encoding = _dict_block(data, "id_encoding")
         derived_from = _optional_dict_block(data, "derived_from")
         return cls(
@@ -162,12 +162,12 @@ class Manifest:
             The parsed :class:`Manifest`.
 
         Raises:
-            InvalidManifestError: If the text is not valid JSON or a block is invalid.
+            TimeNetInvalidManifestError: If the text is not valid JSON or a block is invalid.
         """
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise InvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
+            raise TimeNetInvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
         return cls.from_dict(data)
 
 
@@ -182,12 +182,12 @@ def _dict_block(data: dict[str, Any], key: str) -> dict:
         The block as a ``dict``. The result is empty when the block is absent.
 
     Raises:
-        InvalidManifestError: If the block is present but is not a mapping.
+        TimeNetInvalidManifestError: If the block is present but is not a mapping.
     """
     try:
         return dict(data.get(key, {}))
     except (ValueError, TypeError) as exc:
-        raise InvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
 
 
 def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
@@ -201,7 +201,7 @@ def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
         The block as a ``dict``, or ``None`` when the value is ``null`` or absent.
 
     Raises:
-        InvalidManifestError: If the block is present, is not null, and is not a mapping.
+        TimeNetInvalidManifestError: If the block is present, is not null, and is not a mapping.
     """
     value = data.get(key)
     if value is None:
@@ -209,7 +209,7 @@ def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
     try:
         return dict(value)
     except (ValueError, TypeError) as exc:
-        raise InvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
 
 
 def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
@@ -230,7 +230,7 @@ def _metadata_from_dict(data: dict[str, Any]) -> DatasetMetadata:
     try:
         return DatasetMetadata.from_dict(data)
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise InvalidManifestError(f"invalid manifest 'metadata' block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest 'metadata' block: {exc}") from exc
 
 
 def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
@@ -300,7 +300,7 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
             tasks=tasks,
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise InvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
 
 
 def _data_source(entry: dict[str, Any] | None) -> DataSource | None:
@@ -346,7 +346,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
             time_series_specs=dict(data.get("time_series_specs", {})),
         )
     except (ValueError, TypeError, AttributeError) as exc:
-        raise InvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
 
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
@@ -373,7 +373,7 @@ def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
             time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise InvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
+        raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
 
 
 def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
@@ -385,7 +385,7 @@ def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
 
     Returns:
         The field's parts as a tuple of :class:`FilePart`. A missing ``path``, ``checksum``, or
-        ``size`` raises ``KeyError``. The caller re-raises this error as ``InvalidManifestError``.
+        ``size`` raises ``KeyError``. The caller re-raises this error as ``TimeNetInvalidManifestError``.
 
     Raises:
         TypeError: If the field is a string, or an entry is not an object.

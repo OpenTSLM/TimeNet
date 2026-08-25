@@ -22,7 +22,7 @@ import uuid
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
@@ -46,11 +46,11 @@ class S3Registry(WritableRegistry):
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
 
         Raises:
-            RegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
+            TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
         """
         parsed = urlparse(uri)
         if parsed.scheme != "s3" or not parsed.netloc:
-            raise RegistryError(f"S3 registry URI must be s3://bucket[/prefix], got {uri!r}")
+            raise TimeNetRegistryError(f"S3 registry URI must be s3://bucket[/prefix], got {uri!r}")
         self._bucket = parsed.netloc
         self._prefix = parsed.path.strip("/")
         self._cache_dir = Path(cache_dir) if cache_dir is not None else settings().storage_dir
@@ -88,15 +88,17 @@ class S3Registry(WritableRegistry):
             The dataset's manifest.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version has no manifest in the bucket.
+            TimeNetDatasetNotFoundError: If the dataset id or version has no manifest in the bucket.
         """
         validate_dataset_id(dataset_id)
         resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
         if resolved is None:
-            raise DatasetNotFoundError(f"no committed version for dataset {dataset_id!r} under {self._display_root()}")
+            raise TimeNetDatasetNotFoundError(
+                f"no committed version for dataset {dataset_id!r} under {self._display_root()}"
+            )
         body = self._get_bytes(self._key(dataset_id, resolved, MANIFEST_FILE))
         if body is None:
-            raise DatasetNotFoundError(
+            raise TimeNetDatasetNotFoundError(
                 f"no manifest for {dataset_id!r} version {resolved!r} under {self._display_root()}"
             )
         return Manifest.from_json(body.decode())
@@ -113,7 +115,7 @@ class S3Registry(WritableRegistry):
             An open, streaming binary file object.
 
         Raises:
-            DatasetNotFoundError: If the object does not exist.
+            TimeNetDatasetNotFoundError: If the object does not exist.
         """
         import botocore.exceptions  # noqa: PLC0415
 
@@ -121,7 +123,7 @@ class S3Registry(WritableRegistry):
         try:
             response = client.get_object(Bucket=self._bucket, Key=self._key(dataset_id, version, relpath))
         except botocore.exceptions.ClientError as exc:
-            raise DatasetNotFoundError(f"no object {relpath!r} for {dataset_id!r} version {version!r}") from exc
+            raise TimeNetDatasetNotFoundError(f"no object {relpath!r} for {dataset_id!r} version {version!r}") from exc
         return response["Body"]
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
@@ -205,12 +207,12 @@ class S3Registry(WritableRegistry):
             A boto3 S3 client.
 
         Raises:
-            RegistryError: If boto3 is not installed.
+            TimeNetRegistryError: If boto3 is not installed.
         """
         try:
             import boto3  # noqa: PLC0415
         except ModuleNotFoundError as exc:
-            raise RegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
+            raise TimeNetRegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
         return boto3.client("s3")
 
     @staticmethod
@@ -221,12 +223,12 @@ class S3Registry(WritableRegistry):
             A configured :class:`pyarrow.fs.S3FileSystem`.
 
         Raises:
-            RegistryError: If boto3 is not installed.
+            TimeNetRegistryError: If boto3 is not installed.
         """
         try:
             import boto3  # noqa: PLC0415
         except ModuleNotFoundError as exc:
-            raise RegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
+            raise TimeNetRegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
         import pyarrow.fs as pafs  # noqa: PLC0415
 
         session = boto3.Session()
@@ -270,7 +272,7 @@ class S3Registry(WritableRegistry):
         """Return an object's bytes, or ``None`` if the object does not exist.
 
         Raises:
-            RegistryError: If S3 fails for a reason other than a missing object.
+            TimeNetRegistryError: If S3 fails for a reason other than a missing object.
         """
         import botocore.exceptions  # noqa: PLC0415
 
@@ -280,7 +282,7 @@ class S3Registry(WritableRegistry):
         except botocore.exceptions.ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
                 return None  # a genuinely absent object
-            raise RegistryError(f"cannot read s3://{self._bucket}/{key}: {exc}") from exc
+            raise TimeNetRegistryError(f"cannot read s3://{self._bucket}/{key}: {exc}") from exc
         return response["Body"].read()
 
     def _latest_version(self, dataset_id: str) -> str | None:

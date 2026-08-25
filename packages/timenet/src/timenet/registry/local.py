@@ -8,7 +8,7 @@ from typing import BinaryIO
 import pyarrow.fs as pafs
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
@@ -18,7 +18,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """Serve datasets from a local directory. The curation output is itself a valid registry."""
+    """Serve datasets from a local directory. The build output is itself a valid registry."""
 
     def __init__(self, root: Path) -> None:
         """Open a local registry rooted at a directory.
@@ -70,20 +70,20 @@ class LocalRegistry(WritableRegistry):
             The dataset's manifest.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version has no committed manifest.
+            TimeNetDatasetNotFoundError: If the dataset id or version has no committed manifest.
             TimeFFormatError: If the stored manifest declares a dataset id that differs from its
                 directory. This means a misplaced or corrupt artifact.
         """
         resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
         if resolved is None:
             known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
-            raise DatasetNotFoundError(
+            raise TimeNetDatasetNotFoundError(
                 f"no committed version for dataset {dataset_id!r}; this registry has: {known}. "
-                "Curate one with `timenet-curate build <id>`."
+                "Build one with `timenet-build build <id>`."
             )
         path = self._dataset_dir(dataset_id) / resolved / MANIFEST_FILE
         if not path.exists():
-            raise DatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")
+            raise TimeNetDatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")
         mtime = path.stat().st_mtime
         cached = self._manifest_cache.get((dataset_id, resolved))
         if cached is not None and cached[0] == mtime:
@@ -109,12 +109,12 @@ class LocalRegistry(WritableRegistry):
             An open binary file object.
 
         Raises:
-            DatasetNotFoundError: If the dataset version directory does not exist.
+            TimeNetDatasetNotFoundError: If the dataset version directory does not exist.
             ValueError: If ``relpath`` escapes the dataset version directory.
         """
         version_dir = self._dataset_dir(dataset_id) / version
         if not version_dir.is_dir():
-            raise DatasetNotFoundError(f"no dataset {dataset_id!r} version {version!r}")
+            raise TimeNetDatasetNotFoundError(f"no dataset {dataset_id!r} version {version!r}")
         base = version_dir.resolve()
         target = (version_dir / relpath).resolve()
         if not target.is_relative_to(base):

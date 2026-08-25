@@ -20,7 +20,7 @@ class TimeSeries:
     The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
     across samples, or give two instances the same explicit id, they share one chunk on disk. Consumers
     read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector supplies ``loader`` at
-    curation, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
+    build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
     """
 
     spec: TimeSeriesSpec

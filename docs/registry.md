@@ -13,7 +13,7 @@ Parquet control tables, and a values plane in Parquet or Zarr format. A registry
 connector code. The registry code lives in `timenet.registry`.
 
 You can have several registries: a public registry, private internal registries, or a local
-directory. The output of [curation](curation.md) is itself a valid local registry.
+directory. The output of [build](build.md) is itself a valid local registry.
 
 ## Choosing a registry
 
@@ -79,7 +79,7 @@ Every backend implements this contract: four data-access methods and one shared 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
-| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `DatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
+| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
@@ -96,7 +96,7 @@ lowercase ids to avoid casing clashes on case-insensitive filesystems.
 ## Writing to a registry
 
 A `WritableRegistry` adds one write method to the read contract. As a result,
-[curation](curation.md) can publish into any backend, not only a local directory:
+[build](build.md) can publish into any backend, not only a local directory:
 
 | Method | Description |
 | --- | --- |
@@ -119,10 +119,10 @@ version = registry.store(dataset)   # schema derived if needed, atomic commit
 Every backend is a `WritableRegistry`. As a result, this type alone does not show if a backend is a
 directory the engine can write to or a remote stub. `local_registry_path(uri)` gives this
 information. It returns the directory that a `file://` URI or a plain path names. It raises
-`RegistryError` for a remote scheme. `default_registry_path()` uses `local_registry_path` to find
+`TimeNetRegistryError` for a remote scheme. `default_registry_path()` uses `local_registry_path` to find
 the default local registry. It uses `$TIMENET_REGISTRY` when its value is a local path. Otherwise,
-it uses `<home>/registry`. This is how [`timenet-curate build`](cli/curate.md) resolves its output
-when `--out` is absent. The `timenet_connectors.build` and `load` helpers use it too.
+it uses `<home>/registry`. This is how [`timenet-build build`](cli/build.md) resolves its output
+when `--out` is absent. The `timenet_connectors.builder` and `load` helpers use it too.
 
 ### Remote publishing
 

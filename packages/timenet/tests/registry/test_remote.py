@@ -4,7 +4,7 @@ from _fake_registry import build_fake, build_publish_fake, range_server
 import pytest
 
 from timenet.client import TimeNet
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -47,7 +47,7 @@ def test_get_manifest_latest_resolves_via_detail(version_dir, tmp_path):
 
 def test_get_manifest_unknown_dataset_raises(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         registry.get_manifest("no/such", "1.0.0")
 
 
@@ -69,8 +69,8 @@ def test_open_file_streams_bytes(version_dir, tmp_path):
 
 def test_token_required_when_configured(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path, token="tok_rw")
-    # constructed without passing the token -> anonymous -> 401 mapped to RegistryError
-    with pytest.raises(RegistryError):
+    # constructed without passing the token -> anonymous -> 401 mapped to TimeNetRegistryError
+    with pytest.raises(TimeNetRegistryError):
         registry.list_datasets()
 
 
@@ -88,7 +88,7 @@ def test_load_full_round_trips(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id, download="full")
+    loaded = client.load(manifest.metadata.dataset_id, download_mode="full")
     assert_datasets_equal(make_dataset(), loaded)
 
 
@@ -100,7 +100,7 @@ def test_load_on_demand_round_trips(version_dir, tmp_path):
         transport, _ = build_fake(directory, blob_base=blob_base)
         registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
         client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-        loaded = client.load(manifest.metadata.dataset_id, download="on_demand")
+        loaded = client.load(manifest.metadata.dataset_id, download_mode="on_demand")
         assert_datasets_equal(make_dataset(), loaded)
 
 
@@ -141,5 +141,5 @@ def test_remote_registry_uses_client_storage_path(tmp_path):
 def test_store_without_write_token_is_rejected(tmp_path):
     transport, _ = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
-    with pytest.raises(RegistryError):
+    with pytest.raises(TimeNetRegistryError):
         registry.store(make_dataset())

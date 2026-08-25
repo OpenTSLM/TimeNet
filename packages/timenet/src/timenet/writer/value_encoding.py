@@ -29,7 +29,7 @@ The ``value_encoding`` override covers two known gaps instead of more machinery:
 
 The choice needs no reader support. Parquet records the applied encoding per column chunk in its
 footer, so a decoder resolves it without consulting the manifest. The manifest records it anyway,
-under ``value_encoding``, so a curator can see what happened without opening a shard footer.
+under ``value_encoding``, so a builder can see what happened without opening a shard footer.
 """
 
 from collections.abc import Sequence
@@ -138,7 +138,7 @@ def encoding_for_cardinality(distinct: int) -> ValueEncoding:
 def select_value_encoding(arrays: Sequence[np.ndarray]) -> ValueEncoding:
     """Pick the encoding for one modality from the values the writer has already buffered.
 
-    Deterministic in the buffered values alone, so re-curating an unchanged source reaches the same
+    Deterministic in the buffered values alone, so re-building an unchanged source reaches the same
     encoding and its shards stay byte-identical. A copy-on-write edit re-measures whatever survives
     the edit. This can only reach a different answer for a modality already sitting within a few
     percent of the threshold. There, the two encodings are near enough in size not to matter.

@@ -87,7 +87,7 @@ calls `close()`, it releases them.
 
 `DatasetVersion.open_local` and a registry's `open_version` build the handle. If the version directory
 has no `manifest.json`, they raise `FileNotFoundError`. If the manifest is malformed or is an
-unsupported version, they raise `TimeFFormatError` (an `InvalidManifestError`).
+unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestError`).
 
 Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
 file at open time. The error surfaces on the first access that needs the file. Tasks raise the error

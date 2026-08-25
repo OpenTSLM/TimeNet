@@ -1,22 +1,22 @@
 ---
 icon: lucide/factory
-description: "Curation: run a connector through the pipeline and publish a dataset to a registry."
+description: "Build: run a connector through the pipeline and publish a dataset to a registry."
 tags:
   - guide
-  - curation
+  - build
 ---
 
-# Curate & publish
+# Build & publish
 
-Curation turns a [connector](connectors.md)'s raw source into a stored TimeF version. A version is a
+Build turns a [connector](connectors.md)'s raw source into a stored TimeF version. A version is a
 `manifest.json`, Parquet control tables, and a Parquet or Zarr values plane. TimeNet writes the version
-into a [registry](registry.md). Curation runs on your machine. Today it publishes to a local registry. A
-hosted backend is planned. The command [`timenet-curate build`](cli/curate.md) drives it. This page
+into a [registry](registry.md). Build runs on your machine. Today it publishes to a local registry. A
+hosted backend is planned. The command [`timenet-build build`](cli/build.md) drives it. This page
 explains what happens underneath.
 
 ## The pipeline
 
-Each build runs in its own environment. Before the pipeline starts, `timenet-curate` resolves the
+Each build runs in its own environment. Before the pipeline starts, `timenet-build` resolves the
 connector's `requirements.txt` (see [Connectors](connectors.md)). Then it re-runs itself under `uv`.
 The build environment layers those requirements over the same `timenet` and `timenet-connectors`
 that the parent runs. Two connectors that need incompatible libraries no longer collide. The
@@ -64,7 +64,7 @@ Building a dataset follows one path:
    [`BaseConnector`](connectors.md) as `CONNECTOR`.
 2. Put its [dataset card](manifest.md), `dataset.yaml`, beside it. When the connector loads the card,
    TimeNet validates it against the packaged `dataset-card.schema.json`.
-3. Build it with [`timenet-curate build`](cli/curate.md).
+3. Build it with [`timenet-build build`](cli/build.md).
 4. Verify the dataset: point the SDK at the output directory. The output directory is itself a valid
    local registry.
 5. When a hosted backend is available, publish the dataset.

@@ -8,8 +8,8 @@ connector imports).
 
 Run it before building the docs::
 
-    uv run --group docs --extra curation python scripts/gen_dataset_docs.py
-    uv run --group docs --extra curation python scripts/gen_dataset_docs.py --registry ./local_registry
+    uv run --group docs --extra build python scripts/gen_dataset_docs.py
+    uv run --group docs --extra build python scripts/gen_dataset_docs.py --registry ./local_registry
 
 Output goes to ``docs/catalog/`` as ``datasets.md`` + ``datasets.json`` (git-ignored;
 regenerated at build time), alongside the hand-written ``catalog/benchmarks.md``.
@@ -248,14 +248,14 @@ def _render_index(entries: list[DatasetMetadata], manifests: dict[str, Manifest 
     rows = "\n".join(_render_catalog_row(m, manifests.get(m.dataset_id)) for m in entries)
     return (
         "---\n"
-        'description: "Browse and filter every dataset curated into the TimeNet registry."\n'
+        'description: "Browse and filter every dataset built into the TimeNet registry."\n'
         "icon: lucide/database\n"
         "tags:\n"
         "  - catalog\n"
         "  - datasets\n"
         "---\n\n"
         "# Datasets\n\n"
-        "Every curated dataset in the registry, generated from the `dataset.yaml` cards in\n"
+        "Every built dataset in the registry, generated from the `dataset.yaml` cards in\n"
         "`timenet-connectors`. Search and filter below, expand a row for details, or read\n"
         "[`datasets.json`](datasets.json) for programmatic use.\n\n"
         '<div class="ds-catalog">\n'

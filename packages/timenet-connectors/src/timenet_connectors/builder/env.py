@@ -1,8 +1,8 @@
-"""Run a connector's curation in an environment built from its own requirements.
+"""Run a connector's build in an environment built from its own requirements.
 
 The parent resolves the connector's ``requirements.txt`` without importing the connector (see
 :func:`timenet_connectors.discovery.requirements_for`). It layers that over a base pinned to the
-parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-curate build`` in that
+parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-build build`` in that
 environment. uv owns resolution and caching. A repeat build with an unchanged requirement set is a
 cache hit.
 """
@@ -22,13 +22,13 @@ from urllib.request import url2pathname
 
 from uv import find_uv_bin
 
-from timenet.errors import CurationError
+from timenet.errors import TimeNetBuildError
 from timenet_connectors.discovery import requirements_for
 
 
 BASE_DISTRIBUTIONS = ("timenet", "timenet-connectors")
 """Pinned to the parent's own versions, so the code that writes the TimeF bytes is the code that
-reads them back. ``timenet-connectors`` depends on ``timenet[curation]``, so the card-YAML
+reads them back. ``timenet-connectors`` depends on ``timenet[build]``, so the card-YAML
 dependencies arrive transitively and the extra never needs naming here."""
 
 
@@ -55,7 +55,7 @@ def env_spec(dataset_id: str) -> EnvSpec:
 
     Raises:
         LookupError: If no connector exists for the id.
-        CurationError: If a base distribution is not installed.
+        TimeNetBuildError: If a base distribution is not installed.
     """  # noqa: DOC502 (raised by requirements_for and _base_args, not directly here)
     return EnvSpec(base=_base_args(), requirements=requirements_for(dataset_id), python=_base_interpreter())
 
@@ -75,12 +75,12 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
         The full argument vector.
 
     Raises:
-        CurationError: If the uv executable is missing.
+        TimeNetBuildError: If the uv executable is missing.
     """
     try:
         uv = find_uv_bin()
     except FileNotFoundError as exc:
-        raise CurationError(
+        raise TimeNetBuildError(
             "cannot run an isolated build: no uv executable found. Install uv, or build in this "
             "interpreter with TIMENET_ISOLATION=off."
         ) from exc
@@ -102,7 +102,7 @@ def run_isolated(
     Args:
         dataset_id: The dataset id.
         root: The output registry directory.
-        force: Rebuild even if the version is already curated.
+        force: Rebuild even if the version is already built.
         keep_cache: Keep the raw download cache after building.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
 
@@ -110,11 +110,11 @@ def run_isolated(
         The committed version directory.
 
     Raises:
-        CurationError: If the child failed, or printed no version directory.
+        TimeNetBuildError: If the child failed, or printed no version directory.
         LookupError: If no connector exists for the id.
     """  # noqa: DOC502 (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-curate, not to build, so it goes before the subcommand.
-    argv = ["timenet-curate", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(root)]
+    # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(root)]
     if force:
         argv.append("--force")
     if keep_cache:
@@ -122,21 +122,21 @@ def run_isolated(
     command = uv_command(env_spec(dataset_id), argv)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
-    stdout, stderr, returncode = _run_curate(command, child_env)
+    stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
-        raise CurationError(
-            f"curating {dataset_id!r} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
+        raise TimeNetBuildError(
+            f"building {dataset_id!r} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
         )
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
-        raise CurationError(f"curating {dataset_id!r} printed no version directory")
+        raise TimeNetBuildError(f"building {dataset_id!r} printed no version directory")
     return Path(lines[-1])
 
 
-def _run_curate(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
-    """Run the curation child, streaming its stderr live while also capturing it.
+def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
+    """Run the build child, streaming its stderr live while also capturing it.
 
     stdout is captured whole, because its last line is the version directory. stderr is echoed to
     this process's stderr line by line, so a long download still shows progress, and captured too, so
@@ -189,15 +189,15 @@ def _base_args() -> tuple[str, ...]:
         Alternating flag/value arguments for uv.
 
     Raises:
-        CurationError: If a base distribution is not installed in this interpreter.
+        TimeNetBuildError: If a base distribution is not installed in this interpreter.
     """
     args: list[str] = []
     for name in BASE_DISTRIBUTIONS:
         try:
             dist = Distribution.from_name(name)
         except PackageNotFoundError as exc:
-            raise CurationError(
-                f"cannot build a curation environment: {name} is not installed in {sys.executable}. "
+            raise TimeNetBuildError(
+                f"cannot build a build environment: {name} is not installed in {sys.executable}. "
                 "Reinstall it, or build in this interpreter with TIMENET_ISOLATION=off."
             ) from exc
         source = _local_source_path(dist)

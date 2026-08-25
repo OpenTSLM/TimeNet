@@ -1,4 +1,4 @@
-"""Define the writable-registry contract for a backend that curation publishes datasets into.
+"""Define the writable-registry contract for a backend that build publishes datasets into.
 
 This class extends the read-only :class:`~timenet.registry.BaseRegistry` with one write primitive,
 :meth:`WritableRegistry.store`. Backends differ only in where a compiled dataset lands, for example a
@@ -10,13 +10,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry.base import BaseRegistry
 from timenet.writer import WriteProgressEvent
 
 
 class WritableRegistry(BaseRegistry, ABC):
-    """A registry that curation can publish datasets into, not just read from."""
+    """A registry that build can publish datasets into, not just read from."""
 
     @abstractmethod
     def store(
@@ -54,6 +54,6 @@ class WritableRegistry(BaseRegistry, ABC):
         """
         try:
             self.get_manifest(dataset_id, version)
-        except DatasetNotFoundError:
+        except TimeNetDatasetNotFoundError:
             return False
         return True

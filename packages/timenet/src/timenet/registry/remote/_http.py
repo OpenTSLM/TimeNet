@@ -13,7 +13,7 @@ from typing import Any, BinaryIO, cast
 
 import httpx
 
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 
 
 API_PREFIX = "/api/v1"
@@ -40,18 +40,18 @@ def _raise_for_status(response: httpx.Response) -> None:
         response: The response to check.
 
     Raises:
-        DatasetNotFoundError: On 404.
-        RegistryError: On any other 4xx/5xx, with the status and a body snippet.
+        TimeNetDatasetNotFoundError: On 404.
+        TimeNetRegistryError: On any other 4xx/5xx, with the status and a body snippet.
     """
     if not response.is_error:
         return
     body = response.text[:200]
     if response.status_code == httpx.codes.NOT_FOUND:
-        raise DatasetNotFoundError(f"registry 404 for {response.request.url}: {body}")
+        raise TimeNetDatasetNotFoundError(f"registry 404 for {response.request.url}: {body}")
     if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
         retry = response.headers.get("retry-after", "?")
-        raise RegistryError(f"registry rate-limited (429), retry after {retry}s: {body}")
-    raise RegistryError(f"registry request to {response.request.url} failed ({response.status_code}): {body}")
+        raise TimeNetRegistryError(f"registry rate-limited (429), retry after {retry}s: {body}")
+    raise TimeNetRegistryError(f"registry request to {response.request.url} failed ({response.status_code}): {body}")
 
 
 def _download_path(dataset_id: str, version: str, relpath: str) -> str:
@@ -79,12 +79,12 @@ def _redirect_target(response: httpx.Response, path: str) -> str:
         The presigned URL from the ``Location`` header.
 
     Raises:
-        RegistryError: If the response is not a redirect.
+        TimeNetRegistryError: If the response is not a redirect.
     """
     if response.is_redirect:
         return response.headers["location"]
     _raise_for_status(response)
-    raise RegistryError(f"expected a redirect from {path}, got {response.status_code}")
+    raise TimeNetRegistryError(f"expected a redirect from {path}, got {response.status_code}")
 
 
 class RegistryHttpClient:
@@ -192,7 +192,7 @@ class RegistryHttpClient:
             The presigned URL from the redirect ``Location``.
 
         Raises:
-            RegistryError: If the download endpoint does not redirect.
+            TimeNetRegistryError: If the download endpoint does not redirect.
         """  # noqa: DOC502 - raised by _redirect_target
         path = _download_path(dataset_id, version, relpath)
         response = self._client.get(path, headers=self.api_headers(), follow_redirects=False)

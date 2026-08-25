@@ -1,6 +1,6 @@
 """High-level, scheme-dispatching downloads for connectors.
 
-:func:`fetch_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
+:func:`download_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
 backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself. A
 single file is a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
 it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
@@ -26,7 +26,7 @@ from timenet_connectors.download.s3 import download_s3_object
 _DEFAULT_MAX_CONCURRENCY = 8
 
 
-__all__ = ["Artifact", "ensure_archive", "fetch_files"]
+__all__ = ["Artifact", "download_files", "ensure_archive"]
 
 
 def _safe_filename(url: str) -> str:
@@ -58,7 +58,7 @@ def _is_http(url: str) -> bool:
     return url.startswith(("http://", "https://"))
 
 
-async def fetch_files(
+async def download_files(
     artifacts: Iterable[Artifact],
     *,
     headers: Mapping[str, str] | None = None,
@@ -137,7 +137,7 @@ async def ensure_archive(  # noqa: PLR0913
     if marker.exists():
         return target
     zip_path = target / f"{key}-{name}"
-    await fetch_files([Artifact(url, zip_path, headers=headers, cookies=cookies, sha256=sha256)])
+    await download_files([Artifact(url, zip_path, headers=headers, cookies=cookies, sha256=sha256)])
     with zipfile.ZipFile(zip_path) as archive:
         archive.extractall(target)
     marker.touch()

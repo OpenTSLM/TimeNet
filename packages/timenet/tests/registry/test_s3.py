@@ -8,7 +8,7 @@ from moto.server import ThreadedMotoServer  # noqa: E402
 import pyarrow.fs as pafs  # noqa: E402
 
 from timenet.client import TimeNet  # noqa: E402
-from timenet.errors import DatasetNotFoundError, RegistryError  # noqa: E402
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # noqa: E402
 from timenet.registry import S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
 
@@ -75,7 +75,7 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
 
 def test_missing_dataset_raises(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         registry.get_manifest("no/such", "1.0.0")
 
 
@@ -91,7 +91,7 @@ def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
             raise denied
 
     monkeypatch.setattr(registry, "_client", _Denying)
-    with pytest.raises(RegistryError, match="cannot read s3://"):
+    with pytest.raises(TimeNetRegistryError, match="cannot read s3://"):
         registry._get_bytes("datasets/o/n/1.0.0/manifest.json")
 
 
@@ -104,5 +104,5 @@ def test_list_and_search_are_unsupported(tmp_path):
 
 
 def test_rejects_a_non_s3_uri(tmp_path):
-    with pytest.raises(RegistryError, match="s3://"):
+    with pytest.raises(TimeNetRegistryError, match="s3://"):
         S3Registry("https://not-s3", cache_dir=tmp_path)

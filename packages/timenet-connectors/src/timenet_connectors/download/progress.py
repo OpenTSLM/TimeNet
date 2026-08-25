@@ -1,7 +1,7 @@
 """Download-progress reporting for connectors.
 
 Downloads report progress through an ambient sink rather than a callback threaded down every layer.
-A caller (the ``timenet-curate`` CLI, or a test) installs a sink with :func:`progress_sink`. The
+A caller (the ``timenet-build`` CLI, or a test) installs a sink with :func:`progress_sink`. The
 download helpers deep in the stack call :func:`report_progress`. The event then surfaces without the
 connector, the engine, or any intermediate function growing a ``progress`` parameter. The sink is a
 :class:`~contextvars.ContextVar`, so it propagates correctly across ``asyncio.run`` and into gathered

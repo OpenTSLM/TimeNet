@@ -30,10 +30,10 @@ cli = [
 torch = [
     "torch>=2.2",
 ]
-# Curating a dataset loads and validates its human-authored card YAML against the packaged JSON Schema,
+# Building a dataset loads and validates its human-authored card YAML against the packaged JSON Schema,
 # and runs the connector in an environment built from its own requirements. The PyPI `uv` package ships
-# the binary, so nobody installs uv by hand and the curation path locates it without relying on PATH.
-curation = [
+# the binary, so nobody installs uv by hand and the build path locates it without relying on PATH.
+build = [
     "pyyaml>=6",
     "jsonschema>=4.18",
     "uv>=0.10.10",
@@ -51,7 +51,7 @@ s3 = [
     "boto3>=1.34",
 ]
 all = [
-    "timenet[cli,torch,curation,zarr,s3]",
+    "timenet[cli,torch,build,zarr,s3]",
 ]
 
 [project.scripts]

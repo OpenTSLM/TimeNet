@@ -12,11 +12,11 @@ module-level `CONNECTOR`, an `__init__.py` that re-exports it, and a `dataset.ya
 dataset id, so there is no central registry. Reusable bases (for the HuggingFace Hub and PhysioNet)
 live under `bases/`.
 
-## Curate
+## Build
 
 ```bash
-timenet-curate build timenet/hello-world        # synthetic demo
-timenet-curate build chengsenwang/tsqa          # a real dataset
+timenet-build build timenet/hello-world        # synthetic demo
+timenet-build build chengsenwang/tsqa          # a real dataset
 ```
 
 Some connectors need optional extras, e.g. `pip install 'timenet-connectors[huggingface]'`.

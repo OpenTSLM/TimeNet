@@ -44,7 +44,7 @@ class BaseRegistry(ABC):
             The :class:`~timenet.manifest.Manifest` of the dataset.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
     @abstractmethod
@@ -60,7 +60,7 @@ class BaseRegistry(ABC):
             An open binary file object.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
     @abstractmethod
@@ -81,7 +81,7 @@ class BaseRegistry(ABC):
             A handle to the manifest and files of the committed version.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
     def download_version(

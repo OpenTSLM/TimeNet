@@ -17,7 +17,7 @@ from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
-from timenet.registry.remote._download import materialize_version
+from timenet.registry.remote._download import download_version_files
 from timenet.registry.remote._fs import remote_version_filesystem, remote_version_root
 from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
@@ -74,7 +74,7 @@ class RemoteRegistry(WritableRegistry):
             The dataset's manifest.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
         resolved = self._resolve_latest(dataset_id) if version in {None, "", "latest"} else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
@@ -130,7 +130,7 @@ class RemoteRegistry(WritableRegistry):
                 filesystem=remote_version_filesystem(self._http, dataset_id, resolved, sizes),
                 root=remote_version_root(dataset_id, resolved),
             )
-        materialize_version(self._http, manifest, dataset_id, resolved, dest)
+        download_version_files(self._http, manifest, dataset_id, resolved, dest)
         return DatasetVersion.open_local(dest)
 
     def download_version(
@@ -153,7 +153,7 @@ class RemoteRegistry(WritableRegistry):
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        materialize_version(self._http, manifest, dataset_id, version, Path(dest_dir), force=force)
+        download_version_files(self._http, manifest, dataset_id, version, Path(dest_dir), force=force)
 
     def store(
         self,

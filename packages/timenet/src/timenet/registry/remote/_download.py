@@ -3,7 +3,7 @@
 Resolves each file's presigned URL and streams it concurrently into a staging directory, bounded by a
 semaphore. A single rename then swaps the staging directory into place, so an interrupted download
 never replaces a good copy. The download is async under the hood (httpx ``AsyncClient``).
-:func:`materialize_version` is the synchronous entry point. It runs the coroutine even from inside a
+:func:`download_version_files` is the synchronous entry point. It runs the coroutine even from inside a
 running event loop.
 """
 
@@ -28,7 +28,7 @@ from timenet.registry.remote._http import RegistryHttpClient, _download_path, _r
 _CHUNK_BYTES = 1 << 20
 
 
-def materialize_version(  # noqa: PLR0913
+def download_version_files(  # noqa: PLR0913
     http: RegistryHttpClient,
     manifest: Manifest,
     dataset_id: str,
@@ -116,7 +116,7 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
         The presigned URL from the redirect ``Location``.
 
     Raises:
-        RegistryError: If the download endpoint does not redirect.
+        TimeNetRegistryError: If the download endpoint does not redirect.
     """  # noqa: DOC502 - raised by _redirect_target
     path = _download_path(dataset_id, version, relpath)
     response = await client.get(path, headers=headers, follow_redirects=False)

@@ -36,7 +36,7 @@ are extras. You can add them.
 
     ```bash
     uv tool install 'timenet[cli]'       # the `timenet` command
-    uv tool install timenet-connectors   # `timenet-curate` (connector authors)
+    uv tool install timenet-connectors   # `timenet-build` (connector authors)
     # or, with pipx:  pipx install 'timenet[cli]'
     ```
 
@@ -63,7 +63,7 @@ uv sync --all-groups --all-extras
     a local registry. The build needs no network. The dataset comes from `timenet-connectors`.
 
 ```bash
-timenet-curate build timenet/hello-world
+timenet-build build timenet/hello-world
 ```
 
 The build writes into your local registry. The [`TimeNet`](client.md) client looks there by
@@ -89,4 +89,4 @@ print(df.head())
 `load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values.
 `to_arrow()` and `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
 [Client](client.md) for search, version pinning, PyTorch, and the CLI. See
-[Connectors](connectors.md) and [Curation](curation.md) to build your own datasets.
+[Connectors](connectors.md) and [Build](build.md) to build your own datasets.

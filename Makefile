@@ -23,7 +23,7 @@ install-hooks:
 
 docs: docs-datasets docs-api
 	uv run --group docs zensical build
-	uv run --group docs --extra curation python scripts/gen_site_extras.py
+	uv run --group docs --extra build python scripts/gen_site_extras.py
 
 docs-serve: docs-datasets docs-api
 	uv run --group docs zensical serve
@@ -34,7 +34,7 @@ docs-preview: docs
 	uv run python -m http.server -d site 8000
 
 docs-datasets:
-	uv run --group docs --extra curation python scripts/gen_dataset_docs.py
+	uv run --group docs --extra build python scripts/gen_dataset_docs.py
 
 docs-api:
 	uv run --group docs python scripts/gen_api_docs.py
