@@ -24,7 +24,7 @@ A [connector](connectors.md) turns a raw source into a TimeF version and publish
 [registry](registry.md). TimeF keeps its control plane in Parquet and stores series values in either
 Parquet or Zarr. The [client](client.md) reads the manifest from the registry and loads the data.
 Reading never runs connector code. Against a local registry, `load` can first build a dataset that the
-registry does not have from an installed connector (see [Curate & publish](curation.md)).
+registry does not have from an installed connector (see [Build & publish](build.md)).
 
 - [`BaseConnector`](connectors.md) is the only contract a new data source must satisfy.
 - [`TimeFDataset`](timef-dataset.md) is the in-memory model a connector populates during `convert()`.

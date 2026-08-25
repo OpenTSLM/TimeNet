@@ -6,7 +6,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import ClassificationTask
 import timenet_connectors
 from timenet_connectors import discovery
-from timenet_connectors.curate import env as env_module
+from timenet_connectors.builder import env as env_module
 
 
 def _unexpected_isolation(*args, **kwargs):

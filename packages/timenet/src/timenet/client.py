@@ -14,10 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
+from timenet.builders import find_builder
 from timenet.config import settings
-from timenet.curation import find_curator
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
@@ -171,7 +171,7 @@ class TimeNet:
         return target
 
     def load(
-        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download: str | None = None
+        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download_mode: str | None = None
     ) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
@@ -182,58 +182,58 @@ class TimeNet:
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
-        instead of starting a download and a curation. A remote registry raises as before.
+        instead of starting a download and a build. A remote registry raises as before.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
-            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
-                fetch mode; ignored for local/S3 registries.
+            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                download mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
 
         Raises:
-            DatasetNotFoundError: If the version is absent and nothing builds it, or the connector
+            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
                 declares a different version than the one asked for.
-            CurationError: If the build runs but fails.
-        """  # noqa: DOC502 (CurationError comes from the curator, not from here)
+            TimeNetBuildError: If the build runs but fails.
+        """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         try:
-            handle = self._open_version(dataset_id, version, download)
-        except DatasetNotFoundError as miss:
+            handle = self._open_version(dataset_id, version, download_mode)
+        except TimeNetDatasetNotFoundError as miss:
             if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
-            curator = find_curator(dataset_id)
-            if curator is None:
+            builder = find_builder(dataset_id)
+            if builder is None:
                 raise
             # A connector produces one declared version. Reject a pin it cannot satisfy before the
-            # build runs, so a wrong pin fails fast instead of after a full curation. Sentinels are
+            # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
             # not pins, so a fresh build satisfies them.
             if version not in {None, "", "latest"}:
-                declared = curator.declared_version(dataset_id)
+                declared = builder.declared_version(dataset_id)
                 if declared is not None and version != declared:
-                    raise DatasetNotFoundError(
+                    raise TimeNetDatasetNotFoundError(
                         f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
                     ) from miss
-            curator.build(dataset_id, self._registry.root)
-            handle = self._open_version(dataset_id, version, download)
+            builder.build(dataset_id, self._registry.root)
+            handle = self._open_version(dataset_id, version, download_mode)
         return TimeFReader(handle).read()
 
-    def _open_version(self, dataset_id: str, version: str | None, download: str | None) -> DatasetVersion:
+    def _open_version(self, dataset_id: str, version: str | None, download_mode: str | None) -> DatasetVersion:
         """Open a version handle, honouring a remote registry's fetch-mode override.
 
         Args:
             dataset_id: The bare dataset id.
             version: The resolved version, or ``None`` for the latest.
-            download: ``"full"`` / ``"on_demand"`` for a remote registry, else ignored.
+            download_mode: ``"full"`` / ``"on_demand"`` for a remote registry, else ignored.
 
         Returns:
             The registry's handle to the version.
         """
-        if download is not None and isinstance(self._registry, RemoteRegistry):
-            return self._registry.open_version(dataset_id, version, mode=download)
+        if download_mode is not None and isinstance(self._registry, RemoteRegistry):
+            return self._registry.open_version(dataset_id, version, mode=download_mode)
         return self._registry.open_version(dataset_id, version)
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:

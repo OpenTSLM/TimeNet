@@ -32,8 +32,8 @@ def test_discovery_resolves_and_lists():
 def test_build_then_load_round_trips(tmp_path):
     registry = tmp_path / "registry"
 
-    # PRODUCE: curate the demo dataset into a local registry directory.
-    result = runner.invoke(curate_app, ["build", "timenet/hello-world", "--out", str(registry), "--no-isolation"])
+    # PRODUCE: build the demo dataset into a local registry directory.
+    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(registry), "--no-isolation"])
     assert result.exit_code == 0, result.output
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
@@ -71,8 +71,8 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
 
 
-def test_curate_build_defaults_to_home_registry(clean_env, tmp_path):
-    assert runner.invoke(curate_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
+def test_build_defaults_to_home_registry(clean_env, tmp_path):
+    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (tmp_path / "home" / "registry" / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
 
@@ -80,7 +80,7 @@ def test_build_honors_timenet_registry(clean_env, monkeypatch, tmp_path):
     registry = tmp_path / "elsewhere"
     monkeypatch.setenv("TIMENET_REGISTRY", str(registry))
 
-    assert runner.invoke(curate_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
+    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     # The SDK resolves $TIMENET_REGISTRY the same way, so it reads back what the build just wrote.
     assert TimeNet(storage_path=tmp_path / "store").list()[0].dataset_id == "timenet/hello-world"
@@ -90,7 +90,7 @@ def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "elsewhere"))
     out = tmp_path / "out"
 
-    result = runner.invoke(curate_app, ["build", "timenet/hello-world", "--out", str(out), "--no-isolation"])
+    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(out), "--no-isolation"])
     assert result.exit_code == 0
     assert (out / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     assert not (tmp_path / "elsewhere").exists()
@@ -122,12 +122,12 @@ def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     cache = settings().cache_dir / "timenet" / "hello-world"
 
-    built = runner.invoke(curate_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1"), "--no-isolation"])
+    built = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1"), "--no-isolation"])
     assert built.exit_code == 0
     assert not cache.exists()  # cleaned by default after a successful build
 
     keep = runner.invoke(
-        curate_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r2"), "--keep-cache", "--no-isolation"]
+        build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r2"), "--keep-cache", "--no-isolation"]
     )
     assert keep.exit_code == 0
     assert cache.exists()  # retained with --keep-cache

@@ -30,7 +30,7 @@ from timenet.engine import run_pipeline
 from timenet.errors import TimeNetRegistryError
 from timenet.registry import default_registry_path
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet_connectors.curate.env import run_isolated
+from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 

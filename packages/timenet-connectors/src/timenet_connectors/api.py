@@ -21,7 +21,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
     here loads at once with ``TimeNet().load(dataset_id)``.
 
-    Like ``timenet-curate build``, this runs the connector in an environment built from its
+    Like ``timenet-build build``, this runs the connector in an environment built from its
     ``requirements.txt``. Set ``TIMENET_ISOLATION=off`` to run it in this interpreter instead, which
     is what you want while writing a connector.
 
@@ -47,7 +47,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
         _check_version(dataset_id, version)
     root = Path(out).expanduser() if out is not None else default_registry_path()
     if settings().isolation == "on":
-        from timenet_connectors.curate.env import run_isolated  # noqa: PLC0415
+        from timenet_connectors.builder.env import run_isolated  # noqa: PLC0415
 
         return run_isolated(dataset_id, root, force=force)
 
@@ -71,8 +71,8 @@ def _check_version(dataset_id: str, version: str) -> None:
     Raises:
         TimeFValidationError: If the connector declares a different version.
         LookupError: If no connector exists for the id.
-        InvalidCardError: If the connector's card is missing or invalid.
-    """  # noqa: DOC502 (LookupError and InvalidCardError come from the calls below)
+        TimeNetInvalidCardError: If the connector's card is missing or invalid.
+    """  # noqa: DOC502 (LookupError and TimeNetInvalidCardError come from the calls below)
     from timenet.errors import TimeFValidationError  # noqa: PLC0415
     from timenet.types import DatasetMetadata  # noqa: PLC0415
     from timenet_connectors.discovery import connector_dir  # noqa: PLC0415

@@ -6,8 +6,8 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from timenet_connectors.curate import cli as cli_module
-from timenet_connectors.curate.cli import app
+from timenet_connectors.builder import cli as cli_module
+from timenet_connectors.builder.cli import app
 
 
 runner = CliRunner()
@@ -124,7 +124,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     registry = tmp_path / "registry"
     env = {**os.environ, "TIMENET_HOME": str(tmp_path / "home")}
     env.pop("TIMENET_ISOLATION", None)  # default is "on"; make sure nothing forces it off
-    run_cli = [sys.executable, "-c", "from timenet_connectors.curate.cli import main; main()"]
+    run_cli = [sys.executable, "-c", "from timenet_connectors.builder.cli import main; main()"]
     result = subprocess.run(
         [*run_cli, "build", "timenet/hello-world", "--out", str(registry)],
         env=env,

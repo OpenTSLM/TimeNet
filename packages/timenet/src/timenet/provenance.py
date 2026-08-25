@@ -8,7 +8,7 @@ from typing import Any
 def build_env() -> dict[str, Any]:
     """Describe this process's Python version and installed packages.
 
-    Under isolated curation the recorded set is exactly the base, the connector's requirements, and
+    Under an isolated build the recorded set is exactly the base, the connector's requirements, and
     their transitives. Under ``--no-isolation`` it is the whole ambient environment, which is noisier
     but still the truth about what produced the dataset.
 

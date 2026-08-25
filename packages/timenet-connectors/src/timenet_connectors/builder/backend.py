@@ -1,17 +1,17 @@
-"""The curation backend the SDK reaches through the ``timenet.curators`` entry point."""
+"""The build backend the SDK reaches through the ``timenet.builders`` entry point."""
 
 from pathlib import Path
 
 from timenet.config import settings
 from timenet.engine import run_pipeline
-from timenet_connectors.curate.env import run_isolated
+from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import connector_dir, has_connector, resolve
 
 
-class ConnectorCurator:
+class ConnectorBuilder:
     """Builds a dataset by running its connector in an environment built from its requirements."""
 
-    def knows(self, dataset_id: str) -> bool:  # noqa: PLR6301 (CuratorBackend protocol method)
+    def knows(self, dataset_id: str) -> bool:  # noqa: PLR6301 (BuilderBackend protocol method)
         """Report whether a connector package exists for the id, without importing it.
 
         Args:
@@ -31,12 +31,12 @@ class ConnectorCurator:
         Returns:
             The declared version string, or ``None`` if no readable card exists.
         """
-        from timenet.errors import InvalidCardError  # noqa: PLC0415
+        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
         from timenet.types import DatasetMetadata  # noqa: PLC0415
 
         try:
             card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
-        except (LookupError, InvalidCardError):
+        except (LookupError, TimeNetInvalidCardError):
             return None
         return str(card.dataset_version)
 
@@ -50,7 +50,7 @@ class ConnectorCurator:
         Args:
             dataset_id: The dataset id.
             root: The output registry directory.
-            force: Rebuild even if the version is already curated.
+            force: Rebuild even if the version is already built.
 
         Returns:
             The committed version directory.

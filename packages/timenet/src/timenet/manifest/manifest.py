@@ -65,7 +65,7 @@ class Manifest:
     build_env: dict[str, Any] = field(default_factory=dict)
     """The Python version and package set that produced this version.
 
-    Provenance only: nothing reads it to interpret the data. It is here so a curator can answer what
+    Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
     timef_format_version: int = 1
