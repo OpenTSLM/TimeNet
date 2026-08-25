@@ -392,11 +392,24 @@ class TimeFReader:
         Returns:
             A :class:`TimeFDataset` with lazy per-series loaders and the reconstructed schema/tasks.
         """
+        samples = list(self.iter_samples())
+        tasks = self.tasks
+        # A streamed-written dataset stores empty sample.task_ids: its tasks were never held in memory
+        # to populate them. read() materializes every task, so rebuild the reverse map here, or
+        # tasks_for() and the torch view would return no tasks. This is idempotent for a materialized
+        # dataset, whose task_ids already round-trip through the sample rows.
+        by_id = {sample.sample_id: sample for sample in samples}
+        for task in tasks:
+            for sample_id in task.sample_ids:
+                sample = by_id.get(sample_id)
+                if sample is not None and task.id not in sample.task_ids:
+                    sample.task_ids = (*sample.task_ids, task.id)
         return TimeFDataset.from_parts(
             metadata=self._manifest.metadata,
-            samples=list(self.iter_samples()),
-            tasks=self.tasks,
+            samples=samples,
+            tasks=tasks,
             schema=self._manifest.schema,
+            registered_annotations=self._read_registered_annotations(),
         )
 
     def iter_samples(self, sample_ids: Iterable[str] | None = None) -> Iterator[Sample]:
@@ -572,6 +585,32 @@ class TimeFReader:
                 f"descriptor says {descriptor.value_type!r}"
             )
         return annotation
+
+    def _read_registered_annotations(self) -> tuple[Annotation, ...]:
+        """Rebuild annotations that no sample carries: they exist only for tasks to reference.
+
+        These rows store an empty ``sample_ids``. :meth:`iter_samples` never reaches them, since no
+        sample lists them, so :meth:`read` pulls them here to restore the dataset's registered
+        annotations. The manifest count gates the scan, so a dataset with none (the common case) pays
+        nothing.
+
+        Returns:
+            The registered annotations, in stored order.
+        """
+        if self._manifest.counts.registered_annotations == 0:
+            return ()
+        registered: list[Annotation] = []
+        with self._as_format_error():
+            for part in self._manifest.files.annotations:
+                table = pq.read_table(
+                    self._version.path(part.path),
+                    filesystem=self._fs,
+                    columns=["id", "key", "value", "span", "sample_ids"],
+                )
+                for row in table.to_pylist():
+                    if not row["sample_ids"]:
+                        registered.append(self._decode_annotation(row))
+        return tuple(registered)
 
     def _index_table(self) -> _PrunedControlTable:
         """Return the pruned view over the time-series index, built on first lookup.

@@ -59,9 +59,13 @@ def remove_samples(dataset: TimeFDataset, sample_ids: Iterable[str], *, cascade:
         for sample in dataset.samples
         if sample.sample_id not in remove
     }
-    removed_task_ids = _tasks_to_remove(dataset, remove, annotations_by_sample, cascade=cascade)
+    # Registered annotations no sample carries survive any sample removal, and tasks reference them
+    # regardless of which samples remain, so they are always reachable.
+    registered = dataset.registered_annotations
+    registered_ids = frozenset(annotation.id for annotation in registered)
+    removed_task_ids = _tasks_to_remove(dataset, remove, annotations_by_sample, registered_ids, cascade=cascade)
 
-    tasks = _rebuild_tasks(dataset, removed_task_ids, surviving_ids, annotations_by_sample)
+    tasks = _rebuild_tasks(dataset, removed_task_ids, surviving_ids, annotations_by_sample, registered_ids)
     surviving_task_ids = {task.id for task in tasks}
     samples = [
         replace(sample, task_ids=tuple(tid for tid in sample.task_ids if tid in surviving_task_ids))
@@ -73,7 +77,13 @@ def remove_samples(dataset: TimeFDataset, sample_ids: Iterable[str], *, cascade:
     # overwrites it anyway, and `dataset.schema or dataset.derive_schema()` mutated the input
     # dataset's cached schema as a side effect. Re-deriving the schema from the survivors also
     # drops spec, annotation, and task types that existed only on a removed sample.
-    edited = TimeFDataset.from_parts(metadata=dataset.metadata, samples=samples, tasks=tasks, schema=DatasetSchema())
+    edited = TimeFDataset.from_parts(
+        metadata=dataset.metadata,
+        samples=samples,
+        tasks=tasks,
+        schema=DatasetSchema(),
+        registered_annotations=registered,
+    )
     edited.derive_schema()
     return edited
 
@@ -82,6 +92,7 @@ def _tasks_to_remove(
     dataset: TimeFDataset,
     remove: set[str],
     annotations_by_sample: Mapping[str, frozenset[str]],
+    registered_ids: frozenset[str],
     *,
     cascade: bool,
 ) -> set[str]:
@@ -101,7 +112,9 @@ def _tasks_to_remove(
     Raises:
         TimeFEditError: If a task dangles and ``cascade`` is off.
     """
-    invalid = {task.id for task in dataset.tasks if _task_invalidated(task, remove, annotations_by_sample)}
+    invalid = {
+        task.id for task in dataset.tasks if _task_invalidated(task, remove, annotations_by_sample, registered_ids)
+    }
     if invalid and not cascade:
         raise TimeFEditError(
             f"removing {sorted(remove)} would dangle tasks {sorted(invalid)}; pass cascade=True to remove them"
@@ -121,10 +134,13 @@ def _tasks_to_remove(
     return invalid
 
 
-def _reachable_annotation_ids(task: Task, annotations_by_sample: Mapping[str, frozenset[str]]) -> set[str]:
+def _reachable_annotation_ids(
+    task: Task, annotations_by_sample: Mapping[str, frozenset[str]], registered_ids: frozenset[str]
+) -> set[str]:
     """Return the annotation ids that ``task`` can still resolve.
 
-    These are the ids on the samples the task keeps.
+    These are the ids on the samples the task keeps, plus every registered annotation (which no sample
+    carries, so a sample removal never strips it).
 
     :meth:`~timenet.dataset.TimeFDataset.add_task` validates a task's annotation references
     against its own samples, not against the whole dataset. So an edit must repair the
@@ -140,13 +156,15 @@ def _reachable_annotation_ids(task: Task, annotations_by_sample: Mapping[str, fr
     Returns:
         The annotation ids still reachable from the task's surviving samples.
     """
-    reachable: set[str] = set()
+    reachable: set[str] = set(registered_ids)
     for sample_id in task.sample_ids:
         reachable |= annotations_by_sample.get(sample_id, frozenset())
     return reachable
 
 
-def _task_invalidated(task: Task, remove: set[str], annotations_by_sample: Mapping[str, frozenset[str]]) -> bool:
+def _task_invalidated(
+    task: Task, remove: set[str], annotations_by_sample: Mapping[str, frozenset[str]], registered_ids: frozenset[str]
+) -> bool:
     """Return whether removing ``remove`` strips a required reference from ``task``.
 
     A payload sample reference is required by construction. For example, a forecast needs its
@@ -169,7 +187,7 @@ def _task_invalidated(task: Task, remove: set[str], annotations_by_sample: Mappi
             return True
     if task.sample_ids and all(sid in remove for sid in task.sample_ids):
         return True
-    reachable = _reachable_annotation_ids(task, annotations_by_sample)
+    reachable = _reachable_annotation_ids(task, annotations_by_sample, registered_ids)
     return any(annotation_id not in reachable for annotation_id in task.target_annotation_ids)
 
 
@@ -178,6 +196,7 @@ def _rebuild_tasks(
     removed_task_ids: set[str],
     surviving_ids: set[str],
     annotations_by_sample: Mapping[str, frozenset[str]],
+    registered_ids: frozenset[str],
 ) -> list[Task]:
     """Rebuild the surviving tasks. Strip out unreachable sample, annotation, and from-task references.
 
@@ -194,7 +213,7 @@ def _rebuild_tasks(
     for task in dataset.tasks:
         if task.id in removed_task_ids:
             continue
-        reachable = _reachable_annotation_ids(task, annotations_by_sample)
+        reachable = _reachable_annotation_ids(task, annotations_by_sample, registered_ids)
         rebuilt[task.id] = replace(
             task,
             sample_ids=tuple(sid for sid in task.sample_ids if sid in surviving_ids),
@@ -254,6 +273,7 @@ def edit_version(
             samples=edited.samples,
             tasks=edited.tasks,
             schema=DatasetSchema(),
+            registered_annotations=edited.registered_annotations,
         )
         edited.derive_schema()
 

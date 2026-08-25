@@ -11,6 +11,9 @@ class ManifestCounts:
     """Total number of samples in the dataset."""
     annotations: int = 0
     """Number of unique annotation ids across all samples."""
+    registered_annotations: int = 0
+    """Number of task-referenced annotations that no sample carries. Lets the reader skip the annotation
+    scan that recovers them when there are none."""
     tasks: dict[str, int] = field(default_factory=dict)
     """Count of tasks keyed by task type."""
     time_series_chunks: int = 0

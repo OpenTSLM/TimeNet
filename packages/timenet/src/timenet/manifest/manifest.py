@@ -336,6 +336,7 @@ def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
     return {
         "samples": counts.samples,
         "annotations": counts.annotations,
+        "registered_annotations": counts.registered_annotations,
         "tasks": dict(counts.tasks),
         "time_series_chunks": counts.time_series_chunks,
         "time_series_index_rows": counts.time_series_index_rows,
@@ -348,6 +349,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
         return ManifestCounts(
             samples=data.get("samples", 0),
             annotations=data.get("annotations", 0),
+            registered_annotations=data.get("registered_annotations", 0),
             tasks=dict(data.get("tasks", {})),
             time_series_chunks=data.get("time_series_chunks", 0),
             time_series_index_rows=data.get("time_series_index_rows", 0),
