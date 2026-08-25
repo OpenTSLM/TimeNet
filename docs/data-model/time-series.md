@@ -1,6 +1,6 @@
 ---
 icon: lucide/waypoints
-description: "Time series: one channel of a sample, float32 values over time, typed by a spec."
+description: "Time series: one channel of a sample, its values typed by a spec."
 tags:
   - guide
   - concepts
@@ -8,7 +8,7 @@ tags:
 
 # Time series
 
-A time series is one channel of a [sample](samples.md): `float32` values over time. A sample carries one
+A time series is one channel of a [sample](samples.md): typed values over time. A sample carries one
 or more time series. Each one has a `time_series_id` (for example, the vibration and temperature channels
 of a machine). The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
 offset is always in microseconds, and a sampling rate is always in hertz. A g-scale accelerometer channel
@@ -49,7 +49,7 @@ from timenet.client import TimeNet
 
 dataset = TimeNet().load("chengsenwang/tsqa")
 series = dataset.samples[0].time_series[0]
-values = series.to_numpy()   # a float32 numpy array
+values = series.to_numpy()   # a numpy array in the spec's dtype
 ```
 
 ## Sharing across samples

@@ -139,6 +139,40 @@ def test_default_row_group_holds_a_full_sample():
     assert DEFAULT_ROW_GROUP_TARGET_BYTES // 4 >= SAMPLE_MAX_VALUES
 
 
+# ---- the dtype-aware rule ----------------------------------------------------------------------
+
+
+def test_bool_values_select_plain():
+    assert select_value_encoding([np.array([True, False, True])], dtype="bool") is ValueEncoding.PLAIN
+
+
+def test_low_cardinality_str_selects_dictionary():
+    # Strings share the cardinality rule: few distinct labels encode as a dictionary.
+    assert (
+        select_value_encoding([np.array(["normal", "afib", "normal", "vt"], dtype=object)], dtype="str")
+        is ValueEncoding.DICTIONARY
+    )
+
+
+def test_distinct_patterns_count_same_width_ints():
+    # int16 is read through a uint16 view, so [1, 1, 2, 3] holds three distinct stored patterns.
+    assert distinct_bit_patterns(np.array([1, 1, 2, 3], dtype=np.int16)) == 3
+
+
+def test_high_cardinality_ints_select_plain_not_byte_stream_split():
+    # BYTE_STREAM_SPLIT is a float transpose; an integer past the threshold must land on PLAIN.
+    values = np.arange(DICT_MAX_CARDINALITY + 1, dtype=np.int32)
+    assert select_value_encoding([values], dtype="int32") is ValueEncoding.PLAIN
+
+
+def test_encoding_for_cardinality_delegates_high_cardinality_to_dtype():
+    # The count-to-encoding rule lives in one function: floats get the byte split, other numerics plain.
+    assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="float32") is ValueEncoding.BYTE_STREAM_SPLIT
+    assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="float64") is ValueEncoding.BYTE_STREAM_SPLIT
+    assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="int32") is ValueEncoding.PLAIN
+    assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="uint16") is ValueEncoding.PLAIN
+
+
 # ---- end-to-end selection ----------------------------------------------------------------------
 
 

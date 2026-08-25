@@ -383,7 +383,7 @@ class TimeFWriter:
                 non-finite inexact values, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
-        expected_type = pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+        expected_type = pa.string() if ts.spec.dtype == "str" else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
         if ts.spec.value_shape:
             valid_type = (
                 isinstance(values, pa.FixedShapeTensorArray)

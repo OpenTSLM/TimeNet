@@ -71,8 +71,8 @@ annotations, tasks, and the time-series index are always Parquet. The manifest r
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<float32>` rows. Each file also has a `list<int64>` `time_offsets_us` column. This column is null unless the series stores per-value time offsets. The backend supports scalar float32 values only. | `(shard path, row group, row offset)` |
-| `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. | `(array path, step start, –)` |
+| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<{dtype}>` rows. Each file also has a `list<int64>` `time_offsets_us` column, null unless the series stores per-value time offsets. One shard carries one modality, so its `values` element type is the spec's dtype. `str` stores text and auto-selects the dictionary encoding. The backend supports scalar values only. | `(shard path, row group, row offset)` |
+| `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. The backend stores every scalar dtype except `str`. | `(array path, step start, –)` |
 
 Each backend chunks the data in its own way. Parquet needs the logical `chunk_max_bytes` split to
 pack series into row groups. Zarr chunks the storage itself. As a result, its index carries one
@@ -84,8 +84,14 @@ read, change, and write the object again for each series.
 The Zarr backend needs the `zarr` extra (`pip install 'timenet[zarr]'`). The core package never
 imports the extra. A Zarr series can hold embeddings, pose tensors, spectrogram frames, or image
 sequences. Recordings can have different durations. Every series that shares a `spec_type` must have
-the same dtype and trailing shape. Parquet deliberately rejects N-D or non-float32 specs, until a
-portable mixed-dtype layout exists. A [copy-on-write edit](#copy-on-write-edits) keeps the backend of
+the same dtype and trailing shape. Parquet deliberately rejects N-D specs, which stay on Zarr. The
+Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer types,
+`bool`, and `str`. The Zarr backend stores every scalar dtype **except `str`**: it has no dictionary
+layer, so string channels inflate on disk and read slowly, and the writer rejects them. A dataset's
+values plane uses **one** backend for the whole dataset (the manifest's single `values_backend`
+field), so a dataset with a `str` channel must be entirely Parquet, and a dataset needing N-D
+tensors must be entirely Zarr. They cannot be mixed per channel.
+A [copy-on-write edit](#copy-on-write-edits) keeps the backend of
 the base version, unless overridden.
 
 ## Streaming and chunking
@@ -100,8 +106,8 @@ chunks until they reach `row_group_target_bytes`, then flushes them as one row g
 never spans shards. As a result, the `(chunk_file, chunk_major_idx, chunk_minor_idx)` pointers in the
 index are exact.
 
-A hard limit caps a row group at 2³¹ values, because `list<float32>` uses 32-bit offsets. The
-byte-based flush keeps the row group well under this limit.
+The 2³¹ element cap on a row group comes from the 32-bit offsets of the `values` list column, so the
+cap does not depend on the element type. The byte-based flush keeps the row group well under it.
 
 ## Encodings
 

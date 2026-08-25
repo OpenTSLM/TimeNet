@@ -488,7 +488,7 @@ def fig_dataset():
 
 
 def fig_time_series():
-    """A time series: one channel of float32 values over time."""
+    """A time series: one channel of typed values over time."""
     t = np.linspace(0, 8, 500)
     fig, ax = plt.subplots(figsize=(6.8, 1.8))
     fig.subplots_adjust(left=0.13, right=0.97, top=0.78, bottom=0.2)

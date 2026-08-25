@@ -130,6 +130,15 @@ def test_units_roundtrip_as_pint():
     assert isinstance(spec.unit_value, pint.Unit)
 
 
+def test_str_dtype_round_trips():
+    m = _manifest()
+    spec = m.schema.time_series_specs[0]
+    str_spec = replace(spec, dtype="str")
+    m = replace(m, schema=replace(m.schema, time_series_specs=(str_spec,)))
+    restored = Manifest.from_dict(m.to_dict())
+    assert restored.schema.time_series_specs[0].dtype == "str"
+
+
 def test_unsupported_format_version_rejected():
     d = _manifest().to_dict()
     d["timef_format_version"] = 99

@@ -98,7 +98,7 @@ class TimeSeries:
     @classmethod
     def from_values(  # noqa: PLR0913
         cls,
-        values: np.ndarray | Sequence[float],
+        values: np.ndarray | Sequence[bool | int | float | str],
         *,
         spec: TimeSeriesSpec,
         channel: str,
@@ -106,15 +106,15 @@ class TimeSeries:
         source_id: str | None = None,
         time_series_id: str | None = None,
     ) -> "TimeSeries":
-        """Build a series from already-materialized values and wrap them in a float32 loader.
+        """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
-        Use this path for connectors that hold an in-memory array. It caches ``values`` as a float32
-        Arrow array behind the loader and takes ``n_values`` from the array length. For lazy sources like
-        files or remote shards, use the ``loader=`` constructor directly and state the length, because
-        nothing has read the values yet.
+        Use this path for connectors that hold an in-memory array. It caches ``values`` as an Arrow
+        array cast to the spec's dtype behind the loader and takes ``n_values`` from the array length.
+        For lazy sources like files or remote shards, use the ``loader=`` constructor directly and
+        state the length, because nothing has read the values yet.
 
         Args:
-            values: The channel's values (cast to float32).
+            values: The channel's values (cast to the spec's dtype; for a ``"str"`` spec, the strings).
             spec: The series' measurement-modality spec.
             channel: The channel name.
             time_axis: Where the values sit in time.
@@ -124,7 +124,7 @@ class TimeSeries:
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        array = pa.array(np.asarray(values, dtype=np.float32))
+        array = pa.array(values) if spec.dtype == "str" else pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         return cls(
             spec=spec,
             channel=channel,
@@ -138,7 +138,7 @@ class TimeSeries:
     @classmethod
     def from_irregular(  # noqa: PLR0913
         cls,
-        values: np.ndarray | Sequence[float],
+        values: np.ndarray | Sequence[bool | int | float | str],
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
@@ -153,7 +153,7 @@ class TimeSeries:
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
 
         Args:
-            values: The channel's values (cast to float32).
+            values: The channel's values (cast to the spec's dtype; for a ``"str"`` spec, the strings).
             time_offsets_us: One time offset per value, in microseconds from the sample's relative zero.
             spec: The series' measurement-modality spec.
             channel: The channel name.
@@ -167,7 +167,7 @@ class TimeSeries:
             TimeFValidationError: If the time offsets are unusable, or if there is not exactly one per
                 value.
         """
-        array = pa.array(np.asarray(values, dtype=np.float32))
+        array = pa.array(values) if spec.dtype == "str" else pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         time_offsets = to_time_offsets_us(time_offsets_us)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(

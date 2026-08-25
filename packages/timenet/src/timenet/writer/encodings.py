@@ -58,6 +58,21 @@ ANNOTATIONS_DICTIONARY = ["key"]
 _TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
 
 
+def byte_stream_split_supported(dtype: str) -> bool:
+    """Return whether BYTE_STREAM_SPLIT is a legal encoding for a values dtype (floats only).
+
+    BYTE_STREAM_SPLIT transposes each value into per-byte planes, which is only meaningful for
+    floats. Integers and bools must never be routed to it.
+
+    Args:
+        dtype: The values dtype as its string name (``"float32"``, ``"int16"``, ``"bool"`` ...).
+
+    Returns:
+        ``True`` for ``float32`` and ``float64``, ``False`` for any other dtype.
+    """
+    return dtype in {"float32", "float64"}
+
+
 def shard_dictionary(value_encoding: ValueEncoding) -> list[str]:
     """Return the shard columns to dictionary-encode.
 
