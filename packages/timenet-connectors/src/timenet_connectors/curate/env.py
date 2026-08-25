@@ -16,6 +16,7 @@ from pathlib import Path
 import shlex
 import subprocess  # noqa: S404 - the command is a fixed argument vector
 import sys
+import threading
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -94,8 +95,9 @@ def run_isolated(
 ) -> Path:
     """Build a dataset in its own environment and return the committed version directory.
 
-    The child's stderr is inherited, so a long download shows its progress live. Its stdout is
-    captured, because the last line is the version directory.
+    The child's stderr is streamed live (a long download still shows progress) and also captured, so
+    a failed build's message carries the child's own error. Its stdout is captured, because the last
+    line is the version directory.
 
     Args:
         dataset_id: The dataset id.
@@ -120,18 +122,50 @@ def run_isolated(
     command = uv_command(env_spec(dataset_id), argv)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
-    result = subprocess.run(  # noqa: S603
-        command, env=child_env, stdout=subprocess.PIPE, text=True, check=False
-    )
-    if result.returncode != 0:
+    stdout, stderr, returncode = _run_curate(command, child_env)
+    if returncode != 0:
+        tail = "\n".join(stderr.splitlines()[-15:]).strip()
+        detail = f"\n{tail}" if tail else " The child produced no error output."
         raise CurationError(
-            f"curating {dataset_id!r} failed with exit code {result.returncode}. "
-            f"See the output above for the cause. Command: {shlex.join(command)}."
+            f"curating {dataset_id!r} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
         )
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
         raise CurationError(f"curating {dataset_id!r} printed no version directory")
     return Path(lines[-1])
+
+
+def _run_curate(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
+    """Run the curation child, streaming its stderr live while also capturing it.
+
+    stdout is captured whole, because its last line is the version directory. stderr is echoed to
+    this process's stderr line by line, so a long download still shows progress, and captured too, so
+    a failure carries the child's own error.
+
+    Args:
+        command: The full argument vector to run.
+        env: The child's environment.
+
+    Returns:
+        The child's captured stdout, its captured stderr, and its exit code.
+    """
+    process = subprocess.Popen(  # noqa: S603
+        command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    captured: list[str] = []
+
+    def tee_stderr() -> None:
+        for line in process.stderr or []:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            captured.append(line)
+
+    pump = threading.Thread(target=tee_stderr)
+    pump.start()
+    stdout = process.stdout.read() if process.stdout is not None else ""
+    process.wait()
+    pump.join()
+    return stdout, "".join(captured), process.returncode
 
 
 def _base_interpreter() -> str:

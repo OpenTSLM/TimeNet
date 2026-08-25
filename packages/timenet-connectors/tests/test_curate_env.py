@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -106,58 +107,39 @@ def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
 def test_run_isolated_disables_isolation_in_the_child(monkeypatch, tmp_path):
     captured = {}
 
-    class _Result:
-        returncode = 0
-        stdout = f"{tmp_path}/timenet/hello-world/1.0.0\n"
+    def _fake(command, env):
+        captured["env"] = env
+        return f"{tmp_path}/timenet/hello-world/1.0.0\n", "", 0
 
-    def _fake_run(command, **kwargs):
-        captured["env"] = kwargs["env"]
-        return _Result()
-
-    monkeypatch.setattr(env_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(env_module, "_run_curate", _fake)
     run_isolated("timenet/hello-world", tmp_path)
 
     assert captured["env"]["TIMENET_ISOLATION"] == "off"
 
 
 def test_run_isolated_returns_the_version_directory(monkeypatch, tmp_path):
-    class _Result:
-        returncode = 0
-        stdout = f"noise\n{tmp_path}/timenet/hello-world/1.0.0\n"
-
-    monkeypatch.setattr(env_module.subprocess, "run", lambda command, **kwargs: _Result())
+    stdout = f"noise\n{tmp_path}/timenet/hello-world/1.0.0\n"
+    monkeypatch.setattr(env_module, "_run_curate", lambda command, env: (stdout, "", 0))
 
     assert run_isolated("timenet/hello-world", tmp_path) == tmp_path / "timenet/hello-world/1.0.0"
 
 
 def test_run_isolated_raises_on_a_failed_child(monkeypatch, tmp_path):
-    class _Result:
-        returncode = 2
-        stdout = ""
-
-    monkeypatch.setattr(env_module.subprocess, "run", lambda command, **kwargs: _Result())
+    monkeypatch.setattr(env_module, "_run_curate", lambda command, env: ("", "", 2))
 
     with pytest.raises(CurationError, match="exit code 2"):
         run_isolated("timenet/hello-world", tmp_path)
 
 
-def test_run_isolated_failure_message_points_at_the_child_output(monkeypatch, tmp_path):
-    class _Result:
-        returncode = 1
-        stdout = ""
+def test_run_isolated_failure_message_includes_the_child_stderr(monkeypatch, tmp_path):
+    monkeypatch.setattr(env_module, "_run_curate", lambda command, env: ("", "boom: the disk is full", 1))
 
-    monkeypatch.setattr(env_module.subprocess, "run", lambda command, **kwargs: _Result())
-
-    with pytest.raises(CurationError, match="See the output above"):
+    with pytest.raises(CurationError, match="the disk is full"):
         run_isolated("timenet/hello-world", tmp_path)
 
 
 def test_run_isolated_raises_when_the_child_prints_no_directory(monkeypatch, tmp_path):
-    class _Result:
-        returncode = 0
-        stdout = "\n"
-
-    monkeypatch.setattr(env_module.subprocess, "run", lambda command, **kwargs: _Result())
+    monkeypatch.setattr(env_module, "_run_curate", lambda command, env: ("\n", "", 0))
 
     with pytest.raises(CurationError, match="no version directory"):
         run_isolated("timenet/hello-world", tmp_path)
@@ -166,15 +148,11 @@ def test_run_isolated_raises_when_the_child_prints_no_directory(monkeypatch, tmp
 def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
     captured = {}
 
-    class _Result:
-        returncode = 0
-        stdout = f"{tmp_path}/x\n"
-
-    def _fake_run(command, **kwargs):
+    def _fake(command, env):
         captured["command"] = command
-        return _Result()
+        return f"{tmp_path}/x\n", "", 0
 
-    monkeypatch.setattr(env_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(env_module, "_run_curate", _fake)
     run_isolated("timenet/hello-world", tmp_path, force=True, keep_cache=True)
 
     assert "--force" in captured["command"]
@@ -184,15 +162,11 @@ def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
 def test_run_isolated_forwards_quiet_ahead_of_the_subcommand(monkeypatch, tmp_path):
     captured = {}
 
-    class _Result:
-        returncode = 0
-        stdout = f"{tmp_path}/x\n"
-
-    def _fake_run(command, **kwargs):
+    def _fake(command, env):
         captured["command"] = command
-        return _Result()
+        return f"{tmp_path}/x\n", "", 0
 
-    monkeypatch.setattr(env_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(env_module, "_run_curate", _fake)
     run_isolated("timenet/hello-world", tmp_path, quiet=True)
 
     command = captured["command"]
@@ -203,18 +177,22 @@ def test_run_isolated_forwards_quiet_ahead_of_the_subcommand(monkeypatch, tmp_pa
 def test_run_isolated_omits_quiet_when_the_parent_is_not_quiet(monkeypatch, tmp_path):
     captured = {}
 
-    class _Result:
-        returncode = 0
-        stdout = f"{tmp_path}/x\n"
-
-    def _fake_run(command, **kwargs):
+    def _fake(command, env):
         captured["command"] = command
-        return _Result()
+        return f"{tmp_path}/x\n", "", 0
 
-    monkeypatch.setattr(env_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(env_module, "_run_curate", _fake)
     run_isolated("timenet/hello-world", tmp_path)
 
     assert "--quiet" not in captured["command"]
+
+
+def test_run_curate_captures_stdout_and_stderr_and_the_exit_code():
+    command = [sys.executable, "-c", "import sys; print('out'); print('an error', file=sys.stderr); sys.exit(3)"]
+    stdout, stderr, code = env_module._run_curate(command, dict(os.environ))
+    assert stdout.strip() == "out"
+    assert "an error" in stderr
+    assert code == 3
 
 
 def test_env_spec_reports_a_base_distribution_that_is_not_installed(monkeypatch):
