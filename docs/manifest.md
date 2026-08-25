@@ -53,7 +53,7 @@ a version from a [copy-on-write edit](timef-writer.md#copy-on-write-edits) has `
 
 `value_encoding` reports the [values encoding](timef-writer.md#values-encoding) used to write each
 modality's shards. No code reads this field to make a decision: Parquet already records the applied
-encoding in each file's footer. The field exists so that a curator can inspect what a build chose.
+encoding in each file's footer. The field exists so that a builder can inspect what a build chose.
 The field is empty for a backend that has no such choice.
 
 Format v2 introduces a backend-neutral schema for the values locator. This schema applies to both
@@ -62,7 +62,7 @@ older reader rejects the incompatible values layout. It does not try to read the
 data.
 
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
-`InvalidManifestError`.
+`TimeNetInvalidManifestError`.
 
 ### Codec
 
@@ -73,7 +73,7 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 `from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema` and
 `counts` default to empty. The parser drops unmodeled metadata keys. A malformed block raises
-`InvalidManifestError`. This error names the offending block.
+`TimeNetInvalidManifestError`. This error names the offending block.
 
 ### Serialization notes
 
@@ -82,7 +82,7 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 - A spec carries its data source inline. As a result, the reader does not resolve it against a
   side table.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
-  `TASKS` registry. An unknown `task_type` raises `InvalidManifestError`. The annotation
+  `TASKS` registry. An unknown `task_type` raises `TimeNetInvalidManifestError`. The annotation
   `value_type` round-trips as a string. The reader uses it to decode values.
 
 ---

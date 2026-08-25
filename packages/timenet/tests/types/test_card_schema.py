@@ -1,7 +1,7 @@
 import jsonschema
 import pytest
 
-from timenet.errors import InvalidCardError
+from timenet.errors import TimeNetInvalidCardError
 from timenet.schemas import DATASET_CARD_SCHEMA
 from timenet.types import DatasetMetadata, Domain, License, Version
 
@@ -65,15 +65,15 @@ def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
     ],
 )
 def test_from_yaml_rejects_invalid_cards(tmp_path, bad):
-    with pytest.raises(InvalidCardError):
+    with pytest.raises(TimeNetInvalidCardError):
         DatasetMetadata.from_yaml(_write(tmp_path, bad))
 
 
 def test_from_yaml_rejects_non_mapping(tmp_path):
-    with pytest.raises(InvalidCardError):
+    with pytest.raises(TimeNetInvalidCardError):
         DatasetMetadata.from_yaml(_write(tmp_path, "- just\n- a\n- list\n"))
 
 
 def test_from_yaml_rejects_missing_file(tmp_path):
-    with pytest.raises(InvalidCardError):
+    with pytest.raises(TimeNetInvalidCardError):
         DatasetMetadata.from_yaml(tmp_path / "does_not_exist.yaml")

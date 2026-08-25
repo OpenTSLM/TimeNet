@@ -50,7 +50,7 @@ you implement.
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
-  card. `metadata().dataset_id` must match the connector's curated id.
+  card. `metadata().dataset_id` must match the connector's built id.
 - `store()` writes the dataset through a [`TimeFWriter`](timef-writer.md). If the schema is absent, it
   derives the schema first. It returns the committed version directory. Most connectors never
   override it.
@@ -76,7 +76,7 @@ annotations, by `id`.
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
 concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
 names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
-beside it. As a result, `timenet-curate build <org>/<name>` imports only that package. Reusable bases
+beside it. As a result, `timenet-build build <org>/<name>` imports only that package. Reusable bases
 live under `bases/`. Each connector declares its own id in `metadata()`. An id is a lowercase
 `org/name` pair.
 
@@ -94,7 +94,7 @@ sources need this token. Downloaded source files cache under `<TIMENET_CACHE>` (
 `timenet_connectors.download` has two async helpers. Each helper picks the backend from the scheme of
 the URL. As a result, a connector never has to branch on `s3://` versus `http(s)://` itself:
 
-- `fetch_files([Artifact(url, dest), ...])` downloads a list of files. The list can mix schemes freely.
+- `download_files([Artifact(url, dest), ...])` downloads a list of files. The list can mix schemes freely.
   HTTP entries run at the same time, up to the limit of `max_concurrency`, and share one connection
   pool. S3 entries run one at a time. A single file uses a one-element list.
 - `ensure_archive(url, target)` downloads a zip file and extracts it into `target`. This method is
@@ -102,7 +102,7 @@ the URL. As a result, a connector never has to branch on `s3://` versus `http(s)
   and skips the download.
 
 Each `Artifact` takes optional `headers`, `cookies`, and a `sha256` value to validate the download.
-`fetch_files` also takes batch-level `headers` and `cookies`. These apply to every HTTP request. The
+`download_files` also takes batch-level `headers` and `cookies`. These apply to every HTTP request. The
 per-artifact values merge over the batch-level values. S3 ignores all of these. HTTP downloads use
 `aiohttp` and `aiofiles`, both base dependencies. They stream to disk and write atomically, through a
 `.part` temporary file. If the SHA-256 value does not match, the download raises an error and leaves
@@ -112,11 +112,11 @@ synchronous. boto3 already parallelizes the transfer of a single object. `ensure
 `/download` suffix. Call these helpers from `download_async`:
 
 ```python
-from timenet_connectors.download import Artifact, ensure_archive, fetch_files
+from timenet_connectors.download import Artifact, ensure_archive, download_files
 
 class MyConnector(BaseConnector[MyRawRef]):
     async def download_async(self, cache_dir):
-        await fetch_files(
+        await download_files(
             [
                 Artifact("https://host/a.csv", cache_dir / "a.csv"),
                 Artifact("s3://bucket/b.csv", cache_dir / "b.csv"),
@@ -129,7 +129,7 @@ class MyConnector(BaseConnector[MyRawRef]):
 ```
 
 An ambient sink reports progress, through `timenet_connectors.download.progress`. The download helpers
-emit `DownloadProgress` events, and the `timenet-curate` CLI renders these events. As a result,
+emit `DownloadProgress` events, and the `timenet-build` CLI renders these events. As a result,
 downloads show progress without a `progress` argument passed through the connector. On a terminal,
 the events render as live progress bars, one row per file, that update at the same time. Piped output
 falls back to throttled text lines. The `--quiet` flag silences all output.
@@ -151,9 +151,9 @@ pull their database archive.
   (`pip install 'timenet-connectors[huggingface]'`), because it downloads data from the Hub.
 
 ```bash
-timenet-curate build timenet/hello-world             # offline, synthetic
-timenet-curate build chengsenwang/tsqa               # live, from the Hub
-timenet-curate build chengsenwang/tsqa --keep-cache  # keep the raw sources
+timenet-build build timenet/hello-world             # offline, synthetic
+timenet-build build chengsenwang/tsqa               # live, from the Hub
+timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
 A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. The

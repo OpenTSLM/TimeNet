@@ -464,11 +464,11 @@ errors also derive from `ValueError`, so existing handlers keep working.
 | Exception | Base(s) | Raised when |
 | --- | --- | --- |
 | `TimeNetError` | `Exception` | base for all TimeNet errors |
-| `RegistryError` | `TimeNetError` | a registry cannot be loaded/reached/served |
-| `DatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
+| `TimeNetRegistryError` | `TimeNetError` | a registry cannot be loaded/reached/served |
+| `TimeNetDatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
-| `InvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
+| `TimeNetInvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
 
 `TimeFValidationError` covers two cases. The first is a value for storage in a dataset that violates
 an invariant. Examples: a negative `Version` component, a `unit_value` that is not a frequency, or an

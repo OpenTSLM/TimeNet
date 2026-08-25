@@ -1,8 +1,8 @@
-"""Load a curated TimeF dataset and print a summary (no pandas or extras needed).
+"""Load a built TimeF dataset and print a summary (no pandas or extras needed).
 
 Build the dataset first, then run this script::
 
-    uv run timenet-curate build "chengsenwang/tsqa"
+    uv run timenet-build build "chengsenwang/tsqa"
     uv run python examples/load_tsqa.py
 
 ``TimeNet().load(...)`` returns a ``TimeFDataset``; ``describe()`` prints its identity, counts, per-spec

@@ -1,15 +1,21 @@
 from timenet.errors import (
-    DatasetNotFoundError,
-    InvalidManifestError,
-    RegistryError,
     TimeFFormatError,
     TimeFValidationError,
+    TimeNetDatasetNotFoundError,
     TimeNetError,
+    TimeNetInvalidManifestError,
+    TimeNetRegistryError,
 )
 
 
 def test_all_derive_from_base():
-    for exc in (RegistryError, DatasetNotFoundError, TimeFValidationError, TimeFFormatError, InvalidManifestError):
+    for exc in (
+        TimeNetRegistryError,
+        TimeNetDatasetNotFoundError,
+        TimeFValidationError,
+        TimeFFormatError,
+        TimeNetInvalidManifestError,
+    ):
         assert issubclass(exc, TimeNetError)
 
 
@@ -19,12 +25,12 @@ def test_validation_error_is_value_error():
 
 
 def test_invalid_manifest_is_format_and_value_error():
-    assert issubclass(InvalidManifestError, TimeFFormatError)
-    assert issubclass(InvalidManifestError, ValueError)
+    assert issubclass(TimeNetInvalidManifestError, TimeFFormatError)
+    assert issubclass(TimeNetInvalidManifestError, ValueError)
 
 
 def test_catchable_as_base():
     try:
-        raise DatasetNotFoundError("nope")
+        raise TimeNetDatasetNotFoundError("nope")
     except TimeNetError as exc:
         assert str(exc) == "nope"

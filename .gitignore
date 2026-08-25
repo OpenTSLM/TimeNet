@@ -40,3 +40,6 @@ docs/catalog/datasets.json
 
 # generated API reference (see scripts/gen_api_docs.py)
 docs/api/
+
+# Local agent tooling
+.codex/

@@ -44,7 +44,7 @@ EXCLUDE = {
     "timenet.torch",  # optional torch adapter (covered in the guide)
     "timenet.schemas",  # packaged JSON-Schema data, not code
     "timenet.testing",  # test-support helpers shipped in src
-    "timenet_connectors.curate",  # producer CLI entry point
+    "timenet_connectors.builder",  # producer CLI entry point
     "timenet_connectors.datasets",  # dynamic connector plugins, discovered by id
 }
 
@@ -150,7 +150,7 @@ def _discover(package: str, root: Path) -> list[ApiModule]:
             continue
         if is_package:
             init_file = child / "__init__.py"
-            # A package that curates a public API via __all__ is documented at the
+            # A package that builds a public API via __all__ is documented at the
             # package level; one that doesn't keeps its surface in submodules, so
             # render them recursively instead of an empty page.
             modules.append(ApiModule(dotted, name, _module_summary(init_file), not _has_dunder_all(init_file)))

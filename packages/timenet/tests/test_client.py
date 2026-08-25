@@ -4,8 +4,9 @@ import pytest
 
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import DatasetNotFoundError, TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
+from timenet.manifest.files import FilePart
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Domain, Version
 from timenet.writer import TimeFWriter
@@ -62,11 +63,16 @@ def test_download_copies_into_storage(registry_root, tmp_path):
     assert list(version_dir.glob("time_series/shard-*.parquet"))
 
 
-def test_fetch_rejects_path_traversal(registry_root, tmp_path):
+def test_download_rejects_path_traversal(registry_root, tmp_path):
     # a corrupt manifest relpath must not let a download write outside the target directory
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    manifest = client.get("timenet/hello-world")
+    bad = dataclasses.replace(
+        manifest,
+        files=dataclasses.replace(manifest.files, samples=(FilePart("../../escape.txt", "sha256:0", 0),)),
+    )
     with pytest.raises(TimeFFormatError, match="escapes"):
-        client._fetch("hello_world", "1.0.0", "../../escape.txt", tmp_path / "target")
+        client._registry.download_version("timenet/hello-world", "1.0.0", tmp_path / "target", manifest=bad)
 
 
 def test_download_is_idempotent(registry_root, tmp_path):
@@ -161,7 +167,7 @@ def test_version_ref_download_pins(versioned_registry, tmp_path):
 
 def test_version_ref_missing_pin_raises(versioned_registry, tmp_path):
     client = TimeNet(versioned_registry, storage_path=tmp_path / "store")
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         client.get("timenet/hello-world@9.9.9")
 
 

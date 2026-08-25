@@ -49,7 +49,7 @@ TimeSeries(
 `time_series_id`. If a connector reuses one instance, or gives two instances the same explicit ID,
 both collapse to one chunk on disk.
 Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`. The connector supplies
-`loader` at curation. [`TimeFReader`](timef-reader.md) supplies `loader` again on read-back. In both
+`loader` at build. [`TimeFReader`](timef-reader.md) supplies `loader` again on read-back. In both
 cases, `loader` remains the lazy boundary. `read_steps(start, stop)` lets range-aware storage loaders
 select a temporal subsection, then return it as Arrow. Older connector callables do not support this.
 They fall back to a full-read slice.

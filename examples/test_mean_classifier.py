@@ -1,7 +1,7 @@
-"""End-to-end TimeNet example: curate a dataset, load it, and train a classifier.
+"""End-to-end TimeNet example: build a dataset, load it, and train a classifier.
 
 The task is deliberately simple: each sample in ``timenet/test-mean`` is one noisy signal, labeled by
-whether its mean is above or below zero. The script runs the whole loop top to bottom: curate the
+whether its mean is above or below zero. The script runs the whole loop top to bottom: build the
 dataset from its connector into the local registry, load it back through the SDK, turn the samples into
 an ``(X, y)`` training pair, and train a scikit-learn classifier.
 
@@ -19,7 +19,7 @@ from timenet.client import TimeNet
 import timenet_connectors
 
 
-# Curate the connector's dataset into the local registry (idempotent), then load it back through the SDK.
+# Build the connector's dataset into the local registry (idempotent), then load it back through the SDK.
 timenet_connectors.build("timenet/test-mean")
 dataset = TimeNet().load("timenet/test-mean")
 

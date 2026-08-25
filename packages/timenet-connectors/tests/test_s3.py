@@ -3,9 +3,9 @@ import sys
 import threading
 
 import boto3
-from botocore import UNSIGNED
 import pytest
 
+from timenet.errors import TimeNetError
 from timenet_connectors.download import s3
 from timenet_connectors.download.progress import progress_sink
 from timenet_connectors.download.s3 import _s3_client, download_s3_object
@@ -25,22 +25,24 @@ def _spy_client(monkeypatch) -> dict:
     return captured
 
 
-def test_s3_client_unsigned_without_env_credentials(monkeypatch):
+def test_s3_client_uses_default_resolution_without_env_credentials(monkeypatch):
+    # No env credentials: the client still uses boto3's own resolution (no forced UNSIGNED config), so a
+    # configured profile / shared config / SSO / instance role is honored.
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
     captured = _spy_client(monkeypatch)
     _s3_client()
     assert captured["service"] == "s3"
-    assert captured["kwargs"]["config"].signature_version is UNSIGNED
+    assert captured["kwargs"] == {}  # a plain default client, boto3 resolves credentials itself
 
 
-def test_s3_client_signed_with_env_credentials(monkeypatch):
+def test_s3_client_is_a_plain_default_client_with_env_credentials(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     captured = _spy_client(monkeypatch)
     _s3_client()
     assert captured["service"] == "s3"
-    assert "config" not in captured["kwargs"]  # signed: env creds, no forced UNSIGNED config
+    assert captured["kwargs"] == {}  # boto3 picks up the env credentials on its own
 
 
 def test_download_s3_object_rejects_non_s3_url():
@@ -50,7 +52,8 @@ def test_download_s3_object_rejects_non_s3_url():
 
 def test_missing_boto3_raises_helpful_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", None)  # `import boto3` -> ImportError
-    with pytest.raises(ImportError, match="physionet"):
+    # Raised as a TimeNetError so the build CLI prints one clean line, not a traceback.
+    with pytest.raises(TimeNetError, match="physionet"):
         download_s3_object("s3://bucket/key.zip", Path("dest"))
 
 

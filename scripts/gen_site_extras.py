@@ -12,7 +12,7 @@ Runs after ``zensical build`` and works on the ``site/`` output plus the ``docs/
 
 Run it with the docs env::
 
-    uv run --group docs --extra curation python scripts/gen_site_extras.py
+    uv run --group docs --extra build python scripts/gen_site_extras.py
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 A subclass downloads a PhysioNet database archive with :func:`~timenet_connectors.download.ensure_archive`
 and reads the records with `wfdb <https://wfdb.readthedocs.io>`_. The base class imports ``wfdb`` lazily,
-so a base user who only curates offline datasets does not need it. To use ``wfdb``, install the
+so a base user who only builds offline datasets does not need it. To use ``wfdb``, install the
 ``physionet`` extra. If ``wfdb`` is missing, the base class raises an error that states the fix.
 """
 

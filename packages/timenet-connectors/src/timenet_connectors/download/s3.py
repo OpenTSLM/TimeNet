@@ -1,46 +1,41 @@
 """Download an ``s3://bucket/key`` object for connectors.
 
-This helper downloads an ``s3://bucket/key`` object to a local path with boto3. boto3 runs the transfer
-in parallel with multipart downloads. If the environment provides credentials, the client uses them. If
-not, the client falls back to anonymous (unsigned) requests, so public buckets such as PhysioNet's
-``physionet-open`` work with no credentials. The code imports ``boto3`` lazily, so users who curate only
-offline datasets do not need it.
+This helper downloads an ``s3://bucket/key`` object to a local path with boto3, which runs the transfer
+in parallel with multipart downloads. The client uses boto3's own credential resolution (environment,
+``AWS_PROFILE`` / the shared ``~/.aws`` config / SSO, container and instance roles). It honors the
+caller's AWS configuration. The code imports ``boto3`` lazily, so users who build only offline
+datasets do not need it.
 """
 
-import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetError
 from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
 
 
 def _s3_client() -> Any:
-    """Build a signed or anonymous S3 client.
+    """Build a boto3 S3 client using boto3's own credential resolution.
 
-    If both ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` are set, the client uses them. boto3 also
-    picks up ``AWS_SESSION_TOKEN``. If not, this function returns an unsigned client, so public buckets
-    stay accessible with no credentials. This function reads only the environment. It ignores ``~/.aws``
-    profiles and SSO, so a bad local profile cannot break anonymous access.
+    boto3 resolves credentials through its full chain: environment variables, ``AWS_PROFILE`` and the
+    shared ``~/.aws`` config (including SSO), and container or instance roles. This honors the
+    caller's AWS configuration, rather than special-casing a couple of environment variables. The
+    code imports ``boto3`` lazily, so users who build only offline datasets do not need it.
 
     Returns:
         A boto3 S3 client.
 
     Raises:
-        ImportError: If the caller has not installed ``boto3`` (the ``physionet`` extra).
+        TimeNetError: If the caller has not installed ``boto3`` (the ``physionet`` extra).
     """
     try:
         import boto3  # noqa: PLC0415
-        from botocore import UNSIGNED  # noqa: PLC0415
-        from botocore.config import Config  # noqa: PLC0415
     except ImportError as exc:
-        raise ImportError(
+        raise TimeNetError(
             "downloading from S3 needs the physionet extra: pip install 'timenet-connectors[physionet]'"
         ) from exc
-    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
-        return boto3.client("s3")
-    return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    return boto3.client("s3")
 
 
 def download_s3_object(s3_url: str, dest: Path) -> None:

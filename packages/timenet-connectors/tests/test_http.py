@@ -1,14 +1,9 @@
-"""Tests for the async HTTP download helpers, driven against a real local aiohttp server."""
+"""Tests for the async HTTP download helpers, driven against httpx.MockTransport."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
 import hashlib
-from pathlib import Path
-import socket
 
-import aiohttp
-from aiohttp import web
+import httpx
 import pytest
 
 from timenet.errors import TimeFFormatError
@@ -16,237 +11,205 @@ from timenet_connectors.download.http import Artifact, download_http, download_h
 from timenet_connectors.download.progress import progress_sink
 
 
-_Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
+def _patch_transport(monkeypatch, transport):
+    """Force download_http/_many to build clients bound to a MockTransport."""
+    real_async_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("timenet_connectors.download.http.httpx.AsyncClient", factory)
 
 
-@asynccontextmanager
-async def serving(*, routes: dict[str, _Handler] | None = None, catch_all: _Handler | None = None):
-    """Serve GET routes on an ephemeral localhost port; yields the base URL."""
-    app = web.Application()
-    for path, handler in (routes or {}).items():
-        app.router.add_get(path, handler)
-    if catch_all is not None:
-        app.router.add_get("/{tail:.*}", catch_all)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    await web.SockSite(runner, sock).start()
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        await runner.cleanup()
+def _transport(handler):
+    return httpx.MockTransport(handler)
 
 
-def _bytes(payload: bytes) -> _Handler:
-    async def handler(request: web.Request) -> web.Response:
-        return web.Response(body=payload)
+def _serve_bytes(payload: bytes):
+    def handler(request):
+        return httpx.Response(200, content=payload)
 
-    return handler
-
-
-async def _not_found(request: web.Request) -> web.Response:
-    raise web.HTTPNotFound
+    return _transport(handler)
 
 
-def test_downloads_a_single_file(tmp_path):
-    async def scenario() -> None:
-        async with serving(routes={"/data.bin": _bytes(b"hello world")}) as base:
-            await download_http(f"{base}/data.bin", tmp_path / "data.bin")
-
-    asyncio.run(scenario())
+def test_downloads_a_single_file(tmp_path, monkeypatch):
+    _patch_transport(monkeypatch, _serve_bytes(b"hello world"))
+    asyncio.run(download_http("http://host/data.bin", tmp_path / "data.bin"))
     assert (tmp_path / "data.bin").read_bytes() == b"hello world"
 
 
-def test_leaves_no_part_file_after_success(tmp_path):
-    async def scenario() -> None:
-        async with serving(routes={"/data.bin": _bytes(b"payload")}) as base:
-            await download_http(f"{base}/data.bin", tmp_path / "data.bin")
-
-    asyncio.run(scenario())
-    assert not (tmp_path / "data.bin.part").exists()  # renamed into place, temp cleaned up
+def test_leaves_no_part_file_after_success(tmp_path, monkeypatch):
+    _patch_transport(monkeypatch, _serve_bytes(b"payload"))
+    asyncio.run(download_http("http://host/data.bin", tmp_path / "data.bin"))
+    assert not (tmp_path / "data.bin.part").exists()
 
 
-def test_skips_existing_destination(tmp_path):
+def test_skips_existing_destination(tmp_path, monkeypatch):
     dest = tmp_path / "data.bin"
     dest.write_bytes(b"cached")
-    hits: list[str] = []
+    hits = []
 
-    async def scenario() -> None:
-        async def handler(request: web.Request) -> web.Response:
-            hits.append(request.path)
-            return web.Response(body=b"fresh")
+    def handler(request):
+        hits.append(request.url.path)
+        return httpx.Response(200, content=b"fresh")
 
-        async with serving(routes={"/data.bin": handler}) as base:
-            await download_http(f"{base}/data.bin", dest, skip_existing=True)
-
-    asyncio.run(scenario())
-    assert dest.read_bytes() == b"cached"  # untouched
-    assert hits == []  # server never contacted
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(download_http("http://host/data.bin", dest, skip_existing=True))
+    assert dest.read_bytes() == b"cached"
+    assert hits == []
 
 
-def test_sends_per_artifact_headers(tmp_path):
-    seen: list[str | None] = []
+def test_sends_per_artifact_headers(tmp_path, monkeypatch):
+    seen = []
 
-    async def handler(request: web.Request) -> web.Response:
-        seen.append(request.headers.get("Authorization"))
-        return web.Response(body=b"ok")
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, content=b"ok")
 
-    async def scenario() -> None:
-        async with serving(routes={"/a": handler, "/b": handler}) as base:
-            await download_http_many(
-                [
-                    Artifact(f"{base}/a", tmp_path / "a", headers={"Authorization": "token-a"}),
-                    Artifact(f"{base}/b", tmp_path / "b", headers={"Authorization": "token-b"}),
-                ]
-            )
-
-    asyncio.run(scenario())
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(
+        download_http_many(
+            [
+                Artifact("http://host/a", tmp_path / "a", headers={"Authorization": "token-a"}),
+                Artifact("http://host/b", tmp_path / "b", headers={"Authorization": "token-b"}),
+            ]
+        )
+    )
     assert set(seen) == {"token-a", "token-b"}
 
 
-def test_sends_per_artifact_cookies(tmp_path):
-    seen: list[str | None] = []
+def test_sends_per_artifact_cookies(tmp_path, monkeypatch):
+    seen = []
 
-    async def handler(request: web.Request) -> web.Response:
-        seen.append(request.cookies.get("session"))
-        return web.Response(body=b"ok")
+    def handler(request):
+        seen.append(request.headers.get("cookie"))
+        return httpx.Response(200, content=b"ok")
 
-    async def scenario() -> None:
-        async with serving(routes={"/a": handler, "/b": handler}) as base:
-            await download_http_many(
-                [
-                    Artifact(f"{base}/a", tmp_path / "a", cookies={"session": "cookie-a"}),
-                    Artifact(f"{base}/b", tmp_path / "b", cookies={"session": "cookie-b"}),
-                ]
-            )
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(
+        download_http_many(
+            [
+                Artifact("http://host/a", tmp_path / "a", cookies={"session": "cookie-a"}),
+                Artifact("http://host/b", tmp_path / "b", cookies={"session": "cookie-b"}),
+            ]
+        )
+    )
+    assert {"session=cookie-a", "session=cookie-b"} == set(seen)
 
-    asyncio.run(scenario())
-    assert set(seen) == {"cookie-a", "cookie-b"}
 
+def test_batch_headers_apply_to_all(tmp_path, monkeypatch):
+    seen = []
 
-def test_batch_headers_apply_to_all(tmp_path):
-    seen: list[str | None] = []
+    def handler(request):
+        seen.append(request.headers.get("x-api-key"))
+        return httpx.Response(200, content=b"ok")
 
-    async def handler(request: web.Request) -> web.Response:
-        seen.append(request.headers.get("X-Api-Key"))
-        return web.Response(body=b"ok")
-
-    async def scenario() -> None:
-        async with serving(catch_all=handler) as base:
-            await download_http_many(
-                [Artifact(f"{base}/a", tmp_path / "a"), Artifact(f"{base}/b", tmp_path / "b")],
-                headers={"X-Api-Key": "shared"},
-            )
-
-    asyncio.run(scenario())
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(
+        download_http_many(
+            [Artifact("http://host/a", tmp_path / "a"), Artifact("http://host/b", tmp_path / "b")],
+            headers={"X-Api-Key": "shared"},
+        )
+    )
     assert seen == ["shared", "shared"]
 
 
-def test_downloads_many_concurrently(tmp_path):
-    async def scenario() -> list[Path]:
-        async with serving(catch_all=_bytes(b"x")) as base:
-            artifacts = [Artifact(f"{base}/f{i}", tmp_path / f"f{i}") for i in range(5)]
-            return await download_http_many(artifacts, max_concurrency=8)
-
-    paths = asyncio.run(scenario())
+def test_downloads_many_concurrently(tmp_path, monkeypatch):
+    _patch_transport(monkeypatch, _serve_bytes(b"x"))
+    paths = asyncio.run(
+        download_http_many([Artifact(f"http://host/f{i}", tmp_path / f"f{i}") for i in range(5)], max_concurrency=8)
+    )
     assert len(paths) == 5
     assert all(p.read_bytes() == b"x" for p in paths)
 
 
-def test_respects_max_concurrency(tmp_path):
+def test_respects_max_concurrency(tmp_path, monkeypatch):
     active = 0
     peak = 0
 
-    async def slow(request: web.Request) -> web.Response:
+    async def handler(request):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
         await asyncio.sleep(0.05)
         active -= 1
-        return web.Response(body=b"x")
+        return httpx.Response(200, content=b"x")
 
-    async def scenario() -> None:
-        async with serving(catch_all=slow) as base:
-            artifacts = [Artifact(f"{base}/f{i}", tmp_path / f"f{i}") for i in range(6)]
-            await download_http_many(artifacts, max_concurrency=2)
-
-    asyncio.run(scenario())
-    assert peak == 2  # never exceeded the bound, and actually reached it
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(
+        download_http_many([Artifact(f"http://host/f{i}", tmp_path / f"f{i}") for i in range(6)], max_concurrency=2)
+    )
+    assert peak == 2
 
 
-def test_fails_fast_and_names_the_url(tmp_path):
-    async def scenario() -> None:
-        async with serving(routes={"/ok": _bytes(b"ok"), "/bad": _not_found}) as base:
-            await download_http_many(
-                [
-                    Artifact(f"{base}/ok", tmp_path / "ok"),
-                    Artifact(f"{base}/bad", tmp_path / "bad"),
-                ],
+def test_fails_fast_and_names_the_url(tmp_path, monkeypatch):
+    def handler(request):
+        if request.url.path == "/bad":
+            return httpx.Response(404)
+        return httpx.Response(200, content=b"ok")
+
+    _patch_transport(monkeypatch, _transport(handler))
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        asyncio.run(
+            download_http_many(
+                [Artifact("http://host/ok", tmp_path / "ok"), Artifact("http://host/bad", tmp_path / "bad")],
                 max_concurrency=4,
             )
-
-    with pytest.raises(aiohttp.ClientResponseError) as exc_info:
-        asyncio.run(scenario())
-    assert "/bad" in str(exc_info.value)
-    assert not (tmp_path / "bad").exists()  # the failed download left nothing behind
+        )
+    assert "/bad" in str(exc_info.value.request.url)
+    assert not (tmp_path / "bad").exists()
 
 
-def test_download_http_reports_progress(tmp_path):
+def test_follows_redirects(tmp_path, monkeypatch):
+    def handler(request):
+        if request.url.path == "/download":
+            return httpx.Response(302, headers={"Location": "http://host/final"})
+        return httpx.Response(200, content=b"final payload")
+
+    _patch_transport(monkeypatch, _transport(handler))
+    asyncio.run(download_http("http://host/download", tmp_path / "data.bin"))
+    assert (tmp_path / "data.bin").read_bytes() == b"final payload"
+
+
+def test_download_http_reports_progress(tmp_path, monkeypatch):
+    payload = b"x" * 3_000_000
+    _patch_transport(monkeypatch, _serve_bytes(payload))
     events = []
-
-    async def scenario() -> None:
-        async with serving(routes={"/data.bin": _bytes(b"x" * 3_000_000)}) as base:  # 3 chunks
-            with progress_sink(events.append):
-                await download_http(f"{base}/data.bin", tmp_path / "data.bin")
-
-    asyncio.run(scenario())
-    assert events, "expected at least one progress event"
+    with progress_sink(events.append):
+        asyncio.run(download_http("http://host/data.bin", tmp_path / "data.bin"))
+    assert events
     assert all(event.url.endswith("/data.bin") for event in events)
     assert [event.downloaded for event in events] == sorted(event.downloaded for event in events)
-    assert events[-1].downloaded == 3_000_000  # final event covers the whole file
-    assert events[-1].total == 3_000_000  # total taken from Content-Length
+    assert events[-1].downloaded == 3_000_000
+    assert events[-1].total == 3_000_000
 
 
-def test_download_http_accepts_a_matching_sha256(tmp_path):
+def test_download_http_accepts_a_matching_sha256(tmp_path, monkeypatch):
     payload = b"integrity matters"
-    digest = hashlib.sha256(payload).hexdigest()
-
-    async def scenario() -> None:
-        async with serving(routes={"/f": _bytes(payload)}) as base:
-            await download_http(f"{base}/f", tmp_path / "f", sha256=digest)
-
-    asyncio.run(scenario())
+    _patch_transport(monkeypatch, _serve_bytes(payload))
+    asyncio.run(download_http("http://host/f", tmp_path / "f", sha256=hashlib.sha256(payload).hexdigest()))
     assert (tmp_path / "f").read_bytes() == payload
 
 
-def test_download_http_rejects_a_sha256_mismatch(tmp_path):
-    async def scenario() -> None:
-        async with serving(routes={"/f": _bytes(b"actual bytes")}) as base:
-            await download_http(f"{base}/f", tmp_path / "f", sha256="00" * 32)
-
+def test_download_http_rejects_a_sha256_mismatch(tmp_path, monkeypatch):
+    _patch_transport(monkeypatch, _serve_bytes(b"actual bytes"))
     with pytest.raises(TimeFFormatError, match="SHA-256"):
-        asyncio.run(scenario())
-    assert not (tmp_path / "f").exists()  # no file produced on mismatch
-    assert not (tmp_path / "f.part").exists()  # partial removed
+        asyncio.run(download_http("http://host/f", tmp_path / "f", sha256="00" * 32))
+    assert not (tmp_path / "f").exists()
+    assert not (tmp_path / "f.part").exists()
 
 
-def test_cleans_up_part_file_on_mid_stream_failure(tmp_path):
-    async def drop(request: web.Request) -> web.StreamResponse:
-        # Advertise more bytes than we send, then abort: the client raises mid-stream.
-        response = web.StreamResponse(headers={"Content-Length": "1000"})
-        await response.prepare(request)
-        await response.write(b"partial")
-        assert request.transport is not None
-        request.transport.close()
-        return response
+def test_cleans_up_part_file_on_mid_stream_failure(tmp_path, monkeypatch):
+    def handler(request):
+        async def broken():
+            yield b"partial"
+            raise httpx.RemoteProtocolError("peer closed", request=request)
 
-    async def scenario() -> None:
-        async with serving(routes={"/broken.bin": drop}) as base:
-            await download_http(f"{base}/broken.bin", tmp_path / "broken.bin")
+        return httpx.Response(200, headers={"Content-Length": "1000"}, content=broken())
 
-    with pytest.raises(aiohttp.ClientError):
-        asyncio.run(scenario())
+    _patch_transport(monkeypatch, _transport(handler))
+    with pytest.raises(httpx.HTTPError):
+        asyncio.run(download_http("http://host/broken.bin", tmp_path / "broken.bin"))
     assert not (tmp_path / "broken.bin").exists()
-    assert not (tmp_path / "broken.bin.part").exists()  # partial temp file removed
+    assert not (tmp_path / "broken.bin.part").exists()

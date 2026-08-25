@@ -10,6 +10,7 @@ required-version = ">=0.10.10"
 # packages' extras, installed for dev/test/CI via `make sync`.
 dev = [
     "hypothesis>=6.140",
+    "moto[server]>=5",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
@@ -31,8 +32,7 @@ target-version = "py311"
 src = ["packages/*/src"]
 
 [tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
+# quote-style (double) and indent-style (space) are ruff's defaults; only the non-default is set here.
 docstring-code-format = true
 
 [tool.ruff.lint]
@@ -65,6 +65,7 @@ ignore = [
     "D417",  # Don't require documentation for every function parameter
     "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
+    "RET505",  # Allow elif/else after a return, for explicit if/elif/else branching
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -73,9 +74,9 @@ ignore = [
 # (they prove serializability), and we deserialize only our own freshly-pickled objects.
 # Tests legitimately import private helpers to exercise them, assert self-equality, compare to "",
 # call context-manager dunders directly, and compare against literal fixture values. Async test
-# stubs (aiohttp route handlers, awaited download fakes) must be `async` for their interface even
+# stubs (MockTransport handlers, awaited download fakes) must be `async` for their interface even
 # when their body doesn't await (RUF029).
-"**/tests/**/*.py" = ["S101", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
+"**/tests/**/*.py" = ["S101", "S105", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["S101"]
 
@@ -99,20 +100,13 @@ markers = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.13"
 
 [[tool.ty.overrides]]
-# The example imports scikit-learn, which is intentionally not a project dependency (install it
-# yourself to run the example). Don't fail type-checking on that unresolved import.
-include = ["examples/**"]
-
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
-
-[[tool.ty.overrides]]
-# The CI report script declares its dependencies inline (PEP 723) and runs standalone under
-# `uv run`, so PyGithub is deliberately not a project dependency either.
-include = [".github/scripts/**"]
+# examples/** imports scikit-learn, and .github/scripts/** declares its deps inline (PEP 723) and runs
+# standalone under `uv run`. Neither is a project dependency, so don't fail type-checking on their
+# unresolved imports.
+include = ["examples/**", ".github/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

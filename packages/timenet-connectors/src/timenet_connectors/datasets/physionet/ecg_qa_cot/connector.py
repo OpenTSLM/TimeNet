@@ -8,7 +8,7 @@ whose ``rationale`` is the CoT.
 
 Sources come from three places. The signals come from PhysioNet PTB-XL. The per-template answer options
 come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows (question, answer, rationale,
-template) come from the OpenTSLM release, the only public source for the rationales. Real curation needs
+template) come from the OpenTSLM release, the only public source for the rationales. Real build needs
 the network and a multi-GB PTB-XL download.
 """
 
@@ -30,7 +30,7 @@ from timenet.types import (
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.download import Artifact, ensure_archive, fetch_files
+from timenet_connectors.download import Artifact, download_files, ensure_archive
 
 
 # PTB-XL 500 Hz records from PhysioNet's open S3 bucket. ``_hr`` means high-rate (500 Hz) recordings.
@@ -189,7 +189,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotRef]):
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
-            fetch_files([Artifact(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)]),
+            download_files([Artifact(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)]),
             ensure_archive(ECG_QA_COT_URL, cache_dir),
         )
         answers = _load_template_answers(answers_path)

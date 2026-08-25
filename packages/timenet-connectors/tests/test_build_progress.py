@@ -1,11 +1,11 @@
-"""Tests for the timenet-curate download-progress rendering."""
+"""Tests for the timenet-build download-progress rendering."""
 
 import sys
 
 from rich.progress import Progress
 
 from timenet.cli.ui import console
-from timenet_connectors.curate.cli import _bar_reporter, _download_progress
+from timenet_connectors.builder.cli import _bar_reporter, _download_progress
 from timenet_connectors.download.progress import DownloadProgress, report_progress
 
 

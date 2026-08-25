@@ -91,7 +91,7 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
 
 ## Example: train a classifier end-to-end
 
-One script does the whole loop: curate a dataset, load it, train a model. The `timenet/test-mean`
+One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
 demo is simple. Each sample is one noisy signal. The label is `above_zero` or `below_zero`, by the
 sign of the mean. So a classifier only must recover that sign.
 
@@ -102,7 +102,7 @@ from sklearn.model_selection import train_test_split
 from timenet.client import TimeNet
 import timenet_connectors
 
-# Curate the connector's dataset into the local registry (the producer
+# Build the connector's dataset into the local registry (the producer
 # side), then load it back.
 timenet_connectors.build("timenet/test-mean")
 dataset = TimeNet().load("timenet/test-mean")

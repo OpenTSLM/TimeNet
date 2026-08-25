@@ -1,1 +1,1 @@
-"""Connectors curated by the TimeNet project (the ``timenet`` org)."""
+"""Connectors built by the TimeNet project (the ``timenet`` org)."""

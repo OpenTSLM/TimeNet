@@ -66,7 +66,7 @@ class DatasetVersion:
 
         Reads the version's ``manifest.json`` and pairs it with a :class:`pyarrow.fs.LocalFileSystem`.
         A caller builds this handle when it already holds a version directory on disk, such as
-        curation's copy-on-write edit or a downloaded copy. It does not go through a registry's
+        build's copy-on-write edit or a downloaded copy. It does not go through a registry's
         ``open_version``.
 
         Args:

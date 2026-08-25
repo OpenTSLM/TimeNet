@@ -6,7 +6,7 @@ module-level ``CONNECTOR``. There is no central registry. TimeNet finds them laz
 under ``timenet_connectors.bases``. The connector contract is :class:`timenet.connectors.BaseConnector`.
 
 The module-level helpers :func:`build` and :func:`load` (from :mod:`timenet_connectors.api`) are the
-producer-side shortcuts. Use them to curate and consume a dataset from local code.
+producer-side shortcuts. Use them to build and consume a dataset from local code.
 """
 
 from timenet_connectors.api import build as build, load as load

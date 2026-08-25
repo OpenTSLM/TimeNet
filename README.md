@@ -34,7 +34,7 @@ plus the registry they read from and write to.
 | Part | What it is | Ships |
 | --- | --- | --- |
 | `timenet` | the SDK and CLI | the TimeF format, reader/writer, registry client, engine, `BaseConnector` |
-| `timenet-connectors` | the producer package | connector recipes, dataset cards, and the `timenet-curate` CLI |
+| `timenet-connectors` | the producer package | connector recipes, dataset cards, and the `timenet-build` CLI |
 | registry | a served location | compiled manifests plus parquet; can be public, a private internal one, or a local directory |
 
 See the [architecture guide](https://docs.timenet.ai/architecture.html) for the full map, and the

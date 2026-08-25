@@ -6,10 +6,10 @@ description: Use when finding, searching, inspecting, downloading, or loading Ti
 # Using TimeNet datasets
 
 TimeNet's consumer side is the `timenet` CLI and the `timenet.client.TimeNet` SDK. Both browse a
-**registry** (the catalog of curated datasets) and fetch dataset versions into local storage. The CLI
+**registry** (the catalog of built datasets) and fetch dataset versions into local storage. The CLI
 is a thin mirror of the SDK, so anything below works the same either way.
 
-Producing datasets (writing connectors, running `timenet-curate`) is a separate concern. For that, use
+Producing datasets (writing connectors, running `timenet-build`) is a separate concern. For that, use
 the `add-dataset-connector` skill.
 
 ## Dataset ids and versions

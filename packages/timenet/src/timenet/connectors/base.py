@@ -55,7 +55,7 @@ class BaseConnector(ABC, Generic[TRaw]):
         """Return the dataset's descriptive identity, loaded and validated from its card YAML.
 
         Reads the card by convention (``dataset.yaml`` beside the connector, unless :attr:`CARD`
-        overrides it). Its ``dataset_id`` must match the id used to register or curate the connector.
+        overrides it). Its ``dataset_id`` must match the id used to register or build the connector.
 
         Returns:
             The dataset's :class:`~timenet.types.DatasetMetadata`.

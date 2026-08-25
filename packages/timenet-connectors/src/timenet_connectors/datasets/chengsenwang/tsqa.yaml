@@ -1,5 +1,5 @@
 # Dataset Card for the chengsenwang/tsqa connector.
-# Human-authored metadata; the curator compiles this plus the schema derived from the data into
+# Human-authored metadata; the builder compiles this plus the schema derived from the data into
 # manifest.json. The connector lives at datasets/<org>/<name>.py; the card declares the id.
 yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa

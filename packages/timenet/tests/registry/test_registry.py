@@ -2,9 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import (
+    TIMENET_REGISTRY_URL,
     BaseRegistry,
     DatasetVersion,
     LocalRegistry,
@@ -42,9 +43,16 @@ def test_open_registry_s3_is_s3():
 
 
 def test_open_registry_timenet_scheme_aliases_hosted_remote():
-    registry = open_registry("timenet://hello/world")
+    registry = open_registry("timenet://")
     assert isinstance(registry, RemoteRegistry)
-    assert registry._base_url.startswith("https://registry.timenet.ai")
+    assert registry._base_url == TIMENET_REGISTRY_URL
+
+
+def test_open_registry_timenet_scheme_ignores_any_path():
+    # A path after timenet:// must not be folded into the API base url (it would 404 every call).
+    registry = open_registry("timenet://chengsenwang/tsqa")
+    assert isinstance(registry, RemoteRegistry)
+    assert registry._base_url == TIMENET_REGISTRY_URL
 
 
 def test_open_writable_registry_returns_writable(registry_root):
@@ -94,13 +102,13 @@ def test_local_registry_path_expands_user(monkeypatch, tmp_path):
     "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
 )
 def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(RegistryError, match="remote"):
+    with pytest.raises(TimeNetRegistryError, match="remote"):
         local_registry_path(uri)
 
 
 @pytest.mark.parametrize(("uri", "match"), [("file://host/reg", "three slashes"), ("file://", "absolute path")])
 def test_local_registry_path_rejects_malformed_file_uri(uri, match):
-    with pytest.raises(RegistryError, match=match):
+    with pytest.raises(TimeNetRegistryError, match=match):
         local_registry_path(uri)
 
 
@@ -119,12 +127,12 @@ def test_get_manifest_latest(registry_root):
 
 
 def test_get_manifest_unknown_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).get_manifest("does/not-exist")
 
 
 def test_get_manifest_unknown_version_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).get_manifest("demo/ecg", version="9.9.9")
 
 
@@ -190,12 +198,12 @@ def test_open_version_filesystem_reads_a_file(registry_root):
 
 
 def test_open_version_unknown_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).open_version("does/not-exist")
 
 
 def test_open_version_unknown_version_raises(registry_root):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         LocalRegistry(registry_root).open_version("demo/ecg", version="9.9.9")
 
 
@@ -305,24 +313,13 @@ def test_store_force_overwrites(tmp_path):
     registry.store(make_dataset(), force=True)  # must not raise
 
 
-# ---- remote / s3 stubs ------------------------------------------------------------------------
+# ---- s3 catalog -------------------------------------------------------------------------------
 
 
-def test_remote_registry_is_deferred():
-    remote = RemoteRegistry("https://registry.timenet.io")
-    with pytest.raises(NotImplementedError):
-        remote.list_datasets()
-    with pytest.raises(NotImplementedError):
-        remote.open_version("demo/ecg")
-    with pytest.raises(NotImplementedError):
-        remote.store(make_dataset())
-
-
-def test_s3_registry_is_deferred():
+def test_s3_registry_has_no_catalog():
+    # The S3 backend does store + download by explicit id, but has no catalog: list/search raise.
     s3 = S3Registry("s3://bucket/registry")
     with pytest.raises(NotImplementedError):
         s3.list_datasets()
     with pytest.raises(NotImplementedError):
-        s3.open_version("demo/ecg")
-    with pytest.raises(NotImplementedError):
-        s3.store(make_dataset())
+        s3.search()

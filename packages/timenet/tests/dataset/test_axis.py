@@ -33,7 +33,7 @@ def test_from_rate_hz_is_exact(rate_hz, expected_period_us):
 
 def test_a_non_whole_rate_is_stated_as_a_fraction():
     # A float is refused by the type, not at runtime: every real rate is whole, so 500.0 should be
-    # 500. One that genuinely is not whole has no single reading, so the curator states which.
+    # 500. One that genuinely is not whole has no single reading, so the builder states which.
     assert RegularAxis.from_rate_hz(Fraction(30000, 1001)).period_us == Fraction(100_100, 3)
     assert RegularAxis.from_rate_hz(Fraction("29.97")).period_us == Fraction(1_000_000 * 100, 2997)
 

@@ -2,7 +2,7 @@ from hypothesis import given, strategies as st
 import pint
 import pytest
 
-from timenet.errors import InvalidManifestError
+from timenet.errors import TimeNetInvalidManifestError
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.types import (
     AnnotationDescriptor,
@@ -131,12 +131,12 @@ def test_units_roundtrip_as_pint():
 def test_unsupported_format_version_rejected():
     d = _manifest().to_dict()
     d["timef_format_version"] = 99
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
 def test_direct_construction_validates_format_version():
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest(
             dataset_id="x",
             metadata=_manifest().metadata,
@@ -146,7 +146,7 @@ def test_direct_construction_validates_format_version():
 
 
 def test_dataset_id_must_match_metadata():
-    with pytest.raises(InvalidManifestError, match="does not match"):
+    with pytest.raises(TimeNetInvalidManifestError, match="does not match"):
         Manifest(dataset_id="other", metadata=_manifest().metadata, files=_manifest().files)
 
 
@@ -154,7 +154,7 @@ def test_dataset_id_must_match_metadata():
 def test_from_dict_requires_core_blocks(missing):
     d = _manifest().to_dict()
     del d[missing]
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
@@ -176,10 +176,10 @@ def test_from_dict_requires_core_blocks(missing):
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
     # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
-    # field is a corrupt manifest, surfaced as InvalidManifestError rather than a raw TypeError/KeyError.
+    # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
     d = _manifest().to_dict()
     d["files"]["samples"] = [entry]
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
@@ -209,14 +209,14 @@ def test_values_backend_round_trips():
 
 
 def test_unknown_values_backend_rejected_when_parsing():
-    with pytest.raises(InvalidManifestError, match="values_backend"):
+    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
         _manifest(values_backend="feather")
 
 
 def test_unknown_values_backend_rejected():
     data = _manifest().to_dict()
     data["values_backend"] = "hdf5"
-    with pytest.raises(InvalidManifestError, match="values_backend"):
+    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
         Manifest.from_dict(data)
 
 
@@ -230,21 +230,21 @@ def test_unmodeled_metadata_keys_dropped():
 def test_unknown_task_type_rejected():
     d = _manifest().to_dict()
     d["schema"]["tasks"] = [{"task_type": "not_a_task"}]
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
 def test_bad_unit_string_rejected():
     d = _manifest().to_dict()
     d["schema"]["time_series_specs"][0]["unit_value"] = "not_a_unit"
-    with pytest.raises(InvalidManifestError, match="schema"):
+    with pytest.raises(TimeNetInvalidManifestError, match="schema"):
         Manifest.from_dict(d)
 
 
 def test_non_string_dataset_version_rejected():
     d = _manifest().to_dict()
     d["metadata"]["dataset_version"] = 3
-    with pytest.raises(InvalidManifestError, match="metadata"):
+    with pytest.raises(TimeNetInvalidManifestError, match="metadata"):
         Manifest.from_dict(d)
 
 
@@ -252,7 +252,7 @@ def test_non_string_dataset_version_rejected():
 def test_null_block_rejected(block):
     d = _manifest().to_dict()
     d[block] = None
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
@@ -289,7 +289,7 @@ def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters
     d = _manifest().to_dict()
     d[block][key] = "oops"
-    with pytest.raises(InvalidManifestError):
+    with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
 
@@ -298,5 +298,5 @@ def test_bad_dict_block_names_itself(block):
     # each block gets its own error message, rather than one shared "id_encoding/derived_from" string
     d = _manifest().to_dict()
     d[block] = "oops"
-    with pytest.raises(InvalidManifestError, match=block):
+    with pytest.raises(TimeNetInvalidManifestError, match=block):
         Manifest.from_dict(d)

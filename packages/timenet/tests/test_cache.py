@@ -61,7 +61,7 @@ def test_clear_removes_storage_and_cache_but_keeps_registry(_home):
     assert freed > 0
     assert not (_home / "storage").exists()
     assert not (_home / "cache").exists()
-    assert (_home / "registry").exists()  # curated outputs kept
+    assert (_home / "registry").exists()  # built outputs kept
 
 
 def test_clear_all_removes_registry_too(_home):

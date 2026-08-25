@@ -137,7 +137,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         decision costs only a distinct-value count over data already in memory. The backend does
         not read the series a second time and does not call the loader again. The buffer size stays
         within ``row_group_target_bytes``. The backend logs the decision at INFO level under this
-        module's logger. So a curator can see, for each ``spec_type``, what encoding the backend
+        module's logger. So a builder can see, for each ``spec_type``, what encoding the backend
         chose. For the auto path, the log also shows the cardinality that drove the choice.
 
         Args:

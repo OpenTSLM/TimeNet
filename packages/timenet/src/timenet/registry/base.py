@@ -7,9 +7,13 @@ the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type f
 """
 
 from abc import ABC, abstractmethod
+from pathlib import Path
+import shutil
 from typing import BinaryIO, TypeVar
+import uuid
 
 from timenet.manifest import Manifest
+from timenet.registry._paths import safe_version_path
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
 
@@ -40,7 +44,7 @@ class BaseRegistry(ABC):
             The :class:`~timenet.manifest.Manifest` of the dataset.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
     @abstractmethod
@@ -56,7 +60,7 @@ class BaseRegistry(ABC):
             An open binary file object.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
     @abstractmethod
@@ -77,8 +81,71 @@ class BaseRegistry(ABC):
             A handle to the manifest and files of the committed version.
 
         Raises:
-            DatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def download_version(
+        self,
+        dataset_id: str,
+        version: str,
+        dest_dir: str | Path,
+        *,
+        force: bool = False,
+        manifest: Manifest | None = None,
+    ) -> None:
+        """Download a version's files into ``dest_dir``, swapping the directory in atomically.
+
+        Fetches every file through :meth:`open_file` into a sibling ``<version>.tmp-*`` staging
+        directory, with ``manifest.json`` last as the commit marker. It then renames the staging
+        directory over ``dest_dir`` in one step. An interrupted download never leaves a half-written
+        copy in place. Subclasses can override this method with a faster path, such as concurrent
+        streaming from a remote service.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string.
+            dest_dir: The target ``<...>/<id>/<version>`` directory.
+            force: Re-download even if a copy already exists.
+            manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
+        """
+        if manifest is None:
+            manifest = self.get_manifest(dataset_id, version)
+        target = Path(dest_dir)
+        if (target / "manifest.json").exists() and not force:
+            return  # already downloaded and current
+        parent = target.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        # A hard kill (SIGKILL/power loss) skips the finally below, so its staging dir lingers. Sweep any
+        # stale <version>.tmp-* sibling before staging a fresh copy (mirrors the remote download path).
+        for stale in parent.glob(f"{target.name}.tmp-*"):
+            if stale.is_dir():
+                shutil.rmtree(stale, ignore_errors=True)
+        staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
+        try:
+            for relpath in (*manifest.files.all_parts(), "manifest.json"):
+                self._stage_file(dataset_id, version, relpath, staging)
+            if target.exists():
+                shutil.rmtree(target)
+            staging.replace(target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def _stage_file(self, dataset_id: str, version: str, relpath: str, staging: Path) -> None:
+        """Copy one version file from the registry into the ``staging`` directory.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string.
+            relpath: The version-relative file path from the manifest.
+            staging: The staging directory to write into.
+
+        Raises:
+            TimeFFormatError: If ``relpath`` would escape ``staging`` (an absolute or ``..`` path).
+        """  # noqa: DOC502 - raised by safe_version_path
+        destination = safe_version_path(staging, relpath)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self.open_file(dataset_id, version, relpath) as source, destination.open("wb") as sink:
+            shutil.copyfileobj(source, sink)
 
     def search(  # noqa: PLR0913
         self,

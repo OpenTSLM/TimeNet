@@ -62,3 +62,12 @@ def test_registry_selector_from_env(monkeypatch):
 
 def test_is_basesettings():
     assert isinstance(settings(), TimeNetSettings)
+
+
+def test_isolation_defaults_to_on():
+    assert settings().isolation == "on"
+
+
+def test_isolation_reads_the_environment(monkeypatch):
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    assert settings().isolation == "off"

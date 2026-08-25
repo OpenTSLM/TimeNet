@@ -7,7 +7,7 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
 `BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine drives
-it `download -> convert -> derive_schema -> store`; `timenet-curate build <id>` runs that pipeline and
+it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
 writes the result into a registry.
 
 Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,
@@ -81,12 +81,12 @@ Keep `download` I/O-only and `convert` CPU-only with lazy value loaders (never m
 - Add a fixture-based test mirroring `packages/timenet-connectors/tests/test_tsqa.py`: check in a tiny
   sample of the raw shape and call `convert()` on it directly (no network). The `TIMENET_TESTING` /
   `TIMENET_ROW_LIMIT` env vars mentioned in some docs are **not implemented**, so don't rely on them.
-- Round-trip end to end: `uv run timenet-curate build <id> --out <tmp-dir>`, then
+- Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
   `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
 
 ## Further reading
 
-`references/connector-anatomy.md` in this skill. Repo docs: `docs/connectors.md` and `docs/curation.md`
+`references/connector-anatomy.md` in this skill. Repo docs: `docs/connectors.md` and `docs/build.md`
 (design proposal; where they describe a flat-file `datasets/<org>/<name>.py` layout, the real code uses
 the folder-package layout above, so follow the code).

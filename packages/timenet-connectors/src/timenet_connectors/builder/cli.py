@@ -1,4 +1,4 @@
-"""``timenet-curate``: the producer CLI that runs connectors through the engine.
+"""``timenet-build``: the producer CLI that runs connectors through the engine.
 
 This is not the consumer ``timenet`` CLI. A ``build`` writes a dataset-layout directory that the SDK
 can load. That directory is a valid local registry. The CLI resolves connectors by dataset id at run
@@ -26,19 +26,19 @@ from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.engine import run_pipeline
-from timenet.errors import RegistryError
+from timenet.errors import TimeNetRegistryError
 from timenet.registry import default_registry_path
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.discovery import resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 
 
-app = typer.Typer(help="Curate TimeNet datasets from connectors.", no_args_is_help=True)
+app = typer.Typer(help="Build TimeNet datasets from connectors.", no_args_is_help=True)
 
 
 @app.callback()
 def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress status output.")) -> None:
-    """Curate TimeNet datasets from connectors."""  # forces subcommand mode (so ``build`` is named)
+    """Build TimeNet datasets from connectors."""  # forces subcommand mode (so ``build`` is named)
     console.quiet = quiet
 
 
@@ -56,7 +56,7 @@ def _default_root() -> Path:
     """
     try:
         return default_registry_path()
-    except RegistryError as exc:
+    except TimeNetRegistryError as exc:
         raise typer.BadParameter(f"$TIMENET_REGISTRY: {exc}; pass --out <dir>") from exc
 
 
@@ -66,7 +66,7 @@ def build(
     out: str | None = typer.Option(
         None, "--out", help="Output registry directory (default: $TIMENET_REGISTRY, else the local registry)."
     ),
-    force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already curated."),
+    force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
     ),
@@ -74,7 +74,7 @@ def build(
     """Run a connector through the engine and write its dataset.
 
     This prints an emoji build summary to stderr and the version directory to stdout, so scripts can
-    capture it. If a curated version already exists, the build reuses it unless you give ``--force``.
+    capture it. If a built version already exists, the build reuses it unless you give ``--force``.
 
     Raises:
         BadParameter: If ``dataset_id`` has no known connector, or ``$TIMENET_REGISTRY`` is remote.
@@ -196,7 +196,7 @@ def _text_download_reporter() -> ProgressCallback:
 
 
 def main() -> None:
-    """Entry point for the ``timenet-curate`` console script.
+    """Entry point for the ``timenet-build`` console script.
 
     Expected failures print a one-line message. Only unexpected errors surface a traceback.
     """

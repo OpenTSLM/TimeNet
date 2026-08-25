@@ -7,7 +7,7 @@ import zipfile
 import pytest
 
 from timenet_connectors.download import fetch
-from timenet_connectors.download.fetch import Artifact, ensure_archive, fetch_files
+from timenet_connectors.download.fetch import Artifact, download_files, ensure_archive
 
 
 def _zip_bytes(name: str, content: str) -> bytes:
@@ -17,10 +17,10 @@ def _zip_bytes(name: str, content: str) -> bytes:
     return buffer.getvalue()
 
 
-# ---- fetch_files ------------------------------------------------------------------------------
+# ---- download_files ------------------------------------------------------------------------------
 
 
-def test_fetch_files_routes_s3_sequential_and_http_batched(monkeypatch, tmp_path):
+def test_download_files_routes_s3_sequential_and_http_batched(monkeypatch, tmp_path):
     s3_urls = []
     http_urls = []
 
@@ -44,13 +44,13 @@ def test_fetch_files_routes_s3_sequential_and_http_batched(monkeypatch, tmp_path
         Artifact("https://h/b", tmp_path / "b"),
         Artifact("s3://b/c", tmp_path / "c"),
     ]
-    result = asyncio.run(fetch_files(items))
+    result = asyncio.run(download_files(items))
     assert result == [tmp_path / "a", tmp_path / "b", tmp_path / "c"]  # input order preserved
     assert s3_urls == ["s3://b/a", "s3://b/c"]  # s3 handled one at a time
     assert http_urls == ["https://h/b"]  # http handled as one batch
 
 
-def test_fetch_files_passes_batch_and_per_artifact_auth(monkeypatch, tmp_path):
+def test_download_files_passes_batch_and_per_artifact_auth(monkeypatch, tmp_path):
     captured = {}
 
     async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
@@ -61,7 +61,7 @@ def test_fetch_files_passes_batch_and_per_artifact_auth(monkeypatch, tmp_path):
 
     monkeypatch.setattr(fetch, "download_http_many", _fake_many)
     items = [Artifact("https://h/a", tmp_path / "a", headers={"Authorization": "tok"}, cookies={"s": "1"})]
-    asyncio.run(fetch_files(items, headers={"X-App": "t"}, cookies={"batch": "c"}))
+    asyncio.run(download_files(items, headers={"X-App": "t"}, cookies={"batch": "c"}))
 
     assert captured["headers"] == {"X-App": "t"}  # batch-level forwarded to the session
     assert captured["cookies"] == {"batch": "c"}
@@ -69,7 +69,7 @@ def test_fetch_files_passes_batch_and_per_artifact_auth(monkeypatch, tmp_path):
     assert captured["artifacts"][0].cookies == {"s": "1"}
 
 
-def test_fetch_files_skips_existing_s3(monkeypatch, tmp_path):
+def test_download_files_skips_existing_s3(monkeypatch, tmp_path):
     dest = tmp_path / "a"
     dest.write_bytes(b"cached")
 
@@ -77,17 +77,17 @@ def test_fetch_files_skips_existing_s3(monkeypatch, tmp_path):
         raise AssertionError("should not download when the destination exists")
 
     monkeypatch.setattr(fetch, "download_s3_object", _boom)
-    asyncio.run(fetch_files([Artifact("s3://b/a", dest)]))
+    asyncio.run(download_files([Artifact("s3://b/a", dest)]))
     assert dest.read_bytes() == b"cached"
 
 
-def test_fetch_files_rejects_unknown_scheme_before_downloading(monkeypatch, tmp_path):
+def test_download_files_rejects_unknown_scheme_before_downloading(monkeypatch, tmp_path):
     def _boom(url, dest):
         raise AssertionError("must validate every scheme before any download runs")
 
     monkeypatch.setattr(fetch, "download_s3_object", _boom)
     with pytest.raises(ValueError, match="scheme"):
-        asyncio.run(fetch_files([Artifact("s3://b/a", tmp_path / "a"), Artifact("ftp://h/b", tmp_path / "b")]))
+        asyncio.run(download_files([Artifact("s3://b/a", tmp_path / "a"), Artifact("ftp://h/b", tmp_path / "b")]))
 
 
 # ---- ensure_archive ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ def test_ensure_archive_uses_a_filename_override(monkeypatch, tmp_path):
     assert (target / "hello.txt").read_text() == "hi"
 
 
-def test_fetch_files_forwards_sha256_to_the_download(monkeypatch, tmp_path):
+def test_download_files_forwards_sha256_to_the_download(monkeypatch, tmp_path):
     seen = {}
 
     async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
@@ -189,5 +189,5 @@ def test_fetch_files_forwards_sha256_to_the_download(monkeypatch, tmp_path):
         return [artifact.dest for artifact in artifacts]
 
     monkeypatch.setattr(fetch, "download_http_many", _fake_many)
-    asyncio.run(fetch_files([Artifact("https://h/a", tmp_path / "a", sha256="abc123")]))
+    asyncio.run(download_files([Artifact("https://h/a", tmp_path / "a", sha256="abc123")]))
     assert seen["sha256"] == "abc123"

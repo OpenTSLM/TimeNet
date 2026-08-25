@@ -6,7 +6,7 @@ this branch. Anchor files:
 - Contract: `packages/timenet/src/timenet/connectors/base.py`
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
-- Curate CLI: `packages/timenet-connectors/src/timenet_connectors/curate/cli.py`
+- Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
 - Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
 
 ## The `BaseConnector` contract
@@ -61,9 +61,9 @@ tags:
   - huggingface
 ```
 
-`dataset_id` must equal the id the connector is curated under. `license` must be a valid `License`;
-`domains` valid `Domain` values. The card is validated on load (needs the `curation` extra, which
-`timenet[curation]` pulls in); errors raise `InvalidCardError`.
+`dataset_id` must equal the id the connector is built under. `license` must be a valid `License`;
+`domains` valid `Domain` values. The card is validated on load (needs the `build` extra, which
+`timenet[build]` pulls in); errors raise `TimeNetInvalidCardError`.
 
 ## Base connectors to reuse
 

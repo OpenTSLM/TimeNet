@@ -1,4 +1,4 @@
-"""The curation pipeline that turns a connector into a stored dataset."""
+"""The build pipeline that turns a connector into a stored dataset."""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -20,7 +20,7 @@ def run_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> Path:
-    """Run one connector through the full curation pipeline and return the version directory.
+    """Run one connector through the full build pipeline and return the version directory.
 
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
@@ -29,7 +29,7 @@ def run_pipeline(  # noqa: PLR0913
     only writes local files. Publishing to a remote registry is a separate step.
 
     Args:
-        connector: The connector to curate.
+        connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
         clean_cache: Remove the cache directory after storing the dataset. Conversion is the only

@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.registry import LocalRegistry, default_registry_path
 
 
@@ -17,10 +17,10 @@ def test_default_registry_path_honors_local_registry(monkeypatch, tmp_path):
 
 def test_default_registry_path_rejects_remote(monkeypatch):
     monkeypatch.setenv("TIMENET_REGISTRY", "timenet://")
-    with pytest.raises(RegistryError):
+    with pytest.raises(TimeNetRegistryError):
         default_registry_path()
 
 
 def test_unknown_dataset_error_is_actionable(tmp_path):
-    with pytest.raises(DatasetNotFoundError, match="Curate one with"):
+    with pytest.raises(TimeNetDatasetNotFoundError, match="Build one with"):
         LocalRegistry(tmp_path).get_manifest("nope/missing")

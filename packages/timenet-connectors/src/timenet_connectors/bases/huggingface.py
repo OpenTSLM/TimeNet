@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 
 
 _BATCH_ROWS = 65536  # parquet rows decoded per batch
@@ -40,7 +40,7 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
 
         Raises:
             ImportError: If the caller has not installed the ``huggingface`` extra (``huggingface_hub``).
-            DatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
+            TimeNetDatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
         try:
             from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415
@@ -57,7 +57,7 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
             if f.endswith(".parquet")
         ]
         if not filenames:
-            raise DatasetNotFoundError(
+            raise TimeNetDatasetNotFoundError(
                 f"{self.HF_REPO!r} has no parquet files on {revision!r}; the Hub publishes that ref only "
                 "for public and gated datasets, not fully private ones"
             )
@@ -69,5 +69,7 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
             for batch in pq.ParquetFile(path).iter_batches(batch_size=_BATCH_ROWS):
                 rows.extend(batch.to_pylist())
         if not rows:
-            raise DatasetNotFoundError(f"{self.HF_REPO!r} returned no rows from {len(filenames)} parquet file(s)")
+            raise TimeNetDatasetNotFoundError(
+                f"{self.HF_REPO!r} returned no rows from {len(filenames)} parquet file(s)"
+            )
         return rows

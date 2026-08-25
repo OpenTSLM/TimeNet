@@ -1,6 +1,6 @@
 """Shared CLI output: emoji-prefixed status lines on stderr, with a quiet mode.
 
-The ``timenet`` CLI and the ``timenet-curate`` CLI both report progress through the shared
+The ``timenet`` CLI and the ``timenet-build`` CLI both report progress through the shared
 :data:`console`, so their output looks the same. Status messages go to stderr. Stdout stays free
 for the machine-readable result, for example a path or an id, that a script can capture or pipe.
 ``--quiet`` hides status messages but still shows warnings and errors. The console wraps a Rich

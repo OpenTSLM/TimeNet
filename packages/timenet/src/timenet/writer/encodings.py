@@ -177,7 +177,7 @@ def parquet_kwargs(
         "write_page_checksum": True,
         # Content-defined chunking aligns data pages to the data's content. For this reason, a
         # dedup backend (for example, Xet) needs to re-store only the chunks that changed. This
-        # happens when the writer stores a re-curated or copy-on-write-edited version. This
+        # happens when the writer stores a re-built or copy-on-write-edited version. This
         # feature needs pyarrow>=21.
         "use_content_defined_chunking": True,
     }

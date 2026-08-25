@@ -1,6 +1,6 @@
 """Inspect and clear the local TimeNet cache under ``~/.cache/timenet/`` (see :mod:`timenet.config`).
 
-Datasets live in the local registry (curated locally) and the download storage. Raw sources land in the
+Datasets live in the local registry (built locally) and the download storage. Raw sources land in the
 download cache. All three sit under the home directory.
 """
 
@@ -67,7 +67,7 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
     """Delete cached data and return the bytes freed and the directories removed.
 
     This always clears the download storage and the raw download cache. The caller can fetch both again.
-    It removes the local registry (locally curated datasets) only when the caller sets ``include_registry``.
+    It removes the local registry (locally built datasets) only when the caller sets ``include_registry``.
 
     Args:
         include_registry: Also remove the local registry.
