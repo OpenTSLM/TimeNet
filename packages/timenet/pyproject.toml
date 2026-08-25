@@ -6,6 +6,20 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "The TimeNet authors" }]
+keywords = ["time-series", "datasets", "timef", "machine-learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
 dependencies = [
     "httpx>=0.28",
     "jaxtyping>=0.3",
@@ -14,6 +28,12 @@ dependencies = [
     "pyarrow>=21",
     "pydantic-settings>=2.4",
 ]
+
+[project.urls]
+Homepage = "https://timenet.ai"
+Documentation = "https://docs.timenet.ai/"
+Repository = "https://github.com/OpenTSLM/TimeNet"
+Issues = "https://github.com/OpenTSLM/TimeNet/issues"
 
 [project.optional-dependencies]
 # The console CLI (`timenet`) needs Typer + Rich; the SDK and TimeF format do not. `timenet.cli:main`
