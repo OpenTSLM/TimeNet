@@ -75,7 +75,7 @@ def test_load_full_round_trips(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id, download="full")
+    loaded = client.load(manifest.metadata.dataset_id, download_mode="full")
     assert_datasets_equal(make_dataset(), loaded)
 
 
@@ -87,7 +87,7 @@ def test_load_on_demand_round_trips(version_dir, tmp_path):
         transport, _ = build_fake(directory, blob_base=blob_base)
         registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
         client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-        loaded = client.load(manifest.metadata.dataset_id, download="on_demand")
+        loaded = client.load(manifest.metadata.dataset_id, download_mode="on_demand")
         assert_datasets_equal(make_dataset(), loaded)
 
 

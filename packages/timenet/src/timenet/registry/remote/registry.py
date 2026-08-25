@@ -18,7 +18,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
-from timenet.registry.remote._download import ProgressCallback, materialize_version
+from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._fs import remote_version_filesystem, remote_version_root
 from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
@@ -132,7 +132,7 @@ class RemoteRegistry(WritableRegistry):
                 root=remote_version_root(dataset_id, resolved),
             )
         # Full mode and TimeNet.download() both materialize a version; route through the one method so
-        # there is a single download path (download_version owns the materialize_version call).
+        # there is a single download path (download_version owns the download_version_files call).
         self.download_version(dataset_id, resolved, dest, manifest=manifest)
         return DatasetVersion.open_local(dest)
 

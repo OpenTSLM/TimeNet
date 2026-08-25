@@ -176,7 +176,7 @@ class TimeNet:
         return target
 
     def load(
-        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download: str | None = None
+        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download_mode: str | None = None
     ) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
@@ -193,8 +193,8 @@ class TimeNet:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
-            download: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
-                fetch mode; ignored for local/S3 registries.
+            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                download mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
@@ -206,11 +206,11 @@ class TimeNet:
         """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         try:
-            if download is not None and isinstance(self._registry, RemoteRegistry):
-                handle = self._registry.open_version(dataset_id, version, mode=download)
+            if download_mode is not None and isinstance(self._registry, RemoteRegistry):
+                handle = self._registry.open_version(dataset_id, version, mode=download_mode)
             else:
                 handle = self._registry.open_version(dataset_id, version)
-        except DatasetNotFoundError as miss:
+        except TimeNetDatasetNotFoundError as miss:
             if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
             builder = find_builder(dataset_id)
@@ -246,4 +246,4 @@ class TimeNet:
 
         # Force the full download: a DataLoader pickles the handle to its workers, and the on-demand
         # handle wraps a live httpx client that cannot pickle; only the local-filesystem handle survives.
-        return TimeFTorchDataset(self.load(dataset_id, version, download="full"))
+        return TimeFTorchDataset(self.load(dataset_id, version, download_mode="full"))
