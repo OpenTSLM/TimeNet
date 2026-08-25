@@ -40,7 +40,7 @@ class RemoteRegistry(WritableRegistry):
         """Open a remote registry.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.dev.timenet.ai``.
+            base_url: The service root, e.g. ``https://registry.timenet.ai``.
             token: Bearer token. Defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
             transport: An httpx transport for testing; ``None`` uses the network.
