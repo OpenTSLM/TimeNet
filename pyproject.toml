@@ -32,8 +32,7 @@ target-version = "py311"
 src = ["packages/*/src"]
 
 [tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
+# quote-style (double) and indent-style (space) are ruff's defaults; only the non-default is set here.
 docstring-code-format = true
 
 [tool.ruff.lint]
@@ -101,20 +100,13 @@ markers = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.13"
 
 [[tool.ty.overrides]]
-# The example imports scikit-learn, which is intentionally not a project dependency (install it
-# yourself to run the example). Don't fail type-checking on that unresolved import.
-include = ["examples/**"]
-
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
-
-[[tool.ty.overrides]]
-# The CI report script declares its dependencies inline (PEP 723) and runs standalone under
-# `uv run`, so PyGithub is deliberately not a project dependency either.
-include = [".github/scripts/**"]
+# examples/** imports scikit-learn, and .github/scripts/** declares its deps inline (PEP 723) and runs
+# standalone under `uv run`. Neither is a project dependency, so don't fail type-checking on their
+# unresolved imports.
+include = ["examples/**", ".github/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
