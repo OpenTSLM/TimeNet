@@ -243,3 +243,37 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     scalar_empty = series["sine"].read_steps(6, 6)  # start == total
     assert len(scalar_empty) == 0
     assert scalar_empty.type == pa.float32()
+
+
+def test_str_dtype_is_rejected(tmp_path):
+    # Zarr has no dictionary layer, so string channels inflate on disk and read slowly. The backend
+    # rejects them loudly and steers to Parquet, which stores similar strings as a dictionary.
+    spec = TimeSeriesSpec(
+        spec_type="stage",
+        name="Stage",
+        unit_value=ureg.dimensionless,
+        dtype="str",
+    )
+    labels = ["normal", "afib", "vt", "wörld", ""]
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="t/str",
+            dataset_version=Version(1, 0, 0),
+            name="Str",
+            description="A str series rejected on the zarr backend.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(
+        time_series=(
+            TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1)),
+        ),
+        sample_id="sample-0",
+    )
+    dataset.derive_schema()
+    with (
+        pytest.raises(TimeFValidationError, match="does not support the str dtype"),
+        TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer,
+    ):
+        writer.write()

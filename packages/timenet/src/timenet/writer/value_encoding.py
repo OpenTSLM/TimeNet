@@ -14,7 +14,10 @@ one:
 - **plain** wins on nothing measured so far. It stays available as a manual override.
 
 The rule is cardinality on a sample: at most :data:`DICT_MAX_CARDINALITY` distinct values selects
-dictionary, more selects BYTE_STREAM_SPLIT.
+dictionary, more selects BYTE_STREAM_SPLIT. That is the float rule. Bools bypass it and always
+encode plain. Strings share the cardinality rule but never select BYTE_STREAM_SPLIT, a float
+transpose; above the threshold they encode plain. Integers behave like strings: dictionary under
+the threshold, plain above.
 
 The ``value_encoding`` override covers two known gaps instead of more machinery:
 
@@ -90,52 +93,76 @@ def sample_values(arrays: Sequence[np.ndarray]) -> np.ndarray:
 
     Each chunk contributes an equal share of :data:`SAMPLE_MAX_VALUES`, taken at a stride that spans
     the whole chunk. A contiguous prefix would under-count the alphabet of a chunk whose amplitude
-    drifts. A stride sees all of it. Chunks shorter than their share contribute everything.
+    drifts. A stride sees all of it. Chunks shorter than their share contribute everything. All
+    chunks share one dtype, which the sample keeps.
 
     Args:
-        arrays: One 1-D float32 array per buffered chunk.
+        arrays: One 1-D numeric array per buffered chunk, all the same dtype.
 
     Returns:
-        The concatenated sample, at most :data:`SAMPLE_MAX_VALUES` long.
+        The concatenated sample, at most :data:`SAMPLE_MAX_VALUES` long, in the chunks' dtype. An
+        empty sample is float32, which no caller reads values out of.
     """
     if not arrays:
         return np.empty(0, dtype=np.float32)
+    dtype = next((array.dtype for array in arrays if array.size), np.float32)
     share = max(1, SAMPLE_MAX_VALUES // len(arrays))
     parts = [array[:: max(1, array.size // share)][:share] for array in arrays]
-    return np.concatenate(parts)[:SAMPLE_MAX_VALUES]
+    sample = np.concatenate(parts)[:SAMPLE_MAX_VALUES]
+    return sample if sample.size else np.empty(0, dtype=dtype)
 
 
 def distinct_bit_patterns(values: np.ndarray) -> int:
-    """Return how many distinct float32 bit patterns ``values`` holds.
+    """Return how many distinct value bit patterns ``values`` holds.
 
     Bit patterns rather than numeric values. A Parquet dictionary keys on the stored bytes, so
-    ``-0.0`` and ``0.0`` occupy two slots even though they compare equal.
+    ``-0.0`` and ``0.0`` occupy two slots even though they compare equal. A fixed-width numeric
+    array is read through the same-width unsigned view, which turns each stored pattern into one
+    integer: a float32 array reads as uint32, an int16 array as uint16, and so on. Bools and
+    strings have no byte-linearity to exploit and are counted directly.
 
     Args:
-        values: A 1-D float32 array.
+        values: A 1-D array of one fixed-width numeric dtype, bool, or object-of-str.
 
     Returns:
         The number of distinct patterns.
     """
     if values.size == 0:
         return 0
-    return int(np.unique(np.ascontiguousarray(values, dtype=np.float32).view(np.uint32)).size)
+    contiguous = np.ascontiguousarray(values)
+    if np.issubdtype(values.dtype, np.bool_):
+        return int(np.unique(contiguous).size)
+    if np.issubdtype(values.dtype, np.number):
+        unsigned = {1: np.uint8, 2: np.uint16, 4: np.uint32, 8: np.uint64}.get(values.dtype.itemsize)
+        if unsigned is not None:
+            return int(np.unique(contiguous.view(unsigned)).size)
+    return int(np.unique(contiguous).size)
 
 
-def encoding_for_cardinality(distinct: int) -> ValueEncoding:
-    """Map a sampled distinct-value count to the encoding that stores it smaller.
+def encoding_for_cardinality(distinct: int, *, dtype: str = "float32") -> ValueEncoding:
+    """Map a sampled distinct-value count and a values dtype to the encoding that stores them smaller.
+
+    The cardinality rule selects dictionary up to :data:`DICT_MAX_CARDINALITY`. Above it, the choice
+    is a dtype matter rather than a count matter. Floats transpose into byte planes
+    (BYTE_STREAM_SPLIT); strings and integers have no byte-plane meaning and fall back to plain.
+    Bools never reach this function: they bypass measurement entirely.
 
     Args:
         distinct: Distinct bit patterns counted in the sample.
+        dtype: The values dtype as its string name (``"float32"``, ``"int16"``, ``"bool"``, ...).
+            Defaults to ``"float32"``.
 
     Returns:
-        Dictionary up to :data:`DICT_MAX_CARDINALITY`, BYTE_STREAM_SPLIT above it. Never PLAIN: it
-        won on nothing measured, and stays reachable only as an explicit override.
+        Dictionary up to :data:`DICT_MAX_CARDINALITY`, BYTE_STREAM_SPLIT above it for floats, plain
+        above it for other types. PLAIN is never selected for floats automatically; it stays
+        reachable only as an explicit override.
     """
-    return ValueEncoding.DICTIONARY if distinct <= DICT_MAX_CARDINALITY else ValueEncoding.BYTE_STREAM_SPLIT
+    if distinct <= DICT_MAX_CARDINALITY:
+        return ValueEncoding.DICTIONARY
+    return ValueEncoding.BYTE_STREAM_SPLIT if dtype in {"float32", "float64"} else ValueEncoding.PLAIN
 
 
-def select_value_encoding(arrays: Sequence[np.ndarray]) -> ValueEncoding:
+def select_value_encoding(arrays: Sequence[np.ndarray], *, dtype: str = "float32") -> ValueEncoding:
     """Pick the encoding for one modality from the values the writer has already buffered.
 
     Deterministic in the buffered values alone, so re-building an unchanged source reaches the same
@@ -143,10 +170,18 @@ def select_value_encoding(arrays: Sequence[np.ndarray]) -> ValueEncoding:
     the edit. This can only reach a different answer for a modality already sitting within a few
     percent of the threshold. There, the two encodings are near enough in size not to matter.
 
+    The rule is dtype-aware. Bools have no redundancy to spend a dictionary on, so they encode
+    plain. Everything else measures the sample and defers the count-to-encoding mapping to
+    :func:`encoding_for_cardinality`.
+
     Args:
-        arrays: The buffered chunks' float32 values, one array per chunk.
+        arrays: The buffered chunks' values, one array per chunk.
+        dtype: The values dtype as its string name (``"float32"``, ``"int16"``, ``"bool"``,
+            ``"str"`` ...). Defaults to ``"float32"``.
 
     Returns:
         The selected encoding, defaulting to dictionary when there is nothing to measure.
     """
-    return encoding_for_cardinality(distinct_bit_patterns(sample_values(arrays)))
+    if dtype == "bool":
+        return ValueEncoding.PLAIN
+    return encoding_for_cardinality(distinct_bit_patterns(sample_values(arrays)), dtype=dtype)

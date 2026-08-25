@@ -114,14 +114,15 @@ vibration = TimeSeriesSpec(
 | `name` | `str` | yes | Human-readable modality label. |
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
-| `dtype` | `str` | no | Canonical NumPy scalar dtype. Defaults to `"float32"`. |
+| `dtype` | `str` | no | Canonical NumPy scalar dtype, or `"str"` for string values. Defaults to `"float32"`. |
 | `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
-`dimension_names=("height", "width", "color")`. Parquet values require the scalar `float32` defaults
-today. For other dtypes or multidimensional values, select the Zarr values backend.
+`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`; scalar
+values of a non-`"str"` dtype preserve their NumPy type on disk, and `"str"` values read back as text.
+Multidimensional values require the Zarr values backend.
 
 Connectors that reuse a modality can subclass with field defaults:
 

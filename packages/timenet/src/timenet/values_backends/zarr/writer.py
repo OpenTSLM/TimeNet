@@ -61,6 +61,19 @@ _IRREGULAR_GROUP = "_irregular"
 _TIME_OFFSETS_GROUP = "_time_offsets"
 
 
+def _scalar_bytes(dtype: str) -> int:
+    """Return the estimated bytes one scalar value costs, used to size Zarr chunks and shards.
+
+    Args:
+        dtype: The spec's dtype tag.
+
+    Returns:
+        The estimated uncompressed bytes for one value. A ``str`` dtype never reaches here: the
+        backend rejects it.
+    """
+    return np.dtype(dtype).itemsize
+
+
 def _value_array_path(spec_type: str, stores_time_offsets: bool) -> str:
     """Return the array path holding one partition's values.
 
@@ -138,7 +151,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         Returns:
             The appender for that array.
         """
-        bytes_per_step = np.dtype(ts.spec.dtype).itemsize * max(1, int(np.prod(ts.spec.value_shape)))
+        bytes_per_step = _scalar_bytes(ts.spec.dtype) * max(1, int(np.prod(ts.spec.value_shape)))
         chunk_len = max(1, self._chunk_max_bytes // bytes_per_step)
         shard_len = max(1, (self._shard_target_bytes // bytes_per_step) // chunk_len) * chunk_len
         trailing = ts.spec.value_shape
@@ -212,7 +225,15 @@ class ZarrValuesBackend(BaseValuesBackend):
 
         Raises:
             ImportError: If the ``zarr`` extra is not installed.
+            TimeFValidationError: If a spec uses the ``str`` dtype.
         """
+        str_spec_types = sorted({ts.spec.spec_type for ts in unique_series if ts.spec.dtype == "str"})
+        if str_spec_types:
+            raise TimeFValidationError(
+                "the Zarr values backend does not support the str dtype (no dictionary layer, so "
+                f"string channels inflate on disk and read slowly); use values_backend='parquet' "
+                f"for specs with string values: {str_spec_types}"
+            )
         try:
             import zarr  # noqa: PLC0415
             from zarr.codecs import BloscCname, BloscCodec, BloscShuffle  # noqa: PLC0415

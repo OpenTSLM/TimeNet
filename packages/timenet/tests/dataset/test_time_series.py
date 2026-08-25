@@ -124,6 +124,22 @@ def test_from_values_generates_unique_id_unless_given():
     assert fixed.time_series_id == "x"
 
 
+def test_from_values_casts_to_the_specified_numpy_dtype():
+    spec = replace(_spec(), dtype="int16")
+    arr = TimeSeries.from_values([1, 2, 3], spec=spec, channel="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
+    assert arr.type == pa.int16()
+    assert arr.to_pylist() == [1, 2, 3]
+
+
+def test_from_values_str_spec_keeps_string_labels():
+    spec = replace(_spec(), dtype="str")
+    arr = TimeSeries.from_values(
+        ["normal", "afib"], spec=spec, channel="II", time_axis=RegularAxis.from_rate_hz(2)
+    ).to_arrow()
+    assert arr.type == pa.string()
+    assert arr.to_pylist() == ["normal", "afib"]
+
+
 def _counting(n, tsid="s", axis=None):
     return _series(
         n_values=n,

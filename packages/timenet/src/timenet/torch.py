@@ -80,7 +80,16 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
 
     Returns:
         The values with shape ``(n_steps, *spec.value_shape)``.
+
+    Raises:
+        TimeFValidationError: If the series holds string values, which have no tensor
+            representation.
     """
     # copy(): Arrow's zero-copy numpy view is read-only. torch.from_numpy warns when an array is
     # read-only.
+    if ts.spec.dtype == "str":
+        raise TimeFValidationError(
+            f"string series {ts.time_series_id!r} has no tensor representation; "
+            "read it via TimeSeries.to_arrow() instead"
+        )
     return torch.from_numpy(ts.to_numpy().copy())

@@ -27,8 +27,14 @@ def _manifest() -> Manifest:
         unit_value=ureg.millivolt,
         data_source=source,
     )
+    rhythm = TimeSeriesSpec(
+        spec_type="rhythm",
+        name="Rhythm",
+        unit_value=ureg.dimensionless,
+        dtype="str",
+    )
     schema = DatasetSchema(
-        time_series_specs=(spec,),
+        time_series_specs=(spec, rhythm),
         annotations=(
             AnnotationDescriptor(key="age", annotation_type=AnnotationType.STATIC, value_type="int", unit="years"),
             AnnotationDescriptor(key="artifact", annotation_type=AnnotationType.INTERVAL),

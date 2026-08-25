@@ -100,8 +100,8 @@ flow reads it straight back.
   synthesis. That keeps multiprocessing `DataLoader` workers safe.
 - Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()`,
   `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
-  per-timestep shape. The writer stores scalar `float32` values in Parquet by default or uses Zarr for
-  dtype-preserving scalar and multidimensional values.
+  per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
+  dtype-preserving multidimensional values.
 - Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
   and conversion.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a

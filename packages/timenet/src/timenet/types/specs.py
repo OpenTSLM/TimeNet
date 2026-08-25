@@ -22,8 +22,32 @@ from timenet.types.units import ureg
 _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets"})
 
 SUPPORTED_VALUE_DTYPES = frozenset(
-    {"bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32"}
+    {"bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32", "str"}
 )
+
+
+def _validate_dtype(dtype: str) -> None:
+    """Validate a spec dtype tag.
+
+    An ``"str"`` dtype names the string values and is not a NumPy dtype. Every other dtype must be a
+    supported NumPy scalar dtype written in its canonical form.
+
+    Args:
+        dtype: The spec's dtype tag.
+
+    Raises:
+        TimeFValidationError: If ``dtype`` is not a supported scalar dtype.
+    """
+    if dtype == "str":
+        return
+    try:
+        normalized_dtype = np.dtype(dtype).name
+    except TypeError as exc:
+        raise TimeFValidationError(f"unsupported TimeSeriesSpec.dtype {dtype!r}") from exc
+    if normalized_dtype not in SUPPORTED_VALUE_DTYPES or normalized_dtype != dtype:
+        raise TimeFValidationError(
+            f"TimeSeriesSpec.dtype must be one of {sorted(SUPPORTED_VALUE_DTYPES)}, got {dtype!r}"
+        )
 
 
 @dataclass(frozen=True)
@@ -66,7 +90,7 @@ class TimeSeriesSpec:
     data_source: DataSource | None = None
     """Origin that produced this modality, if known."""
     dtype: str = "float32"
-    """NumPy scalar dtype used for each value element."""
+    """Value dtype: a NumPy scalar dtype, or ``"str"`` for string values."""
     value_shape: tuple[int, ...] = ()
     """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[str, ...] = ()
@@ -92,14 +116,7 @@ class TimeSeriesSpec:
             raise TimeFValidationError(
                 f"TimeSeriesSpec.spec_type must not be one of {sorted(_RESERVED_SPEC_TYPES)}, got {self.spec_type!r}"
             )
-        try:
-            normalized_dtype = np.dtype(self.dtype).name
-        except TypeError as exc:
-            raise TimeFValidationError(f"unsupported TimeSeriesSpec.dtype {self.dtype!r}") from exc
-        if normalized_dtype not in SUPPORTED_VALUE_DTYPES or normalized_dtype != self.dtype:
-            raise TimeFValidationError(
-                f"TimeSeriesSpec.dtype must be one of {sorted(SUPPORTED_VALUE_DTYPES)}, got {self.dtype!r}"
-            )
+        _validate_dtype(self.dtype)
         if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in self.value_shape):
             raise TimeFValidationError(
                 f"TimeSeriesSpec.value_shape dimensions must be positive integers, got {self.value_shape!r}"

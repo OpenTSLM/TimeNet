@@ -136,11 +136,17 @@ def annotations_schema(id_types: IdTypes) -> pa.Schema:
     )
 
 
-def shard_schema(id_types: IdTypes) -> pa.Schema:
+#: The default values-element type of a waveform shard. A module-level constant keeps
+#: :func:`shard_schema`'s default free of a function call in its signature.
+_DEFAULT_VALUES_TYPE = pa.float32()
+
+
+def shard_schema(id_types: IdTypes, value_type: pa.DataType = _DEFAULT_VALUES_TYPE) -> pa.Schema:
     """Return the waveform shard schema.
 
     Args:
         id_types: The resolved id storage types.
+        value_type: The element type of the ``values`` list (defaults to ``float32``).
 
     Returns:
         The Arrow schema.
@@ -152,7 +158,7 @@ def shard_schema(id_types: IdTypes) -> pa.Schema:
             ("channel", pa.string()),
             ("chunk_idx", pa.int32()),
             ("n_values", pa.int32()),
-            ("values", pa.list_(pa.float32())),
+            ("values", pa.list_(value_type)),
             ("time_offsets_us", pa.list_(pa.int64())),
         ]
     )

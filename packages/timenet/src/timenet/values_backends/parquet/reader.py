@@ -1,4 +1,4 @@
-"""The default reader-side values backend: reads float32 values from Parquet shards.
+"""The default reader-side values backend: reads typed values from Parquet shards.
 
 The reader decodes each shared row group at most once because chunks of different series can land
 in the same row group.
@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -22,6 +23,23 @@ if TYPE_CHECKING:
 
 
 _ROW_GROUP_CACHE_SIZE = 16  # decoded row groups kept, so one shared by many series decodes once
+
+
+def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
+    """Return the Arrow type a spec's values should come back as.
+
+    A ``"str"`` dtype reads back as plain text; every other dtype maps through NumPy so the
+    in-memory and stored types match.
+
+    Args:
+        spec: The series' spec.
+
+    Returns:
+        The canonical Arrow type for the spec's dtype.
+    """
+    if spec.dtype == "str":
+        return pa.string()
+    return pa.from_numpy_dtype(np.dtype(spec.dtype))
 
 
 class ParquetValuesReader(BaseValuesReader):
@@ -40,14 +58,13 @@ class ParquetValuesReader(BaseValuesReader):
             rows: The series' index rows, sorted by ``chunk_idx``.
 
         Returns:
-            The series' 1-D float32 values.
+            The series' 1-D values in the spec's canonical Arrow type.
         """
-        del spec  # Parquet is scalar float32-only in this format version.
         chunks = [
             self._row_group_values(version, row["chunk_file"], row["chunk_major_idx"])[row["chunk_minor_idx"]].values
             for row in rows
         ]
-        return pa.concat_arrays([chunk.cast(pa.float32()) for chunk in chunks])
+        return pa.concat_arrays([chunk.cast(_target_type(spec)) for chunk in chunks])
 
     def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
         """Read an irregular series' time offsets, which share their values' chunk locators.
@@ -82,13 +99,13 @@ class ParquetValuesReader(BaseValuesReader):
         """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
 
         Returns:
-            The requested scalar float32 values.
+            The requested scalar values in the spec's canonical Arrow type.
         """
-        del spec  # Parquet is scalar float32-only in this format version.
+        target = _target_type(spec)
         total = sum(row["n_values"] for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
-            return pa.array([], type=pa.float32())
+            return pa.array([], type=target)
         parts = []
         cursor = 0
         for row in rows:
@@ -99,7 +116,7 @@ class ParquetValuesReader(BaseValuesReader):
                 ].values
                 lo = max(start - cursor, 0)
                 hi = min(bounded_stop - cursor, row["n_values"])
-                parts.append(values.slice(lo, hi - lo).cast(pa.float32()))
+                parts.append(values.slice(lo, hi - lo).cast(target))
             cursor = row_stop
         return pa.concat_arrays(parts)
 
