@@ -900,3 +900,54 @@ def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
     assert isinstance(task, ClassificationTask)
     assert task.target == "afib"
     assert task.target_schema is None
+
+
+def _annotation_dataset(annotations):
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/annotations",
+            dataset_version=Version(1, 0, 0),
+            name="Annotations",
+            description="One sample carrying annotations under test.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    for ann in annotations:
+        sample.add_annotation(ann)
+    return dataset
+
+
+def test_annotation_map_value_round_trips(tmp_path):
+    ds = _annotation_dataset([Annotation(key="panas", value={"pa": 30, "na": 12}, id="ann-map")])
+    restored = _read(_write(tmp_path, dataset=ds))
+    assert restored.samples[0].annotations[0].value == {"pa": 30, "na": 12}
+
+
+def test_annotation_source_round_trips(tmp_path):
+    ds = _annotation_dataset([Annotation(key="stage", value="N2", source="rater-A", id="ann-src")])
+    restored = _read(_write(tmp_path, dataset=ds))
+    assert restored.samples[0].annotations[0].source == "rater-A"
+
+
+def test_annotation_partition_missing_source_reads_none(tmp_path):
+    """An annotations partition written before the source column existed reads back source=None."""
+    ds = _annotation_dataset([Annotation(key="stage", value="N2", source="rater-A", id="ann-src")])
+    version_dir = _write(tmp_path, dataset=ds)
+    parquets = [p for p in version_dir.rglob("*.parquet") if p.parent.name == "annotations"]
+    assert len(parquets) == 1
+    table = pq.read_table(parquets[0])
+    assert "source" in table.column_names
+    pq.write_table(table.drop_columns(["source"]), parquets[0])
+    restored = _read(version_dir)
+    assert restored.samples[0].annotations[0].source is None

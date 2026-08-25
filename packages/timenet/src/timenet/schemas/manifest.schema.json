@@ -83,7 +83,7 @@
     "valueType": {
       "type": "string",
       "description": "The manifest value_type tag for an annotation value. Kept in sync with timenet.types.value_type_of by a drift test.",
-      "enum": ["bool", "int", "float", "str", "list"]
+      "enum": ["bool", "int", "float", "str", "list", "map"]
     },
     "taskType": {
       "type": "string",

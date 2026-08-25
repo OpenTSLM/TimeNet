@@ -128,7 +128,8 @@ def annotations_schema(id_types: IdTypes) -> pa.Schema:
         [
             ("id", id_types["annotation_id"]),
             ("key", pa.string()),
-            ("value", pa.string()),  # JSON-encoded scalar/list, null for a pure marker
+            ("value", pa.string()),  # JSON-encoded scalar/list/map, null for a pure marker
+            ("source", pa.string()),  # optional per-instance provenance, null when unset
             ("span", span_struct(id_types)),  # null for a static annotation
             ("sample_ids", pa.list_(id_types["sample_id"])),
         ]

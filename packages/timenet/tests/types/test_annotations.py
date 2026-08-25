@@ -12,6 +12,7 @@ from timenet.types import (
     TimePoint,
     annotation_type_of,
     ureg,
+    value_type_of,
 )
 
 
@@ -133,3 +134,12 @@ def test_base_annotation_not_typeable():
 def test_span_must_be_a_span():
     with pytest.raises(TimeFValidationError, match="must be a TimePoint or a TimeInterval"):
         Annotation(key="bad", span="not-a-span")  # ty: ignore[invalid-argument-type]
+
+
+def test_value_type_of_map():
+    assert value_type_of({"panas_pa": 30, "panas_na": 12}) == "map"
+
+
+def test_value_type_of_rejects_unsupported_type():
+    with pytest.raises(TimeFValidationError, match="unsupported annotation value type"):
+        value_type_of(object())

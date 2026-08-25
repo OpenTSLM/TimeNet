@@ -60,6 +60,10 @@ class Annotation:
     string raises ``ValueError``. Construction stores a ``pint.Unit`` as its canonical name."""
     description: str | None = None
     """Optional human-readable description of the annotation."""
+    source: str | None = None
+    """Optional per-instance provenance (the rater, method, or model behind this value). Unlike
+    ``description``, which the descriptor holds once per key, ``source`` can differ between
+    annotations that share a key."""
     id: str = field(default_factory=new_id)
     """Unique identifier, a UUIDv7 string by default."""
 
@@ -112,7 +116,7 @@ class AnnotationDescriptor:
     annotation_type: AnnotationType
     """Which of the three annotation shapes this key uses."""
     value_type: str | None = None
-    """Manifest value-type tag (bool, int, float, str, or list)."""
+    """Manifest value-type tag (bool, int, float, str, list, or map)."""
     unit: str | None = None
     """Optional physical unit of the value."""
     description: str | None = None
@@ -126,21 +130,23 @@ def value_type_of(value: Any) -> str | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker.
+        One of ``"bool" | "int" | "float" | "str" | "list" | "map"``, or ``None`` for a pure marker.
 
     Raises:
-        TypeError: If ``value`` is a non-null value of an unsupported type.
+        TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
     """
     if value is None:
         return None
-    if isinstance(value, bool):  # bool before int: bool is an int subclass
-        return "bool"
-    if isinstance(value, int):
-        return "int"
-    if isinstance(value, float):
-        return "float"
-    if isinstance(value, str):
-        return "str"
-    if isinstance(value, list | tuple):
-        return "list"
-    raise TypeError(f"unsupported annotation value type: {type(value).__name__}")
+    # bool before int, since bool is an int subclass.
+    tags: tuple[tuple[type | object, str], ...] = (
+        (bool, "bool"),
+        (int, "int"),
+        (float, "float"),
+        (str, "str"),
+        (list | tuple, "list"),
+        (dict, "map"),
+    )
+    for value_type, tag in tags:
+        if isinstance(value, value_type):
+            return tag
+    raise TimeFValidationError(f"unsupported annotation value type: {type(value).__name__}")

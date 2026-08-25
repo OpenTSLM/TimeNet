@@ -544,6 +544,7 @@ class TimeFWriter:
             "id": codec.encode("annotation_id", ann.id),
             "key": ann.key,
             "value": None if ann.value is None else json.dumps(ann.value),
+            "source": ann.source,
             "span": codec.encode_span(ann.span),
             "sample_ids": [],
         }
