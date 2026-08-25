@@ -41,6 +41,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     derived_from=None,          # copy-on-write lineage (see below)
+    build_env=None,             # environment provenance (see below)
     timef_format_version=1,     # validated against the supported set {1}
 )
 ```
@@ -55,6 +56,10 @@ a version from a [copy-on-write edit](timef-writer.md#copy-on-write-edits) has `
 modality's shards. No code reads this field to make a decision: Parquet already records the applied
 encoding in each file's footer. The field exists so that a builder can inspect what a build chose.
 The field is empty for a backend that has no such choice.
+
+`build_env` records the environment that produced the version: the interpreter version and every
+installed package with its version. `timenet.provenance.build_env` collects this data. Like
+`value_encoding`, `build_env` is provenance only, so no code reads it to interpret the data.
 
 Format v2 introduces a backend-neutral schema for the values locator. This schema applies to both
 scalar and multidimensional datasets. Multidimensional specs also require format v2. As a result, an

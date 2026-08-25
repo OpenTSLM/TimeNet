@@ -1,7 +1,9 @@
 import dataclasses
+from pathlib import Path
 
 import pytest
 
+from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
@@ -175,3 +177,79 @@ def test_version_given_twice_raises(versioned_registry, tmp_path):
     client = TimeNet(versioned_registry, storage_path=tmp_path / "store")
     with pytest.raises(ValueError, match="twice"):
         client.get("timenet/hello-world@1.0.0", "1.1.0")
+
+
+def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_root, tmp_path, monkeypatch):
+    # The builder declares only one version, so a pin it cannot satisfy must say which version it
+    # builds, and must fail before the expensive build rather than after it.
+    class _Builder:
+        built = False
+
+        def knows(self, dataset_id):
+            return True
+
+        def declared_version(self, dataset_id):
+            return "1.0.0"
+
+        def build(self, dataset_id, root, *, force=False):
+            self.built = True
+            return Path(root) / dataset_id / "1.0.0"
+
+    builder = _Builder()
+    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: builder)
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+
+    with pytest.raises(TimeNetDatasetNotFoundError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+        client.load("timenet/hello-world@9.9.9")
+    assert not builder.built  # the pin was rejected before the build ran
+
+
+@pytest.mark.parametrize("pin", [None, "latest", ""])
+def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, pin):
+    # Every registry reads "latest" and "" as the latest version, so they are not pins the build
+    # can miss: the version the builder just committed satisfies them.
+    class _Builder:
+        def knows(self, dataset_id):
+            return True
+
+        def declared_version(self, dataset_id):
+            return "1.0.0"
+
+        def build(self, dataset_id, root, *, force=False):
+            dataset = make_dataset()
+            dataset.derive_schema()
+            with TimeFWriter(Path(root), dataset) as writer:
+                writer.write()
+            return Path(root) / dataset_id / "1.0.0"
+
+    empty_root = tmp_path / "reg"
+    empty_root.mkdir()
+    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder())
+    client = TimeNet(empty_root, storage_path=tmp_path / "store")
+
+    assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
+
+
+def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, monkeypatch):
+    # A caller can opt out of the build-on-miss, so a notebook load fails fast instead of starting a
+    # multi-GB download and a build.
+    class _Builder:
+        built = False
+
+        def knows(self, dataset_id):
+            return True
+
+        def declared_version(self, dataset_id):
+            return "1.0.0"
+
+        def build(self, dataset_id, root, *, force=False):
+            self.built = True
+            return Path(root) / dataset_id / "1.0.0"
+
+    builder = _Builder()
+    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: builder)
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+
+    with pytest.raises(TimeNetDatasetNotFoundError):
+        client.load("timenet/hello-world@9.9.9", auto_build=False)
+    assert not builder.built  # auto_build=False skips the connector entirely

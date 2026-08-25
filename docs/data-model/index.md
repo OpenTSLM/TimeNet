@@ -27,7 +27,7 @@ To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The eng
 through a fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an
 in-memory dataset (CPU only). The engine then derives the schema from the data. It stores the result
 as parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets round-trip
-deterministically, and the consumer SDK never runs connector code.
+deterministically, and reading a compiled version never runs connector code.
 
 ```mermaid
 flowchart LR

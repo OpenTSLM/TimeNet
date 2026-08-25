@@ -2,7 +2,9 @@
 
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
 (the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
-``load``. This class never runs connector code. The build side produces datasets.
+``load``. Against a local registry, ``load`` builds a dataset the registry does not have when an
+installed package registers a connector for its id; against a remote registry it never runs connector
+code.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -12,13 +14,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
+from timenet.builders import find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.refs import split_ref
-from timenet.registry import BaseRegistry, LocalRegistry, RemoteRegistry, open_registry
+from timenet.registry import (
+    BaseRegistry,
+    DatasetVersion,
+    LocalRegistry,
+    RemoteRegistry,
+    open_registry,
+)
 from timenet.types import DatasetMetadata, Domain, License, Task
 
 
@@ -161,7 +170,9 @@ class TimeNet:
         self._registry.download_version(dataset_id, resolved, target, force=force, manifest=manifest)
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, download_mode: str | None = None) -> TimeFDataset:
+    def load(
+        self, dataset_id: str, version: str | None = None, *, auto_build: bool = True, download_mode: str | None = None
+    ) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
         This method does not download the whole dataset. The reader loads each series only
@@ -169,21 +180,61 @@ class TimeNet:
         :meth:`~timenet.registry.BaseRegistry.open_version` returns. To get an on-disk cache,
         use :meth:`download`.
 
+        Against a local registry, a dataset the registry does not have is built first, if some
+        installed package registers a connector for its id. Set ``auto_build`` false to fail fast
+        instead of starting a download and a build. A remote registry raises as before.
+
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the
-                default download mode; ignored for local/S3 registries.
+            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            download_mode: For a remote registry, ``"full"`` or ``"on_demand"`` to override the default
+                download mode; ignored for local/S3 registries.
 
         Returns:
             The dataset with lazy, per-series loaders that use the registry handle.
-        """
+
+        Raises:
+            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
+                declares a different version than the one asked for.
+            TimeNetBuildError: If the build runs but fails.
+        """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
-        if download_mode is not None and isinstance(self._registry, RemoteRegistry):
-            handle = self._registry.open_version(dataset_id, version, mode=download_mode)
-        else:
-            handle = self._registry.open_version(dataset_id, version)
+        try:
+            handle = self._open_version(dataset_id, version, download_mode)
+        except TimeNetDatasetNotFoundError as miss:
+            if not auto_build or not isinstance(self._registry, LocalRegistry):
+                raise
+            builder = find_builder(dataset_id)
+            if builder is None:
+                raise
+            # A connector produces one declared version. Reject a pin it cannot satisfy before the
+            # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
+            # not pins, so a fresh build satisfies them.
+            if version not in {None, "", "latest"}:
+                declared = builder.declared_version(dataset_id)
+                if declared is not None and version != declared:
+                    raise TimeNetDatasetNotFoundError(
+                        f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
+                    ) from miss
+            builder.build(dataset_id, self._registry.root)
+            handle = self._open_version(dataset_id, version, download_mode)
         return TimeFReader(handle).read()
+
+    def _open_version(self, dataset_id: str, version: str | None, download_mode: str | None) -> DatasetVersion:
+        """Open a version handle, honouring a remote registry's fetch-mode override.
+
+        Args:
+            dataset_id: The bare dataset id.
+            version: The resolved version, or ``None`` for the latest.
+            download_mode: ``"full"`` / ``"on_demand"`` for a remote registry, else ignored.
+
+        Returns:
+            The registry's handle to the version.
+        """
+        if download_mode is not None and isinstance(self._registry, RemoteRegistry):
+            return self._registry.open_version(dataset_id, version, mode=download_mode)
+        return self._registry.open_version(dataset_id, version)
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
         """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.

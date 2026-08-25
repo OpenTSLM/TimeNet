@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import platform
 
 import pytest
 import typer
@@ -8,6 +10,7 @@ from timenet.client import TimeNet
 from timenet.config import settings
 from timenet.engine import run_pipeline
 from timenet.errors import TimeFValidationError
+from timenet.provenance import build_env
 from timenet.testing import assert_datasets_equal
 from timenet_connectors import build, load
 from timenet_connectors.builder.cli import _default_root, app as build_app
@@ -16,6 +19,9 @@ from timenet_connectors.discovery import available, resolve
 
 
 runner = CliRunner()
+
+# The CLI tests below pass --no-isolation so a build stays in this process. The isolated path
+# shells out to uv and is covered on its own.
 
 
 def test_discovery_resolves_and_lists():
@@ -27,7 +33,7 @@ def test_build_then_load_round_trips(tmp_path):
     registry = tmp_path / "registry"
 
     # PRODUCE: build the demo dataset into a local registry directory.
-    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(registry)])
+    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(registry), "--no-isolation"])
     assert result.exit_code == 0, result.output
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
@@ -66,7 +72,7 @@ def clean_env(monkeypatch, tmp_path):
 
 
 def test_build_defaults_to_home_registry(clean_env, tmp_path):
-    assert runner.invoke(build_app, ["build", "timenet/hello-world"]).exit_code == 0
+    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (tmp_path / "home" / "registry" / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
 
@@ -74,7 +80,7 @@ def test_build_honors_timenet_registry(clean_env, monkeypatch, tmp_path):
     registry = tmp_path / "elsewhere"
     monkeypatch.setenv("TIMENET_REGISTRY", str(registry))
 
-    assert runner.invoke(build_app, ["build", "timenet/hello-world"]).exit_code == 0
+    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     # The SDK resolves $TIMENET_REGISTRY the same way, so it reads back what the build just wrote.
     assert TimeNet(storage_path=tmp_path / "store").list()[0].dataset_id == "timenet/hello-world"
@@ -84,7 +90,8 @@ def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "elsewhere"))
     out = tmp_path / "out"
 
-    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(out)]).exit_code == 0
+    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(out), "--no-isolation"])
+    assert result.exit_code == 0
     assert (out / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     assert not (tmp_path / "elsewhere").exists()
 
@@ -115,9 +122,40 @@ def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     cache = settings().cache_dir / "timenet" / "hello-world"
 
-    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1")]).exit_code == 0
+    built = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1"), "--no-isolation"])
+    assert built.exit_code == 0
     assert not cache.exists()  # cleaned by default after a successful build
 
-    keep = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r2"), "--keep-cache"])
+    keep = runner.invoke(
+        build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r2"), "--keep-cache", "--no-isolation"]
+    )
     assert keep.exit_code == 0
     assert cache.exists()  # retained with --keep-cache
+
+
+@pytest.mark.slow
+def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    client = TimeNet(tmp_path / "registry")
+
+    dataset = client.load("timenet/hello-world")
+
+    assert dataset.metadata.dataset_id == "timenet/hello-world"
+    assert (tmp_path / "registry/timenet/hello-world/1.0.0/manifest.json").is_file()
+
+
+@pytest.mark.slow
+def test_an_isolated_build_records_its_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    TimeNet(tmp_path / "registry").load("timenet/hello-world")
+
+    manifest = json.loads((tmp_path / "registry/timenet/hello-world/1.0.0/manifest.json").read_text())
+    packages = manifest["build_env"]["packages"]
+    assert packages["timenet-connectors"]
+    # The child must run on the parent's interpreter, not one uv picked for itself.
+    assert manifest["build_env"]["python"] == platform.python_version()
+    # pytest runs this process and is a runtime dependency of neither package, so it separates a
+    # real isolated build from one that quietly inherited the parent's site-packages. Assert both
+    # directions: without the first the second would also pass on a machine that simply lacks it.
+    assert "pytest" in build_env()["packages"]
+    assert "pytest" not in packages

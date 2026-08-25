@@ -28,6 +28,9 @@ physionet = ["wfdb>=4.1", "boto3>=1.34"]
 [project.scripts]
 timenet-build = "timenet_connectors.builder.cli:main"
 
+[project.entry-points."timenet.builders"]
+connectors = "timenet_connectors.builder.backend:ConnectorBuilder"
+
 [tool.uv.sources]
 # Dev-time override so the workspace resolves timenet locally. This is uv-only
 # and never reaches published metadata; Requires-Dist comes from the floor above.

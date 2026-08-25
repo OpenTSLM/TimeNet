@@ -9,8 +9,10 @@ tags:
 # Client
 
 `TimeNet` is the single Python entry point to TimeNet. It wraps a [registry](registry.md) (the
-catalog) and a local storage path (the download cache). `TimeNet` does not run connector code. The
-module `timenet.client` contains `TimeNet`.
+catalog) and a local storage path (the download cache). Against a local registry, `load` builds a
+dataset that the registry does not have. This needs an installed package that registers a connector
+for the dataset id. See [Build & publish](build.md). Against a remote registry, `load` never
+runs connector code. The module `timenet.client` contains `TimeNet`.
 
 ```python
 from timenet.client import TimeNet
@@ -59,6 +61,7 @@ precedence for any value is **CLI flag / argument > environment variable > defau
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
 | `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
 | `TIMENET_DOWNLOAD_MODE` | `on_demand` | How a remote `load` fetches bytes: `on_demand` (lazy range reads, cache-first) or `full` (download the whole version first). |
+| `TIMENET_ISOLATION` | `on` | Whether a build runs in an environment built from the connector's requirements. `off` runs it in the current interpreter. |
 
 The configuration is a `pydantic-settings` model, `timenet.config.TimeNetSettings`. You can add new
 settings there.

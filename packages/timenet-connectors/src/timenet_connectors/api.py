@@ -21,6 +21,10 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
     here loads at once with ``TimeNet().load(dataset_id)``.
 
+    Like ``timenet-build build``, this runs the connector in an environment built from its
+    ``requirements.txt``. Set ``TIMENET_ISOLATION=off`` to run it in this interpreter instead, which
+    is what you want while writing a connector.
+
     Args:
         dataset_id: The dataset id (``org/name``).
         version: The expected dataset version. A connector produces only its own version, so this
@@ -35,21 +39,50 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     Raises:
         TimeFValidationError: If the caller sets ``version`` and it does not match the connector's
             declared version.
-    """
-    from timenet.engine import run_pipeline  # noqa: PLC0415
-    from timenet.errors import TimeFValidationError  # noqa: PLC0415
+    """  # noqa: DOC502 (raised by _check_version, not directly here)
+    from timenet.config import settings  # noqa: PLC0415
     from timenet.registry import default_registry_path  # noqa: PLC0415
+
+    if version is not None:
+        _check_version(dataset_id, version)
+    root = Path(out).expanduser() if out is not None else default_registry_path()
+    if settings().isolation == "on":
+        from timenet_connectors.builder.env import run_isolated  # noqa: PLC0415
+
+        return run_isolated(dataset_id, root, force=force)
+
+    from timenet.engine import run_pipeline  # noqa: PLC0415
     from timenet_connectors.discovery import resolve  # noqa: PLC0415
 
-    connector = resolve(dataset_id)()
-    if version is not None:
-        available = str(connector.metadata().dataset_version)
-        if version != available:
-            raise TimeFValidationError(
-                f"connector for {dataset_id!r} builds version {available}, not the requested {version}"
-            )
-    root = Path(out).expanduser() if out is not None else default_registry_path()
-    return run_pipeline(connector, root, force=force)
+    return run_pipeline(resolve(dataset_id)(), root, force=force)
+
+
+def _check_version(dataset_id: str, version: str) -> None:
+    """Reject a requested version the connector does not build.
+
+    Deliberately import-free, like :func:`timenet_connectors.discovery.requirements_for`. This guard
+    runs before the isolated build, so asking the connector for its metadata would need the very
+    dependencies that only the child environment has. It reads the card beside the connector instead.
+
+    Args:
+        dataset_id: The dataset id (``org/name``).
+        version: The requested dataset version.
+
+    Raises:
+        TimeFValidationError: If the connector declares a different version.
+        LookupError: If no connector exists for the id.
+        TimeNetInvalidCardError: If the connector's card is missing or invalid.
+    """  # noqa: DOC502 (LookupError and TimeNetInvalidCardError come from the calls below)
+    from timenet.errors import TimeFValidationError  # noqa: PLC0415
+    from timenet.types import DatasetMetadata  # noqa: PLC0415
+    from timenet_connectors.discovery import connector_dir  # noqa: PLC0415
+
+    card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
+    available = str(card.dataset_version)
+    if version != available:
+        raise TimeFValidationError(
+            f"connector for {dataset_id!r} builds version {available}, not the requested {version}"
+        )
 
 
 def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
