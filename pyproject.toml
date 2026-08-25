@@ -6,15 +6,15 @@ default-groups = ["dev"]
 required-version = ">=0.10.10"
 
 [dependency-groups]
-# Optional runtime deps are NOT duplicated here: torch and typer/rich come from the packages' extras,
-# connector libraries from each connector's requirements.txt. `make sync` installs both for dev/test/CI.
 dev = [
+    "huggingface-hub>=0.20",
     "hypothesis>=6.140",
     "moto[server]>=5",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
     "ty>=0.0.34",
+    "wfdb>=4.1",
 ]
 docs = [
     "zensical",
