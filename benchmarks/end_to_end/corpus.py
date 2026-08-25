@@ -113,6 +113,59 @@ def _scalar_series(
     )
 
 
+def _nonfloat_series(name: str, dtype: str, values: tuple[str, ...] | np.ndarray, scale: int) -> TimeSeries:
+    """Construct one portable scalar non-float series, shareable by both backends.
+
+    Args:
+        name: The modality and channel tag.
+        dtype: A scalar dtype both values backends can store (int/bool/float64/str).
+        values: Deterministic per-series values. A ``str`` dtype takes a tuple of label strings;
+            every other dtype takes a NumPy array already in the target dtype.
+        scale: Positive step multiplier, repeating each value ``scale`` times.
+
+    Returns:
+        The fully described series.
+    """
+    spec = TimeSeriesSpec(
+        spec_type=f"portable-{name}",
+        name=name.replace("-", " ").title(),
+        unit_value=ureg.dimensionless,
+        data_source=_SOURCE,
+        dtype=dtype,
+    )
+    if dtype == "str":
+        labels = [label for label in values for _ in range(scale)]
+        array = pa.array(labels, type=pa.string())
+    else:
+        array = pa.array(np.repeat(np.asarray(values), scale, axis=0))
+    return TimeSeries(
+        loader=lambda: array,
+        spec=spec,
+        channel=name,
+        time_axis=RegularAxis.from_rate_hz(Fraction(1)),
+        source_id=f"{name}-recording",
+        time_series_id=f"portable-{name}",
+        n_values=len(array),
+    )
+
+
+_NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = (
+    ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16)),
+    ("alarm", "bool", np.array([False, False, True, False, True, False, False, True])),
+    ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64)),
+    ("rhythm", "str", ("normal", "afib", "vt", "normal")),
+)
+"""Portable scalar non-float channels, appended to a dedicated sample. Exercise dtype handling on
+the Parquet values backend. The ``rhythm`` str channel is Parquet-only; Zarr drops it."""
+
+_NONFLOAT_CHANNELS_WITHOUT_STR: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = (
+    ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16)),
+    ("alarm", "bool", np.array([False, False, True, False, True, False, False, True])),
+    ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64)),
+)
+"""The non-float channels without the str one, for a Zarr-valued corpus case."""
+
+
 def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     """Attach every currently supported task payload to representative scenarios."""
     vibration = samples["vibration"]
@@ -310,13 +363,36 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
         sample.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
-def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
+def _add_nonfloat_sample(dataset: TimeFDataset, scale: int, *, include_str: bool) -> None:
+    """Add a sample whose channels come in varied scalar dtypes (int16, bool, float64, str).
+
+    The ``str`` channel is Parquet-only: the Zarr backend rejects the str dtype, so a case writing
+    Zarr drops it while the Parquet matrix case keeps it.
+
+    Args:
+        dataset: The dataset to add the sample to.
+        scale: Positive step multiplier.
+        include_str: Whether to include a str channel. False for a Zarr-valued case.
+    """
+    channels = _NONFLOAT_CHANNELS if include_str else _NONFLOAT_CHANNELS_WITHOUT_STR
+    series = tuple(_nonfloat_series(name, dtype, values, scale) for name, dtype, values in channels)
+    sample = dataset.add_sample(
+        time_series=series,
+        sample_id="sample-nonfloat",
+        subject_ids=("subject-nonfloat",),
+    )
+    sample.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
+
+
+def build_corpus(*, profile: str = "portable", scale: int = 1, values_backend: str = "parquet") -> TimeFDataset:
     """Build the benchmark corpus.
 
     Args:
         profile: ``"portable"`` for scalar float32 data accepted by both backends, or ``"rich"``
             to add Zarr-only N-D and varied-dtype series.
         scale: Positive multiplier for each scenario's number of temporal steps.
+        values_backend: The values backend this corpus will be written with. The ``str`` channel is
+            included only for ``"parquet"``, since the Zarr backend does not support it.
 
     Returns:
         A deterministic dataset with a derived schema.
@@ -366,6 +442,7 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
         samples[scenario.name] = sample
     _add_tasks(dataset, samples)
     _add_connector_patterns(dataset, samples, scale)
+    _add_nonfloat_sample(dataset, scale, include_str=values_backend != "zarr")
     if profile == "rich":
         _add_rich_series(dataset, scale)
     dataset.derive_schema()

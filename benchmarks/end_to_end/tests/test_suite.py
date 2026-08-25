@@ -16,10 +16,17 @@ def test_portable_corpus_covers_scenarios_connector_patterns_and_tasks():
     assert len(SCENARIOS) == 8
     assert len(dataset.samples) > 100
     assert {type(task) for task in dataset.tasks} == set(schema.tasks)
-    assert all(
-        getattr(spec, "dtype", "float32") == "float32" and getattr(spec, "value_shape", ()) == ()
-        for spec in schema.time_series_specs
-    )
+    # The portable corpus stays scalar (no N-D value_shape) and adds scalar non-float channels.
+    # The default (parquet) build keeps the str channel; a zarr build must drop it, because the
+    # Zarr backend rejects the str dtype.
+    for spec in schema.time_series_specs:
+        assert spec.value_shape == ()
+        if spec.dtype != "float32":
+            assert spec.dtype in {"int16", "bool", "float64", "str"}
+    zarr_schema = build_corpus(values_backend="zarr").schema
+    assert zarr_schema is not None
+    zarr_dtypes = {s.dtype for s in zarr_schema.time_series_specs}
+    assert "str" not in zarr_dtypes
 
 
 def test_rich_corpus_adds_varied_dtypes_and_shapes():
