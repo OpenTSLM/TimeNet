@@ -83,7 +83,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     started = time.perf_counter_ns()
-    dataset = build_corpus(profile=case.profile, scale=scale)
+    dataset = build_corpus(profile=case.profile, scale=scale, values_backend=case.values_backend)
     converted_ns = time.perf_counter_ns() - started
     started = time.perf_counter_ns()
     writer_kwargs: dict[str, Any] = {
@@ -146,7 +146,13 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                         separators=(",", ":"),
                     ).encode()
                 )
-                digest.update(values.tobytes())
+                # A string/object array exposes only raw pointer bytes via tobytes(), which differ
+                # across processes. Fingerprint string values by their text instead so a str series
+                # (dtype="str") produces a stable digest.
+                if values.dtype == object:
+                    digest.update(json.dumps(values.tolist(), sort_keys=False, separators=(",", ":")).encode())
+                else:
+                    digest.update(values.tobytes())
                 series_count += 1
                 value_bytes += values.nbytes
     read_ns = time.perf_counter_ns() - started
