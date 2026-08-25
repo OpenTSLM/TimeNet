@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.registry import LocalRegistry
 
@@ -218,7 +218,7 @@ def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.R
     if len(parts) == 2:  # GET /api/v1/datasets/<org>/<name>
         try:
             return httpx.Response(200, json=_detail(local.get_manifest(dataset_id)))
-        except DatasetNotFoundError as exc:
+        except TimeNetDatasetNotFoundError as exc:
             return httpx.Response(404, json={"detail": str(exc)})
     version, action = parts[2], parts[3] if len(parts) > 3 else ""
     if action == "manifest":

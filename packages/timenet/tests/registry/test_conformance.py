@@ -15,7 +15,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import DatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (
@@ -135,12 +135,12 @@ def test_get_manifest_pins_an_explicit_version(backend):
 
 
 def test_get_manifest_unknown_id_raises(backend):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         backend.registry.get_manifest("no/such")
 
 
 def test_get_manifest_unknown_version_raises(backend):
-    with pytest.raises(DatasetNotFoundError):
+    with pytest.raises(TimeNetDatasetNotFoundError):
         backend.registry.get_manifest("timenet/hello-world", "9.9.9")
 
 
@@ -156,8 +156,8 @@ def test_open_file_reads_a_manifest_part(backend):
 
 def test_open_file_rejects_traversal(backend):
     # LocalRegistry guards up front (ValueError "escapes"); S3 and remote reject implicitly because the
-    # escaped key/route does not exist (DatasetNotFoundError). Either way a caller cannot read out of tree.
-    with pytest.raises((ValueError, DatasetNotFoundError)):
+    # escaped key/route does not exist (TimeNetDatasetNotFoundError). Either way a caller cannot read out of tree.
+    with pytest.raises((ValueError, TimeNetDatasetNotFoundError)):
         backend.registry.open_file("timenet/hello-world", "1.0.0", "../../escape")
 
 

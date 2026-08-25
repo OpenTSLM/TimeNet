@@ -15,10 +15,10 @@ import httpx
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import RegistryError
+from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
-from timenet.registry.remote._download import ProgressCallback, materialize_version
+from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
@@ -143,7 +143,7 @@ class RemoteRegistry(WritableRegistry):
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        materialize_version(
+        download_version_files(
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
 
@@ -171,7 +171,7 @@ class RemoteRegistry(WritableRegistry):
             The stored version string.
 
         Raises:
-            RegistryError: If the service requests a file that was not produced locally.
+            TimeNetRegistryError: If the service requests a file that was not produced locally.
         """
         if dataset.schema is None:
             dataset.derive_schema()
@@ -193,7 +193,7 @@ class RemoteRegistry(WritableRegistry):
             unrequested = sorted(declared - set(files))
             missing = [relpath for relpath in files if not (version_dir / relpath).is_file()]
             if unrequested or missing:
-                raise RegistryError(
+                raise TimeNetRegistryError(
                     f"publish for {dataset_id}@{version} disagrees with the manifest: "
                     f"service did not request {unrequested}, requested files not produced locally {missing}"
                 )

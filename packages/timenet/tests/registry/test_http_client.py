@@ -88,7 +88,7 @@ def test_gives_up_after_the_retry_budget_and_raises():
         calls["n"] += 1
         return httpx.Response(429, json={"detail": "always"})
 
-    with pytest.raises(RegistryError, match="429"):
+    with pytest.raises(TimeNetRegistryError, match="429"):
         _client(handler).get_json("/datasets")
     assert calls["n"] > 1  # retried before giving up
 

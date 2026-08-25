@@ -202,7 +202,7 @@ class TimeNet:
         dataset_id, version = _resolve_ref(dataset_id, version)
         try:
             handle = self._registry.open_version(dataset_id, version)
-        except DatasetNotFoundError as miss:
+        except TimeNetDatasetNotFoundError as miss:
             if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
             builder = find_builder(dataset_id)
@@ -217,7 +217,7 @@ class TimeNet:
                     raise TimeNetDatasetNotFoundError(
                         f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
                     ) from miss
-            curator.build(dataset_id, self._registry.root)
+            builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
         return TimeFReader(handle).read()
 

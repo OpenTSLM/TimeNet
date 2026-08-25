@@ -8,7 +8,7 @@ from moto.server import ThreadedMotoServer  # noqa: E402
 import pyarrow.fs as pafs  # noqa: E402
 
 from timenet.client import TimeNet  # noqa: E402
-from timenet.errors import RegistryError  # noqa: E402
+from timenet.errors import TimeNetRegistryError  # noqa: E402
 from timenet.registry import S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
 

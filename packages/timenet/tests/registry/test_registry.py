@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from timenet.errors import DatasetNotFoundError, RegistryError, TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,

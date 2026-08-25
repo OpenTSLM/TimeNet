@@ -4,7 +4,7 @@ from _fake_registry import build_fake, build_publish_fake
 import pytest
 
 from timenet.client import TimeNet
-from timenet.errors import RegistryError
+from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -103,7 +103,7 @@ def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
     registry = RemoteRegistry(
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
-    with pytest.raises(RegistryError, match="disagrees with the manifest"):
+    with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
         registry.store(make_dataset(), force=True)
 
 
