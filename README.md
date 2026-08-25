@@ -103,3 +103,11 @@ into `site/`. Published at <https://docs.timenet.ai/>, deployed from `main` by
 ## License
 
 TimeNet is released under the [MIT License](LICENSE).
+
+### Dataset licenses
+
+The MIT License covers TimeNet's own code, not the datasets it fetches. Each dataset keeps its
+upstream license. Check the `license` and `source_url` fields on a dataset's card to see what applies
+and where the data comes from. Some sources, such as PhysioNet, only grant credentialed access, so
+follow their terms when you download. See
+[Dataset licensing](https://docs.timenet.ai/catalog/licensing/) for the full note.
