@@ -11,11 +11,39 @@ from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "tsqa_sample.json"
+# Synthetic rows shaped exactly like the HuggingFace Hub rows this connector converts. They are
+# hand-written for the tests and not derived from the real TSQA dataset, so the repo ships no dataset
+# bytes. Questions and answers are distinct per row; each Series is a JSON string of floats.
+_FIXTURE_ROWS = [
+    {
+        "Task": "Trend",
+        "Size": 8,
+        "Question": "Does the first synthetic series trend upward?",
+        "Answer": "(a) yes",
+        "Label": "increasing",
+        "Series": json.dumps([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
+    },
+    {
+        "Task": "Trend",
+        "Size": 8,
+        "Question": "Does the second synthetic series trend downward?",
+        "Answer": "(b) no",
+        "Label": "decreasing",
+        "Series": json.dumps([7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0]),
+    },
+    {
+        "Task": "Volatility",
+        "Size": 8,
+        "Question": "Is the third synthetic series flat?",
+        "Answer": "(c) constant",
+        "Label": "constant",
+        "Series": json.dumps([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+    },
+]
 
 
 def _fixture_rows():
-    return json.loads(FIXTURE.read_text())
+    return _FIXTURE_ROWS
 
 
 def _convert() -> TimeFDataset:
