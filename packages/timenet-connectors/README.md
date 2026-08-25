@@ -19,4 +19,6 @@ timenet-build build timenet/hello-world        # synthetic demo
 timenet-build build chengsenwang/tsqa          # a real dataset
 ```
 
-Some connectors need optional extras, e.g. `pip install 'timenet-connectors[huggingface]'`.
+A connector declares the libraries that its source needs in a `requirements.txt` beside its
+`dataset.yaml`. A build installs them into the environment where the build runs. This keeps
+`timenet-connectors` small.

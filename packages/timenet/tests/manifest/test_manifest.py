@@ -64,7 +64,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
             tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
-            time_series=(FilePart("time_series/shard-00000.parquet", "sha256:ee", 50),),
+            time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
         ),
         values_backend=values_backend,
     )

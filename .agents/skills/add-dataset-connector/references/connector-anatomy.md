@@ -36,6 +36,8 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   __init__.py      # re-exports CONNECTOR (and the class) from connector.py
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
+  requirements.txt # the libraries this connector needs, installed into the
+                   # environment its build runs in (optional)
 ```
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
@@ -71,17 +73,22 @@ tags:
 `BaseHuggingFaceConnector(BaseConnector[dict[str, Any]])`. Set `HF_REPO` to the external Hub repo id
 and implement `convert`. `download` is inherited: it reads the Hub's auto-converted parquet on
 `refs/convert/parquet` and returns one dict per row, so any source format is handled uniformly.
-`huggingface_hub` is imported lazily (install the `huggingface` extra); `HF_TOKEN` is read from the
+The connector imports `huggingface_hub` lazily and declares it in its `requirements.txt`. The lazy
+import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
 environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
-`BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Helpers (all lazy
-import `wfdb`/`requests` behind the `physionet` extra):
-- `_ensure_archive(url, cache_dir, sentinel) -> Path`: download + extract a zip once (idempotent).
-- `_stream_download(url, dest)`: chunked download for multi-GB files.
+`BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
+records through `wfdb`, which the base imports lazily so that `--no-isolation` stays usable while you
+write the connector:
 - `_read_header(record_base)`: WFDB header (`fs`, `sig_len`, `sig_name`), no signal decode.
 - `_lead_loader(record_base, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for one lead's
   physical signal.
+
+The base does not fetch the archive. Call `ensure_archive` / `download_files` from
+`timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
+its download path needs. `physionet/ecg_qa_cot` pulls PTB-XL from `s3://physionet-open/`, which goes
+through boto3, so it names `boto3` too.
 
 ## Building the dataset in `convert`
 
@@ -194,7 +201,7 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
 Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `_ensure_archive` / `_stream_download` and returns refs; `convert` shares the 12-lead
+`download` calls `ensure_archive` / `download_files` and returns refs; `convert` shares the 12-lead
 ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
 whole-sample `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
 `AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
@@ -203,6 +210,7 @@ pattern, including sharing a series across many samples.
 
 ## Fixture-based test pattern
 
-Mirror `packages/timenet-connectors/tests/test_tsqa.py`: check a tiny raw sample into
-`tests/fixtures/`, then call `convert()` on it directly and assert on samples, tasks, annotations, and
-parsed values. No network, no env-var toggles.
+Tests live beside their connector, in `<org>/<name>/tests/`. Mirror the `chengsenwang/tsqa` one at
+`packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
+check a tiny raw sample into `tests/fixtures/`, then call `convert()` on it directly and assert on
+samples, tasks, annotations, and parsed values. No network, no env-var toggles.

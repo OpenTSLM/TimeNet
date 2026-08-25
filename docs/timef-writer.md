@@ -40,7 +40,7 @@ parts and does not assume fixed names.
   annotations/part-00000000.parquet ...
   time_series_index/part-00000000.parquet ...
   tasks/task=<task_type>/part-00000000.parquet ...
-  time_series/shard-00000000.parquet ...   # values_backend="parquet" (default)
+  time_series/part-00000000.parquet ...   # values_backend="parquet" (default)
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
   time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
   time_series.zarr/_time_offsets/<spec_type>/...    # their int64 time offsets, one per value
@@ -71,7 +71,7 @@ annotations, tasks, and the time-series index are always Parquet. The manifest r
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | Rotating `time_series/shard-*.parquet` files of `list<float32>` rows. Each file also has a `list<int64>` `time_offsets_us` column. This column is null unless the series stores per-value time offsets. The backend supports scalar float32 values only. | `(shard path, row group, row offset)` |
+| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<float32>` rows. Each file also has a `list<int64>` `time_offsets_us` column. This column is null unless the series stores per-value time offsets. The backend supports scalar float32 values only. | `(shard path, row group, row offset)` |
 | `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. | `(array path, step start, –)` |
 
 Each backend chunks the data in its own way. Parquet needs the logical `chunk_max_bytes` split to

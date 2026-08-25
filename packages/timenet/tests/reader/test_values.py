@@ -30,7 +30,7 @@ class _Shard:
 def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
-    rows = [{"chunk_file": "time_series/shard-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
+    rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
     spec = make_dataset().samples[0].time_series[0].spec
 
     # The reader keys its row-group cache on the handle's root, so the same relative path under two

@@ -94,5 +94,5 @@ def test_answer_options_come_from_template():
 
 def test_missing_wfdb_raises_helpful_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError
-    with pytest.raises(ImportError, match="physionet"):
+    with pytest.raises(ImportError, match=r"requirements\.txt"):
         EcgQaCotConnector().convert(_refs())

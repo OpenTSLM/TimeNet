@@ -481,7 +481,7 @@ def test_verify_detects_a_corrupted_shard(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         # a shard: read lazily, so __init__ still succeeds and verify() is what catches it
-        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
+        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/part-"))
     target = version_dir / rel
     original = target.read_bytes()
     # Same size, flipped content: exercises the checksum check, not the size check verify() also does.
@@ -496,7 +496,7 @@ def test_verify_detects_a_corrupted_shard(tmp_path):
 def test_verify_detects_a_size_mismatch(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
+        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/part-"))
     target = version_dir / rel
     target.write_bytes(target.read_bytes()[:-1])  # truncate, so size disagrees before a checksum is even computed
     with (
@@ -509,7 +509,7 @@ def test_verify_detects_a_size_mismatch(tmp_path):
 def test_verify_detects_a_deleted_file(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/shard-"))
+        rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/part-"))
     (version_dir / rel).unlink()
     # A value shard is read lazily, so __init__ no longer stat-sweeps it; verify() reopens every listed
     # file through the handle and is where a deleted one now surfaces.

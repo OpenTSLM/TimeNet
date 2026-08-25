@@ -6,15 +6,15 @@ default-groups = ["dev"]
 required-version = ">=0.10.10"
 
 [dependency-groups]
-# Optional runtime deps (torch, typer/rich, huggingface-hub) are NOT duplicated here: they come from the
-# packages' extras, installed for dev/test/CI via `make sync`.
 dev = [
+    "huggingface-hub>=0.20",
     "hypothesis>=6.140",
     "moto[server]>=5",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
     "ty>=0.0.34",
+    "wfdb>=4.1",
 ]
 docs = [
     "zensical",
@@ -103,10 +103,10 @@ markers = [
 python-version = "3.13"
 
 [[tool.ty.overrides]]
-# examples/** imports scikit-learn, and .github/scripts/** declares its deps inline (PEP 723) and runs
-# standalone under `uv run`. Neither is a project dependency, so don't fail type-checking on their
-# unresolved imports.
-include = ["examples/**", ".github/scripts/**"]
+# examples/** imports scikit-learn; .github/scripts/** and docs/scripts/** declare their deps inline
+# (PEP 723) and run standalone under `uv run` (PyGithub for the CI report, matplotlib for the figure
+# generator). None is a project dependency, so don't fail type-checking on their unresolved imports.
+include = ["examples/**", ".github/scripts/**", "docs/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

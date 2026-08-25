@@ -1,3 +1,4 @@
+import re
 import sys
 
 import pytest
@@ -81,3 +82,27 @@ def test_has_connector_does_not_import_any_connector_on_a_miss():
     assert not has_connector("nope/nothing")
 
     assert leaf not in sys.modules
+
+
+# A requirement line starts with the distribution name; a version specifier, an extra, a marker, an
+# inline comment or a direct-reference URL all follow it.
+_REQUIREMENT_NAME = re.compile(r"^ *([A-Za-z0-9][A-Za-z0-9._-]*)", re.MULTILINE)
+
+
+def _declared_names(requirements):
+    # pip reads huggingface_hub and huggingface-hub as the same requirement, so compare PEP 503
+    # normalized names instead of the spelling the file happens to use.
+    return {re.sub(r"[-_.]+", "-", name).lower() for name in _REQUIREMENT_NAME.findall(requirements)}
+
+
+@pytest.mark.parametrize(
+    ("dataset_id", "expected"),
+    [
+        ("chengsenwang/tsqa", {"huggingface-hub"}),
+        ("physionet/ecg-qa-cot", {"wfdb", "boto3"}),
+    ],
+)
+def test_connectors_declare_their_own_requirements(dataset_id, expected):
+    path = requirements_for(dataset_id)
+    assert path is not None
+    assert expected <= _declared_names(path.read_text())

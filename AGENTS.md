@@ -55,9 +55,10 @@ workspace definition and the shared ruff/ty/pytest config; per-package
 
 ## Python And uv
 - Use `uv` for all Python workflows. The build backend is `uv_build`.
-- Set up the environment with `make sync` (`uv sync --all-groups --all-extras`),
-  which installs every workspace member plus their optional extras (`timenet[cli,torch]`,
-  `timenet-connectors[huggingface]`) so tests and `ty` see the optional deps.
+- Configure the environment with `make sync`. It installs every workspace member and the
+  workspace extras (`timenet[cli,torch]`). It does not install connector dependencies. Each
+  connector declares its own in a `requirements.txt`, and `make test-connectors` runs that
+  connector's tests and type-check in an environment built from it.
 - Build distributables with `make build` (`uv build --package <name>` per member).
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
 - Keep `uv.lock` committed; the `uv-lock` pre-commit hook enforces freshness.
@@ -66,7 +67,8 @@ workspace definition and the shared ruff/ty/pytest config; per-package
 After any change, run these and make them pass before claiming the work is done:
 - `make check` — `ruff format`, `ruff check`, `ty check`
 - `make lint-fix` — auto-fix lint findings
-- `make test` — `uv run pytest`
+- `make test` — core tests in the dev environment
+- `make test-connectors` — each connector's tests and type-check in its own environment
 
 `make install-hooks` once after cloning to wire up pre-commit. To mirror CI exactly,
 run `uv run pre-commit run --all-files`.

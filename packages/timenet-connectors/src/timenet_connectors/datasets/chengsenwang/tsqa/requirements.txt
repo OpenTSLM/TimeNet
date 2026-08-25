@@ -1,0 +1,2 @@
+# huggingface_hub downloads the source dataset from the HuggingFace Hub.
+huggingface_hub>=0.24
