@@ -12,6 +12,9 @@ module-level `CONNECTOR`, an `__init__.py` that re-exports it, and a `dataset.ya
 dataset id, so there is no central registry. Reusable bases (for the HuggingFace Hub and PhysioNet)
 live under `bases/`.
 
+The card's `license` and `source_url` fields record each dataset's upstream license and where it
+came from. This package's MIT license covers the connector code, not the datasets it converts.
+
 ## Build
 
 ```bash
