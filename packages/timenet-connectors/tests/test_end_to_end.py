@@ -99,7 +99,7 @@ def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
 def test_resolve_target_routes_remote_url_to_registry(clean_env, tmp_path):
     # A remote --out publishes through a writable registry (constructed offline, no network).
     assert isinstance(_resolve_target("timenet://"), RemoteRegistry)
-    assert isinstance(_resolve_target("https://registry.dev.timenet.ai"), RemoteRegistry)
+    assert isinstance(_resolve_target("https://registry.timenet.ai"), RemoteRegistry)
     # A local --out writes a directory.
     assert _resolve_target(str(tmp_path / "reg")) == tmp_path / "reg"
 

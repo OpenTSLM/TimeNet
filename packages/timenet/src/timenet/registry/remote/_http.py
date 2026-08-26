@@ -152,7 +152,7 @@ class RegistryHttpClient:
         """Open a client against a registry service root.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.dev.timenet.ai``. A trailing slash is
+            base_url: The service root, e.g. ``https://registry.timenet.ai``. A trailing slash is
                 stripped. The ``/api/v1`` prefix is added per request.
             token: Bearer token, or ``None`` for anonymous.
             timeout: Per-request timeout in seconds.
