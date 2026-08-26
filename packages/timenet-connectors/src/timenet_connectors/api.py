@@ -13,7 +13,14 @@ if TYPE_CHECKING:
     from timenet.dataset import TimeFDataset
 
 
-def build(dataset_id: str, *, version: str | None = None, out: str | Path | None = None, force: bool = False) -> Path:
+def build(
+    dataset_id: str,
+    *,
+    version: str | None = None,
+    out: str | Path | None = None,
+    force: bool = False,
+    keep_cache: bool = False,
+) -> Path:
     """Build a dataset into a local registry by connector id.
 
     This is the producer-side one-liner over the engine. The build reuses an already-built version
@@ -32,6 +39,7 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
             runs. ``None`` builds the version that the connector declares.
         out: Output registry directory. Defaults to the shared local registry.
         force: Rebuild even if the registry already has a built version.
+        keep_cache: Keep the raw download cache. A successful build deletes it by default.
 
     Returns:
         The committed version directory.
@@ -49,12 +57,12 @@ def build(dataset_id: str, *, version: str | None = None, out: str | Path | None
     if settings().isolation == "on":
         from timenet_connectors.builder.env import run_isolated  # noqa: PLC0415
 
-        return Path(run_isolated(dataset_id, root, force=force))
+        return Path(run_isolated(dataset_id, root, force=force, keep_cache=keep_cache))
 
     from timenet.engine import run_pipeline  # noqa: PLC0415
     from timenet_connectors.discovery import resolve  # noqa: PLC0415
 
-    return run_pipeline(resolve(dataset_id)(), root, force=force)
+    return run_pipeline(resolve(dataset_id)(), root, force=force, keep_cache=keep_cache)
 
 
 def _check_version(dataset_id: str, version: str) -> None:

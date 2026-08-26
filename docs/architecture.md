@@ -60,7 +60,7 @@ Three producer-side pieces, each with one job:
 | Role | What it is | Job |
 | --- | --- | --- |
 | **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
-| **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `clean_cache`. Knows no dataset specifics. |
+| **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `keep_cache`. Knows no dataset specifics. |
 | **Builder** | the `timenet-build` CLI ([build](build.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
 
 ```

@@ -17,7 +17,7 @@ def run_pipeline(  # noqa: PLR0913
     root: Path,
     *,
     cache_dir: Path | None = None,
-    clean_cache: bool = False,
+    keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> Path:
@@ -26,16 +26,17 @@ def run_pipeline(  # noqa: PLR0913
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
     to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
-    references into it, ``convert`` them into a dataset, ``derive_schema``, then ``store``. The engine
-    only writes local files. Publishing to a remote registry is a separate step.
+    references into it, ``convert`` them into a dataset, ``derive_schema``, ``store``, then delete
+    the cache directory. The engine only writes local files. Publishing to a remote registry is a
+    separate step.
 
     Args:
         connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory after storing the dataset. Conversion is the only
-            stage that needs the raw sources, so this frees disk after a successful build. The
-            sources re-download on the next run.
+        keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
+            Conversion is the only stage that needs the raw sources, so removing them frees disk
+            after a successful build. The sources re-download on the next run.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -64,7 +65,7 @@ def run_pipeline(  # noqa: PLR0913
     store_dataset(dataset, root, progress_cb=progress_cb)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
-    if clean_cache and cache_dir is None and cache.is_dir():
+    if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version_dir
 
@@ -74,7 +75,7 @@ def publish_pipeline(  # noqa: PLR0913
     registry: WritableRegistry,
     *,
     cache_dir: Path | None = None,
-    clean_cache: bool = False,
+    keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> str:
@@ -88,7 +89,7 @@ def publish_pipeline(  # noqa: PLR0913
         connector: The connector to build.
         registry: The writable registry to publish into (local, remote, or S3).
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory after publishing.
+        keep_cache: Keep the cache directory instead of removing it after publishing.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
 
@@ -107,7 +108,7 @@ def publish_pipeline(  # noqa: PLR0913
     dataset = connector.convert(connector.download(cache))
     dataset.derive_schema()
     registry.store(dataset, force=force, progress_cb=progress_cb)
-    if clean_cache and cache_dir is None and cache.is_dir():
+    if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
 

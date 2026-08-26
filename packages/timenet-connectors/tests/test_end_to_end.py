@@ -124,15 +124,27 @@ def test_publish_pipeline_stores_through_writable_registry(clean_env, tmp_path):
 
 def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry", clean_cache=True)
+    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=False)
     assert (version_dir / "manifest.json").exists()  # build succeeded
     assert not (settings().cache_dir / "timenet" / "hello-world").exists()  # raw cache removed
 
 
-def test_run_pipeline_keeps_cache_by_default(tmp_path, monkeypatch):
+def test_run_pipeline_keeps_cache_when_asked(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    run_pipeline(HelloWorldConnector(), tmp_path / "registry")
+    run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=True)
     assert (settings().cache_dir / "timenet" / "hello-world").exists()
+
+
+def test_sdk_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")  # the in-process path, the one that kept the cache
+    cache = settings().cache_dir / "timenet" / "hello-world"
+
+    build("timenet/hello-world", out=tmp_path / "r1")
+    assert not cache.exists()
+
+    build("timenet/hello-world", out=tmp_path / "r2", keep_cache=True)
+    assert cache.exists()
 
 
 def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):

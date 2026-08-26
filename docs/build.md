@@ -27,25 +27,26 @@ To run the pipeline in the current interpreter instead, pass `--no-isolation` or
 `timenet_connectors.build()` works the same way. It is isolated by default. It runs in-process when
 `TIMENET_ISOLATION=off`.
 
-The engine runs one connector through four stages in `timenet.engine.run_pipeline`:
+The engine runs one connector through five stages in `timenet.engine.run_pipeline`:
 
 ```python
 from timenet.engine import run_pipeline
 
 run_pipeline(
     connector, root, *,
-    cache_dir=None, clean_cache=False, progress_cb=None, force=False,
+    cache_dir=None, keep_cache=False, progress_cb=None, force=False,
 )
 ```
 
-1. cache: create `cache_dir`. The default is `<TIMENET_CACHE>/<dataset_id>`. If you set
-   `clean_cache=True`, the engine removes `cache_dir` after a successful build.
+1. cache: create `cache_dir`. The default is `<TIMENET_CACHE>/<dataset_id>`.
 2. download: `connector.download(cache_dir)` fetches the raw references. Only this stage touches the
    network.
 3. convert: `connector.convert(raw_refs)` builds an in-memory [`TimeFDataset`](timef-dataset.md).
 4. derive_schema and store: the engine derives the schema first. It then calls `store_dataset()`,
    which streams the dataset through [`TimeFWriter`](timef-writer.md) and returns the committed
    version directory.
+5. clean: the engine removes `cache_dir` again. Pass `keep_cache=True`, or `--keep-cache` on the
+   CLI, to keep the raw sources. A `cache_dir` you passed in yourself is never removed.
 
 `run_pipeline` is idempotent. If a version is already committed, it short-circuits, unless you pass
 `force=True`. Distributed (Ray-backed) scheduling is out of scope for now.
