@@ -20,6 +20,11 @@ def test_bpm_custom_unit():
     assert (60.0 * ureg.bpm).to(ureg.beat / ureg.second).magnitude == pytest.approx(1.0)
 
 
+def test_brpm_custom_unit():
+    # brpm is breaths per minute; 60 brpm == 1 breath/second.
+    assert (60.0 * ureg.brpm).to(ureg.breath / ureg.second).magnitude == pytest.approx(1.0)
+
+
 def test_incompatible_conversion_raises():
     with pytest.raises(pint.DimensionalityError):
         (5.0 * ureg.millivolt).to(ureg.hertz)
