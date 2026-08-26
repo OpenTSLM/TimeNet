@@ -2,6 +2,7 @@ from timenet.errors import (
     TimeFFormatError,
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
+    TimeNetDownloadError,
     TimeNetError,
     TimeNetInvalidManifestError,
     TimeNetRegistryError,
@@ -12,6 +13,7 @@ def test_all_derive_from_base():
     for exc in (
         TimeNetRegistryError,
         TimeNetDatasetNotFoundError,
+        TimeNetDownloadError,
         TimeFValidationError,
         TimeFFormatError,
         TimeNetInvalidManifestError,

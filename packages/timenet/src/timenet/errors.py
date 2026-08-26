@@ -24,6 +24,10 @@ class TimeNetAccessError(TimeNetError):
     """A dataset needs credentialed or restricted access, so TimeNet does not host its data."""
 
 
+class TimeNetDownloadError(TimeNetError):
+    """TimeNet could not fetch a dataset's source data, or what arrived is not what was expected."""
+
+
 class TimeFValidationError(TimeNetError, ValueError):
     """A dataset or its arrays violate a TimeF invariant (raised while building or writing)."""
 
