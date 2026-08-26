@@ -27,5 +27,7 @@ class ParquetValuesConfig:
     """Parquet compression codec."""
     compression_level: int
     """Parquet compression level."""
+    data_page_size: int | None = None
+    """Target uncompressed bytes per data page, or ``None`` for pyarrow's default."""
     value_encoding: ValueEncoding | None = None
     """Forced values-column encoding for every modality, or ``None`` to select one per modality."""

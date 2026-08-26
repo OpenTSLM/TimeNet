@@ -37,7 +37,9 @@ DEFAULT_CONTROL_SHARD_TARGET_BYTES = 128 * 2**20
 DEFAULT_ROW_GROUP_TARGET_BYTES = 4 * 2**20
 DEFAULT_CHUNK_MAX_BYTES = 1 * 2**20
 DEFAULT_COMPRESSION = "zstd"
-DEFAULT_COMPRESSION_LEVEL = 3
+# Write-once data reads faster than it writes, so pay the higher zstd level. The Zarr backend clamps
+# this to Blosc's 0-9 range.
+DEFAULT_COMPRESSION_LEVEL = 19
 
 
 def check_relative_path(name: str, path: str) -> None:

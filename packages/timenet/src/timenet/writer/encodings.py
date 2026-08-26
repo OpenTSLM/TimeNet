@@ -161,6 +161,7 @@ class ParquetEncoding:
     compression: str
     compression_level: int
     column_encoding: dict[str, str] | None = None
+    data_page_size: int | None = None
 
 
 def parquet_kwargs(
@@ -169,6 +170,7 @@ def parquet_kwargs(
     column_encoding: dict[str, str] | None,
     compression: str,
     compression_level: int,
+    data_page_size: int | None = None,
 ) -> dict[str, Any]:
     """Build the shared Parquet write options for one file.
 
@@ -178,6 +180,10 @@ def parquet_kwargs(
             values column.
         compression: Codec name (``"zstd"``, ``"snappy"``, ``"none"``).
         compression_level: Compression level, used only for the zstd codec.
+        data_page_size: Target uncompressed bytes per data page, or ``None`` for pyarrow's default. A
+            page never spans more than one row group. A larger page gives the codec a wider window,
+            which shrinks the file, and the reader decodes a whole row group at once regardless of how
+            many pages it holds, so a larger page costs nothing at read time.
 
     Returns:
         Keyword arguments for :class:`pyarrow.parquet.ParquetWriter` or ``write_table``.
@@ -187,6 +193,7 @@ def parquet_kwargs(
         "column_encoding": dict(column_encoding) if column_encoding else None,
         "compression": compression,
         "compression_level": compression_level if compression == "zstd" else None,
+        "data_page_size": data_page_size,
         "write_statistics": True,
         "write_page_index": True,
         "write_page_checksum": True,

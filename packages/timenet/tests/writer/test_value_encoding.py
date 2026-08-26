@@ -14,10 +14,12 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
+from timenet.values_backends.parquet.writer import _leading_sample_source
 from timenet.writer import TimeFWriter
 from timenet.writer.encodings import applied_matches, shard_dictionary, shard_encoding, values_encoding_of
 from timenet.writer.value_encoding import (
     DICT_MAX_CARDINALITY,
+    ENCODING_SAMPLE_SOURCE_BYTES,
     SAMPLE_MAX_VALUES,
     ValueEncoding,
     distinct_bit_patterns,
@@ -147,7 +149,6 @@ def test_bool_values_select_plain():
 
 
 def test_low_cardinality_str_selects_dictionary():
-    # Strings share the cardinality rule: few distinct labels encode as a dictionary.
     assert (
         select_value_encoding([np.array(["normal", "afib", "normal", "vt"], dtype=object)], dtype="str")
         is ValueEncoding.DICTIONARY
@@ -155,22 +156,55 @@ def test_low_cardinality_str_selects_dictionary():
 
 
 def test_distinct_patterns_count_same_width_ints():
-    # int16 is read through a uint16 view, so [1, 1, 2, 3] holds three distinct stored patterns.
     assert distinct_bit_patterns(np.array([1, 1, 2, 3], dtype=np.int16)) == 3
 
 
 def test_high_cardinality_ints_select_plain_not_byte_stream_split():
-    # BYTE_STREAM_SPLIT is a float transpose; an integer past the threshold must land on PLAIN.
     values = np.arange(DICT_MAX_CARDINALITY + 1, dtype=np.int32)
     assert select_value_encoding([values], dtype="int32") is ValueEncoding.PLAIN
 
 
 def test_encoding_for_cardinality_delegates_high_cardinality_to_dtype():
-    # The count-to-encoding rule lives in one function: floats get the byte split, other numerics plain.
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="float32") is ValueEncoding.BYTE_STREAM_SPLIT
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="float64") is ValueEncoding.BYTE_STREAM_SPLIT
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="int32") is ValueEncoding.PLAIN
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="uint16") is ValueEncoding.PLAIN
+
+
+# ---- encoding sample source -------------------------------------------------------------------
+
+
+def test_encoding_sample_source_stops_at_the_budget():
+    lead = pa.array(continuous(n=ENCODING_SAMPLE_SOURCE_BYTES // 4), type=pa.float32())
+    trailing = pa.array(quantized(n=1_000), type=pa.float32())
+    assert len(_leading_sample_source([lead, trailing, trailing], ENCODING_SAMPLE_SOURCE_BYTES)) == 1
+
+
+def test_encoding_sample_source_returns_at_least_one_chunk():
+    lead = pa.array(continuous(n=100), type=pa.float32())
+    assert len(_leading_sample_source([lead, lead], budget_bytes=1)) == 1
+
+
+def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
+    channels = {("ecg", "I"): quantized(), ("embedding", "e"): continuous(n=5 * 262_144)}
+    default = _manifest(
+        _write(
+            tmp_path / "a",
+            _dataset(channels),
+            row_group_target_bytes=DEFAULT_ROW_GROUP_TARGET_BYTES,
+            compression_level=1,
+        )
+    )
+    large = _manifest(
+        _write(
+            tmp_path / "b",
+            _dataset(channels),
+            row_group_target_bytes=4 * DEFAULT_ROW_GROUP_TARGET_BYTES,
+            compression_level=1,
+        )
+    )
+    assert default.value_encoding == large.value_encoding
+    assert default.value_encoding == {"ecg": "dictionary", "embedding": "byte_stream_split"}
 
 
 # ---- end-to-end selection ----------------------------------------------------------------------

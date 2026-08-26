@@ -80,6 +80,7 @@ class TimeFWriter:
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int = DEFAULT_COMPRESSION_LEVEL,
+        data_page_size: int | None = None,
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
@@ -96,6 +97,9 @@ class TimeFWriter:
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned level (applied for zstd) for reproducible output.
+            data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` to match
+                ``row_group_target_bytes``. A larger page shrinks the file and costs nothing at read
+                time, since the reader decodes a whole row group at once. Ignored by the Zarr backend.
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
                 ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
@@ -132,6 +136,7 @@ class TimeFWriter:
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
         self._compression_level = compression_level
+        self._data_page_size = data_page_size if data_page_size is not None else row_group_target_bytes
         self._values_backend_name = values_backend
         self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
         self._value_encoding: dict[str, str] = {}
@@ -334,6 +339,7 @@ class TimeFWriter:
                 chunk_max_bytes=self._chunk_max_bytes,
                 compression=self._compression,
                 compression_level=self._compression_level,
+                data_page_size=self._data_page_size,
                 value_encoding=self._forced_value_encoding,
             )
         else:
@@ -481,6 +487,7 @@ class TimeFWriter:
                 column_encoding=column_encoding,
                 compression=self._compression,
                 compression_level=self._compression_level,
+                data_page_size=self._data_page_size,
             ),
         )
 

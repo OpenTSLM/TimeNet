@@ -140,7 +140,9 @@ class ZarrValuesBackend(BaseValuesBackend):
         self._chunk_max_bytes = config.chunk_max_bytes
         self._shard_target_bytes = config.shard_target_bytes
         self._cname = config.compression
-        self._clevel = config.compression_level
+        # Blosc accepts clevel 0-9 and errors outside it, while the shared compression_level default is
+        # tuned for Parquet's zstd (0-22). Clamp so a high Parquet default does not crash a Zarr write.
+        self._clevel = max(0, min(config.compression_level, 9))
 
     def _value_appender(self, group: Any, ts: TimeSeries, array_path: str, codec: Any) -> "_ArrayAppender":
         """Create the values array for one partition and wrap it in an appender.

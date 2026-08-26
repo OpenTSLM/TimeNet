@@ -88,6 +88,14 @@ def test_shard_aligned_appends_round_trip(tmp_path):
         assert_datasets_equal(make_dataset(), reader.read())
 
 
+def test_high_compression_level_is_clamped_for_blosc(tmp_path):
+    # Blosc's clevel is 0-9 and errors above it, while the shared compression_level default is tuned
+    # for Parquet zstd (0-22). A high level must clamp, not crash, and still round-trip.
+    version_dir = _write(tmp_path, compression_level=22)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert_datasets_equal(make_dataset(), reader.read())
+
+
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_sample_ids=("sample-1",))
