@@ -998,3 +998,32 @@ def test_registered_annotation_partition_missing_source_reads_none(tmp_path):
     pq.write_table(table.drop_columns(["source"]), parquets[0])
     restored = _read(version_dir)
     assert restored.registered_annotations[0].source is None
+
+
+def test_temporal_localization_empty_target_round_trips(tmp_path):
+    """A localization ``target=()`` ("searched, found none") round-trips as ``()``, not ``None``."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/localization-empty",
+            dataset_version=Version(1, 0, 0),
+            name="Localization",
+            description="A localization task whose answer is that there are no events.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    dataset.add_task(sample, TemporalLocalizationTask(prompt="Mark every P-wave", target=(), id="loc-0"))
+    restored = _read(_write(tmp_path, dataset=dataset))
+    task = restored.tasks[0]
+    assert isinstance(task, TemporalLocalizationTask)
+    assert task.target == ()
