@@ -34,18 +34,23 @@ from timenet.engine import run_pipeline
 
 run_pipeline(
     connector, root, *,
-    cache_dir=None, clean_cache=False, progress_cb=None, force=False,
+    cache_dir=None, clean_cache=True, progress_cb=None, force=False,
 )
 ```
 
-1. cache: create `cache_dir`. The default is `<TIMENET_CACHE>/<dataset_id>`. If you set
-   `clean_cache=True`, the engine removes `cache_dir` after a successful build.
+1. cache: create `cache_dir`. The default is `<TIMENET_CACHE>/<dataset_id>`.
 2. download: `connector.download(cache_dir)` fetches the raw references. Only this stage touches the
    network.
 3. convert: `connector.convert(raw_refs)` builds an in-memory [`TimeFDataset`](timef-dataset.md).
 4. derive_schema and store: the engine derives the schema first. It then calls `store_dataset()`,
    which streams the dataset through [`TimeFWriter`](timef-writer.md) and returns the committed
    version directory.
+5. clean: the engine removes `cache_dir` again. Only `convert` reads the raw sources, and they are
+   often several times the size of the dataset they produce, so a finished build has no use for
+   them. Pass `clean_cache=False` (or `--keep-cache` on the CLI) to keep them; they re-download on
+   the next build otherwise. A cache directory *you* passed as `cache_dir` is yours, and the engine
+   never removes it. Neither does a failed build: whatever it downloaded stays put, so a re-run is a
+   cache hit.
 
 `run_pipeline` is idempotent. If a version is already committed, it short-circuits, unless you pass
 `force=True`. Distributed (Ray-backed) scheduling is out of scope for now.

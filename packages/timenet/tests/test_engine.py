@@ -1,6 +1,8 @@
 from pathlib import Path
 import tempfile
 
+import pytest
+
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
@@ -49,6 +51,17 @@ class _DemoConnector(BaseConnector[str]):
 
     def convert(self, raw_refs: list[str]) -> TimeFDataset:
         return make_dataset()
+
+
+class _FailingConnector(_DemoConnector):
+    """Downloads into the cache, then fails before the dataset is ever stored."""
+
+    def download(self, cache_dir: Path) -> list[str]:
+        (cache_dir / "source.bin").write_bytes(b"raw")
+        return ["ref"]
+
+    def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        raise RuntimeError("convert blew up")
 
 
 def test_store_writes_a_readable_layout(tmp_path):
@@ -101,13 +114,34 @@ def test_run_pipeline_force_rebuilds(tmp_path):
 
 def test_clean_cache_keeps_caller_supplied_dir(tmp_path):
     cache = tmp_path / "mine"
-    run_pipeline(_DemoConnector(), tmp_path / "root", cache_dir=cache, clean_cache=True)
-    assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even with clean_cache
+    run_pipeline(_DemoConnector(), tmp_path / "root", cache_dir=cache)
+    assert cache.is_dir()  # a caller-owned cache_dir is never deleted, not even by the default clean
 
 
-def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
+def _isolated_home(tmp_path, monkeypatch) -> None:
+    """Point the settings at a scratch home so the default cache lands under tmp_path."""
     for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    run_pipeline(_DemoConnector(), tmp_path / "root", clean_cache=True)  # cache_dir=None -> we own it
+
+
+def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
+    _isolated_home(tmp_path, monkeypatch)
+    run_pipeline(_DemoConnector(), tmp_path / "root")  # cache_dir=None -> we own it, so we clean it
     assert not (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+
+
+def test_clean_cache_false_keeps_the_auto_created_default(tmp_path, monkeypatch):
+    _isolated_home(tmp_path, monkeypatch)
+    run_pipeline(_DemoConnector(), tmp_path / "root", clean_cache=False)
+    assert (settings().cache_dir / make_dataset().metadata.dataset_id).is_dir()
+
+
+def test_a_failed_build_leaves_the_cache_in_place(tmp_path, monkeypatch):
+    # The rmtree sits after store_dataset, so a build that never got there keeps whatever it
+    # downloaded. Re-running it is then a cache hit rather than a second full download.
+    _isolated_home(tmp_path, monkeypatch)
+    connector = _FailingConnector()
+    with pytest.raises(RuntimeError, match="convert blew up"):
+        run_pipeline(connector, tmp_path / "root")
+    assert (settings().cache_dir / make_dataset().metadata.dataset_id).is_dir()

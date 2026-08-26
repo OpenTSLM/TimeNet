@@ -1,6 +1,7 @@
 """Tests for the high-level, scheme-dispatching download helpers."""
 
 import asyncio
+import hashlib
 import io
 import zipfile
 
@@ -141,6 +142,75 @@ def test_ensure_archive_disambiguates_same_basename_urls(monkeypatch, tmp_path):
     asyncio.run(ensure_archive("https://hostB/data.zip", target))
     assert (target / "from_a.txt").exists()
     assert (target / "from_b.txt").exists()  # second archive not skipped despite the shared basename
+
+
+def test_ensure_archive_deletes_the_archive_after_extracting(monkeypatch, tmp_path):
+    payload = _zip_bytes("hello.txt", "hi")
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(payload)
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    assert (target / "hello.txt").read_text() == "hi"  # the extracted tree is the raw source now
+    assert not list(target.glob("*.zip"))  # and the archive is not a second copy of it
+
+
+def test_ensure_archive_keeps_the_archive_when_extraction_fails(monkeypatch, tmp_path):
+    # The archive is the only thing that makes a re-run cheap before the marker exists, so a failed
+    # extraction must not throw it away: re-running re-extracts instead of downloading again.
+    calls = {"n": 0}
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            if skip_existing and artifact.dest.exists():  # as the real downloader does
+                continue
+            calls["n"] += 1
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(b"not a zip at all")
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    with pytest.raises(zipfile.BadZipFile):
+        asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    archives = list(target.iterdir())
+    assert len(archives) == 1  # the downloaded archive survives the failure
+    assert calls["n"] == 1
+
+    # The retry reuses it (download_files skips an existing destination) rather than re-fetching.
+    with pytest.raises(zipfile.BadZipFile):
+        asyncio.run(ensure_archive("https://h/data.zip", target))
+    assert calls["n"] == 1
+
+
+def test_ensure_archive_sweeps_an_archive_stranded_by_an_earlier_run(monkeypatch, tmp_path):
+    # Killed between marker.touch() and the unlink, a run leaves the archive behind. The next call
+    # short-circuits on the marker, and must still clear the stale copy.
+    payload = _zip_bytes("hello.txt", "hi")
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(payload)
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    key = hashlib.sha256(b"https://h/data.zip").hexdigest()[:8]
+    stranded = target / f"{key}-data.zip"
+    stranded.write_bytes(payload)  # simulate the interrupted run
+
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+    assert not stranded.exists()
 
 
 def test_ensure_archive_rejects_unknown_scheme(tmp_path):

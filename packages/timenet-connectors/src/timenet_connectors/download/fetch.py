@@ -2,8 +2,8 @@
 
 :func:`download_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
 backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself. A
-single file is a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
-it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
+single file is a one-element list. :func:`ensure_archive` builds on it to download a zip, extract it
+once, and drop the archive again once the extracted tree has replaced it. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
 (:mod:`~timenet_connectors.download.http`). Both are async so they compose with a connector's
 ``download_async``. The S3 branch is a plain blocking call, because boto3 already parallelizes a single
 object's transfer. A list mixing schemes runs its S3 entries one at a time and its HTTP entries
@@ -116,6 +116,13 @@ async def ensure_archive(  # noqa: PLR0913
     Idempotent: the function writes a marker file under ``target``, keyed by the archive URL, after a
     successful extraction. A re-run then reuses the extracted contents and skips the download.
 
+    A successful extraction also deletes the archive. From that point the extracted tree *is* the raw
+    source, and the archive is a second copy of it that nothing reads again; keeping it doubles the
+    peak disk a build needs, which is the difference between one and two copies of a multi-gigabyte
+    database. Only the marker makes the re-run cheap, so nothing is lost. An extraction that *fails*
+    keeps the archive, and because an HTTP download is atomic (a ``.part`` file renamed on success) a
+    present archive is always complete: the re-run re-extracts rather than downloading again.
+
     Args:
         url: The archive URL, ``s3://`` or ``http(s)://``.
         target: Directory into which the function downloads the archive and extracts its contents.
@@ -134,11 +141,17 @@ async def ensure_archive(  # noqa: PLR0913
     # colliding, which would silently skip the second download.
     key = hashlib.sha256(url.encode()).hexdigest()[:8]
     marker = target / f".{key}-{name}.extracted"
-    if marker.exists():
-        return target
     zip_path = target / f"{key}-{name}"
+    if marker.exists():
+        # A run killed between the touch and the unlink below leaves the archive behind. Sweep it, so
+        # the stale copy cannot outlive the one run that failed to clean up after itself.
+        zip_path.unlink(missing_ok=True)
+        return target
     await download_files([Artifact(url, zip_path, headers=headers, cookies=cookies, sha256=sha256)])
     with zipfile.ZipFile(zip_path) as archive:
         archive.extractall(target)
+    # Marker first, then the archive: an interruption between the two costs a stale file that the
+    # branch above sweeps, while the reverse order would cost the whole download again.
     marker.touch()
+    zip_path.unlink(missing_ok=True)
     return target

@@ -17,7 +17,7 @@ def run_pipeline(  # noqa: PLR0913
     root: Path,
     *,
     cache_dir: Path | None = None,
-    clean_cache: bool = False,
+    clean_cache: bool = True,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> Path:
@@ -26,16 +26,18 @@ def run_pipeline(  # noqa: PLR0913
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
     to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
-    references into it, ``convert`` them into a dataset, ``derive_schema``, then ``store``. The engine
-    only writes local files. Publishing to a remote registry is a separate step.
+    references into it, ``convert`` them into a dataset, ``derive_schema``, ``store``, and finally
+    discard the cache directory. The engine only writes local files. Publishing to a remote registry
+    is a separate step.
 
     Args:
         connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory after storing the dataset. Conversion is the only
-            stage that needs the raw sources, so this frees disk after a successful build. The
-            sources re-download on the next run.
+        clean_cache: Remove the cache directory after storing the dataset. On by default: ``convert``
+            is the only stage that needs the raw sources, so a finished build has no use for them and
+            keeping them can cost many times the size of the dataset it produced. Pass ``False`` to
+            keep them; otherwise they re-download on the next run.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -74,7 +76,7 @@ def publish_pipeline(  # noqa: PLR0913
     registry: WritableRegistry,
     *,
     cache_dir: Path | None = None,
-    clean_cache: bool = False,
+    clean_cache: bool = True,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
 ) -> str:
@@ -88,7 +90,7 @@ def publish_pipeline(  # noqa: PLR0913
         connector: The connector to build.
         registry: The writable registry to publish into (local, remote, or S3).
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        clean_cache: Remove the cache directory after publishing.
+        clean_cache: Remove the cache directory after publishing. On by default, as in :func:`run_pipeline`.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
 

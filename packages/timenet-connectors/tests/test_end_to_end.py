@@ -122,17 +122,31 @@ def test_publish_pipeline_stores_through_writable_registry(clean_env, tmp_path):
     assert_datasets_equal(original, restored)
 
 
-def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):
+def test_run_pipeline_cleans_cache_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry", clean_cache=True)
+    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry")
     assert (version_dir / "manifest.json").exists()  # build succeeded
     assert not (settings().cache_dir / "timenet" / "hello-world").exists()  # raw cache removed
 
 
-def test_run_pipeline_keeps_cache_by_default(tmp_path, monkeypatch):
+def test_run_pipeline_keeps_cache_when_asked(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    run_pipeline(HelloWorldConnector(), tmp_path / "registry")
+    run_pipeline(HelloWorldConnector(), tmp_path / "registry", clean_cache=False)
     assert (settings().cache_dir / "timenet" / "hello-world").exists()
+
+
+def test_api_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):
+    # The SDK entry point used to leave the raw sources behind while the CLI removed them. Both
+    # now clean, and keep_cache is the programmatic counterpart of --keep-cache.
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    cache = settings().cache_dir / "timenet" / "hello-world"
+
+    build("timenet/hello-world", out=tmp_path / "r1")
+    assert not cache.exists()
+
+    build("timenet/hello-world", out=tmp_path / "r2", keep_cache=True)
+    assert cache.exists()
 
 
 def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):

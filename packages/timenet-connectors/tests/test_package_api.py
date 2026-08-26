@@ -40,16 +40,20 @@ def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path)
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
 
-    def fake_isolated(dataset_id, root, *, force=False):
-        calls.append((dataset_id, root, force))
+    def fake_isolated(dataset_id, root, *, force=False, keep_cache=False):
+        calls.append((dataset_id, root, force, keep_cache))
         return Path(root) / "timenet" / "hello-world" / "1.0.0"
 
     monkeypatch.setattr(env_module, "run_isolated", fake_isolated)
 
     version_dir = timenet_connectors.build("timenet/hello-world", out=str(tmp_path), force=True)
 
-    assert calls == [("timenet/hello-world", tmp_path, True)]
+    # keep_cache=False: the isolated child cleans the raw cache, as a direct build does.
+    assert calls == [("timenet/hello-world", tmp_path, True, False)]
     assert version_dir == tmp_path / "timenet" / "hello-world" / "1.0.0"
+
+    timenet_connectors.build("timenet/hello-world", out=str(tmp_path), force=True, keep_cache=True)
+    assert calls[-1] == ("timenet/hello-world", tmp_path, True, True)
 
 
 def test_version_guard_does_not_import_the_connector(monkeypatch, tmp_path):
