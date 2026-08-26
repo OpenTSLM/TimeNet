@@ -1,4 +1,4 @@
-.PHONY: sync test test-connectors check install-hooks lint-fix build docs docs-serve docs-preview docs-datasets docs-api clean
+.PHONY: sync test test-connectors check install-hooks lint-fix build license-check docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
 	uv sync --all-groups --all-extras
@@ -13,6 +13,18 @@ test:
 # requirements, the same way a build runs. See scripts/check_connectors.py.
 test-connectors:
 	uv run scripts/check_connectors.py
+
+# Fail the build if a copyleft dependency (GPL/LGPL/AGPL/SSPL/EUPL/CDDL/OSL) enters the resolved
+# environment. Runs against the synced dev env, which pulls in every extra plus the connector deps in
+# the dev group (wfdb, huggingface-hub, boto3). A dep declared only in a connector's requirements.txt
+# is not seen here; current connectors are all permissive. Denylist over --allow-only on purpose:
+# --allow-only trips on PEP 639 combined expressions (e.g. numpy's "BSD-3-Clause AND 0BSD AND ..."),
+# while --partial-match --fail-on only fires when a copyleft token actually appears. A dep whose
+# metadata declares no license reports UNKNOWN and is not gated; scan the printed table if one shows up.
+license-check:
+	uv run --with "pip-licenses>=5.0" pip-licenses --partial-match \
+		--fail-on="GPL;LGPL;AGPL;SSPL;EUPL;CDDL;OSL" \
+		--format=markdown
 
 build:
 	uv build --package timenet

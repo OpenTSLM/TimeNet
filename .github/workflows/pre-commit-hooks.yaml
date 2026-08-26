@@ -59,6 +59,12 @@ jobs:
       id: connectors
       continue-on-error: true
       run: make test-connectors
+    - name: Check dependency licenses
+      # Fail the build if a copyleft dependency enters the resolved dev environment. Runs against the
+      # 3.13 sync, alongside the connectors check, and is gated below without its own report row.
+      id: license
+      continue-on-error: true
+      run: make license-check
     - name: Test with pytest (Python 3.11)
       # Guard the minimum supported Python; the steps above run on 3.13. Re-syncs the venv, so it
       # has to come after the 3.13 run.
@@ -85,5 +91,5 @@ jobs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: uv run .github/scripts/ci_report.py
     - name: Fail if any check failed
-      if: steps.precommit.outcome == 'failure' || steps.pytest.outcome == 'failure' || steps.pytestmin.outcome == 'failure' || steps.connectors.outcome == 'failure'
+      if: steps.precommit.outcome == 'failure' || steps.pytest.outcome == 'failure' || steps.pytestmin.outcome == 'failure' || steps.connectors.outcome == 'failure' || steps.license.outcome == 'failure'
       run: exit 1
