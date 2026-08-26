@@ -31,7 +31,13 @@ from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
-from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
+from timenet.format.schemas import (
+    TASK_COMMON_NAMES,
+    IdCodec,
+    annotations_schema,
+    id_types_from_encoding,
+    task_schema,
+)
 from timenet.types import (
     TASKS,
     Annotation,
@@ -607,14 +613,15 @@ class TimeFReader:
         """
         if self._manifest.counts.registered_annotations == 0:
             return ()
+        # Read against the current schema, so a partition written before a column (source) was added
+        # back-fills it as null rather than failing the read.
+        schema = annotations_schema(id_types_from_encoding(self._manifest.id_encoding))
         registered: list[Annotation] = []
         with self._as_format_error():
             for part in self._manifest.files.annotations:
-                table = pq.read_table(
-                    self._version.path(part.path),
-                    filesystem=self._fs,
-                    columns=["id", "key", "value", "source", "span", "sample_ids"],
-                )
+                table = pads.dataset(
+                    self._version.path(part.path), filesystem=self._fs, schema=schema, format="parquet"
+                ).to_table(columns=["id", "key", "value", "source", "span", "sample_ids"])
                 for row in table.to_pylist():
                     if not row["sample_ids"]:
                         registered.append(self._decode_annotation(row))

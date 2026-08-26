@@ -951,3 +951,50 @@ def test_annotation_partition_missing_source_reads_none(tmp_path):
     pq.write_table(table.drop_columns(["source"]), parquets[0])
     restored = _read(version_dir)
     assert restored.samples[0].annotations[0].source is None
+
+
+def _registered_source_dataset(source):
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/registered-source",
+            dataset_version=Version(1, 0, 0),
+            name="RegisteredSource",
+            description="A registered annotation carrying a source that no sample carries.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    options = Annotation(key="answer_options", value=["yes", "no"], source=source, id="opts-src")
+    dataset.register_annotations([options])
+    dataset.add_task(
+        sample,
+        AnswerTask(prompt="Rhythm?", target="yes", input_annotation_ids=(options.id,), id="qa-0"),
+    )
+    return dataset
+
+
+def test_registered_annotation_source_round_trips(tmp_path):
+    restored = _read(_write(tmp_path, dataset=_registered_source_dataset("rater-A")))
+    assert restored.registered_annotations[0].source == "rater-A"
+
+
+def test_registered_annotation_partition_missing_source_reads_none(tmp_path):
+    """A registered-annotations partition written before the source column existed reads source=None."""
+    version_dir = _write(tmp_path, dataset=_registered_source_dataset("rater-A"))
+    parquets = [p for p in version_dir.rglob("*.parquet") if p.parent.name == "annotations"]
+    assert len(parquets) == 1
+    table = pq.read_table(parquets[0])
+    assert "source" in table.column_names
+    pq.write_table(table.drop_columns(["source"]), parquets[0])
+    restored = _read(version_dir)
+    assert restored.registered_annotations[0].source is None
