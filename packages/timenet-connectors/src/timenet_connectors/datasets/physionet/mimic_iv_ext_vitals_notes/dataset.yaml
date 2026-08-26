@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: physionet/mimic-iv-ext-vitals-notes
+dataset_version: 3.1.0
+name: MIMIC-IV-Ext Vitals and Notes
+description: >-
+  Hospital admissions from MIMIC-IV 3.1 with hourly ICU vital signs and human-authored discharge
+  summaries from MIMIC-IV-Note 2.2.
+license: PhysioNet-Credentialed-Health-Data-1.5.0
+domains:
+  - health
+tags:
+  - clinical
+  - ehr
+  - physionet
+  - text
+  - vitals
+source_url: https://physionet.org/content/mimiciv/3.1/

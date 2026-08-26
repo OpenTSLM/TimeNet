@@ -1,0 +1,2 @@
+# Reads the authorized MIMIC CSV files and prepares the local Parquet cache.
+duckdb>=1.4
