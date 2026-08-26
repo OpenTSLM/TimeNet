@@ -256,6 +256,7 @@ def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataTy
         TaskType.TS_CORRESPONDENCE: [
             ("candidate_sample_ids", pa.list_(id_types["sample_id"])),
             ("target", pa.list_(id_types["sample_id"])),
+            ("target_time_series_ids", pa.list_(id_types["time_series_id"])),
         ],
     }
 
@@ -412,9 +413,14 @@ class IdCodec:
             if isinstance(value, Span):
                 return self.encode_span(value)
             return [self.encode_span(span) for span in cast("list[Span]", value)]
-        if name not in refs.sample_id_fields or "sample_id" not in self.uuid16:
+        logical = None
+        if name in refs.sample_id_fields:
+            logical = "sample_id"
+        elif name in refs.time_series_id_fields:
+            logical = "time_series_id"
+        if logical is None or logical not in self.uuid16:
             return value
-        return self.encode_list("sample_id", value) if isinstance(value, list) else self.encode("sample_id", value)
+        return self.encode_list(logical, value) if isinstance(value, list) else self.encode(logical, value)
 
     def decode(self, logical: str, value: object) -> str:
         """Decode one required id, turning 16 raw bytes back into a canonical string for ``uuid16``.
@@ -506,8 +512,13 @@ class IdCodec:
             if isinstance(value, tuple):
                 return tuple(self.decode_span(row) for row in value)
             return self.decode_span(value)
-        if name not in refs.sample_id_fields or "sample_id" not in self.uuid16:
+        logical = None
+        if name in refs.sample_id_fields:
+            logical = "sample_id"
+        elif name in refs.time_series_id_fields:
+            logical = "time_series_id"
+        if logical is None or logical not in self.uuid16:
             return value
         if isinstance(value, tuple):
-            return tuple(self.decode("sample_id", item) for item in value)
-        return self.decode("sample_id", value)
+            return tuple(self.decode(logical, item) for item in value)
+        return self.decode(logical, value)
