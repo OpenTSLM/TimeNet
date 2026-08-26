@@ -21,6 +21,22 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
       "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Empty or absent for a backend with no such choice."
+    },
+    "id_encoding": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "enum": ["uuid16"] },
+      "description": "Map of logical id name to its binary storage encoding. An id absent from this map is stored as a UTF-8 string. The reader uses it to decode id columns."
+    },
+    "derived_from": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": { "type": "string" } },
+        { "type": "null" }
+      ],
+      "description": "Copy-on-write lineage (base version and operation) for a manifest produced by an edit, or null for a freshly built version."
+    },
+    "build_env": {
+      "type": "object",
+      "description": "Provenance for the environment that produced the version (interpreter and installed packages). No reader consults it to interpret the data."
     }
   },
   "$defs": {
@@ -178,6 +194,7 @@
       "properties": {
         "samples": { "type": "integer" },
         "annotations": { "type": "integer" },
+        "registered_annotations": { "type": "integer" },
         "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
         "time_series_chunks": { "type": "integer" },
         "time_series_index_rows": { "type": "integer" },

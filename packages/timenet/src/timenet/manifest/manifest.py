@@ -116,7 +116,7 @@ class Manifest:
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
             "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
-            "build_env": dict(self.build_env) if self.build_env is not None else None,
+            "build_env": dict(self.build_env),
         }
 
     def to_json(self) -> str:
@@ -155,7 +155,7 @@ class Manifest:
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
             derived_from=derived_from,
-            build_env=data.get("build_env", {}),
+            build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
         )
 
