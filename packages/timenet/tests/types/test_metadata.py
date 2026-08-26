@@ -3,7 +3,10 @@ import pickle
 
 import pytest
 
+from timenet.errors import TimeFValidationError
+from timenet.manifest.manifest import _metadata_to_dict
 from timenet.types import (
+    Access,
     AnnotationDescriptor,
     AnnotationType,
     ClassificationTask,
@@ -86,3 +89,40 @@ def test_a_spec_carries_its_own_data_source():
 
 def test_metadata_picklable():
     assert pickle.loads(pickle.dumps(_metadata())) == _metadata()
+
+
+def test_license_other_requires_a_license_url():
+    with pytest.raises(TimeFValidationError, match="license_url is required"):
+        _metadata(license=License.OTHER)
+    assert _metadata(license=License.OTHER, license_url="https://l.example").license is License.OTHER
+
+
+def test_non_open_access_requires_an_access_url():
+    with pytest.raises(TimeFValidationError, match="access_url is required"):
+        _metadata(access=Access.CREDENTIALED)
+    ok = _metadata(access=Access.CREDENTIALED, access_url="https://physionet.example/dua")
+    assert ok.access is Access.CREDENTIALED
+
+
+def test_access_defaults_to_open():
+    m = _metadata()
+    assert m.access is Access.OPEN
+    assert m.access_url is None and m.license_url is None and m.citation is None
+
+
+def test_metadata_round_trips_access_and_license_fields():
+    m = _metadata(
+        license=License.OTHER,
+        license_url="https://l.example",
+        citation="Author et al., 2024",
+        access=Access.CREDENTIALED,
+        access_url="https://physionet.example/dua",
+    )
+    assert DatasetMetadata.from_dict(_metadata_to_dict(m)) == m
+
+
+def test_metadata_from_dict_defaults_when_access_fields_absent():
+    m = DatasetMetadata.from_dict(
+        {"dataset_id": "org/name", "dataset_version": "1.0.0", "name": "N", "description": "D", "license": "MIT"}
+    )
+    assert m.access is Access.OPEN and m.access_url is None and m.citation is None

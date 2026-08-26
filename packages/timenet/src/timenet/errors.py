@@ -18,6 +18,10 @@ class TimeNetDatasetNotFoundError(TimeNetError):
     """A requested dataset id or version is not present in a registry or on disk."""
 
 
+class TimeNetAccessError(TimeNetError):
+    """A dataset needs credentialed or restricted access, so TimeNet does not host its data."""
+
+
 class TimeFValidationError(TimeNetError, ValueError):
     """A dataset or its arrays violate a TimeF invariant (raised while building or writing)."""
 

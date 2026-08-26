@@ -4,7 +4,7 @@ Adding a license/domain/annotation/task in Python without updating the schema fa
 """
 
 from timenet.schemas import DATASET_CARD_SCHEMA, MANIFEST_SCHEMA
-from timenet.types import AnnotationType, Domain, License, TaskType
+from timenet.types import Access, AnnotationType, Domain, License, TaskType
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -19,11 +19,13 @@ def _values(enum):
 def test_card_enums_match_python():
     assert _schema_enum(DATASET_CARD_SCHEMA, "license") == _values(License)
     assert _schema_enum(DATASET_CARD_SCHEMA, "domain") == _values(Domain)
+    assert _schema_enum(DATASET_CARD_SCHEMA, "access") == _values(Access)
 
 
 def test_manifest_shared_enums_match_python():
     assert _schema_enum(MANIFEST_SCHEMA, "license") == _values(License)
     assert _schema_enum(MANIFEST_SCHEMA, "domain") == _values(Domain)
+    assert _schema_enum(MANIFEST_SCHEMA, "access") == _values(Access)
 
 
 def test_manifest_annotation_and_task_enums_match_python():

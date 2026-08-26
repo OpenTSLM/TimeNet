@@ -19,7 +19,11 @@
     "license": { "$ref": "#/$defs/license" },
     "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
     "tags": { "type": "array", "items": { "type": "string" } },
-    "source_url": { "type": ["string", "null"] }
+    "source_url": { "type": ["string", "null"] },
+    "license_url": { "type": ["string", "null"] },
+    "citation": { "type": ["string", "null"] },
+    "access": { "$ref": "#/$defs/access" },
+    "access_url": { "type": ["string", "null"] }
   },
   "$defs": {
     "datasetId": {
@@ -48,7 +52,8 @@
         "CC-BY-SA-4.0",
         "CC-BY-NC-4.0",
         "ODC-By-1.0",
-        "ODbL-1.0"
+        "ODbL-1.0",
+        "other"
       ]
     },
     "domain": {
@@ -63,6 +68,11 @@
         "finance",
         "general"
       ]
+    },
+    "access": {
+      "type": "string",
+      "description": "Kept in sync with timenet.types.Access by a drift test.",
+      "enum": ["open", "credentialed", "restricted"]
     }
   }
 }
