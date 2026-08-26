@@ -27,10 +27,12 @@ from timenet.errors import TimeFValidationError
 
 ureg = pint.UnitRegistry()
 
-# Non-physical units pint does not ship. `beat` is a dimensionless count with its own base dimension,
-# so heart-rate units stay distinct from plain frequencies.
+# Clinical count units that pint does not supply. Each count has its own base dimension. Thus, the
+# clinical rates stay distinct from plain frequencies and from each other.
 ureg.define("beat = [beat]")
 ureg.define("bpm = beat / minute")
+ureg.define("breath = [breath]")
+ureg.define("brpm = breath / minute")
 
 
 def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
