@@ -172,6 +172,9 @@ pull their database archive.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `TimeSeries`, and each
   row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
   `requirements.txt` names `huggingface_hub`.
+- `physionet/mimic-iv-ext-vitals-notes` reads authorized MIMIC-IV files from local storage. It uses
+  DuckDB to make one sample per hospital admission. Each sample has sparse hourly vital signs and
+  discharge-summary tasks. The connector does not send protected data to a cloud service.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic
@@ -179,10 +182,24 @@ timenet-build build chengsenwang/tsqa               # live, from the Hub
 timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
-A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. Only
-`convert` reads the sources, and they are often several times the size of the dataset they produce.
-To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.build()`. This helps
-while you write a connector for a large source, because each rebuild downloads the source again.
+For the MIMIC connector, first get access to MIMIC-IV 3.1 and MIMIC-IV-Note 2.2 on PhysioNet. Keep
+the downloaded `csv.gz` files in their original directory structure. Then set the two source roots:
+
+```bash
+export MIMIC_IV_ROOT=/data/mimiciv/3.1
+export MIMIC_IV_NOTE_ROOT=/data/mimic-iv-note/2.2
+timenet-build build physionet/mimic-iv-ext-vitals-notes --keep-cache
+```
+
+The first build scans the large `icu/chartevents.csv.gz` file and writes a smaller Parquet cache.
+Use `--keep-cache` if you expect to build the connector again. The connector checks source paths,
+sizes, and modification times before it reuses that cache.
+
+The TimeF output remains credentialed health data. Do not publish it to an open registry. Follow the
+PhysioNet license and data use agreement for storage and sharing.
+
+A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. The
+build needs the sources only during conversion. To keep the sources, pass `--keep-cache`.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. As a result, a test can hand it a checked-in fixture and
