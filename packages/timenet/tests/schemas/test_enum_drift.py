@@ -33,7 +33,7 @@ def test_manifest_annotation_and_task_enums_match_python():
 
 def test_manifest_value_type_enum_matches_the_closed_set():
     # Mirrors the tags returned by timenet.types.value_type_of (no Python enum backs it).
-    assert _schema_enum(MANIFEST_SCHEMA, "valueType") == ["bool", "float", "int", "list", "str"]
+    assert _schema_enum(MANIFEST_SCHEMA, "valueType") == ["bool", "float", "int", "list", "map", "str"]
 
 
 def test_manifest_value_encoding_enum_matches_python():

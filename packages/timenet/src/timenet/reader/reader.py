@@ -31,7 +31,13 @@ from timenet.dataset.sample import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
-from timenet.format.schemas import TASK_COMMON_NAMES, IdCodec, task_schema
+from timenet.format.schemas import (
+    TASK_COMMON_NAMES,
+    IdCodec,
+    annotations_schema,
+    id_types_from_encoding,
+    task_schema,
+)
 from timenet.types import (
     TASKS,
     Annotation,
@@ -229,7 +235,14 @@ class _PrunedControlTable:
         if cached is not None:
             self._cache.move_to_end(key)
             return cached
-        table = self._file(group.part).read_row_group(group.ordinal, columns=self._columns)
+        pf = self._file(group.part)
+        read_columns = self._columns
+        if read_columns is not None:
+            available = set(pf.schema_arrow.names)
+            # Project only columns the file actually has, so a column added to the schema after this
+            # partition was written is skipped and decodes to None instead of failing the read.
+            read_columns = [name for name in read_columns if name in available]
+        table = pf.read_row_group(group.ordinal, columns=read_columns)
         columns = [table.column(name).to_pylist() for name in self._lookup_columns]
         keys = list(zip(*columns, strict=True))
         entry = (table, keys)
@@ -538,7 +551,7 @@ class TimeFReader:
                 self._root,
                 tuple(part.path for part in self._manifest.files.annotations),
                 lookup_columns=(key_column,),
-                columns=["id", "key", "value", "span"],
+                columns=["id", "key", "value", "source", "span"],
             )
         return self._annotations
 
@@ -563,6 +576,7 @@ class TimeFReader:
             "id": self._codec.decode("annotation_id", row["id"]),
             "key": key,
             "value": None if row["value"] is None else json.loads(row["value"]),
+            "source": row.get("source"),
             "unit": descriptor.unit,
             "description": descriptor.description,
         }
@@ -599,14 +613,15 @@ class TimeFReader:
         """
         if self._manifest.counts.registered_annotations == 0:
             return ()
+        # Read against the current schema, so a partition written before a column (source) was added
+        # back-fills it as null rather than failing the read.
+        schema = annotations_schema(id_types_from_encoding(self._manifest.id_encoding))
         registered: list[Annotation] = []
         with self._as_format_error():
             for part in self._manifest.files.annotations:
-                table = pq.read_table(
-                    self._version.path(part.path),
-                    filesystem=self._fs,
-                    columns=["id", "key", "value", "span", "sample_ids"],
-                )
+                table = pads.dataset(
+                    self._version.path(part.path), filesystem=self._fs, schema=schema, format="parquet"
+                ).to_table(columns=["id", "key", "value", "source", "span", "sample_ids"])
                 for row in table.to_pylist():
                     if not row["sample_ids"]:
                         registered.append(self._decode_annotation(row))
