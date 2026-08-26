@@ -1,7 +1,7 @@
 """The :class:`License` enum: the legal license of a dataset's source data.
 
-Values are SPDX-style identifiers that mirror GitHub's license keyword list, not display strings.
-This lets them round-trip through the manifest without ambiguity.
+Values are stable license identifiers, not display strings. Most values use SPDX identifiers. A
+source-specific license uses a stable identifier when SPDX has no matching value.
 """
 
 from enum import StrEnum, unique
@@ -9,7 +9,7 @@ from enum import StrEnum, unique
 
 @unique
 class License(StrEnum):
-    """The legal license of the source data. Values are SPDX-style identifiers."""
+    """The legal license of the source data."""
 
     MIT = "MIT"
     APACHE_2_0 = "Apache-2.0"
@@ -24,5 +24,6 @@ class License(StrEnum):
     CC_BY_NC_4_0 = "CC-BY-NC-4.0"
     ODC_BY_1_0 = "ODC-By-1.0"
     ODBL_1_0 = "ODbL-1.0"
+    PHYSIONET_CREDENTIALED_HEALTH_DATA_1_5_0 = "PhysioNet-Credentialed-Health-Data-1.5.0"
     OTHER = "other"
     """Escape hatch for a license outside this list; requires a ``license_url`` on the card."""
