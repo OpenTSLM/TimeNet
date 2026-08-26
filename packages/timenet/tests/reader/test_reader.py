@@ -855,3 +855,48 @@ def test_point_shaped_time_span_raises_format_error(tmp_path):
         pytest.raises(TimeFFormatError, match="must be a TimeInterval"),
     ):
         list(reader.iter_samples())
+
+
+def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
+    """A task partition written before an optional column existed reads back with that field None.
+
+    Task payload columns are derived from the live dataclass, so adding an optional field to a task
+    type would make every already-published partition of that type raise on read. The reader must
+    tolerate a missing payload column instead, so additive task fields never force a recuration.
+    """
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/defensive-reads",
+            dataset_version=Version(1, 0, 0),
+            name="Defensive",
+            description="One classification task carrying an optional schema column.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        channel="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+        source_id="rec-0",
+        time_series_id="ecg-rec-0-I",
+        n_values=3,
+    )
+    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    dataset.add_task(sample, ClassificationTask(target="afib", target_schema="scp5", id="cls-0"))
+    version_dir = _write(tmp_path, dataset=dataset)
+
+    # Simulate an older partition: drop the optional payload column from the task Parquet on disk.
+    task_parquets = [p for p in version_dir.rglob("*.parquet") if "task=classification" in str(p)]
+    assert len(task_parquets) == 1
+    table = pq.read_table(task_parquets[0])
+    assert "target_schema" in table.column_names
+    pq.write_table(table.drop_columns(["target_schema"]), task_parquets[0])
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+    task = restored.tasks[0]
+    assert isinstance(task, ClassificationTask)
+    assert task.target == "afib"
+    assert task.target_schema is None
