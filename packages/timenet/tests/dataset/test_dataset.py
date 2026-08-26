@@ -662,3 +662,14 @@ def test_add_task_accepts_a_time_series_ref_on_the_sample(make_series):
     series_id = sample.time_series[0].time_series_id
     task = ds.add_task(sample, TSCorrespondenceTask(target_time_series_ids=(series_id,)))
     assert task.target_time_series_ids == (series_id,)
+
+
+def test_add_task_rejects_multiple_inline_answers(make_series):
+    ds = _dataset()
+    sample = ds.add_sample(time_series=(make_series(),))
+    series_id = sample.time_series[0].time_series_id
+    with pytest.raises(TimeFValidationError, match="multiple inline answers"):
+        ds.add_task(
+            sample,
+            TSCorrespondenceTask(target=(sample.sample_id,), target_time_series_ids=(series_id,)),
+        )

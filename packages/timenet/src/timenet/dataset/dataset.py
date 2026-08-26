@@ -504,18 +504,24 @@ class TimeFDataset:
 
     @staticmethod
     def _check_task_answer(task: Task) -> None:
-        """Reject a task whose answer is both inline and by reference, or whose answer is missing.
+        """Reject a task whose answer is ambiguous or missing.
+
+        A task answers with exactly one thing: one inline field, or by reference.
 
         Args:
             task: The task to register.
 
         Raises:
-            TimeFValidationError: This error occurs if ``target`` and ``target_annotation_ids``
-                are both set. It also occurs if both fields are unset on a task whose answer is
-                not a produced series.
+            TimeFValidationError: If the task sets more than one inline answer field, or sets an
+                inline answer together with ``target_annotation_ids``, or sets no answer at all on
+                a task whose answer is not a produced series.
         """
         name = type(task).__name__
         inline = [field_name for field_name in type(task).answer_fields if getattr(task, field_name) is not None]
+        if len(inline) > 1:
+            raise TimeFValidationError(
+                f"{name} sets multiple inline answers ({', '.join(inline)}); a task answers with exactly one"
+            )
         if inline and task.target_annotation_ids:
             raise TimeFValidationError(
                 f"{name} sets an inline answer ({', '.join(inline)}) and target_annotation_ids "
