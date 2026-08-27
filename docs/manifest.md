@@ -45,23 +45,23 @@ Manifest(
 )
 ```
 
-`id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as
-`binary(16)`. If an entry is absent, that id is a UTF-8 string. `values_backend` names the
-[values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The reader uses
-this value to choose the backend. A manifest without this key reads as `"parquet"`.
+`id_encoding` lists the logical ids that the [writer](timef-writer.md#id-storage) stored as
+`binary(16)`. If an id is not in the list, the reader decodes it as a UTF-8 string. `values_backend`
+names the [values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The
+reader uses this value to select the backend. If the key is absent, the reader uses `"parquet"`.
 
-`value_encoding` reports the [values encoding](timef-writer.md#values-encoding) used to write each
-modality's shards. No code reads this field to make a decision: Parquet already records the applied
-encoding in each file's footer. The field exists so that a builder can inspect what a build chose.
-The field is empty for a backend that has no such choice.
+`value_encoding` gives the [values encoding](timef-writer.md#values-encoding) that wrote the shards
+of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
+each file, so the reader does not need it. The field lets a builder see which encoding a build
+selected. The field is empty for a backend that has no such choice.
 
-`build_env` records the environment that produced the version: the interpreter version and every
-installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only, so no code reads it to interpret the data.
+`build_env` records the environment that produced the version. It gives the interpreter version and
+every installed package with its version. `timenet.provenance.build_env` collects this data. Like
+`value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
 
-The values locator is backend-neutral: one schema covers both scalar and multidimensional specs. A
-multidimensional spec records its shape in `value_shape` and `dimension_names`, so no separate
-format version gates it.
+The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
+multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
+separate format version.
 
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `TimeNetInvalidManifestError`.
