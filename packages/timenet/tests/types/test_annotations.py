@@ -136,6 +136,21 @@ def test_span_must_be_a_span():
         Annotation(key="bad", span="not-a-span")  # ty: ignore[invalid-argument-type]
 
 
+def test_annotation_descriptor_rejects_invalid_unit():
+    with pytest.raises(TimeFValidationError, match="unknown unit"):
+        AnnotationDescriptor(key="x", annotation_type=AnnotationType.STATIC, unit="not_a_unit")
+
+
+def test_annotation_descriptor_accepts_valid_unit():
+    d = AnnotationDescriptor(key="x", annotation_type=AnnotationType.STATIC, unit="years")
+    assert d.unit == "years"
+
+
+def test_annotation_descriptor_normalizes_pint_unit_to_string():
+    d = AnnotationDescriptor(key="x", annotation_type=AnnotationType.STATIC, unit=ureg.millivolt)  # ty: ignore[invalid-argument-type]
+    assert d.unit == "millivolt"
+
+
 def test_value_type_of_map():
     assert value_type_of({"panas_pa": 30, "panas_na": 12}) == "map"
 

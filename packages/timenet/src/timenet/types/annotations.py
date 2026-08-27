@@ -122,6 +122,10 @@ class AnnotationDescriptor:
     description: str | None = None
     """Optional human-readable description of the annotation."""
 
+    def __post_init__(self) -> None:
+        """Validate ``unit`` against the shared registry."""
+        object.__setattr__(self, "unit", normalize_unit(self.unit))
+
 
 def value_type_of(value: Any) -> str | None:
     """Return the manifest ``value_type`` tag for an annotation value.

@@ -85,18 +85,29 @@ class DatasetMetadata:
     """Version of the card's own field schema."""
 
     def __post_init__(self) -> None:
-        """Validate the ``dataset_id`` shape via :func:`validate_dataset_id`.
+        """Validate and coerce typed fields.
 
-        No segment can start with ``.``. The registry, the writer, and the download cache join
-        dataset ids into filesystem paths. A ``.`` or ``..`` segment can escape the registry or
-        storage root. A leading-dot name like ``.git`` writes to disk, but discovery skips it
-        because discovery drops hidden directories.
+        Coerces ``license``, ``domains``, and ``dataset_version`` from plain strings to their enum
+        or value types when passed as strings, matching what :meth:`from_dict` does.
 
         Raises:
-            TimeFValidationError: If ``license`` is ``License.OTHER`` without a ``license_url``, or
-                ``access`` is not open without an ``access_url``.
+            TimeFValidationError: If a typed field cannot be coerced, ``license`` is
+                ``License.OTHER`` without a ``license_url``, or ``access`` is not open without an
+                ``access_url``.
         """
         validate_dataset_id(self.dataset_id)
+        if isinstance(self.license, str) and not isinstance(self.license, License):
+            try:
+                object.__setattr__(self, "license", License(self.license))
+            except ValueError as exc:
+                raise TimeFValidationError(f"invalid license {self.license!r}") from exc
+        if isinstance(self.dataset_version, str):
+            object.__setattr__(self, "dataset_version", Version.parse(self.dataset_version))
+        if self.domains and not isinstance(self.domains[0], Domain):
+            try:
+                object.__setattr__(self, "domains", tuple(Domain(d) for d in self.domains))
+            except ValueError as exc:
+                raise TimeFValidationError(f"invalid domain in {self.domains!r}") from exc
         if self.license is License.OTHER and not self.license_url:
             raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:

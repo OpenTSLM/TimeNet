@@ -15,7 +15,7 @@ import numpy as np
 import pint
 
 from timenet.errors import TimeFValidationError
-from timenet.types.units import ureg
+from timenet.types.units import normalize_unit, ureg
 
 
 #: Spec types the Zarr backend cannot encode as its own array path segment.
@@ -114,12 +114,19 @@ class TimeSeriesSpec:
     """Optional names for the dimensions in :attr:`value_shape`."""
 
     def __post_init__(self) -> None:
-        """Validate the spec type tag plus the per-timestep dtype and shape contract.
+        """Validate the spec type tag, unit, and the per-timestep dtype and shape contract.
+
+        A string ``unit_value`` is resolved against the shared registry. A :class:`pint.Unit` from a
+        foreign registry is re-resolved to keep it bound to :data:`~timenet.types.units.ureg`.
 
         Raises:
-            TimeFValidationError: If the spec type, data source, dtype, shape, or dimension names are
-                invalid.
+            TimeFValidationError: If the unit, spec type, data source, dtype, shape, or dimension
+                names are invalid.
         """
+        if isinstance(self.unit_value, str):
+            object.__setattr__(self, "unit_value", ureg.Unit(cast("str", normalize_unit(self.unit_value))))
+        elif isinstance(self.unit_value, pint.Unit) and self.unit_value._REGISTRY is not ureg:
+            object.__setattr__(self, "unit_value", ureg.Unit(str(self.unit_value)))
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.data_source is not None and not isinstance(self.data_source, DataSource):
