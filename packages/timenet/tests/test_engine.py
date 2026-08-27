@@ -1,6 +1,8 @@
 from pathlib import Path
 import tempfile
 
+import pytest
+
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
@@ -101,13 +103,57 @@ def test_run_pipeline_force_rebuilds(tmp_path):
 
 def test_clean_cache_keeps_caller_supplied_dir(tmp_path):
     cache = tmp_path / "mine"
-    run_pipeline(_DemoConnector(), tmp_path / "root", cache_dir=cache, clean_cache=True)
-    assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even with clean_cache
+    run_pipeline(_DemoConnector(), tmp_path / "root", cache_dir=cache, keep_cache=False)
+    assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even when asked to clean it
 
 
-def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
+def _isolated_home(tmp_path, monkeypatch) -> None:
+    """Point the settings at a scratch home so the default cache lands under tmp_path."""
     for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    run_pipeline(_DemoConnector(), tmp_path / "root", clean_cache=True)  # cache_dir=None -> we own it
+
+
+def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
+    _isolated_home(tmp_path, monkeypatch)
+    run_pipeline(_DemoConnector(), tmp_path / "root")  # cache_dir=None -> the engine made it
     assert not (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+
+
+def test_run_pipeline_keeps_the_cache_when_asked(tmp_path, monkeypatch):
+    _isolated_home(tmp_path, monkeypatch)
+    run_pipeline(_DemoConnector(), tmp_path / "root", keep_cache=True)
+    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+
+
+def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path, monkeypatch):
+    # Downloads resume: http writes a .part and renames it, so a file that landed is complete and the
+    # next run skips it. Deleting the cache here would throw away good bytes.
+    _isolated_home(tmp_path, monkeypatch)
+
+    class _HalfDownloadedConnector(_DemoConnector):
+        def download(self, cache_dir: Path) -> list[str]:
+            (cache_dir / "first.bin").write_bytes(b"complete")
+            raise RuntimeError("download blew up")
+
+    with pytest.raises(RuntimeError, match="download blew up"):
+        run_pipeline(_HalfDownloadedConnector(), tmp_path / "root")
+    cache = settings().cache_dir / make_dataset().metadata.dataset_id
+    assert (cache / "first.bin").read_bytes() == b"complete"  # the finished file survives the retry
+
+
+def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
+    # The rmtree runs after store_dataset, so a convert that raises keeps what download fetched.
+    _isolated_home(tmp_path, monkeypatch)
+
+    class _FailingConnector(_DemoConnector):
+        def download(self, cache_dir: Path) -> list[str]:
+            (cache_dir / "source.bin").write_bytes(b"raw")
+            return ["ref"]
+
+        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+            raise RuntimeError("convert blew up")
+
+    with pytest.raises(RuntimeError, match="convert blew up"):
+        run_pipeline(_FailingConnector(), tmp_path / "root")
+    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()

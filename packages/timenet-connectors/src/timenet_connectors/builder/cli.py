@@ -129,13 +129,13 @@ def build(
     with _download_progress():
         if isinstance(target, Path):
             version_dir = run_pipeline(
-                connector_cls(), target, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
+                connector_cls(), target, progress_cb=_report_progress, force=force, keep_cache=keep_cache
             )
             console.success(f"Built '{dataset_id}' → {version_dir.name}")
             typer.echo(str(version_dir))
         else:
             version = publish_pipeline(
-                connector_cls(), target, progress_cb=_report_progress, force=force, clean_cache=not keep_cache
+                connector_cls(), target, progress_cb=_report_progress, force=force, keep_cache=keep_cache
             )
             console.success(f"Published '{dataset_id}' → {version}")
             typer.echo(version)

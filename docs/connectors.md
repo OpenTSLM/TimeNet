@@ -122,7 +122,7 @@ the URL. As a result, a connector never has to branch on `s3://` versus `http(s)
   pool. S3 entries run one at a time. A single file uses a one-element list.
 - `ensure_archive(url, target)` downloads a zip file and extracts it into `target`. This method is
   idempotent. A marker file records success. As a result, a later run reuses the extracted contents
-  and skips the download.
+  and skips the download. A successful extraction then deletes the archive.
 
 Each `Artifact` takes optional `headers`, `cookies`, and a `sha256` value to validate the download.
 `download_files` also takes batch-level `headers` and `cookies`. These apply to every HTTP request. The
@@ -179,8 +179,10 @@ timenet-build build chengsenwang/tsqa               # live, from the Hub
 timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
-A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. The
-build needs the sources only during conversion. To keep the sources, pass `--keep-cache`.
+A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. Only
+`convert` reads the sources, and they are often several times the size of the dataset they produce.
+To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.build()`. This helps
+while you write a connector for a large source, because each rebuild downloads the source again.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. As a result, a test can hand it a checked-in fixture and

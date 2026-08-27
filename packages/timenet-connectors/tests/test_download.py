@@ -143,6 +143,74 @@ def test_ensure_archive_disambiguates_same_basename_urls(monkeypatch, tmp_path):
     assert (target / "from_b.txt").exists()  # second archive not skipped despite the shared basename
 
 
+def test_ensure_archive_deletes_the_zip_after_extracting(monkeypatch, tmp_path):
+    payload = _zip_bytes("hello.txt", "hi")
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(payload)
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    assert (target / "hello.txt").read_text() == "hi"  # the extracted files are the raw source now
+    assert not list(target.glob("*.zip"))  # and no second copy of them
+
+
+def test_ensure_archive_keeps_the_zip_if_extraction_fails(monkeypatch, tmp_path):
+    # Before the marker exists, only the archive makes the next run cheap. A failure must keep it.
+    calls = {"n": 0}
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            if skip_existing and artifact.dest.exists():  # as the real downloader does
+                continue
+            calls["n"] += 1
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(b"not a zip at all")
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    with pytest.raises(zipfile.BadZipFile):
+        asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    archives = list(target.iterdir())
+    assert len(archives) == 1  # the downloaded archive survives the failure
+    assert calls["n"] == 1
+
+    # The next run reuses it, because download_files skips a destination that exists.
+    with pytest.raises(zipfile.BadZipFile):
+        asyncio.run(ensure_archive("https://h/data.zip", target))
+    assert calls["n"] == 1
+
+
+def test_ensure_archive_deletes_a_leftover_zip(monkeypatch, tmp_path):
+    # A run that stops between marker.touch() and the unlink leaves the zip behind.
+    payload = _zip_bytes("hello.txt", "hi")
+    seen = {}
+
+    async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
+        for artifact in artifacts:
+            seen["dest"] = artifact.dest  # the path ensure_archive picked, rather than recomputing it
+            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
+            artifact.dest.write_bytes(payload)
+        return [artifact.dest for artifact in artifacts]
+
+    monkeypatch.setattr(fetch, "download_http_many", _fake_many)
+    target = tmp_path / "out"
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+
+    leftover_zip = seen["dest"]
+    leftover_zip.write_bytes(payload)  # stand in for the run that stopped
+
+    asyncio.run(ensure_archive("https://h/data.zip", target))
+    assert not leftover_zip.exists()
+
+
 def test_ensure_archive_rejects_unknown_scheme(tmp_path):
     with pytest.raises(ValueError, match="scheme"):
         asyncio.run(ensure_archive("ftp://h/data.zip", tmp_path / "out"))

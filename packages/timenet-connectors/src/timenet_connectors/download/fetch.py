@@ -2,8 +2,9 @@
 
 :func:`download_files` downloads a list of :class:`~timenet_connectors.download.http.Artifact`, choosing the
 backend from each URL's scheme so a connector never branches on ``s3://`` vs ``http(s)://`` itself. A
-single file is a one-element list. :func:`ensure_archive` builds on it to download a zip and extract
-it once. S3 objects go through boto3 (:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
+single file is a one-element list. :func:`ensure_archive` builds on it to download a zip archive,
+extract it once, and delete the archive. S3 objects go through boto3
+(:mod:`~timenet_connectors.download.s3`) and HTTP through httpx
 (:mod:`~timenet_connectors.download.http`). Both are async so they compose with a connector's
 ``download_async``. The S3 branch is a plain blocking call, because boto3 already parallelizes a single
 object's transfer. A list mixing schemes runs its S3 entries one at a time and its HTTP entries
@@ -116,6 +117,9 @@ async def ensure_archive(  # noqa: PLR0913
     Idempotent: the function writes a marker file under ``target``, keyed by the archive URL, after a
     successful extraction. A re-run then reuses the extracted contents and skips the download.
 
+    A successful extraction then deletes the archive, because the marker alone makes the next run
+    cheap. A failed one keeps it, so the next run extracts it again instead of downloading it again.
+
     Args:
         url: The archive URL, ``s3://`` or ``http(s)://``.
         target: Directory into which the function downloads the archive and extracts its contents.
@@ -134,11 +138,15 @@ async def ensure_archive(  # noqa: PLR0913
     # colliding, which would silently skip the second download.
     key = hashlib.sha256(url.encode()).hexdigest()[:8]
     marker = target / f".{key}-{name}.extracted"
-    if marker.exists():
-        return target
     zip_path = target / f"{key}-{name}"
+    if marker.exists():
+        # A run that stopped before the unlink below can leave a stale archive. Delete it.
+        zip_path.unlink(missing_ok=True)
+        return target
     await download_files([Artifact(url, zip_path, headers=headers, cookies=cookies, sha256=sha256)])
     with zipfile.ZipFile(zip_path) as archive:
         archive.extractall(target)
+    # Marker first: the reverse order costs the whole download if the run stops between the two.
     marker.touch()
+    zip_path.unlink(missing_ok=True)
     return target
