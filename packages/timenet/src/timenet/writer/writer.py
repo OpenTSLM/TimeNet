@@ -83,7 +83,6 @@ class TimeFWriter:
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-        derived_from: dict[str, str] | None = None,
     ) -> None:
         """Configure the writer.
 
@@ -103,8 +102,6 @@ class TimeFWriter:
                 forces one for every modality. Only the Parquet backend applies an encoding, so the
                 writer rejects forcing one on another backend.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
-            derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
-                another (for example ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, ``values_backend`` or
@@ -129,7 +126,6 @@ class TimeFWriter:
             )
         self._root = Path(root)
         self._dataset = dataset
-        self._derived_from = derived_from
         self._shard_target_bytes = shard_target_bytes
         self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
@@ -671,7 +667,6 @@ class TimeFWriter:
             id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
-            derived_from=self._derived_from,
             build_env=build_env(),
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

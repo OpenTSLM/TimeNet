@@ -27,13 +27,6 @@
       "additionalProperties": { "type": "string", "enum": ["uuid16"] },
       "description": "Map of logical id name to its binary storage encoding. An id absent from this map is stored as a UTF-8 string. The reader uses it to decode id columns."
     },
-    "derived_from": {
-      "oneOf": [
-        { "type": "object", "additionalProperties": { "type": "string" } },
-        { "type": "null" }
-      ],
-      "description": "Copy-on-write lineage (base version and operation) for a manifest produced by an edit, or null for a freshly built version."
-    },
     "build_env": {
       "type": "object",
       "description": "Provenance for the environment that produced the version (interpreter and installed packages). No reader consults it to interpret the data."

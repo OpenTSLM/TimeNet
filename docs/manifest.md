@@ -40,7 +40,6 @@ Manifest(
     id_encoding={},             # logical id -> "uuid16" (absent => string)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    derived_from=None,          # copy-on-write lineage (see below)
     build_env=None,             # environment provenance (see below)
     timef_format_version=1,     # validated against the supported set {1}
 )
@@ -49,8 +48,7 @@ Manifest(
 `id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as
 `binary(16)`. If an entry is absent, that id is a UTF-8 string. `values_backend` names the
 [values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The reader uses
-this value to choose the backend. A manifest without this key reads as `"parquet"`. Only
-a version from a [copy-on-write edit](timef-writer.md#copy-on-write-edits) has `derived_from` set.
+this value to choose the backend. A manifest without this key reads as `"parquet"`.
 
 `value_encoding` reports the [values encoding](timef-writer.md#values-encoding) used to write each
 modality's shards. No code reads this field to make a decision: Parquet already records the applied

@@ -277,7 +277,6 @@ def edit_version(
         )
         edited.derive_schema()
 
-        derived_from = {"dataset_version": base_version, "op": "remove_samples"}
-        with TimeFWriter(out_root, edited, derived_from=derived_from, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
+        with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()
     return out_root / edited.metadata.dataset_id / str(dataset_version)

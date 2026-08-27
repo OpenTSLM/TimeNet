@@ -60,8 +60,6 @@ class Manifest:
     file's footer, so a reader does not need this field. The field lets a builder see what a build
     chose without opening a shard. The field is empty for a backend with no such choice.
     """
-    derived_from: dict[str, str] | None = None
-    """Copy-on-write lineage (base version and operation), or ``None`` for a newly built version."""
     build_env: dict[str, Any] = field(default_factory=dict)
     """The Python version and package set that produced this version.
 
@@ -115,7 +113,6 @@ class Manifest:
             "id_encoding": dict(self.id_encoding),
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
-            "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
             "build_env": dict(self.build_env),
         }
 
@@ -144,7 +141,6 @@ class Manifest:
             if required not in data:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
         id_encoding = _dict_block(data, "id_encoding")
-        derived_from = _optional_dict_block(data, "derived_from")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
@@ -154,7 +150,6 @@ class Manifest:
             id_encoding=id_encoding,
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
-            derived_from=derived_from,
             build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
         )
@@ -194,28 +189,6 @@ def _dict_block(data: dict[str, Any], key: str) -> dict:
     """
     try:
         return dict(data.get(key, {}))
-    except (ValueError, TypeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
-
-
-def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
-    """Convert a nullable manifest dict block to a ``dict`` or ``None``. Name the block in the error on failure.
-
-    Args:
-        data: The manifest dict.
-        key: The block's key.
-
-    Returns:
-        The block as a ``dict``, or ``None`` when the value is ``null`` or absent.
-
-    Raises:
-        TimeNetInvalidManifestError: If the block is present, is not null, and is not a mapping.
-    """
-    value = data.get(key)
-    if value is None:
-        return None
-    try:
-        return dict(value)
     except (ValueError, TypeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
 
