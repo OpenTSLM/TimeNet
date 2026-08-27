@@ -483,8 +483,7 @@ DatasetSchema(
 ## Enums
 
 - `Domain`: `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
-- `License`: stable identifiers, usually from SPDX (`MIT`, `Apache-2.0`, `CC-BY-4.0`, ...).
-  Source-specific identifiers cover licenses that SPDX does not define.
+- `License`: SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, ...).
 
 All are `StrEnum`, so members compare equal to their string values.
 

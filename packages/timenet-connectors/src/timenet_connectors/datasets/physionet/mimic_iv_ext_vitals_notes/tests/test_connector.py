@@ -220,7 +220,7 @@ def test_is_a_connector_and_has_credentialed_license():
     connector = MimicIvExtVitalsNotesConnector()
     assert isinstance(connector, BaseConnector)
     assert connector.metadata().dataset_id == "physionet/mimic-iv-ext-vitals-notes"
-    assert connector.metadata().license is License.PHYSIONET_CREDENTIALED_HEALTH_DATA_1_5_0
+    assert connector.metadata().license is License.OTHER
 
 
 def test_download_requires_authorized_local_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
