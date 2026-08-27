@@ -45,8 +45,9 @@ Manifest(
 )
 ```
 
-`id_encoding` lists the logical ids that the [writer](timef-writer.md#id-storage) stored as
-`binary(16)`. If an id is not in the list, the reader decodes it as a UTF-8 string. `values_backend`
+`id_encoding` gives the on-disk form of every logical id. A value of `uuid16` means the
+[writer](timef-writer.md#id-storage) stored that id as `binary(16)`. A value of `str` means a UTF-8
+string column. `values_backend`
 names the [values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The
 reader uses this value to select the backend. If the key is absent, the reader uses `"parquet"`.
 

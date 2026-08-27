@@ -272,7 +272,7 @@ class TimeFWriter:
             id_types[name] = UUID16 if is_uuid16 else pa.string()
         self._id_types = id_types
         self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
-        self._id_encoding = dict.fromkeys(self._uuid16, "uuid16")
+        self._id_encoding = {name: ("uuid16" if name in self._uuid16 else "str") for name in LOGICAL_IDS}
         self._codec = IdCodec.from_uuid16(self._uuid16)
 
     # ---- values --------------------------------------------------------------------------------

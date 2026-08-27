@@ -58,8 +58,8 @@ def id_types_from_encoding(id_encoding: dict[str, str]) -> IdTypes:
     """Resolve a manifest ``id_encoding`` map to Arrow id types.
 
     Args:
-        id_encoding: A mapping from logical id to ``"uuid16"`` or ``"string"`` (missing keys default to
-            ``"string"``).
+        id_encoding: A mapping from every logical id to ``"uuid16"`` or ``"str"``. A missing key
+            defaults to a string column, so an older sparse map still reads.
 
     Returns:
         A mapping from every logical id to its Arrow type.
@@ -325,7 +325,7 @@ class IdCodec:
         """Build a codec from a manifest ``id_encoding`` map (the reader's entry point).
 
         Args:
-            id_encoding: Mapping from logical id to ``"uuid16"`` / ``"string"``.
+            id_encoding: Mapping from logical id to ``"uuid16"`` / ``"str"``.
 
         Returns:
             The codec for those columns.

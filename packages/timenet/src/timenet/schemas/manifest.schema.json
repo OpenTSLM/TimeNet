@@ -24,8 +24,8 @@
     },
     "id_encoding": {
       "type": "object",
-      "additionalProperties": { "type": "string", "enum": ["uuid16"] },
-      "description": "Map of logical id name to its binary storage encoding. An id absent from this map is stored as a UTF-8 string. The reader uses it to decode id columns."
+      "additionalProperties": { "type": "string", "enum": ["uuid16", "str"] },
+      "description": "Complete map of every logical id to its on-disk form: 'uuid16' for a binary(16) column, or 'str' for a UTF-8 string column. The reader uses it to decode id columns."
     },
     "build_env": {
       "type": "object",

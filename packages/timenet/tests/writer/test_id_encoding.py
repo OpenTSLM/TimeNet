@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.format.schemas import LOGICAL_IDS
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
@@ -192,11 +193,20 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
 def test_non_uuid_ids_stay_string(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset(sample_id="sample-0"))
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert "sample_id" not in manifest.id_encoding  # not all canonical UUIDs -> string
+    assert manifest.id_encoding["sample_id"] == "str"  # not all canonical UUIDs -> a string column
     samples = pq.read_table(version_dir / "samples/part-00000000.parquet").schema
     assert samples.field("sample_id").type == pa.string()
     # a sibling id space that is all-uuid still packs to binary(16)
-    assert manifest.id_encoding.get("time_series_id") == "uuid16"
+    assert manifest.id_encoding["time_series_id"] == "uuid16"
+
+
+def test_id_encoding_lists_every_id(tmp_path):
+    """The id_encoding map is complete: every logical id has an explicit uuid16 or str entry."""
+    version_dir = _write(tmp_path, _uuid_dataset())
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    assert set(manifest.id_encoding) == set(LOGICAL_IDS)
+    assert manifest.id_encoding["sample_id"] == "uuid16"
+    assert manifest.id_encoding["subject_id"] == "str"  # no subjects -> a string column
 
 
 def test_span_series_ids_round_trip_as_binary16(tmp_path):
