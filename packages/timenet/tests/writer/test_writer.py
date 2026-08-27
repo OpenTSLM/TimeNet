@@ -153,10 +153,12 @@ def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
 # ---- validation & commit protocol -------------------------------------------------------------
 
 
-def test_write_without_schema_raises(tmp_path):
-    dataset = make_dataset()  # schema not derived
-    with pytest.raises(TimeFValidationError), TimeFWriter(tmp_path, dataset) as writer:
+def test_write_derives_schema_automatically(tmp_path):
+    dataset = make_dataset()
+    assert dataset.schema is None
+    with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
+    assert dataset.schema is not None
 
 
 def test_unknown_values_backend_rejected_before_staging(tmp_path):

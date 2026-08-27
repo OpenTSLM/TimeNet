@@ -93,7 +93,5 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
             "read it via TimeSeries.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
-        code_to_index = {label: i for i, label in enumerate(ts.spec.categories)}
-        codes = [code_to_index[label] for label in ts.to_arrow().to_pylist()]
-        return torch.tensor(codes, dtype=torch.int64)
+        return torch.from_numpy(ts.to_arrow().indices.to_numpy().copy()).to(torch.int64)
     return torch.from_numpy(ts.to_numpy().copy())

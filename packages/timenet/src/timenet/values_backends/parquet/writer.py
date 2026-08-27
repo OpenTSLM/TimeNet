@@ -79,9 +79,8 @@ def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
     return bytes_per_value + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
 
 
-#: Arrow leaf type for the values of an ``"enum"`` dtype. The category codebook is the spec's
-#: ``categories``; each stored value is an index into it, backed by a self-contained dictionary so
-#: the shard stays understandable on its own.
+#: Arrow leaf type for ``"enum"`` values. Each shard carries a self-contained dictionary so it stays
+#: readable on its own.
 _ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())
 
 
@@ -98,8 +97,7 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Returns:
             The shard Arrow schema with ``values`` as ``list<element>`` for that dtype. A ``"str"``
-            dtype stores variable-width text as ``string``; an ``"enum"`` dtype stores the category
-            codebook as a self-contained dictionary.
+            dtype stores variable-width text; an ``"enum"`` dtype uses a dictionary leaf.
         """
         if dtype == "str":
             return shard_schema(self._id_types, pa.string())

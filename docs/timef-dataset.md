@@ -57,7 +57,7 @@ They fall back to a full-read slice.
 `TimeSeriesSpec.dtype`, `value_shape`, and `dimension_names` describe one timestep. Scalar series keep
 the defaults `float32`, `()`, and `()`. An RGB camera, for example, uses `dtype="uint8"`,
 `value_shape=(height, width, 3)`, and names `("height", "width", "color")`. A text channel uses
-`dtype="str"`, and a categorical channel uses `dtype="enum"` with a `categories` codebook. The full
+`dtype="str"`, and a categorical channel uses `dtype="enum"`. The full
 logical shape is always `(n_steps, *value_shape)`.
 
 If a connector already holds the values in memory, use the classmethod

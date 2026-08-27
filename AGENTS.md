@@ -75,6 +75,16 @@ run `uv run pre-commit run --all-files`.
 
 In final summaries, state which checks you ran and call out any you could not run.
 
+## Stacked PRs
+This repository uses GitHub Stacked PRs via the `gh stack` CLI extension. Each branch in a stack
+maps to one PR whose base is the branch below it, so a large change ships as a chain of small,
+independently reviewable diffs. A stack is an ordered `main ← branch-1 ← branch-2 ← ...` chain;
+foundations go in lower branches and dependents above them, and the tooling (`gh stack init`,
+`submit --auto`, `sync`, `rebase --upstack`) keeps the chain rebased and its PRs linked. Agents must
+run every `gh stack` command non-interactively (always pass branch names to `init`/`add`, `--auto` to
+`submit`, `--json` to `view`); make mid-stack changes on the branch that logically owns them and run
+`gh stack rebase --upstack` to propagate, rather than mixing concerns into a higher branch.
+
 ## Conventions
 - Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);
   underscores for Python import packages and modules (`timenet`, `timenet.cli`,

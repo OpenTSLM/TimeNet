@@ -13,31 +13,6 @@ from timenet.errors import TimeFValidationError
 from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
-def _validate_enum_values(spec: TimeSeriesSpec, values: Sequence[object]) -> None:
-    """Reject enum values that are not in the spec's category codebook.
-
-    Args:
-        spec: The series' spec, for its ``categories``.
-        values: The label values to check.
-
-    Raises:
-        TimeFValidationError: If any value is not a member of ``spec.categories``.
-    """
-    categories = set(spec.categories)
-    unknown = {value for value in values if value not in categories}
-    if unknown:
-        raise TimeFValidationError(
-            f"enum series for {spec.spec_type!r} has values outside its categories "
-            f"(codes {list(spec.categories)!r}): {sorted(unknown, key=str)}"
-        )
-
-
-def _values_to_arrow(values: np.ndarray | Sequence[bool | int | float | str], spec: TimeSeriesSpec) -> pa.Array:
-    if spec.dtype in {"str", "enum"}:
-        return pa.array(values)
-    return pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
-
-
 @dataclass(frozen=True, eq=False, kw_only=True)
 class TimeSeries:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
@@ -150,9 +125,12 @@ class TimeSeries:
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        array = _values_to_arrow(values, spec)
         if spec.dtype == "enum":
-            _validate_enum_values(spec, array.to_pylist())
+            array = pa.array(values, type=pa.string()).dictionary_encode()
+        elif spec.dtype == "str":
+            array = pa.array(values)
+        else:
+            array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         return cls(
             spec=spec,
             channel=channel,
@@ -193,12 +171,15 @@ class TimeSeries:
             The constructed :class:`TimeSeries`.
 
         Raises:
-            TimeFValidationError: If an ``"enum"`` spec receives a value outside its categories, or
-                the time offsets are unusable, or there is not exactly one per value.
+            TimeFValidationError: If the time offsets are unusable, or there is not exactly one per
+                value.
         """
         if spec.dtype == "enum":
-            _validate_enum_values(spec, list(values))
-        array = _values_to_arrow(values, spec)
+            array = pa.array(values, type=pa.string()).dictionary_encode()
+        elif spec.dtype == "str":
+            array = pa.array(values)
+        else:
+            array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         time_offsets = to_time_offsets_us(time_offsets_us)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(
