@@ -29,7 +29,15 @@
     },
     "build_env": {
       "type": "object",
-      "description": "Provenance for the environment that produced the version (interpreter and installed packages). No reader consults it to interpret the data."
+      "description": "Provenance for the environment that produced the version. No reader consults it to interpret the data. Empty when a build records no provenance.",
+      "properties": {
+        "python": { "type": "string", "description": "The Python interpreter version, for example '3.13.12'." },
+        "packages": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Installed distribution name to version, sorted by name."
+        }
+      }
     }
   },
   "$defs": {
