@@ -28,8 +28,9 @@ _ROW_GROUP_CACHE_SIZE = 16  # decoded row groups kept, so one shared by many ser
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     """Return the Arrow type a spec's values should come back as.
 
-    A ``"str"`` dtype reads back as plain text; every other dtype maps through NumPy so the
-    in-memory and stored types match.
+    A ``"str"`` reads back as plain text and an ``"enum"`` reads back as its label strings (a
+    dictionary-decode of the stored codebook). Every other dtype maps through NumPy so the in-memory
+    and stored types match.
 
     Args:
         spec: The series' spec.
@@ -37,7 +38,7 @@ def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     Returns:
         The canonical Arrow type for the spec's dtype.
     """
-    if spec.dtype == "str":
+    if spec.dtype in {"str", "enum"}:
         return pa.string()
     return pa.from_numpy_dtype(np.dtype(spec.dtype))
 

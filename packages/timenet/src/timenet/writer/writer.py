@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -383,7 +384,9 @@ class TimeFWriter:
                 non-finite inexact values, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
-        expected_type = pa.string() if ts.spec.dtype == "str" else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+        expected_type = (
+            pa.string() if ts.spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+        )
         if ts.spec.value_shape:
             valid_type = (
                 isinstance(values, pa.FixedShapeTensorArray)
@@ -396,6 +399,8 @@ class TimeFWriter:
                 and not isinstance(values, pa.ExtensionArray)
                 and values.type == expected_type
             )
+        if ts.spec.dtype == "enum":
+            _validate_enum_values(ts.spec, values.to_pylist())
         if not valid_type:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r} must load dtype={ts.spec.dtype}, "

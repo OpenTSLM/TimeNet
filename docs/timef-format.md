@@ -153,7 +153,7 @@ rotating Parquet shards.
 | `spec_type`, `channel` | string | The series' modality and channel. |
 | `chunk_idx` | int32 | The chunk's position within the series. |
 | `n_values` | int32 | How many values the chunk holds. |
-| `values` | list of the spec dtype | The chunk's values. A `"str"` chunk stores text. |
+| `values` | list of the spec dtype | The chunk's values. A `"str"` or `"enum"` chunk stores text. |
 | `time_offsets_us` | list of int64 | Per-value time offsets, for an irregular axis. Null for a regular one. |
 
 The writer builds the shards in a fixed order. It dedupes series by `time_series_id`, sorts them by

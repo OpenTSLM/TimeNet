@@ -13,8 +13,27 @@ from timenet.errors import TimeFValidationError
 from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
+def _validate_enum_values(spec: TimeSeriesSpec, values: Sequence[object]) -> None:
+    """Reject enum values that are not in the spec's category codebook.
+
+    Args:
+        spec: The series' spec, for its ``categories``.
+        values: The label values to check.
+
+    Raises:
+        TimeFValidationError: If any value is not a member of ``spec.categories``.
+    """
+    categories = set(spec.categories)
+    unknown = {value for value in values if value not in categories}
+    if unknown:
+        raise TimeFValidationError(
+            f"enum series for {spec.spec_type!r} has values outside its categories "
+            f"(codes {list(spec.categories)!r}): {sorted(unknown, key=str)}"
+        )
+
+
 def _values_to_arrow(values: np.ndarray | Sequence[bool | int | float | str], spec: TimeSeriesSpec) -> pa.Array:
-    if spec.dtype == "str":
+    if spec.dtype in {"str", "enum"}:
         return pa.array(values)
     return pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
 
@@ -120,7 +139,8 @@ class TimeSeries:
         state the length, because nothing has read the values yet.
 
         Args:
-            values: The channel's values (cast to the spec's dtype; for a ``"str"`` spec, the strings).
+            values: The channel's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
+                spec, the strings).
             spec: The series' measurement-modality spec.
             channel: The channel name.
             time_axis: Where the values sit in time.
@@ -131,6 +151,8 @@ class TimeSeries:
             The constructed :class:`TimeSeries`.
         """
         array = _values_to_arrow(values, spec)
+        if spec.dtype == "enum":
+            _validate_enum_values(spec, array.to_pylist())
         return cls(
             spec=spec,
             channel=channel,
@@ -159,7 +181,8 @@ class TimeSeries:
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
 
         Args:
-            values: The channel's values (cast to the spec's dtype; for a ``"str"`` spec, the strings).
+            values: The channel's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
+                spec, the strings).
             time_offsets_us: One time offset per value, in microseconds from the sample's relative zero.
             spec: The series' measurement-modality spec.
             channel: The channel name.
@@ -170,9 +193,11 @@ class TimeSeries:
             The constructed :class:`TimeSeries`.
 
         Raises:
-            TimeFValidationError: If the time offsets are unusable, or if there is not exactly one per
-                value.
+            TimeFValidationError: If an ``"enum"`` spec receives a value outside its categories, or
+                the time offsets are unusable, or there is not exactly one per value.
         """
+        if spec.dtype == "enum":
+            _validate_enum_values(spec, list(values))
         array = _values_to_arrow(values, spec)
         time_offsets = to_time_offsets_us(time_offsets_us)
         if len(time_offsets) != len(array):

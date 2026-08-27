@@ -142,7 +142,8 @@
         "name": { "type": "string" },
         "unit_value": { "type": "string", "minLength": 1, "description": "A pint unit name (dimensionality is unconstrained)." },
         "data_source": { "oneOf": [{ "$ref": "#/$defs/dataSource" }, { "type": "null" }] },
-        "dtype": { "type": "string", "enum": ["bool", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
+        "dtype": { "type": "string", "enum": ["bool", "enum", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
+        "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered value-to-label codebook for an enum dtype; empty otherwise." },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
       }

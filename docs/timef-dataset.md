@@ -57,12 +57,13 @@ They fall back to a full-read slice.
 `TimeSeriesSpec.dtype`, `value_shape`, and `dimension_names` describe one timestep. Scalar series keep
 the defaults `float32`, `()`, and `()`. An RGB camera, for example, uses `dtype="uint8"`,
 `value_shape=(height, width, 3)`, and names `("height", "width", "color")`. A text channel uses
-`dtype="str"`. The full logical shape is always `(n_steps, *value_shape)`.
+`dtype="str"`, and a categorical channel uses `dtype="enum"` with a `categories` codebook. The full
+logical shape is always `(n_steps, *value_shape)`.
 
 If a connector already holds the values in memory, use the classmethod
 `TimeSeries.from_values(values, *, spec, channel, time_axis, source_id=None, time_series_id=None)`.
-This method wraps the values in a loader cast to the spec's dtype. For a `"str"` spec, pass the
-strings and the loader keeps them as text. It takes `n_values` from the length of the array.
+This method wraps the values in a loader cast to the spec's dtype. For a `"str"` or `"enum"` spec,
+pass the labels and the loader keeps them as text. It takes `n_values` from the length of the array.
 If a series stores time offsets instead of computing them, use
 `TimeSeries.from_irregular(values, *, time_offsets_us, ...)`. This method derives the axis from the
 stream, so the two values cannot disagree. Use the `loader=` constructor above only for lazy sources
