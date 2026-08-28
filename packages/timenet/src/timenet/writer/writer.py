@@ -380,22 +380,8 @@ class TimeFWriter:
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
             valid_type = isinstance(values, pa.DictionaryArray) and values.type.value_type == pa.string()
-        elif ts.spec.dtype == "str":
-            expected_type = pa.string()
-            if ts.spec.value_shape:
-                valid_type = (
-                    isinstance(values, pa.FixedShapeTensorArray)
-                    and values.type.value_type == expected_type
-                    and tuple(values.type.shape) == ts.spec.value_shape
-                )
-            else:
-                valid_type = (
-                    isinstance(values, pa.Array)
-                    and not isinstance(values, pa.ExtensionArray)
-                    and values.type == expected_type
-                )
         else:
-            expected_type = pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+            expected_type = pa.string() if ts.spec.dtype == "str" else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
             if ts.spec.value_shape:
                 valid_type = (
                     isinstance(values, pa.FixedShapeTensorArray)
@@ -414,13 +400,14 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        as_numpy = (
-            values.to_numpy_ndarray()
-            if isinstance(values, pa.FixedShapeTensorArray)
-            else values.to_numpy(zero_copy_only=False)
-        )
-        if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
-            raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
+        if ts.spec.dtype not in {"str", "enum"}:
+            as_numpy = (
+                values.to_numpy_ndarray()
+                if isinstance(values, pa.FixedShapeTensorArray)
+                else values.to_numpy(zero_copy_only=False)
+            )
+            if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
+                raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "
