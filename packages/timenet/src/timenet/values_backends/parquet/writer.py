@@ -33,8 +33,8 @@ from timenet.writer.value_encoding import (
     DICT_MAX_CARDINALITY,
     ValueEncoding,
     distinct_bit_patterns,
+    encoding_for_cardinality,
     sample_values,
-    select_value_encoding,
 )
 
 
@@ -198,7 +198,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         arrays = [np.asarray(values.to_numpy(zero_copy_only=False)) for values in buffered]
         sample = sample_values(arrays)
         distinct = distinct_bit_patterns(sample)
-        encoding = select_value_encoding([sample], dtype=dtype)
+        encoding = encoding_for_cardinality(distinct, dtype=dtype)
         _LOG.info(
             "values encoding for %r: %s (auto; %d distinct in %d sampled values, dictionary up to %d)",
             spec_type,
@@ -306,6 +306,7 @@ class _ShardStream:
         self._shard_target_bytes = shard_target_bytes
         self._on_file_done = on_file_done
         self._core: RotatingPartWriter | None = None
+        self._schema: pa.Schema | None = None
         self._spec_type: str | None = None
         self._shard_base = 0
         self._buffer: list[_Chunk] = []
@@ -355,9 +356,10 @@ class _ShardStream:
             self._backend._verify_values_encoding(rel_path, encoding)
             self._on_file_done(base + parts_written)
 
+        self._schema = self._backend._schema_for(dtype)
         self._core = RotatingPartWriter(
             self._backend._staging_dir,
-            self._backend._schema_for(dtype),
+            self._schema,
             lambda index: part_path(SHARD_TEMPLATE, base + index),
             part_target_bytes=self._shard_target_bytes,
             parquet_kwargs=self._backend._shard_parquet_kwargs(encoding),
@@ -373,6 +375,7 @@ class _ShardStream:
         self._shard_paths.extend(self._core.parts)
         self._shard_base += len(self._core.parts)
         self._core = None
+        self._schema = None
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -380,8 +383,7 @@ class _ShardStream:
         if sum(chunk.n_values for chunk in self._buffer) >= MAX_ELEMENTS_PER_ROW_GROUP:
             raise TimeFValidationError("row group would exceed the 2^31 element limit")
         core = self._core if self._core is not None else self._open_modality()
-        schema = self._backend._schema_for(self._buffer[0].dtype)
-        table = _shard_table(self._buffer, schema, self._backend._codec)
+        table = _shard_table(self._buffer, self._schema, self._backend._codec)
         shard_path, row_group = core.write(table, self._buffer_bytes)
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(

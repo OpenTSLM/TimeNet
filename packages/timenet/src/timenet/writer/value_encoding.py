@@ -159,7 +159,9 @@ def encoding_for_cardinality(distinct: int, *, dtype: str = "float32") -> ValueE
     """
     if distinct <= DICT_MAX_CARDINALITY:
         return ValueEncoding.DICTIONARY
-    return ValueEncoding.BYTE_STREAM_SPLIT if dtype in {"float32", "float64"} else ValueEncoding.PLAIN
+    from timenet.writer.encodings import byte_stream_split_supported  # noqa: PLC0415
+
+    return ValueEncoding.BYTE_STREAM_SPLIT if byte_stream_split_supported(dtype) else ValueEncoding.PLAIN
 
 
 def select_value_encoding(arrays: Sequence[np.ndarray], *, dtype: str = "float32") -> ValueEncoding:

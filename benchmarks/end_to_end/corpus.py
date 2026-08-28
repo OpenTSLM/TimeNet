@@ -158,10 +158,8 @@ _NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = 
 """Portable scalar non-float channels, appended to a dedicated sample. Exercise dtype handling on
 the Parquet values backend. The ``rhythm`` str channel is Parquet-only; Zarr drops it."""
 
-_NONFLOAT_CHANNELS_WITHOUT_STR: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = (
-    ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16)),
-    ("alarm", "bool", np.array([False, False, True, False, True, False, False, True])),
-    ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64)),
+_NONFLOAT_CHANNELS_WITHOUT_STR: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = tuple(
+    c for c in _NONFLOAT_CHANNELS if c[1] != "str"
 )
 """The non-float channels without the str one, for a Zarr-valued corpus case."""
 

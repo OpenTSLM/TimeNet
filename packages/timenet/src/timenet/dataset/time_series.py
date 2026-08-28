@@ -13,6 +13,12 @@ from timenet.errors import TimeFValidationError
 from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
+def _values_to_arrow(values: np.ndarray | Sequence[bool | int | float | str], spec: TimeSeriesSpec) -> pa.Array:
+    if spec.dtype == "str":
+        return pa.array(values)
+    return pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+
+
 @dataclass(frozen=True, eq=False, kw_only=True)
 class TimeSeries:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
@@ -124,7 +130,7 @@ class TimeSeries:
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        array = pa.array(values) if spec.dtype == "str" else pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+        array = _values_to_arrow(values, spec)
         return cls(
             spec=spec,
             channel=channel,
@@ -167,7 +173,7 @@ class TimeSeries:
             TimeFValidationError: If the time offsets are unusable, or if there is not exactly one per
                 value.
         """
-        array = pa.array(values) if spec.dtype == "str" else pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+        array = _values_to_arrow(values, spec)
         time_offsets = to_time_offsets_us(time_offsets_us)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(
