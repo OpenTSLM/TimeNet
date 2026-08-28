@@ -207,14 +207,11 @@ class MimicRawFiles:
         """Return stable names and paths for the source fingerprint.
 
         Returns:
-            The source file entries in stable order.
+            The source file entries in field-declaration order.
         """
-        return (
-            ("admissions", self.admissions),
-            ("icustays", self.icustays),
-            ("chartevents", self.chartevents),
-            ("discharge", self.discharge),
-        )
+        from dataclasses import fields  # noqa: PLC0415
+
+        return tuple((f.name, getattr(self, f.name)) for f in fields(self))
 
 
 @dataclass(frozen=True)
@@ -613,15 +610,18 @@ def _prepare_source(
 def _create_source_views(connection: Any, raw: MimicRawFiles) -> None:
     """Create typed DuckDB views over the compressed source CSV files."""
     definitions = (
-        ("admissions_raw", raw.admissions, _ADMISSIONS_COLUMNS),
-        ("icustays_raw", raw.icustays, _ICUSTAYS_COLUMNS),
-        ("chartevents_raw", raw.chartevents, _CHARTEVENTS_COLUMNS),
-        ("discharge_raw", raw.discharge, _DISCHARGE_COLUMNS),
+        ("admissions_raw", raw.admissions, _ADMISSIONS_COLUMNS, False),
+        ("icustays_raw", raw.icustays, _ICUSTAYS_COLUMNS, False),
+        ("chartevents_raw", raw.chartevents, _CHARTEVENTS_COLUMNS, False),
+        ("discharge_raw", raw.discharge, _DISCHARGE_COLUMNS, True),
     )
-    for view, path, columns in definitions:
+    for name, path, columns, materialize in definitions:
+        # Identifiers and paths come from connector-owned definitions. Materialize sources
+        # that the pipeline reads more than once (discharge is read for the cohort join and
+        # the notes export) to avoid re-parsing the gzipped CSV.
+        kind = "TABLE" if materialize else "VIEW"
         connection.execute(
-            # Identifiers and paths come from connector-owned definitions.
-            f"CREATE TEMP VIEW {view} AS SELECT * FROM {_read_csv_expression(path, columns)}"  # noqa: S608
+            f"CREATE TEMP {kind} {name} AS SELECT * FROM {_read_csv_expression(path, columns)}"  # noqa: S608
         )
 
 
