@@ -3,11 +3,12 @@
 The column layout is fixed. Only the id columns vary. Every id column holds one of the six logical ids
 in :data:`LOGICAL_IDS`. Each is stored as ``pa.string()``, or as ``pa.binary(16)`` when every value is a
 canonical UUID. ``pa.binary(16)`` uses 16 raw bytes instead of a 36-character string. The writer picks
-the type per logical id and records the choice in the manifest ``id_encoding``. The reader decodes
-``binary(16)`` back to the canonical string, so callers always see string ids.
+the type per logical id and writes it into the Parquet schemas. The reader infers the types from the
+samples file schema. ``binary(16)`` decodes back to the canonical string, so callers always see
+string ids.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from typing import cast
 
@@ -46,7 +47,7 @@ IdTypes = dict[str, pa.DataType]
 
 
 def default_id_types() -> IdTypes:
-    """Return the all-``string`` id types (the fallback when a manifest carries no ``id_encoding``).
+    """Return the all-``string`` id types.
 
     Returns:
         A mapping from every logical id to ``pa.string()``.
@@ -54,17 +55,36 @@ def default_id_types() -> IdTypes:
     return {name: pa.string() for name in LOGICAL_IDS}
 
 
-def id_types_from_encoding(id_encoding: dict[str, str]) -> IdTypes:
-    """Resolve a manifest ``id_encoding`` map to Arrow id types.
+#: Where each logical id lives in the samples Parquet schema.
+_SAMPLES_ID_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sample_id", ("sample_id",)),
+    ("subject_id", ("subject_ids",)),
+    ("time_series_id", ("time_series", "time_series_id")),
+    ("source_id", ("time_series", "source_id")),
+    ("task_id", ("task_ids",)),
+    ("annotation_id", ("annotation_ids",)),
+)
+
+
+def id_types_from_samples_schema(schema: pa.Schema) -> IdTypes:
+    """Infer every logical id's Arrow type from the samples Parquet schema.
 
     Args:
-        id_encoding: A mapping from every logical id to ``"uuid16"`` or ``"str"``. A missing key
-            defaults to a string column, so an older sparse map still reads.
+        schema: The Arrow schema of any samples part file.
 
     Returns:
         A mapping from every logical id to its Arrow type.
     """
-    return {name: (UUID16 if id_encoding.get(name) == "uuid16" else pa.string()) for name in LOGICAL_IDS}
+    types: IdTypes = {}
+    for logical, path in _SAMPLES_ID_PATHS:
+        arrow_type: pa.DataType = schema.field(path[0]).type
+        for step in path[1:]:
+            arrow_type = arrow_type.value_type  # unwrap list
+            arrow_type = arrow_type.field(step).type  # enter struct
+        if pa.types.is_list(arrow_type):
+            arrow_type = arrow_type.value_type
+        types[logical] = arrow_type
+    return types
 
 
 def time_series_struct(id_types: IdTypes) -> pa.DataType:
@@ -321,16 +341,16 @@ class IdCodec:
         return cls(frozenset(uuid16))
 
     @classmethod
-    def from_encoding(cls, id_encoding: Mapping[str, str]) -> "IdCodec":
-        """Build a codec from a manifest ``id_encoding`` map (the reader's entry point).
+    def from_id_types(cls, id_types: IdTypes) -> "IdCodec":
+        """Build a codec from resolved Arrow id types (the reader's entry point).
 
         Args:
-            id_encoding: Mapping from logical id to ``"uuid16"`` / ``"str"``.
+            id_types: Mapping from logical id to its Arrow type.
 
         Returns:
             The codec for those columns.
         """
-        return cls(frozenset(name for name, enc in id_encoding.items() if enc == "uuid16"))
+        return cls(frozenset(name for name, arrow_type in id_types.items() if arrow_type == UUID16))
 
     def encode(self, logical: str, value: object) -> object:
         """Encode one id to 16 raw bytes for a ``uuid16`` column, else pass it through unchanged.

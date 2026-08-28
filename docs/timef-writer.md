@@ -195,9 +195,9 @@ their shared prefix.
 For each of the six logical ids (`sample_id`, `time_series_id`, `annotation_id`, `task_id`,
 `source_id`, `subject_id`), the writer verifies whether every value is a canonical UUID. If every
 value is a canonical UUID, the writer stores the columns for that id as 16 raw bytes (`binary(16)`)
-instead of a 36-char string. It also records `"<id>": "uuid16"` in the `id_encoding` map of the
-manifest. Connector-supplied non-UUID ids, for example `ecgqa-test-0`, stay strings. The reader
-decodes `binary(16)` back to the canonical string, so callers always see string ids.
+instead of a 36-char string. Connector-supplied non-UUID ids, for example `ecgqa-test-0`, stay
+strings. The reader infers each id's storage type from the Parquet schema and decodes `binary(16)`
+back to the canonical string, so callers always see string ids.
 
 ## Validation
 

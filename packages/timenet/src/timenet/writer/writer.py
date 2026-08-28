@@ -236,11 +236,7 @@ class TimeFWriter:
     # ---- id storage ----------------------------------------------------------------------------
 
     def _resolve_id_types(self) -> None:
-        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string.
-
-        Stores the resolved Arrow types, the set of ``uuid16`` logical ids, the manifest ``id_encoding``
-        map, and the shared codec. The map holds only the uuid16 entries. An absent entry means string.
-        """
+        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
         for sample in self._dataset.samples:
             values["sample_id"].append(sample.sample_id)
@@ -272,7 +268,6 @@ class TimeFWriter:
             id_types[name] = UUID16 if is_uuid16 else pa.string()
         self._id_types = id_types
         self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
-        self._id_encoding = {name: ("uuid16" if name in self._uuid16 else "str") for name in LOGICAL_IDS}
         self._codec = IdCodec.from_uuid16(self._uuid16)
 
     # ---- values --------------------------------------------------------------------------------
@@ -664,7 +659,6 @@ class TimeFWriter:
                 tasks=self._file_parts(self._task_files),
                 time_series=self._file_parts(self._value_files),
             ),
-            id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),

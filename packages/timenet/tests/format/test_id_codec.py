@@ -20,9 +20,13 @@ def test_uuid16_round_trips():
     assert codec.decode("sample_id", encoded) == sid
 
 
-def test_from_encoding_matches_from_uuid16():
-    # the reader builds from the manifest map, the writer from the set; they must agree
-    assert IdCodec.from_encoding({"sample_id": "uuid16", "task_id": "string"}) == IdCodec.from_uuid16({"sample_id"})
+def test_from_id_types_matches_from_uuid16():
+    import pyarrow as pa  # noqa: PLC0415
+
+    from timenet.format.schemas import UUID16  # noqa: PLC0415
+
+    id_types = {"sample_id": UUID16, "task_id": pa.string()}
+    assert IdCodec.from_id_types(id_types) == IdCodec.from_uuid16({"sample_id"})
 
 
 def test_non_uuid_in_a_uuid16_column_raises_with_context():

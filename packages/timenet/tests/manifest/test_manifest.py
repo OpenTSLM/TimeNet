@@ -304,7 +304,7 @@ def test_string_for_list_field_rejected(block, key):
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["id_encoding", "value_encoding", "build_env"])
+@pytest.mark.parametrize("block", ["value_encoding", "build_env"])
 def test_bad_dict_block_names_itself(block):
     # each block names itself in the error, rather than a shared message
     d = _manifest().to_dict()

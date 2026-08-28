@@ -49,8 +49,6 @@ class Manifest:
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    id_encoding: dict[str, str] = field(default_factory=dict)
-    """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``. An id not listed here is a string."""
     values_backend: str = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
     value_encoding: dict[str, str] = field(default_factory=dict)
@@ -110,7 +108,6 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
-            "id_encoding": dict(self.id_encoding),
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
             "build_env": dict(self.build_env),
@@ -140,14 +137,12 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
-        id_encoding = _dict_block(data, "id_encoding")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
-            id_encoding=id_encoding,
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
             build_env=_dict_block(data, "build_env"),

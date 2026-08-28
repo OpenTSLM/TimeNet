@@ -37,7 +37,6 @@ Manifest(
     files=files,                # ManifestFiles (required)
     schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
-    id_encoding={},             # logical id -> "uuid16" (absent => string)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
@@ -45,11 +44,9 @@ Manifest(
 )
 ```
 
-`id_encoding` gives the on-disk form of every logical id. A value of `uuid16` means the
-[writer](timef-writer.md#id-storage) stored that id as `binary(16)`. A value of `str` means a UTF-8
-string column. `values_backend`
-names the [values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The
-reader uses this value to select the backend. If the key is absent, the reader uses `"parquet"`.
+`values_backend` names the [values backend](timef-writer.md#values-backends) that wrote
+`files.time_series`. The reader uses this value to select the backend. If the key is absent, the
+reader uses `"parquet"`.
 
 `value_encoding` gives the [values encoding](timef-writer.md#values-encoding) that wrote the shards
 of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
