@@ -1,6 +1,7 @@
 """Tests for the async HTTP download helpers, driven against httpx.MockTransport."""
 
 import asyncio
+import gzip
 import hashlib
 
 import httpx
@@ -29,6 +30,23 @@ def _transport(handler):
 def _serve_bytes(payload: bytes):
     def handler(request):
         return httpx.Response(200, content=payload)
+
+    return _transport(handler)
+
+
+def _serve_stream(payload: bytes, *, headers=None, chunk=1 << 14):
+    """A transport that streams the payload in chunks, so response.num_bytes_downloaded advances.
+
+    A MockTransport built from a single bytes body is pre-buffered and never advances the counter;
+    a streaming body reads over the wire like a real download does.
+    """
+
+    def handler(request):
+        async def body():
+            for start in range(0, len(payload), chunk):
+                yield payload[start : start + chunk]
+
+        return httpx.Response(200, headers={"Content-Length": str(len(payload)), **(headers or {})}, content=body())
 
     return _transport(handler)
 
@@ -174,7 +192,7 @@ def test_follows_redirects(tmp_path, monkeypatch):
 
 def test_download_http_reports_progress(tmp_path, monkeypatch):
     payload = b"x" * 3_000_000
-    _patch_transport(monkeypatch, _serve_bytes(payload))
+    _patch_transport(monkeypatch, _serve_stream(payload))
     events = []
     with progress_sink(events.append):
         asyncio.run(download_http("http://host/data.bin", tmp_path / "data.bin"))
@@ -183,6 +201,21 @@ def test_download_http_reports_progress(tmp_path, monkeypatch):
     assert [event.downloaded for event in events] == sorted(event.downloaded for event in events)
     assert events[-1].downloaded == 3_000_000
     assert events[-1].total == 3_000_000
+
+
+def test_download_http_progress_tracks_raw_bytes_when_gzipped(tmp_path, monkeypatch):
+    payload = b"y" * 3_000_000
+    compressed = gzip.compress(payload)
+    assert len(compressed) < len(payload)
+    _patch_transport(monkeypatch, _serve_stream(compressed, headers={"Content-Encoding": "gzip"}))
+    events = []
+    with progress_sink(events.append):
+        asyncio.run(download_http("http://host/data.csv", tmp_path / "data.csv"))
+    assert (tmp_path / "data.csv").read_bytes() == payload
+    assert events
+    assert all(event.total == len(compressed) for event in events)
+    assert all(event.downloaded <= event.total for event in events)
+    assert events[-1].downloaded == len(compressed)
 
 
 def test_download_http_accepts_a_matching_sha256(tmp_path, monkeypatch):
