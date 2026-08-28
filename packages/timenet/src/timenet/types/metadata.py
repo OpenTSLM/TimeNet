@@ -103,7 +103,7 @@ class DatasetMetadata:
                 raise TimeFValidationError(f"invalid license {self.license!r}") from exc
         if isinstance(self.dataset_version, str):
             object.__setattr__(self, "dataset_version", Version.parse(self.dataset_version))
-        if self.domains and not isinstance(self.domains[0], Domain):
+        if self.domains and not all(isinstance(d, Domain) for d in self.domains):
             try:
                 object.__setattr__(self, "domains", tuple(Domain(d) for d in self.domains))
             except ValueError as exc:
