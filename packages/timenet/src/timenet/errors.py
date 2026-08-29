@@ -1,8 +1,10 @@
-"""TimeNet's exception hierarchy.
+"""TimeNet's exception hierarchy, and the warnings it raises.
 
 Every TimeNet-raised error derives from :class:`TimeNetError`. Validation and manifest errors also
 derive from :class:`ValueError` so existing ``except ValueError`` handlers keep working. TimeNet raises
 the builtin ``FileNotFoundError`` and ``FileExistsError`` directly for user-supplied paths.
+
+Every TimeNet-raised warning derives from :class:`TimeNetWarning`.
 """
 
 
@@ -36,6 +38,14 @@ class TimeNetInvalidCardError(TimeNetError, ValueError):
 
 class TimeNetBuildError(TimeNetError):
     """A build run failed: the connector build, or the environment it needed."""
+
+
+class TimeNetWarning(UserWarning):
+    """Base class for all TimeNet warnings."""
+
+
+class SpanOutsideWindowWarning(TimeNetWarning):
+    """An annotation's span falls outside the window of the series it names, and is kept."""
 
 
 class TimeFFormatError(TimeNetError):

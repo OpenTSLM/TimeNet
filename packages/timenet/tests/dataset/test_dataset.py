@@ -4,7 +4,7 @@ import pytest
 
 from timenet.dataset import Sample, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFValidationError
+from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import (
     Annotation,
     AnnotationDescriptor,
@@ -203,19 +203,19 @@ def test_add_sample_rejects_duplicate_time_series_ids(make_series):
         _dataset().add_sample(time_series=(ts, ts))
 
 
-def test_add_task_rejects_scope_outside_sample_span(make_series):
-    # Span times are in the source recording timeline, so a window past the series' end is invalid.
+def test_add_task_warns_for_a_scope_outside_sample_span(make_series):
+    # Span times are in the source recording timeline, so a window past the series' end warns.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         dataset.add_task(sample, ClassificationTask(target="walking", scope=TimeInterval.seconds(5.0, 20.0)))
 
 
-def test_add_task_rejects_a_point_at_the_exclusive_window_end(make_series):
+def test_add_task_warns_for_a_point_at_the_exclusive_window_end(make_series):
     # 5000 values at 500 Hz is a 10 s window [0, 10); a point at exactly 10.0 s is outside it.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         dataset.add_task(sample, ClassificationTask(target="walking", scope=TimePoint.seconds(10.0)))
 
 
@@ -239,7 +239,7 @@ def test_add_task_checks_every_span_a_task_carries(make_series):
     # Localization target spans are bounds-checked the same way a scope is.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         dataset.add_task(
             sample,
             TemporalLocalizationTask(
@@ -537,18 +537,19 @@ def test_add_task_bounds_checks_a_point_span(make_series):
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     dataset.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(9.5)))  # inside
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         dataset.add_task(sample, ClassificationTask(target="beat", scope=TimePoint.seconds(10.5)))
 
 
 def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
-    # The shared window check must reject the same span whether it arrives as an annotation or a scope.
+    # The shared window check must treat the same span alike, whether it arrives as an annotation
+    # or as a scope.
     dataset = _dataset()
     sample = dataset.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     outside = TimePoint.seconds(50.0)
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         sample.add_annotation(Annotation(key="mark", span=outside))
-    with pytest.raises(TimeFValidationError, match="falls outside sample"):
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
         dataset.add_task(sample, ClassificationTask(target="x", scope=outside))
 
 
@@ -581,7 +582,7 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     ds = _dataset()
     sample = ds.add_sample(time_series=(make_series(values=(0.0,) * 5000),))
     good = ClassificationTask(target="a")
-    bad = ClassificationTask(target="b", scope=TimeInterval.seconds(5.0, 20.0))  # outside the sample span
+    bad = ClassificationTask(target="b", scope=TimePoint.seconds(1.0, time_series_ids=("nope",)))  # unknown id
     with pytest.raises(TimeFValidationError):
         ds.add_tasks(sample, [good, bad])
     assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either

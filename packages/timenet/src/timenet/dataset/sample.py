@@ -3,22 +3,25 @@
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+import warnings
 
 import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.time_series import TimeSeries
-from timenet.errors import TimeFValidationError
+from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Annotation, Span, StepSpan, TimeInterval, TimePoint, TimeSpan, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
 
 
-def check_span_within_window(
+def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is keyword-only)
     label: str,
     span: Span,
     time_series: tuple[TimeSeries, ...],
     sample_id: str,
     time_span: TimeInterval | None = None,
+    *,
+    warn_when_outside: bool = True,
 ) -> None:
     """Reject a span its targeted series cannot place, by the three-part scoping rule.
 
@@ -44,12 +47,14 @@ def check_span_within_window(
         time_series: The series the span is checked against.
         sample_id: The owning sample's id, for the error message.
         time_span: The sample's declared session span, if any, consulted only for an unscoped span.
+        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
     Raises:
         TimeFValidationError: If a series id is unknown. If a scoped span names a timeless series
             or ones whose windows do not overlap. If the sample has no timeline for an unscoped
-            span. If the span falls outside the window the rule selects. If a step span names a
-            series with a timeline, or it runs past its steps.
+            span. If the span falls outside the window the rule selects, when
+            ``warn_when_outside`` is False. If a step span names a series with a timeline, or it runs
+            past its steps.
     """
     if isinstance(span, StepSpan):
         ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
@@ -93,11 +98,13 @@ def check_span_within_window(
                 f"{label} is scoped to series whose windows do not overlap on sample {sample_id!r}, so no "
                 f"region lies inside all of them"
             )
-        _reject_outside(label, span, start, end, sample_id)
+        _reject_outside(label, span, start, end, sample_id, warn_when_outside=warn_when_outside)
         return
 
     if time_span is not None:
-        _reject_outside(label, span, time_span.start_us, time_span.end_us, sample_id)
+        _reject_outside(
+            label, span, time_span.start_us, time_span.end_us, sample_id, warn_when_outside=warn_when_outside
+        )
         return
 
     windows = sorted(window for window in covered.values() if window is not None)
@@ -106,31 +113,62 @@ def check_span_within_window(
             f"{label} is a time-valued region, but sample {sample_id!r} has no timeline to place it against: "
             f"no timed series and no time_span. Use a static annotation, or declare a time_span"
         )
-    _reject_outside_union(label, span, windows, sample_id)
+    _reject_outside_union(label, span, windows, sample_id, warn_when_outside=warn_when_outside)
 
 
-def _reject_outside(label: str, span: TimeSpan, start: int, end: int, sample_id: str) -> None:
+def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
+    label: str, span: TimeSpan, start: int, end: int, sample_id: str, *, warn_when_outside: bool = True
+) -> None:
     """Reject a time span that runs past the half-open window ``[start, end)``.
 
+    Args:
+        label: Human-readable label for the span, used in the message.
+        span: The span to check.
+        start: The first microsecond of the window.
+        end: One microsecond past the window.
+        sample_id: The owning sample's id, for the message.
+        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+
     Raises:
-        TimeFValidationError: If the span starts before ``start`` or ends after ``end``.
+        TimeFValidationError: If the span starts before ``start`` or ends after ``end``, and
+            ``warn_when_outside`` is False.
     """
     if span.start_us < start or span.exclusive_end > end:
-        raise TimeFValidationError(
+        message = (
             f"{label} falls outside sample {sample_id!r} span ({start}, {end}) us: got {span!r}; span "
             f"times are in the source recording timeline"
         )
+        if warn_when_outside:
+            warnings.warn(f"{message}. It is kept as it was given.", SpanOutsideWindowWarning, stacklevel=2)
+            return
+
+        raise TimeFValidationError(message)
 
 
-def _reject_outside_union(label: str, span: TimeSpan, windows: list[tuple[int, int]], sample_id: str) -> None:
+def _reject_outside_union(
+    label: str,
+    span: TimeSpan,
+    windows: list[tuple[int, int]],
+    sample_id: str,
+    *,
+    warn_when_outside: bool = True,
+) -> None:
     """Reject a span not covered by the union of ``windows``.
 
     With no gaps the union is one contiguous window, so this is the same bounds check as a scope. With
     gaps the span must fall entirely within one of the merged windows. This rejects a span that lands
     in a gap.
 
+    Args:
+        label: Human-readable label for the span, used in the message.
+        span: The span to check.
+        windows: The windows of the timed series, sorted by start.
+        sample_id: The owning sample's id, for the message.
+        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+
     Raises:
-        TimeFValidationError: If the span runs past the windows or falls in a gap between them.
+        TimeFValidationError: If the span runs past the windows or falls in a gap between them, and
+            ``warn_when_outside`` is False.
     """
     merged: list[tuple[int, int]] = []
     for start, end in windows:  # sorted by start, half-open, so windows that touch are contiguous
@@ -139,13 +177,18 @@ def _reject_outside_union(label: str, span: TimeSpan, windows: list[tuple[int, i
         else:
             merged.append((start, end))
     if len(merged) == 1:
-        _reject_outside(label, span, merged[0][0], merged[0][1], sample_id)
+        _reject_outside(label, span, merged[0][0], merged[0][1], sample_id, warn_when_outside=warn_when_outside)
         return
     if not any(start <= span.start_us and span.exclusive_end <= end for start, end in merged):
-        raise TimeFValidationError(
+        message = (
             f"{label} falls in a gap between the recorded windows of sample {sample_id!r} {merged}: got "
             f"{span!r}. Declare a time_span if the session spans the gap"
         )
+        if warn_when_outside:
+            warnings.warn(f"{message}. It is kept as it was given.", SpanOutsideWindowWarning, stacklevel=2)
+            return
+
+        raise TimeFValidationError(message)
 
 
 @dataclass(kw_only=True)
@@ -261,11 +304,12 @@ class Sample:
             time_series_ids=time_series_ids,
         )
 
-    def add_annotation(self, annotation: Annotation) -> Annotation:
+    def add_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
         """Attach an annotation to the sample and return it.
 
         Args:
             annotation: The annotation to attach.
+            warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
         Returns:
             The attached annotation (the same instance).
@@ -274,13 +318,15 @@ class Sample:
             TimeFValidationError: If the annotation's span references a series not on this sample. If a
                 scoped span names a timeless series. If the span falls outside the window its scope
                 selects: the intersection of named series, the sample's ``time_span``, or the union of
-                the series' windows.
+                the series' windows and ``warn_when_outside`` is False.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
-        self._validate_annotation(annotation)
+        self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         self.annotations = (*self.annotations, annotation)
         return annotation
 
-    def add_annotations(self, annotations: Iterable[Annotation]) -> tuple[Annotation, ...]:
+    def add_annotations(
+        self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
+    ) -> tuple[Annotation, ...]:
         """Attach several annotations to the sample, all together or not at all.
 
         The whole batch is validated before any of it is attached: if one annotation fails a check, the
@@ -289,6 +335,7 @@ class Sample:
 
         Args:
             annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
+            warn_when_outside: As on :meth:`add_annotation`.
 
         Returns:
             The attached annotations (the same instances), in the order given.
@@ -298,11 +345,11 @@ class Sample:
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         batch = tuple(annotations)
         for annotation in batch:
-            self._validate_annotation(annotation)
+            self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         self.annotations = (*self.annotations, *batch)
         return batch
 
-    def _validate_annotation(self, annotation: Annotation) -> None:
+    def _validate_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> None:
         """Run :meth:`add_annotation`'s checks without attaching it.
 
         Split out so :meth:`add_annotations` can validate a whole batch before committing it in one tuple
@@ -310,6 +357,7 @@ class Sample:
 
         Args:
             annotation: The annotation to check.
+            warn_when_outside: As on :meth:`add_annotation`.
 
         Raises:
             TimeFValidationError: as documented on :meth:`add_annotation`.
@@ -321,6 +369,7 @@ class Sample:
                 self.time_series,
                 self.sample_id,
                 self.time_span,
+                warn_when_outside=warn_when_outside,
             )
 
     def to_arrow(self) -> pa.Array:

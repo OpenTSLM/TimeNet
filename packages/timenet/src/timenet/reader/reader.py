@@ -688,7 +688,14 @@ class TimeFReader:
             for annotation in annotations:
                 if annotation.span is not None:
                     check_span_within_window(
-                        f"annotation {annotation.key!r}", annotation.span, series, sample_id, time_span
+                        f"annotation {annotation.key!r}",
+                        annotation.span,
+                        series,
+                        sample_id,
+                        time_span,
+                        # A stored span that no longer fits its series is corruption, not a
+                        # caller's choice, so the reader refuses it.
+                        warn_when_outside=False,
                     )
             return sample
         except TimeFValidationError as exc:

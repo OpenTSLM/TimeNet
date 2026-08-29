@@ -110,11 +110,14 @@ Use `sample.has_absolute_time` to find out whether the anchor is known.
 annotation's span with the same rule that a task's `scope` uses. A span scoped to named
 `time_series_ids` must lie inside the *intersection* of those series' windows. If an unscoped span
 declares a `time_span`, `add_annotation` validates the span against the sample's `time_span`.
-Otherwise, `add_annotation` validates the span against the *union* of the series' windows. As a
-result, `add_annotation` rejects an event that lands in an unrecorded gap between series, unless a
-`time_span` states that the session spanned this gap. `add_annotations([...])` attaches an iterable
-the same way, but as one all-or-nothing operation. It validates the whole batch first. It leaves the
-sample untouched if any annotation fails.
+Otherwise, `add_annotation` validates the span against the *union* of the series' windows. A span
+that leaves the window this rule selects warns with `SpanOutsideWindowWarning` and is kept as it was
+given. Some sources state a region that reaches past the signals it was written for, and a connector
+records what the source says. Pass `warn_when_outside=False` to raise `TimeFValidationError` instead.
+The reader passes that argument, so a stored span outside its window is still a format error.
+
+`add_annotations([...])` attaches an iterable the same way, but as one all-or-nothing operation. It
+validates the whole batch first. It leaves the sample untouched if any annotation fails.
 
 `to_arrow()` and `to_numpy()` return the sole channel's 1-D values (Arrow or NumPy) for the common
 single-channel sample. For a multi-channel sample, both methods raise `ValueError`. In that case, index
@@ -166,7 +169,8 @@ both a task and its samples. `add_task` raises `TimeFValidationError` in these c
 - A task sets both `target` and `target_annotation_ids`, or sets neither, unless its answer is a
   produced series.
 - A [`Span`](types.md#span) (the `scope` or a localization target) has `time_series_ids` that do not
-  resolve on every target sample, or the span falls outside a sample's covered span.
+  resolve on every target sample. A span that falls outside a sample's covered span warns with
+  `SpanOutsideWindowWarning` and is kept, the same way an annotation's span is.
 - An `input_annotation_ids` or `target_annotation_ids` entry names an annotation that no target sample
   carries.
 

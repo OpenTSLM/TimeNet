@@ -6,7 +6,7 @@ import pytest
 from timenet.dataset import Sample, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.dataset.sample import check_span_within_window
-from timenet.errors import TimeFValidationError
+from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimePoint
 
 
@@ -157,7 +157,7 @@ def test_annotation_span_outside_the_window_is_rejected(make_series):
     # 5000 values at 500 Hz is a 10 s window [0, 10); an interval past it means nothing on the data.
     sample = Sample(time_series=(make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        sample.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(5.0, 20.0)))
+        sample.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(5.0, 20.0)), warn_when_outside=False)
 
 
 def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
@@ -170,7 +170,15 @@ def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
     sample = Sample(time_series=(early, late))
     # 15 s falls in the [10, 20) s gap, inside neither series.
     with pytest.raises(TimeFValidationError, match="falls in a gap"):
-        sample.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)))
+        sample.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)), warn_when_outside=False)
+
+
+def test_an_outside_span_warns_and_is_kept(make_series):
+    sample = Sample(time_series=(make_series(values=(0.0,) * 5000),))  # a 10 s window [0, 10)
+    span = TimeInterval.seconds(5.0, 20.0)
+    with pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"):
+        sample.add_annotation(Annotation(key="artifact", span=span))
+    assert sample.annotations[0].span == span  # kept, not trimmed
 
 
 def test_annotation_in_a_gap_is_accepted_with_a_time_span(make_series):
@@ -197,7 +205,9 @@ def test_a_scoped_span_must_lie_within_the_intersection(make_series):
     sample.add_annotation(Annotation(key="ok", span=TimeInterval.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
     # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
     with pytest.raises(TimeFValidationError, match="falls outside sample"):
-        sample.add_annotation(Annotation(key="bad", span=TimePoint.seconds(3.0, time_series_ids=ids)))
+        sample.add_annotation(
+            Annotation(key="bad", span=TimePoint.seconds(3.0, time_series_ids=ids)), warn_when_outside=False
+        )
 
 
 def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
@@ -208,7 +218,9 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
     sample = Sample(time_series=(early, late))
     ids = (early.time_series_id, late.time_series_id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
-        sample.add_annotation(Annotation(key="bad", span=TimePoint.seconds(5.0, time_series_ids=ids)))
+        sample.add_annotation(
+            Annotation(key="bad", span=TimePoint.seconds(5.0, time_series_ids=ids)), warn_when_outside=False
+        )
 
 
 def test_time_span_must_contain_every_series_window(make_series):
