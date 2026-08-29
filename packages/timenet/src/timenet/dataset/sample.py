@@ -154,6 +154,10 @@ class Sample:
 
     Created via :meth:`~timenet.dataset.TimeFDataset.add_sample`. Mutable so ``task_ids`` and
     ``annotations`` can be populated after construction.
+
+    A sample has no metadata field. Sample-level facts, such as a subject's age or the recording
+    device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
+    also state a ``unit``, and it travels with every window drawn later from the sample.
     """
 
     time_series: tuple[TimeSeries, ...]

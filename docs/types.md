@@ -155,7 +155,7 @@ subclass with field defaults for reuse. The annotations round-trip without runti
 
 | `span` | Extra fields | Scope |
 | --- | --- | --- |
-| absent | `value` (required) | Whole sample, time-independent (condition, firmware, device, ticker). |
+| absent | `value` (required) | Whole sample, time-independent (a subject's age, condition, firmware, device, ticker). |
 | `TimePoint` | none | One time offset, on specific signals or the whole sample. |
 | `TimeInterval` | none | A bounded region, on specific signals or the whole sample. |
 
