@@ -9,7 +9,7 @@ import pytest
 
 from evaluations.errors import EvaluationError
 from evaluations.formats import timef as timef_module
-from evaluations.formats.base import directory_size
+from evaluations.formats.base import FormatName
 from evaluations.formats.pandas_ import PandasFormat
 from evaluations.formats.timef import DATASET_ID, TimeFFormat
 from evaluations.formats.torch_ import TorchFormat
@@ -57,19 +57,18 @@ def frame_format(request):
 
 
 def test_a_frame_format_round_trips_every_value(frame_format, frame, tmp_path: Path) -> None:
-    artifact = frame_format._write_frame(frame, tmp_path / frame_format.name)
-    restored = frame_format.read_all(artifact.path)
+    path = frame_format._write_frame(frame, tmp_path / frame_format.name)
+    restored = frame_format.read_all(path)
 
     assert len(restored) == N_EPOCHS
     np.testing.assert_allclose(np.stack(restored), signal_stack(frame), rtol=0, atol=0)
 
 
-def test_a_frame_format_reports_its_size(frame_format, frame, tmp_path: Path) -> None:
-    artifact = frame_format._write_frame(frame, tmp_path / frame_format.name)
+def test_a_frame_format_writes_a_file_that_exists(frame_format, frame, tmp_path: Path) -> None:
+    path = frame_format._write_frame(frame, tmp_path / frame_format.name)
 
-    assert artifact.format == frame_format.name
-    assert artifact.path.exists()
-    assert artifact.size_bytes > 0
+    assert frame_format.name in FormatName
+    assert path.exists()
 
 
 # What the stub was asked for, so a test can prove the format named the dataset and passed the
@@ -137,27 +136,17 @@ def test_timef_converts_with_the_connector_of_the_dataset(stub_connector, tmp_pa
 
 def test_timef_round_trips_every_series(stub_connector, tmp_path: Path) -> None:
     fmt = TimeFFormat()
-    artifact = fmt.write(tmp_path / "release", tmp_path / "timef")
-    restored = fmt.read_all(artifact.path)
+    path = fmt.write(tmp_path / "release", tmp_path / "timef")
+    restored = fmt.read_all(path)
 
     assert [len(series) for series in restored] == list(STUB_LENGTHS)
 
 
-def test_timef_reports_its_size(stub_connector, tmp_path: Path) -> None:
-    artifact = TimeFFormat().write(tmp_path / "release", tmp_path / "timef")
+def test_timef_writes_a_version_directory(stub_connector, tmp_path: Path) -> None:
+    path = TimeFFormat().write(tmp_path / "release", tmp_path / "timef")
 
-    assert artifact.format == "timef"
-    assert artifact.path.is_dir()
-    assert artifact.size_bytes > 0
-
-
-def test_directory_size_sums_every_file(tmp_path: Path) -> None:
-    (tmp_path / "nested").mkdir()
-    (tmp_path / "a.bin").write_bytes(b"x" * 10)
-    (tmp_path / "nested" / "b.bin").write_bytes(b"y" * 25)
-
-    assert directory_size(tmp_path) == 35
-    assert directory_size(tmp_path / "a.bin") == 10
+    assert TimeFFormat.name is FormatName.TIMEF
+    assert path.is_dir()
 
 
 def test_missing_source_raises(tmp_path: Path) -> None:

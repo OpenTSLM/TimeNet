@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from evaluations.formats.base import Artifact, directory_size
+from evaluations.formats.base import FormatName
 from evaluations.pyhealth_loader import LABEL, PATIENT, SIGNAL, load_frame
 
 
@@ -23,9 +23,9 @@ class PandasFormat:
     where Parquet requires it.
     """
 
-    name = "pandas"
+    name = FormatName.PANDAS
 
-    def write(self, source: Path, out: Path) -> Artifact:
+    def write(self, source: Path, out: Path) -> Path:
         """Read the release with PyHealth and write the frame it gives back.
 
         Args:
@@ -33,11 +33,12 @@ class PandasFormat:
             out: Directory to write into.
 
         Returns:
-            The Parquet artifact and its size.
+            The Parquet file written.
         """
         return self._write_frame(load_frame(source), out)
 
-    def _write_frame(self, frame: pd.DataFrame, out: Path) -> Artifact:
+    @staticmethod
+    def _write_frame(frame: pd.DataFrame, out: Path) -> Path:
         """Write a loaded frame to a single Parquet file.
 
         PyHealth gives a two-dimensional array per row, one row per epoch. Parquet has no type
@@ -49,7 +50,7 @@ class PandasFormat:
             out: Directory to write into.
 
         Returns:
-            The Parquet artifact and its size.
+            The Parquet file written.
         """
         out.mkdir(parents=True, exist_ok=True)
         path = out / "epochs.parquet"
@@ -65,7 +66,7 @@ class PandasFormat:
         )
         flat.to_parquet(path, compression="zstd", index=False)
 
-        return Artifact(format=self.name, path=path, size_bytes=directory_size(path))
+        return path
 
     def read_all(self, path: Path) -> list[np.ndarray]:  # noqa: PLR6301 - implements the Format Protocol
         """Read every epoch back from Parquet.

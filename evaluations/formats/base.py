@@ -1,49 +1,53 @@
-"""The interface every format implements, and the artifact it produces."""
+"""The interface every format implements."""
 
 from __future__ import annotations
 
+from enum import StrEnum, unique
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from pydantic import BaseModel
 
 
-class Artifact(BaseModel):
-    """What a format wrote, and what it cost on disk."""
+@unique
+class FormatName(StrEnum):
+    """The formats under comparison. One member for each library that stores the dataset."""
 
-    format: str
-    """The name of the format that wrote it."""
-    path: Path
-    """The file or directory the format wrote."""
-    size_bytes: int
-    """Total bytes on disk, summed over every file when the artifact is a directory."""
+    PANDAS = "pandas"
+    """Parquet, the on-disk format of pandas."""
+    TORCH = "torch"
+    """A ``.pt`` file, the on-disk format of torch."""
+    TIMEF = "timef"
+    """A TimeF version, as the connector of the dataset builds it."""
 
 
 class Format(Protocol):
-    """One library's storage. It reads the release its own way, then writes and reads its artifact.
+    """One library's storage. It reads the release its own way, then writes and reads it back.
 
-    Every format starts at the same directory of raw files and ends at values in memory. What
-    happens in between is that library's own path, because that is the path its user would run.
-    A format never reads another format's artifact. Parquet is not a rival to TimeF here; it is
-    pandas' own on-disk format, in the same way ``.pt`` is torch's.
+    Every format starts at the same directory of raw files and ends at values in memory. Between
+    those two points it runs its own library's path, because that is the path its user would run.
+    No format reads another format's artifact. Parquet is not a rival to TimeF. It is the on-disk
+    format of pandas, in the same way that ``.pt`` is the one of torch.
 
-    The read of the release is inside :meth:`write` on purpose. An EDF file is not a format that
-    pandas or torch can open, so a reference loader stands between the release and the frame, and
-    what it costs is part of what that format costs.
+    The read of the release is inside :meth:`write` on purpose. Neither pandas nor torch can open
+    an EDF file, so a loader stands between the release and the frame. What that loader costs is
+    part of what the format costs.
     """
 
-    name: str
+    name: FormatName
 
-    def write(self, source: Path, out: Path) -> Artifact:
+    def write(self, source: Path, out: Path) -> Path:
         """Read the release and write it in this format.
+
+        A format states no size. It gives back what it wrote, and the caller measures that, so
+        one rule covers all three and no format can claim a size its own files disagree with.
 
         Args:
             source: The directory the release was extracted into. Every format reads the same one.
             out: A directory this format may write into. It is created if absent.
 
         Returns:
-            The artifact written, carrying its size on disk.
+            The file or directory written.
         """
         ...
 
@@ -59,21 +63,3 @@ class Format(Protocol):
             that were sampled at different rates and so differ in length.
         """
         ...
-
-
-def directory_size(path: Path) -> int:
-    """Total the bytes an artifact occupies.
-
-    A directory reports the sum of every file beneath it, not the size of its own directory
-    entry, which says nothing about the data.
-
-    Args:
-        path: A file or a directory.
-
-    Returns:
-        The size in bytes.
-    """
-    if path.is_file():
-        return path.stat().st_size
-
-    return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())

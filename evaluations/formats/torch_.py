@@ -8,16 +8,16 @@ import numpy as np
 import pandas as pd
 import torch
 
-from evaluations.formats.base import Artifact, directory_size
+from evaluations.formats.base import FormatName
 from evaluations.pyhealth_loader import LABEL, PATIENT, load_frame, signal_stack
 
 
 class TorchFormat:
     """A ``.pt`` file, written from the frame PyHealth hands back."""
 
-    name = "torch"
+    name = FormatName.TORCH
 
-    def write(self, source: Path, out: Path) -> Artifact:
+    def write(self, source: Path, out: Path) -> Path:
         """Read the release with PyHealth and save the signals it gives back.
 
         Args:
@@ -25,11 +25,12 @@ class TorchFormat:
             out: Directory to write into.
 
         Returns:
-            The ``.pt`` artifact and its size.
+            The ``.pt`` file written.
         """
         return self._write_frame(load_frame(source), out)
 
-    def _write_frame(self, frame: pd.DataFrame, out: Path) -> Artifact:
+    @staticmethod
+    def _write_frame(frame: pd.DataFrame, out: Path) -> Path:
         """Write a loaded frame's signals as one tensor.
 
         Args:
@@ -37,7 +38,7 @@ class TorchFormat:
             out: Directory to write into.
 
         Returns:
-            The ``.pt`` artifact and its size.
+            The ``.pt`` file written.
         """
         out.mkdir(parents=True, exist_ok=True)
         path = out / "epochs.pt"
@@ -51,7 +52,7 @@ class TorchFormat:
             path,
         )
 
-        return Artifact(format=self.name, path=path, size_bytes=directory_size(path))
+        return path
 
     def read_all(self, path: Path) -> list[np.ndarray]:  # noqa: PLR6301 - implements the Format Protocol
         """Read every epoch back from the ``.pt`` file.

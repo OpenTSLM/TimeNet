@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from evaluations.formats.base import Artifact, directory_size
+from evaluations.formats.base import FormatName
 from timenet.engine import store_dataset
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
@@ -26,9 +26,9 @@ class TimeFFormat:
     rather than TimeF.
     """
 
-    name = "timef"
+    name = FormatName.TIMEF
 
-    def write(self, source: Path, out: Path) -> Artifact:
+    def write(self, source: Path, out: Path) -> Path:  # noqa: PLR6301 - implements the Format Protocol
         """Convert the release with its connector, and store what the connector returns.
 
         ``download`` resolves the release inside ``source``. It is idempotent, so it extracts on a
@@ -39,13 +39,12 @@ class TimeFFormat:
             out: Directory to write into. The version lands beneath it.
 
         Returns:
-            The version directory and its size.
+            The version directory.
         """
         out.mkdir(parents=True, exist_ok=True)
         connector = resolve(DATASET_ID)()
-        version = store_dataset(connector.convert(connector.download(source)), out)
 
-        return Artifact(format=self.name, path=version, size_bytes=directory_size(version))
+        return store_dataset(connector.convert(connector.download(source)), out)
 
     def read_all(self, path: Path) -> list[np.ndarray]:  # noqa: PLR6301 - implements the Format Protocol
         """Read every value back from the TimeF version.
