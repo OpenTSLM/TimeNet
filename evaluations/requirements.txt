@@ -1,0 +1,11 @@
+# The comparative benchmark suite. Not a workspace dependency: `make sync` does not
+# install these, and the suite never runs in CI, because timings from two machines are
+# not comparable. Install into a throwaway environment before running:
+#
+#     uv pip install -r evaluations/requirements.txt
+#
+# pyhealth loads Sleep-EDF. It supports Python >=3.12,<3.14, which is narrower than the
+# workspace, and that is one reason it is not a workspace dependency.
+pyhealth>=2.0.0
+pandas>=2.0
+torch

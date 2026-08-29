@@ -105,8 +105,9 @@ python-version = "3.13"
 [[tool.ty.overrides]]
 # examples/** imports scikit-learn; .github/scripts/** and docs/scripts/** declare their deps inline
 # (PEP 723) and run standalone under `uv run` (PyGithub for the CI report, matplotlib for the figure
-# generator). None is a project dependency, so don't fail type-checking on their unresolved imports.
-include = ["examples/**", ".github/scripts/**", "docs/scripts/**"]
+# generator); evaluations/** declares its own in evaluations/requirements.txt and runs in a throwaway
+# environment. None is a project dependency, so don't fail type-checking on their unresolved imports.
+include = ["examples/**", ".github/scripts/**", "docs/scripts/**", "evaluations/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
