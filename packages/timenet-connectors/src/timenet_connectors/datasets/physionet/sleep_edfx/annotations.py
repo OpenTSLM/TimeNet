@@ -4,13 +4,13 @@ A technician scored every 30 s epoch of a recording. The file stores a run of eq
 one entry, not one row for each epoch. This module turns each entry into one annotation.
 
 The caller reads the entries and passes them in. This module reads no file.
+``connector.py`` measures the overrun and reports it. It needs that measure for the session
+span of the sample as well.
 """
-
-import warnings
 
 from timenet.dataset import TimeSeries
 from timenet.errors import TimeFFormatError
-from timenet.types import US_PER_S, Annotation, TimeInterval
+from timenet.types import Annotation, TimeInterval
 from timenet_connectors.bases.edf import reader
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
@@ -70,7 +70,6 @@ def build(
     sample_id: str,
     entries: tuple[reader.EdfAnnotation, ...],
     series: tuple[TimeSeries, ...],
-    end_microseconds: int,
 ) -> list[Annotation]:
     """Give one annotation for each entry of a scoring, in file order.
 
@@ -82,8 +81,6 @@ def build(
             names the recording in any message this build gives.
         entries: Its scoring, as :func:`reader.read_annotations` gives it.
         series: Its time series, which name the channels a stage was scored from.
-        end_microseconds: Where the recorded signals stop, from
-            :func:`reader.compute_signal_end_microseconds`.
 
     Returns:
         One annotation for each entry.
@@ -91,14 +88,6 @@ def build(
     Raises:
         TimeFFormatError: If the recording does not hold all four scoring channels.
     """  # noqa: DOC502 (raised by _channel_ids_of_annotation, not directly here)
-    overrun = measure_overrun_microseconds(entries, end_microseconds)
-    if overrun:
-        warnings.warn(
-            f"{sample_id}: the scoring runs {overrun // US_PER_S} s past the last recorded "
-            f"sample. It is written as the file states it.",
-            stacklevel=2,
-        )
-
     channel_ids = _channel_ids_of_annotation(sample_id, series, _channel_names_for_annotations)
     return [
         Annotation(
