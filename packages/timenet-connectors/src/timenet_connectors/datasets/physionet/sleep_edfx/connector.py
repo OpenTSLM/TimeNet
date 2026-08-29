@@ -9,6 +9,10 @@ of temazepam. It recorded each subject in hospital, on a telemetry system.
 
 The two studies used different equipment. As a result, their channel sets differ. Their spans
 differ too. A cassette recording covers about a day.
+
+The loop that walks the release is in ``convert``, so one place states what a sample is made of.
+:mod:`~timenet_connectors.bases.edf.reader` reads the EDF container, and
+:mod:`~timenet_connectors.datasets.physionet.sleep_edfx.specs` states what each channel measures.
 """
 
 from collections.abc import Iterator
@@ -18,12 +22,17 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDownloadError
+from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
 # The full release, as one zip on the open S3 bucket of PhysioNet. boto3 reads it anonymously.
 SLEEP_EDFX_ZIP_URL = "s3://physionet-open/sleep-edfx/sleep-edfx-1.0.0.zip"
+
+# The prefix of every id this connector writes.
+_ID_PREFIX = "sleep-edfx"
 
 
 @dataclass(frozen=True)
@@ -145,10 +154,18 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         Args:
             raw_refs: The list of one handle from :meth:`download`.
 
-        Raises:
-            NotImplementedError: Always.
+        Returns:
+            An empty dataset, with the metadata of the card.
         """
-        raise NotImplementedError
+        source = raw_refs[0]
+        for recording in _iter_recordings(source):
+            # Named and not generated, thus two builds of one archive give one set of ids.
+            sample_id = f"{_ID_PREFIX}-{recording.recording_id}"
+
+            file = reader.open_edf(recording.psg_path)
+            timeseries.build(sample_id, file, SPECS, loader=reader.build_channel_loader)
+
+        return TimeFDataset(metadata=self.metadata())
 
 
 CONNECTOR = SleepEdfxConnector
