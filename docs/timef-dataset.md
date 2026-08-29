@@ -114,7 +114,7 @@ Otherwise, `add_annotation` validates the span against the *union* of the series
 that leaves the window this rule selects warns with `SpanOutsideWindowWarning` and is kept as it was
 given. Some sources state a region that reaches past the signals it was written for, and a connector
 records what the source says. Pass `warn_when_outside=False` to raise `TimeFValidationError` instead.
-The reader passes that argument, so a stored span outside its window is still a format error.
+The reader keeps the same default, so it reads back a span the writer accepted.
 
 `add_annotations([...])` attaches an iterable the same way, but as one all-or-nothing operation. It
 validates the whole batch first. It leaves the sample untouched if any annotation fails.
