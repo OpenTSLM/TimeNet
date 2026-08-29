@@ -8,7 +8,7 @@ recorded each subject at home, on a cassette recorder. ``sleep-telemetry`` measu
 of temazepam. It recorded each subject in hospital, on a telemetry system.
 
 The two studies used different equipment. As a result, their channel sets differ. Their spans
-differ too. A cassette recording covers about a day.
+differ too. A cassette recording covers about a day, and a telemetry recording about ten hours.
 
 The loop that walks the release is in ``convert``, so one place states what a sample is made of.
 :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.reader` reads the EDF container, and
@@ -18,10 +18,12 @@ The loop that walks the release is in ``convert``, so one place states what a sa
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDownloadError
+from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.types import TimeInterval
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.sleep_edfx import annotations, reader, timeseries
 from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
@@ -33,6 +35,19 @@ SLEEP_EDFX_ZIP_URL = "s3://physionet-open/sleep-edfx/sleep-edfx-1.0.0.zip"
 
 # The prefix of every id this connector writes.
 _ID_PREFIX = "sleep-edfx"
+
+# The two studies of the release. Each writes its own three characters at the front of a
+# recording id, and each numbers its subjects on its own.
+_CASSETTE_STUDY = "sleep-cassette"
+
+_TELEMETRY_STUDY = "sleep-telemetry"
+
+# The three characters that each study writes at the front of its recording ids.
+_STUDY_CODES = {_CASSETTE_STUDY: "SC4", _TELEMETRY_STUDY: "ST7"}
+
+# A recording id is eight characters: the three its study writes, the two digits of the subject
+# number, and three more for the night, the recorder and a trailing zero.
+_RECORDING_ID_SHAPE = re.compile(r"(?P<code>.{3})(?P<subject>[0-9]{2}).{3}")
 
 
 @dataclass(frozen=True)
@@ -52,14 +67,15 @@ class SleepEdfxRecording:
 
     A recording name has the form ``<SC4|ST7><subject><night><recorder>0``. The name holds the
     subject and the night. The scoring, the subject table and the sample ids all need them.
-    Nothing reads them yet, and this class does not parse them yet.
 
-    A recording is not one night of sleep. A cassette recording covers about a day, with one
-    night in the middle of it. A ``*-Hypnogram.edf`` file of sleep stages is beside each
-    recording, which :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.annotations` reads.
+    A recording is not one night of sleep. It starts before the night and stops after it. A
+    ``*-Hypnogram.edf`` file of sleep stages is beside each recording, which
+    :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.annotations` reads.
     """
 
     recording_id: str
+    study: str
+    subject_id: str
     psg_path: Path
     hypnogram_path: Path
 
@@ -88,6 +104,38 @@ def _find_hypnogram(psg_path: Path) -> Path:
     return matches[0]
 
 
+def _parse_subject_id(study: str, recording_id: str, psg_path: Path) -> str:
+    """Give the id of the person a recording belongs to, from the name of its file.
+
+    A subject id names a person and not a recording, so the recordings of one person share an
+    id. The study qualifies the number, because each study numbers its subjects on its own.
+
+    Args:
+        study: The study directory the file was walked in, which qualifies the number.
+        recording_id: The name of the file with ``-PSG`` taken off.
+        psg_path: The file itself, for the error message.
+
+    Returns:
+        The subject id: the name of the study and the two subject digits, joined by a hyphen.
+
+    Raises:
+        TimeFFormatError: If the study is not one this connector knows, or if the name does not
+            fit the shape the release uses.
+    """
+    code = _STUDY_CODES.get(study)
+    if code is None:
+        raise TimeFFormatError(f"{psg_path}: lies in {study!r}, which is not a study of this release")
+
+    match = _RECORDING_ID_SHAPE.fullmatch(recording_id)
+    if match is None or match["code"] != code:
+        raise TimeFFormatError(
+            f"{psg_path.name}: a {study} recording is named {code}<2 subject digits><night><recorder>0, "
+            f"as in {code}001E0, thus {recording_id!r} names no subject"
+        )
+
+    return f"{study}-{match['subject']}"
+
+
 def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
     """Walk the release and give one recording for each PSG file, with no list up front.
 
@@ -95,14 +143,22 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
         source: The download handle, which names the directory of each study.
 
     Yields:
-        Each recording, cassette study first, and inside a study in recording-id order.
-    """
-    for _, study_dir in source.studies:
+        Each recording, in the order the studies are declared, and inside a study in
+        recording-id order.
+
+    Raises:
+        TimeFFormatError: If a study directory holds a PSG file whose name this connector
+            cannot read.
+    """  # noqa: DOC502 (raised by _parse_subject_id, not directly here)
+    for study, study_dir in source.studies:
         for psg_path in sorted(study_dir.glob("*-PSG.edf")):
             # The filename is the only identifier. The EDF header names no subject, because the
             # patient field is anonymous in every file of this release.
+            recording_id = psg_path.stem.removesuffix("-PSG")
             yield SleepEdfxRecording(
-                recording_id=psg_path.stem.removesuffix("-PSG"),
+                recording_id=recording_id,
+                study=study,
+                subject_id=_parse_subject_id(study, recording_id, psg_path),
                 psg_path=psg_path,
                 hypnogram_path=_find_hypnogram(psg_path),
             )
@@ -112,10 +168,9 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
     """Connector for Sleep-EDF (PhysioNet ``sleep-edfx``)."""
 
     # Each study with the subject table that describes it. The order keeps sample ids stable.
-    # The download gets both studies. Only a study with a module of its own becomes samples.
     _STUDIES: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("sleep-cassette", "SC-subjects.xls"),
-        ("sleep-telemetry", "ST-subjects.xls"),
+        (_CASSETTE_STUDY, "SC-subjects.xls"),
+        (_TELEMETRY_STUDY, "ST-subjects.xls"),
     )
 
     async def download_async(self, cache_dir: Path) -> list[SleepEdfxSource]:
@@ -155,9 +210,10 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             raw_refs: The list of one handle from :meth:`download`.
 
         Returns:
-            An empty dataset, with the metadata of the card.
+            The dataset, with one sample for each recording it walked.
         """
         source = raw_refs[0]
+        dataset = TimeFDataset(metadata=self.metadata())
         for recording in _iter_recordings(source):
             # Named and not generated, thus two builds of one archive give one set of ids.
             sample_id = f"{_ID_PREFIX}-{recording.recording_id}"
@@ -166,9 +222,21 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             series = timeseries.build(sample_id, file, SPECS, loader=reader.build_channel_loader)
 
             entries = reader.read_annotations(recording.hypnogram_path)
-            annotations.build(sample_id, entries, series, reader.compute_signal_end_microseconds(file.header))
+            signal_end = reader.compute_signal_end_microseconds(file.header)
+            # The session may end after the signals stop, when the scoring reaches past them.
+            session_end = signal_end + reader.measure_overrun_microseconds(entries, signal_end)
 
-        return TimeFDataset(metadata=self.metadata())
+            sleep_stages = annotations.build(sample_id, entries, series)
+
+            sample = dataset.add_sample(
+                time_series=series,
+                sample_id=sample_id,
+                subject_ids=(recording.subject_id,),
+                time_span=TimeInterval.micros(0, session_end),
+            )
+            sample.add_annotations(sleep_stages)
+
+        return dataset
 
 
 CONNECTOR = SleepEdfxConnector
