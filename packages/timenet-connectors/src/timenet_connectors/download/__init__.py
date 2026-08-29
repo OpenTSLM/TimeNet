@@ -6,7 +6,7 @@ progress through the ambient :func:`progress_sink`. The per-transport backends l
 :mod:`.s3`.
 """
 
-from timenet_connectors.download.fetch import Artifact, download_files, ensure_archive
+from timenet_connectors.download.fetch import Artifact, download_files, ensure_archive, find_dir_containing
 from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, progress_sink
 
 
@@ -16,5 +16,6 @@ __all__ = [
     "ProgressCallback",
     "download_files",
     "ensure_archive",
+    "find_dir_containing",
     "progress_sink",
 ]
