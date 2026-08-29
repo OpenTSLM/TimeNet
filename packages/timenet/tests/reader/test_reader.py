@@ -11,7 +11,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import SpanOutsideWindowWarning, TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -785,8 +785,8 @@ def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_err
         list(reader.iter_samples())
 
 
-def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
-    # A stored span that no longer fits the series it resolves to is corruption, not a caller mistake.
+def test_annotation_span_outside_the_series_warns_and_reads_back_unchanged(tmp_path):
+    # The writer keeps a span that runs past its series, so the reader gives it back unchanged.
     version_dir = _write(tmp_path)
     ann_path = version_dir / "annotations/part-00000000.parquet"
     table = pq.read_table(ann_path)
@@ -798,9 +798,12 @@ def test_annotation_span_outside_the_series_raises_format_error(tmp_path):
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
-        pytest.raises(TimeFFormatError, match="falls outside sample"),
+        pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"),
     ):
-        list(reader.iter_samples())
+        samples = list(reader.iter_samples())
+    # Only an interval was stretched; a point has no end to stretch.
+    ends = [a.span.end_us for s in samples for a in s.annotations if isinstance(a.span, TimeInterval)]
+    assert 10**15 in ends, "the stretched span must survive the read"
 
 
 def _time_span_dataset(tmp_path) -> Path:

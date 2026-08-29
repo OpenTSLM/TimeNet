@@ -687,6 +687,8 @@ class TimeFReader:
             )
             for annotation in annotations:
                 if annotation.span is not None:
+                    # A stored span is already written. Refusing to load it hides a dataset that a
+                    # writer accepted on purpose, and the span is still there for a caller to judge.
                     check_span_within_window(
                         f"annotation {annotation.key!r}", annotation.span, series, sample_id, time_span
                     )

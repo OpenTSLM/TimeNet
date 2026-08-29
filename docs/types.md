@@ -456,10 +456,11 @@ All are `StrEnum`, so members compare equal to their string values.
 
 ---
 
-## Errors
+## Errors and warnings
 
 `timenet.errors` defines the exception hierarchy. `TimeNetError` is the base. Validation and manifest
-errors also derive from `ValueError`, so existing handlers keep working.
+errors also derive from `ValueError`, so existing handlers keep working. It also defines the warning
+hierarchy, listed at the end of this section.
 
 | Exception | Base(s) | Raised when |
 | --- | --- | --- |
@@ -479,6 +480,16 @@ subclasses `ValueError`, so `except ValueError` keeps catching all of it.
 Plain `ValueError` is for genuine programming bugs, not bad data or input. One example: two `Task`
 classes declare the same `task_type`, a definition bug raised at import. That is never a data or input
 problem. A tag of TimeF validation failure on it makes the distinction useless.
+
+`timenet.errors` also defines the warnings TimeNet raises. `TimeNetWarning` is the base, and it
+derives from `UserWarning`. `SpanOutsideWindowWarning` is raised where a span leaves its window and
+is kept rather than refused. Filter it by type to silence a source that states such a region for
+every recording.
+
+| Warning | Base(s) | Warned when |
+| --- | --- | --- |
+| `TimeNetWarning` | `UserWarning` | base for all TimeNet warnings |
+| `SpanOutsideWindowWarning` | `TimeNetWarning` | a span leaves its window and is kept |
 
 ---
 
