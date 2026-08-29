@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 
 from evaluations.formats.base import Artifact, directory_size
-from evaluations.source import LABEL, PATIENT, load_frame, signal_stack
+from evaluations.pyhealth_loader import LABEL, PATIENT, load_frame, signal_stack
 
 
 class TorchFormat:
@@ -33,7 +33,7 @@ class TorchFormat:
         """Write a loaded frame's signals as one tensor.
 
         Args:
-            frame: The frame from :func:`~evaluations.source.load_frame`.
+            frame: The frame from :func:`~evaluations.pyhealth_loader.load_frame`.
             out: Directory to write into.
 
         Returns:

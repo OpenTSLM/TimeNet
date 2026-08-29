@@ -13,7 +13,15 @@ from evaluations.formats.base import directory_size
 from evaluations.formats.pandas_ import PandasFormat
 from evaluations.formats.timef import DATASET_ID, TimeFFormat
 from evaluations.formats.torch_ import TorchFormat
-from evaluations.source import LABEL, PATIENT, SIGNAL, load_frame, signal_stack
+from evaluations.pyhealth_loader import (
+    LABEL,
+    PATIENT,
+    SIGNAL,
+    SUBJECT_TABLES,
+    _release_root,
+    load_frame,
+    signal_stack,
+)
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
@@ -160,3 +168,21 @@ def test_missing_source_raises(tmp_path: Path) -> None:
 def test_a_source_without_a_release_raises(tmp_path: Path) -> None:
     with pytest.raises(EvaluationError, match="holds no release"):
         load_frame(tmp_path)
+
+
+def test_the_release_root_is_the_directory_holding_both_tables(tmp_path: Path) -> None:
+    root = tmp_path / "sleep-edfx-1.0.0"
+    root.mkdir()
+    for table in SUBJECT_TABLES:
+        (root / table).touch()
+
+    assert _release_root(tmp_path) == root
+
+
+def test_a_release_missing_one_study_table_raises(tmp_path: Path) -> None:
+    root = tmp_path / "sleep-edfx-1.0.0"
+    root.mkdir()
+    (root / SUBJECT_TABLES[0]).touch()
+
+    with pytest.raises(EvaluationError, match="holds no release"):
+        _release_root(tmp_path)

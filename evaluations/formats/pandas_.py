@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from evaluations.formats.base import Artifact, directory_size
-from evaluations.source import LABEL, PATIENT, SIGNAL, load_frame
+from evaluations.pyhealth_loader import LABEL, PATIENT, SIGNAL, load_frame
 
 
 CHANNEL = "channel"
@@ -46,7 +46,7 @@ class PandasFormat:
         a ``list<float32>`` column, which Parquet stores natively.
 
         Args:
-            frame: The frame from :func:`~evaluations.source.load_frame`.
+            frame: The frame from :func:`~evaluations.pyhealth_loader.load_frame`.
             out: Directory to write into.
 
         Returns:
