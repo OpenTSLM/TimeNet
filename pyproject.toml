@@ -16,6 +16,7 @@ dev = [
     "ty>=0.0.34",
     "edfio>=0.4.14",
     "wfdb>=4.1",
+    "xlrd>=2.0",
 ]
 docs = [
     "zensical",
