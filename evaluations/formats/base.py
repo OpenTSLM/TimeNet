@@ -13,12 +13,12 @@ import numpy as np
 class FormatName(StrEnum):
     """The formats under comparison. One member for each library that stores the dataset."""
 
+    # Parquet, the on-disk format of pandas.
     PANDAS = "pandas"
-    """Parquet, the on-disk format of pandas."""
+    # A .pt file, the on-disk format of torch.
     TORCH = "torch"
-    """A ``.pt`` file, the on-disk format of torch."""
+    # A TimeF version, as the connector of the dataset builds it.
     TIMEF = "timef"
-    """A TimeF version, as the connector of the dataset builds it."""
 
 
 class Format(Protocol):
