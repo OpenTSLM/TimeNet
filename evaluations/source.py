@@ -1,4 +1,4 @@
-"""Load the dataset into memory once, as the one frame every format writes from."""
+"""Read the release into a pandas DataFrame, the way a pandas or a torch user would."""
 
 from __future__ import annotations
 
@@ -24,13 +24,16 @@ PATIENT = "patient_id"
 RATE_HZ = 100
 """The rate PyHealth resamples every channel to before it cuts epochs."""
 
+CASSETTE_STUDY = "sleep-cassette"
+"""A directory of the release. Its parent is the root PyHealth reads."""
+
 
 def load_frame(source: Path, *, batch_size: int = 64) -> pd.DataFrame:
-    """Load Sleep-EDF into one pandas DataFrame, through PyHealth.
+    """Read Sleep-EDF into one pandas DataFrame, through PyHealth.
 
-    This frame is the single in-memory object of the whole run. ``PandasFormat`` writes it
-    directly; ``TorchFormat`` and ``TimeFFormat`` derive their artifacts from it. Loading once is
-    what lets the three artifacts hold the same content without a check.
+    Neither pandas nor torch can open an EDF file, so a reference loader stands between the
+    release and the frame. This is that loader, and both formats call it inside their own
+    ``write``, because what it costs is part of what those formats cost.
 
     Three steps happen here. ``SleepEDFDataset`` reads the metadata table, which carries a path
     per recording rather than any values. ``set_task`` parses each EDF and cuts it into
@@ -38,7 +41,8 @@ def load_frame(source: Path, *, batch_size: int = 64) -> pd.DataFrame:
     is what pulls the signals into memory.
 
     Args:
-        source: Directory holding the Sleep-EDF recordings.
+        source: The directory the release was extracted into. The archive unpacks into a
+            directory of its own beneath it, which this function finds.
         batch_size: How many epochs the dataloader yields at a time. It affects only how the
             values are drained, never what ends up in the frame.
 
@@ -46,12 +50,18 @@ def load_frame(source: Path, *, batch_size: int = 64) -> pd.DataFrame:
         One row per epoch, with the columns ``signal``, ``label`` and ``patient_id``.
 
     Raises:
-        EvaluationError: If ``source`` does not exist.
+        EvaluationError: If ``source`` does not exist, or holds no release.
     """
     if not source.is_dir():
         raise EvaluationError(f"source directory does not exist: {source}")
 
-    dataset = SleepEDFDataset(root=str(source))
+    # The archive unpacks into a directory of its own, whose name the release states and this
+    # suite does not. Find the study directory instead, and read the release from its parent.
+    root = next((match.parent for match in source.rglob(CASSETTE_STUDY) if match.is_dir()), None)
+    if root is None:
+        raise EvaluationError(f"no {CASSETTE_STUDY!r} directory under {source}, so it holds no release")
+
+    dataset = SleepEDFDataset(root=str(root))
     samples = dataset.set_task(SleepStagingSleepEDF())
     loader = get_dataloader(samples, batch_size=batch_size, shuffle=False)
 

@@ -4,8 +4,11 @@
 #
 #     uv pip install -r evaluations/requirements.txt
 #
-# pyhealth loads Sleep-EDF. It supports Python >=3.12,<3.14, which is narrower than the
-# workspace, and that is one reason it is not a workspace dependency.
+# pyhealth reads the release for the pandas and the torch formats. It supports Python
+# >=3.12,<3.14, which is narrower than the workspace, and that is one reason it is not a
+# workspace dependency.
 pyhealth>=2.0.0
 pandas>=2.0
 torch
+# The TimeF format runs the dataset's own connector, which declares its own
+# requirements.txt beside it. Install that file too, in the same environment.

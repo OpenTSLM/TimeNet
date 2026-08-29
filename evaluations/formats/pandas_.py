@@ -1,4 +1,4 @@
-"""The pandas format: the frame PyHealth produced, written straight to Parquet."""
+"""The pandas format: the frame PyHealth reads out of the release, written to Parquet."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from evaluations.formats.base import Artifact, directory_size
-from evaluations.source import LABEL, PATIENT, SIGNAL
+from evaluations.source import LABEL, PATIENT, SIGNAL, load_frame
 
 
 CHANNEL = "channel"
@@ -18,7 +18,7 @@ EPOCH = "epoch"
 
 
 class PandasFormat:
-    """Parquet, written from the frame PyHealth handed back.
+    """Parquet, written from the frame PyHealth hands back.
 
     Nothing is rebuilt here. The frame under test is the one the loader produced, reshaped only
     where Parquet requires it.
@@ -26,15 +26,27 @@ class PandasFormat:
 
     name = "pandas"
 
-    def write(self, frame: pd.DataFrame, out: Path) -> Artifact:
-        """Write the frame to a single Parquet file.
+    def write(self, source: Path, out: Path) -> Artifact:
+        """Read the release with PyHealth and write the frame it gives back.
+
+        Args:
+            source: The directory the release was extracted into.
+            out: Directory to write into.
+
+        Returns:
+            The Parquet artifact and its size.
+        """
+        return self._write_frame(load_frame(source), out)
+
+    def _write_frame(self, frame: pd.DataFrame, out: Path) -> Artifact:
+        """Write a loaded frame to a single Parquet file.
 
         PyHealth gives a two-dimensional array per row, one row per epoch. Parquet has no type
         for that, so the frame is exploded to one row per (epoch, channel) and the values become
         a ``list<float32>`` column, which Parquet stores natively.
 
         Args:
-            frame: The shared frame from ``evaluations.source.load_frame``.
+            frame: The frame from :func:`~evaluations.source.load_frame`.
             out: Directory to write into.
 
         Returns:
@@ -56,27 +68,27 @@ class PandasFormat:
 
         return Artifact(format=self.name, path=path, size_bytes=directory_size(path))
 
-    def read_all(self, path: Path) -> np.ndarray:  # noqa: PLR6301 - implements the Format Protocol
+    def read_all(self, path: Path) -> list[np.ndarray]:  # noqa: PLR6301 - implements the Format Protocol
         """Read every epoch back from Parquet.
 
         Args:
             path: The Parquet file written by :meth:`write`.
 
         Returns:
-            The signals, shaped ``(n_epochs, n_channels, n_samples)``.
+            One array per epoch, shaped ``(n_channels, n_samples)``.
         """
         flat = pd.read_parquet(path)
         n_channels = int(flat[CHANNEL].max()) + 1
         values = np.stack(flat[SIGNAL].to_numpy()).astype(np.float32, copy=False)
 
-        return values.reshape(-1, n_channels, values.shape[-1])
+        return list(values.reshape(-1, n_channels, values.shape[-1]))
 
 
 def _n_channels(frame: pd.DataFrame) -> int:
     """Report how many channels each epoch carries.
 
     Args:
-        frame: The shared frame.
+        frame: The loaded frame.
 
     Returns:
         The channel count, read from the first epoch.

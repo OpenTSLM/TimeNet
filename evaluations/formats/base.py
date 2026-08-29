@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-import pandas as pd
 from pydantic import BaseModel
 
 
@@ -22,19 +21,25 @@ class Artifact(BaseModel):
 
 
 class Format(Protocol):
-    """One library's storage. It writes its own artifact and reads that artifact back.
+    """One library's storage. It reads the release its own way, then writes and reads its artifact.
 
+    Every format starts at the same directory of raw files and ends at values in memory. What
+    happens in between is that library's own path, because that is the path its user would run.
     A format never reads another format's artifact. Parquet is not a rival to TimeF here; it is
     pandas' own on-disk format, in the same way ``.pt`` is torch's.
+
+    The read of the release is inside :meth:`write` on purpose. An EDF file is not a format that
+    pandas or torch can open, so a reference loader stands between the release and the frame, and
+    what it costs is part of what that format costs.
     """
 
     name: str
 
-    def write(self, frame: pd.DataFrame, out: Path) -> Artifact:
-        """Write the shared frame in this format.
+    def write(self, source: Path, out: Path) -> Artifact:
+        """Read the release and write it in this format.
 
         Args:
-            frame: The one in-memory dataset, as produced by ``evaluations.source.load_frame``.
+            source: The directory the release was extracted into. Every format reads the same one.
             out: A directory this format may write into. It is created if absent.
 
         Returns:
@@ -42,14 +47,16 @@ class Format(Protocol):
         """
         ...
 
-    def read_all(self, path: Path) -> np.ndarray:
+    def read_all(self, path: Path) -> list[np.ndarray]:
         """Read every value back.
 
         Args:
             path: The artifact path returned by :meth:`write`.
 
         Returns:
-            The signals, shaped ``(n_epochs, n_channels, n_samples)``.
+            One array for each run of values the format stores: an epoch for pandas and torch, a
+            time series for TimeF. The arrays are not stacked, because a recording holds channels
+            that were sampled at different rates and so differ in length.
         """
         ...
 

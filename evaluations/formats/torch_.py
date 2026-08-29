@@ -1,4 +1,4 @@
-"""The torch format: tensors saved with ``torch.save``."""
+"""The torch format: the frame PyHealth reads out of the release, saved with ``torch.save``."""
 
 from __future__ import annotations
 
@@ -9,19 +9,31 @@ import pandas as pd
 import torch
 
 from evaluations.formats.base import Artifact, directory_size
-from evaluations.source import LABEL, PATIENT, signal_stack
+from evaluations.source import LABEL, PATIENT, load_frame, signal_stack
 
 
 class TorchFormat:
-    """A ``.pt`` file, derived from the same frame the pandas format writes."""
+    """A ``.pt`` file, written from the frame PyHealth hands back."""
 
     name = "torch"
 
-    def write(self, frame: pd.DataFrame, out: Path) -> Artifact:
-        """Write the frame's signals as one tensor.
+    def write(self, source: Path, out: Path) -> Artifact:
+        """Read the release with PyHealth and save the signals it gives back.
 
         Args:
-            frame: The shared frame from ``evaluations.source.load_frame``.
+            source: The directory the release was extracted into.
+            out: Directory to write into.
+
+        Returns:
+            The ``.pt`` artifact and its size.
+        """
+        return self._write_frame(load_frame(source), out)
+
+    def _write_frame(self, frame: pd.DataFrame, out: Path) -> Artifact:
+        """Write a loaded frame's signals as one tensor.
+
+        Args:
+            frame: The frame from :func:`~evaluations.source.load_frame`.
             out: Directory to write into.
 
         Returns:
@@ -41,15 +53,15 @@ class TorchFormat:
 
         return Artifact(format=self.name, path=path, size_bytes=directory_size(path))
 
-    def read_all(self, path: Path) -> np.ndarray:  # noqa: PLR6301 - implements the Format Protocol
+    def read_all(self, path: Path) -> list[np.ndarray]:  # noqa: PLR6301 - implements the Format Protocol
         """Read every epoch back from the ``.pt`` file.
 
         Args:
             path: The file written by :meth:`write`.
 
         Returns:
-            The signals, shaped ``(n_epochs, n_channels, n_samples)``.
+            One array per epoch, shaped ``(n_channels, n_samples)``.
         """
         loaded = torch.load(path, weights_only=False)
 
-        return loaded["signals"].numpy()
+        return list(loaded["signals"].numpy())
