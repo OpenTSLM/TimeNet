@@ -12,18 +12,17 @@ from pyhealth.tasks import SleepStagingSleepEDF
 from evaluations.errors import EvaluationError
 
 
+# The columns the frame keeps: one epoch's values shaped (n_channels, n_samples), the stage a
+# technician scored for it, and the subject it came from.
 SIGNAL = "signal"
-"""Column holding one epoch's values, shaped ``(n_channels, n_samples)``."""
 LABEL = "label"
-"""Column holding the scored sleep stage."""
 PATIENT = "patient_id"
-"""Column holding the subject the epoch came from."""
 
+# Both studies of the release. PyHealth reads one per instance, so the loader reads each.
 SUBSETS = ("cassette", "telemetry")
-"""Both studies of the release. PyHealth reads one per instance, so the loader reads each."""
 
+# One table per study. The directory holding both of them is the root PyHealth reads.
 SUBJECT_TABLES = ("SC-subjects.xls", "ST-subjects.xls")
-"""One table per study. The directory holding both of them is the root PyHealth reads."""
 
 
 def load_frame(source: Path) -> pd.DataFrame:

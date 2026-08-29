@@ -11,10 +11,9 @@ from evaluations.formats.base import Artifact, directory_size
 from evaluations.pyhealth_loader import LABEL, PATIENT, SIGNAL, load_frame
 
 
+# Columns added at write time, naming which epoch and which channel a row's values belong to.
 CHANNEL = "channel"
-"""Column added at write time, naming which channel a row's values belong to."""
 EPOCH = "epoch"
-"""Column added at write time, naming which epoch a row's values belong to."""
 
 
 class PandasFormat:

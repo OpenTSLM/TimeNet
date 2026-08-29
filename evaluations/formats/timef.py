@@ -13,8 +13,8 @@ from timenet.registry import DatasetVersion
 from timenet_connectors.discovery import resolve
 
 
+# The dataset under test, named by id. Nothing here imports a connector module.
 DATASET_ID = "physionet/sleep-edfx"
-"""The dataset under test, named by id. Nothing here imports a connector module."""
 
 
 class TimeFFormat:
