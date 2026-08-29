@@ -13,7 +13,7 @@ time-series datasets in one on-disk format ([TimeF](../timef-dataset.md)). Then 
 TimeNet is not a training toolkit. These pages show the shape of that data:
 
 - **[Datasets](datasets.md)**: versioned collections addressed by an `org/name` id.
-- **[Samples](samples.md)**: one recording with its signals, annotations, tasks, and metadata.
+- **[Samples](samples.md)**: one recording with its signals, annotations, and tasks.
 - **[Time series](time-series.md)**: one channel's values over time. A sample has one or more.
 - **[Annotations](annotations.md)**: scoped side-information in three shapes.
 - **[Tasks](tasks.md)**: the labeled training targets built from a sample.

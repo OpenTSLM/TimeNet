@@ -21,12 +21,15 @@ authors it directly, or subclasses it with field defaults for reuse.
 ## Sample-wide facts
 
 An `Annotation` with no `span` has no time reference. It describes the whole recording. It requires a
-`value`. Sample-level facts live here: the machine id, its firmware version, an operating mode, or a
-single condition label. This label travels with every window drawn later from the sample.
+`value`. Sample-level facts live here: a subject's attributes, the machine id, its firmware version,
+an operating mode, or a single condition label. A sample has no metadata field, so this is where such
+context belongs. The fact travels with every window drawn later from the sample.
 
 ```python
 from timenet.types import Annotation
 
+Annotation(key="age", value=54, unit="years")
+Annotation(key="sex", value="F")
 Annotation(key="condition", value="healthy")
 Annotation(key="operating_hours", value=1200, unit="hours")
 ```
