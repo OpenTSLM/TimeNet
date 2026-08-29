@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from evaluations.errors import EvaluationError
 from evaluations.formats.base import Format, FormatName
 from evaluations.formats.pandas_ import PandasFormat
 from evaluations.formats.timef import TimeFFormat
 from evaluations.formats.torch_ import TorchFormat
-from evaluations.harness import Artifact, Measurement, Operation, measure_read, measure_write
+from evaluations.harness import Artifact, Measurement, measure_read, measure_write
+from evaluations.report import print_summary, write_json
+from evaluations.result import EvaluationResult, collect_environment
 
 
 # Every format under test, in the order a run measures them. The name is the key, so the loop
@@ -29,7 +33,7 @@ def run_evaluation(
     *,
     repeats: int = 5,
     warmups: int = 1,
-) -> tuple[tuple[Artifact, ...], tuple[Measurement, ...]]:
+) -> EvaluationResult:
     """Write the release in every format, and time both the write and the read of each.
 
     Every format reads the release itself, so the loop below is the whole run. Each format is
@@ -40,13 +44,12 @@ def run_evaluation(
 
     Args:
         source: The directory the release was extracted into.
-        out_dir: Directory the artifacts are written beneath.
+        out_dir: Directory the run directory is created beneath.
         repeats: Recorded read repetitions per format.
         warmups: Discarded leading read repetitions per format.
 
     Returns:
-        The artifacts written, and the measurements in the order they were taken. Each format
-        contributes one write measurement and one read measurement.
+        Everything the run produced, already written to JSON and summarized on standard output.
 
     Raises:
         EvaluationError: If the source is missing.
@@ -54,18 +57,34 @@ def run_evaluation(
     if not source.is_dir():
         raise EvaluationError(f"source directory does not exist: {source}")
 
+    run_id = uuid4().hex[:12]
+    started_at = datetime.now(UTC)
+    environment = collect_environment()
+    run_dir = out_dir / run_id
+
     artifacts: list[Artifact] = []
     measurements: list[Measurement] = []
     for name, build_format in FORMATS.items():
         fmt = build_format()
-        artifact, write = measure_write(fmt, source, out_dir / name)
+        artifact, write = measure_write(fmt, source, run_dir / name)
         read = measure_read(fmt, artifact.path, repeats=repeats, warmups=warmups)
 
         artifacts.append(artifact)
         measurements.append(write)
         measurements.append(read)
 
-    return tuple(artifacts), tuple(measurements)
+    result = EvaluationResult(
+        run_id=run_id,
+        started_at=started_at,
+        source_path=source,
+        environment=environment,
+        artifacts=tuple(artifacts),
+        measurements=tuple(measurements),
+    )
+    write_json(result, out_dir)
+    print_summary(result)
+
+    return result
 
 
 def main() -> None:
@@ -77,19 +96,12 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=1, help="discarded read repetitions, at least 1")
     args = parser.parse_args()
 
-    artifacts, measurements = run_evaluation(
+    run_evaluation(
         args.source,
         args.out,
         repeats=args.repeats,
         warmups=args.warmups,
     )
-
-    elapsed = {(one.format, one.operation): one.elapsed_ns / 1e9 for one in measurements}
-    for artifact in artifacts:
-        write_s = elapsed[artifact.format, Operation.WRITE]
-        read_s = elapsed[artifact.format, Operation.READ]
-        megabytes = artifact.size_bytes / 1e6
-        print(f"{artifact.format:<8} write {write_s:7.3f} s   read {read_s:7.3f} s   size {megabytes:9.1f} MB")
 
 
 if __name__ == "__main__":
