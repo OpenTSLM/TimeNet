@@ -93,7 +93,7 @@ class StubConnector:
                 dataset_version=Version(1, 0, 0),
                 name="stub",
                 description="A stub of the dataset's connector, for these tests.",
-                license=License.ODBL_1_0,
+                license=License.CC_BY_4_0,
             )
         )
         spec = TimeSeriesSpec(spec_type="eeg", name="EEG", unit_value=ureg.microvolt)
