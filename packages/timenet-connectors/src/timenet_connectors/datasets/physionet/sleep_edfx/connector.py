@@ -149,3 +149,6 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             NotImplementedError: Always.
         """
         raise NotImplementedError
+
+
+CONNECTOR = SleepEdfxConnector
