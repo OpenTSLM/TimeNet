@@ -24,6 +24,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDownloadError
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet_connectors.datasets.physionet.sleep_edfx import annotations
 from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
@@ -56,7 +57,7 @@ class SleepEdfxRecording:
 
     A recording is not one night of sleep. A cassette recording covers about a day, with one
     night in the middle of it. A ``*-Hypnogram.edf`` file of sleep stages is beside each
-    recording. Nothing reads that file yet.
+    recording, which :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.annotations` reads.
     """
 
     recording_id: str
@@ -163,7 +164,10 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             sample_id = f"{_ID_PREFIX}-{recording.recording_id}"
 
             file = reader.open_edf(recording.psg_path)
-            timeseries.build(sample_id, file, SPECS, loader=reader.build_channel_loader)
+            series = timeseries.build(sample_id, file, SPECS, loader=reader.build_channel_loader)
+
+            entries = reader.read_annotations(reader.open_edf(recording.hypnogram_path))
+            annotations.build(sample_id, entries, series, reader.compute_signal_end_microseconds(file.header))
 
         return TimeFDataset(metadata=self.metadata())
 
