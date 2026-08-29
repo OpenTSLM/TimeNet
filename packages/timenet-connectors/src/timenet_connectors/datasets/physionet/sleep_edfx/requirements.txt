@@ -3,3 +3,6 @@
 edfio>=0.4.14
 # boto3 gets the archive from the physionet-open S3 bucket.
 boto3>=1.34
+# xlrd reads the two subject tables. They are legacy BIFF8 workbooks, which
+# openpyxl cannot open at all.
+xlrd>=2.0
