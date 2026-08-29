@@ -1,11 +1,15 @@
-"""Read the EDF container: the header of a file, and one data record from it.
+"""Read the files of the release: the EDF container, and the subject tables beside it.
 
 EDF holds an ASCII header and then data records of 16-bit integers. One record holds the
 samples of every signal for one stretch of time, one signal after the other. Signals of
 different rates therefore hold a different count of samples in the same record.
 
-This module parses no bytes. ``edfio`` does that. This connector declares ``edfio`` in its
-``requirements.txt``, and :func:`open_edf` imports it inside the call that needs it.
+A subject table is a legacy ``.xls`` workbook. :func:`read_table_rows` gives its rows and reads
+no meaning into one. It is the only function of the connector that opens a workbook, thus every
+function that decodes a row takes rows and never a path.
+
+This module parses no bytes. ``edfio`` and ``xlrd`` do that. This connector declares both in its
+``requirements.txt``.
 
 :class:`EdfHeader` and :class:`EdfFile` are the boundary: ``edfio`` types stay inside this
 file, thus a later change of library does not reach the modules that call it.
@@ -20,6 +24,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import pyarrow as pa
+import xlrd
 
 from timenet.errors import TimeFFormatError
 from timenet.types import US_PER_S
@@ -341,3 +346,36 @@ def measure_overrun_microseconds(annotations: tuple[EdfAnnotation, ...], end_mic
         return 0
     last = max(annotation.onset_microseconds + annotation.duration_microseconds for annotation in annotations)
     return max(0, last - end_microseconds)
+
+
+def read_table_rows(path: Path) -> list[tuple[object, ...]]:
+    """Open a subject table and give every row of its data sheet, header rows included.
+
+    This gives the cells as the workbook states them and decodes nothing.
+    :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.tables` states what a column means.
+
+    Both workbooks carry three sheets, and only the first holds data. This takes the first sheet
+    and searches for no sheet by name.
+
+    Args:
+        path: The ``.xls`` workbook.
+
+    Returns:
+        One tuple of cell values for each row of the first sheet, in sheet order.
+
+    Raises:
+        TimeFFormatError: If the file does not open as a workbook, or holds no data sheet.
+    """
+    try:
+        # These are legacy BIFF8 workbooks that Excel wrote. openpyxl reads only the ZIP-based
+        # .xlsx format and cannot open them at all.
+        book = xlrd.open_workbook(path)
+    # xlrd has no single exception type for a bad file, so catch broadly and re-raise.
+    except Exception as exc:
+        raise TimeFFormatError(f"{path}: cannot read this file as a workbook") from exc
+
+    if book.nsheets == 0:
+        raise TimeFFormatError(f"{path}: holds no data sheet")
+
+    sheet = book.sheet_by_index(0)
+    return [tuple(sheet.row_values(index)) for index in range(sheet.nrows)]
