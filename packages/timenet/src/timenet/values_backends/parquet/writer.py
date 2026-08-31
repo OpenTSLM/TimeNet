@@ -189,7 +189,6 @@ class ParquetValuesBackend(BaseValuesBackend):
         """
         forced = self._forced_encoding
         if dtype == "bool":
-            _LOG.info("values encoding for %r: plain (bool)", spec_type)
             return ValueEncoding.PLAIN
         if forced is not None:
             if forced is ValueEncoding.BYTE_STREAM_SPLIT and not encodings.byte_stream_split_supported(dtype):

@@ -51,7 +51,6 @@ _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
 # index column type). 2^30 values is 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
 _BYTES_PER_TIME_OFFSET = 8
-_STR_ESTIMATED_BYTES = 64
 
 
 #: Group that holds the values of series that store per-value time offsets. The writer keeps it apart
@@ -69,11 +68,10 @@ def _scalar_bytes(dtype: str) -> int:
         dtype: The spec's dtype tag.
 
     Returns:
-        Bytes per value. For ``str``, a fixed estimate (variable-length strings have no
-        compile-time size).
+        Bytes per value.
     """
     if dtype == "str":
-        return _STR_ESTIMATED_BYTES
+        return np.dtypes.StringDType().itemsize
     return np.dtype(dtype).itemsize
 
 
@@ -158,9 +156,6 @@ class ZarrValuesBackend(BaseValuesBackend):
         chunk_len = max(1, self._chunk_max_bytes // bytes_per_step)
         shard_len = max(1, (self._shard_target_bytes // bytes_per_step) // chunk_len) * chunk_len
         trailing = ts.spec.value_shape
-        extra: dict[str, Any] = {}
-        if ts.spec.dtype == "str":
-            extra["fill_value"] = ""
         return _ArrayAppender(
             group.create_array(
                 name=array_path,
@@ -169,7 +164,6 @@ class ZarrValuesBackend(BaseValuesBackend):
                 chunks=(chunk_len, *trailing),
                 shards=(shard_len, *trailing),
                 compressors=codec,
-                **extra,
             ),
             shard_len,
         )
