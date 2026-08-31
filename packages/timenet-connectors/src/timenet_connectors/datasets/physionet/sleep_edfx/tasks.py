@@ -15,8 +15,17 @@ No task carries a prompt. The release states no question in words.
 from collections.abc import Iterator, Sequence
 
 from timenet.errors import TimeFFormatError
-from timenet.types import US_PER_S, Annotation, ClassificationTask, TimeInterval
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition
+from timenet.types import (
+    US_PER_S,
+    Annotation,
+    ClassificationTask,
+    LocalizationMode,
+    ScalarPredictionTask,
+    Task,
+    TemporalLocalizationTask,
+    TimeInterval,
+)
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -156,3 +165,148 @@ def build_epoch_tasks(
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
                 sample_ids=(sample_id,),
             )
+
+
+def build_sample_tasks(
+    sample_id: str,
+    id_prefix: str,
+    non_span_annotations: Sequence[Annotation],
+    span_annotations: Sequence[Annotation],
+) -> Iterator[Task]:
+    """Give the questions about a whole recording rather than a region of one.
+
+    Each takes an unset ``scope``. Age, sex and the drug condition come from the subject table.
+    Where the subject slept comes from the scoring.
+
+    Provenance is left out. The study, the night, the header clock and the demographics note
+    carry no span either, so the caller passes those in too. A task for one of them asks a
+    model to recover a fact the dataset states beside it.
+
+    Args:
+        sample_id: The sample these questions are about.
+        id_prefix: The prefix every id of this connector carries.
+        non_span_annotations: Its recording-metadata annotations, from ``SubjectTables``.
+        span_annotations: Its sleep-stage annotations, which bound the night.
+
+    Yields:
+        The whole-sample tasks of that recording, in a stable order.
+
+    Raises:
+        TimeFFormatError: If a fact this asks about is missing, stated twice, or states a value
+            the release does not write.
+    """
+    stated: dict[str, object] = {}
+    for one in non_span_annotations:
+        if one.key in stated:
+            raise TimeFFormatError(f"{sample_id}: states {one.key!r} twice, so it has no one answer for it")
+
+        stated[one.key] = one.value
+
+    yield ScalarPredictionTask(
+        # A float with a unit keeps the type a regression metric needs. As a string, a
+        # one-year error reads as two unequal labels.
+        target=_whole_years(sample_id, stated),
+        unit="year",
+        target_name=Question.AGE,
+        sample_ids=(sample_id,),
+    )
+
+    yield ClassificationTask(
+        # The decoded letter, never the sheet's code. The two sheets code the column with
+        # opposite meanings, so one code means two opposite things.
+        target=_one_of(sample_id, stated, AnnotationKey.SEX, SEX_LABELS),
+        target_schema=name_vocabulary(id_prefix, AnnotationKey.SEX),
+        sample_ids=(sample_id,),
+    )
+
+    # Only the telemetry sheet states a condition, so this one is optional.
+    if AnnotationKey.CONDITION in stated:
+        yield ClassificationTask(
+            target=_one_of(sample_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),
+            target_schema=name_vocabulary(id_prefix, AnnotationKey.CONDITION),
+            sample_ids=(sample_id,),
+        )
+
+    night = find_sleep_period(span_annotations)
+    if night is not None:
+        yield TemporalLocalizationTask(
+            target=(night,),
+            # The interval does not tile the recording. A cassette recording is mostly wake on
+            # either side of one night, and that time is unmarked rather than something else.
+            mode=LocalizationMode.SPARSE,
+            sample_ids=(sample_id,),
+        )
+
+
+def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | None:
+    """Give the interval from the first scored epoch that is not wake to the end of the last.
+
+    ``Sleep stage W``, ``Movement time`` and ``Sleep stage ?`` do not bound it, because none of
+    the three says the subject was asleep.
+
+    Args:
+        span_annotations: The sleep-stage annotations of one recording.
+
+    Returns:
+        The interval, or ``None`` where the scoring holds no sleep. TimeF refuses an interval of
+        zero length, so a recording with no sleep carries no question about its night.
+    """
+    spans = [one.span for one in span_annotations if one.value in ASLEEP_LABELS and one.span is not None]
+    if not spans:
+        return None
+
+    start = min(span.start_us for span in spans)
+    end = max(span.exclusive_end for span in spans)
+
+    return TimeInterval.micros(start, end)
+
+
+def _whole_years(sample_id: str, stated: dict[str, object]) -> float:
+    """Give the subject's age as a float, from the value the subject table stated.
+
+    ``Annotation.value`` is untyped, and the sheet decoder two modules away is what makes an
+    age a whole number. This states it again where the task is built.
+
+    Args:
+        sample_id: The sample the age belongs to, for the error message.
+        stated: What its metadata annotations state.
+
+    Returns:
+        The age in whole years.
+
+    Raises:
+        TimeFFormatError: If no age is stated, or the value is not a whole number.
+    """
+    if AnnotationKey.AGE not in stated:
+        raise TimeFFormatError(f"{sample_id}: states no age, so it cannot be asked for one")
+
+    age = stated[AnnotationKey.AGE]
+    if not isinstance(age, int) or isinstance(age, bool):
+        raise TimeFFormatError(f"{sample_id}: states an age of {age!r}, which is not a whole number of years")
+
+    return float(age)
+
+
+def _one_of(sample_id: str, stated: dict[str, object], key: AnnotationKey, permitted: Sequence[str]) -> str:
+    """Give one stated value, after a check that the release writes it.
+
+    Args:
+        sample_id: The sample it belongs to, for the error message.
+        stated: What its metadata annotations state.
+        key: The key to read.
+        permitted: The values the release writes for that key.
+
+    Returns:
+        The value.
+
+    Raises:
+        TimeFFormatError: If the key is absent, or its value is outside the set.
+    """
+    if key not in stated:
+        raise TimeFFormatError(f"{sample_id}: states no {key}, so it cannot be asked for one")
+
+    value = stated[key]
+    if value not in permitted:
+        raise TimeFFormatError(f"{sample_id}: states a {key} of {value!r}, which the release does not write")
+
+    return str(value)
