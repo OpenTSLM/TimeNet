@@ -83,7 +83,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     started = time.perf_counter_ns()
-    dataset = build_corpus(profile=case.profile, scale=scale, values_backend=case.values_backend)
+    dataset = build_corpus(profile=case.profile, scale=scale)
     converted_ns = time.perf_counter_ns() - started
     started = time.perf_counter_ns()
     writer_kwargs: dict[str, Any] = {

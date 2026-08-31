@@ -205,11 +205,13 @@ one. It samples the values it has already buffered for a modality, counts the di
 patterns for floats), and picks:
 
 - **dictionary** at or below **65,536** distinct values,
-- **BYTE_STREAM_SPLIT** above that.
+- **BYTE_STREAM_SPLIT** above that for floats,
+- **plain** above that for strings and integers (byte-plane splitting has no
+  meaning for these types).
 
-`plain` is never chosen automatically. It stays reachable as a manual override. The writer takes one
-decision per `spec_type`, before that modality's first shard opens. The decision reads only buffered
-data, so re-building an unchanged source reaches the same encoding and writes the same bytes.
+Bool channels always use plain. The writer takes one decision per `spec_type`, before that
+modality's first shard opens. The decision reads only buffered data, so re-building an unchanged
+source reaches the same encoding and writes the same bytes.
 
 The rule follows the measurements. On real data, at zstd level 3, the values column measures:
 

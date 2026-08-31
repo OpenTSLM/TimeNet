@@ -51,6 +51,7 @@ _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
 # index column type). 2^30 values is 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
 _BYTES_PER_TIME_OFFSET = 8
+_STR_ESTIMATED_BYTES = 64
 
 
 #: Group that holds the values of series that store per-value time offsets. The writer keeps it apart
@@ -62,15 +63,17 @@ _TIME_OFFSETS_GROUP = "_time_offsets"
 
 
 def _scalar_bytes(dtype: str) -> int:
-    """Return the estimated bytes one scalar value costs, used to size Zarr chunks and shards.
+    """Return the byte cost of one scalar value, for chunk and shard sizing.
 
     Args:
         dtype: The spec's dtype tag.
 
     Returns:
-        The estimated uncompressed bytes for one value. A ``str`` dtype never reaches here: the
-        backend rejects it.
+        Bytes per value. For ``str``, a fixed estimate (variable-length strings have no
+        compile-time size).
     """
+    if dtype == "str":
+        return _STR_ESTIMATED_BYTES
     return np.dtype(dtype).itemsize
 
 
@@ -155,6 +158,9 @@ class ZarrValuesBackend(BaseValuesBackend):
         chunk_len = max(1, self._chunk_max_bytes // bytes_per_step)
         shard_len = max(1, (self._shard_target_bytes // bytes_per_step) // chunk_len) * chunk_len
         trailing = ts.spec.value_shape
+        extra: dict[str, Any] = {}
+        if ts.spec.dtype == "str":
+            extra["fill_value"] = ""
         return _ArrayAppender(
             group.create_array(
                 name=array_path,
@@ -163,6 +169,7 @@ class ZarrValuesBackend(BaseValuesBackend):
                 chunks=(chunk_len, *trailing),
                 shards=(shard_len, *trailing),
                 compressors=codec,
+                **extra,
             ),
             shard_len,
         )
@@ -225,14 +232,13 @@ class ZarrValuesBackend(BaseValuesBackend):
 
         Raises:
             ImportError: If the ``zarr`` extra is not installed.
-            TimeFValidationError: If a spec uses the ``str`` dtype.
+            TimeFValidationError: If a spec uses the ``enum`` dtype.
         """
-        str_spec_types = sorted({ts.spec.spec_type for ts in unique_series if ts.spec.dtype == "str"})
-        if str_spec_types:
+        enum_spec_types = sorted({ts.spec.spec_type for ts in unique_series if ts.spec.dtype == "enum"})
+        if enum_spec_types:
             raise TimeFValidationError(
-                "the Zarr values backend does not support the str dtype (no dictionary layer, so "
-                f"string channels inflate on disk and read slowly); use values_backend='parquet' "
-                f"for specs with string values: {str_spec_types}"
+                "the Zarr values backend does not support the enum dtype (no dictionary layer); "
+                f"use values_backend='parquet' for enum channels: {enum_spec_types}"
             )
         try:
             import zarr  # noqa: PLC0415

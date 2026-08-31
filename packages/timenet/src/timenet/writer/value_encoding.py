@@ -105,11 +105,10 @@ def sample_values(arrays: Sequence[np.ndarray]) -> np.ndarray:
     """
     if not arrays:
         return np.empty(0, dtype=np.float32)
-    dtype = next((array.dtype for array in arrays if array.size), np.float32)
     share = max(1, SAMPLE_MAX_VALUES // len(arrays))
     parts = [array[:: max(1, array.size // share)][:share] for array in arrays]
     sample = np.concatenate(parts)[:SAMPLE_MAX_VALUES]
-    return sample if sample.size else np.empty(0, dtype=dtype)
+    return sample if sample.size else np.empty(0, dtype=np.float32)
 
 
 def distinct_bit_patterns(values: np.ndarray) -> int:

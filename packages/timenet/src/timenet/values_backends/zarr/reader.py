@@ -238,14 +238,13 @@ def _to_arrow(values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec) 
     Returns:
         A primitive array for scalar values or a fixed-shape tensor array for N-D values.
     """
+    if spec.dtype == "str":
+        return pa.array(values.tolist(), type=pa.string())
     contiguous = np.ascontiguousarray(values)
     value_type = pa.from_numpy_dtype(np.dtype(spec.dtype))
     if spec.value_shape:
         dim_names = spec.dimension_names or None
         if len(contiguous) == 0:
-            # pa.FixedShapeTensorArray.from_numpy_ndarray rejects a 0-length ndarray. An empty range
-            # read, for example read_steps(n, n), produces a 0-length ndarray. So the code builds the
-            # empty tensor array from storage instead.
             tensor_type = pa.fixed_shape_tensor(value_type, spec.value_shape, dim_names=dim_names)
             storage = pa.FixedSizeListArray.from_arrays(pa.array([], type=value_type), int(np.prod(spec.value_shape)))
             return pa.FixedShapeTensorArray.from_storage(tensor_type, storage)
