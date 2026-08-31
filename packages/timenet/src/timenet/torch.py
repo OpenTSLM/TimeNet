@@ -9,7 +9,6 @@ from collections.abc import Callable
 from typing import Any
 
 from jaxtyping import Shaped
-import pyarrow as pa
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -94,10 +93,7 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
             "read it via TimeSeries.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
-        arr = ts.to_arrow()
-        dict_values = arr.dictionary.to_pylist()
-        sorted_dict = sorted(dict_values)
-        old_to_new = pa.array([sorted_dict.index(v) for v in dict_values], type=pa.int32())
-        stable = old_to_new.take(arr.indices)
-        return torch.from_numpy(stable.to_numpy(zero_copy_only=False).copy()).to(torch.int64)
+        code_to_index = {label: i for i, label in enumerate(ts.spec.categories)}
+        codes = [code_to_index[label] for label in ts.to_arrow().to_pylist()]
+        return torch.tensor(codes, dtype=torch.int64)
     return torch.from_numpy(ts.to_numpy().copy())

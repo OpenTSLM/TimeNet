@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -400,6 +401,8 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
+        if ts.spec.dtype == "enum":
+            _validate_enum_values(ts.spec, values.to_pylist())
         if ts.spec.dtype not in {"str", "enum"}:
             as_numpy = (
                 values.to_numpy_ndarray()

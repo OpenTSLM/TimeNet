@@ -262,6 +262,7 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                     else None
                 ),
                 "dtype": spec.dtype,
+                "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
             }
@@ -290,6 +291,7 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 unit_value=ureg.Unit(entry["unit_value"]),
                 data_source=_data_source(entry.get("data_source")),
                 dtype=entry.get("dtype", "float32"),
+                categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),
                 dimension_names=tuple(entry.get("dimension_names", ())),
             )

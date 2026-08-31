@@ -26,19 +26,34 @@ SUPPORTED_VALUE_DTYPES = frozenset(
 )
 
 
-def _validate_dtype(dtype: str) -> None:
-    """Validate a spec dtype tag.
+def _validate_dtype(dtype: str, categories: tuple[str, ...]) -> None:
+    """Validate a spec dtype tag and its categories codebook.
 
-    ``"str"`` and ``"enum"`` name string-kind values and are not NumPy dtypes. Every other dtype
-    must be a supported NumPy scalar dtype written in its canonical form.
+    ``"str"`` and ``"enum"`` are string-kind values, not NumPy dtypes. An ``"enum"`` dtype carries
+    its ordered category labels in ``categories``: non-empty, unique, non-empty strings. Every other
+    dtype must not declare categories.
 
     Args:
         dtype: The spec's dtype tag.
+        categories: The ordered codebook, empty for every dtype except ``"enum"``.
 
     Raises:
-        TimeFValidationError: If ``dtype`` is not a supported scalar dtype.
+        TimeFValidationError: If ``dtype`` is unsupported, or ``categories`` is unusable for an
+            enum or set on a non-enum dtype.
     """
-    if dtype in {"str", "enum"}:
+    if dtype == "enum":
+        if not categories:
+            raise TimeFValidationError(
+                f"TimeSeriesSpec.categories must be non-empty for dtype {dtype!r}, got {categories!r}"
+            )
+        if any(not isinstance(name, str) or not name for name in categories):
+            raise TimeFValidationError(f"TimeSeriesSpec.categories must be non-empty strings, got {categories!r}")
+        if len(set(categories)) != len(categories):
+            raise TimeFValidationError(f"TimeSeriesSpec.categories must be unique, got {categories!r}")
+        return
+    if categories:
+        raise TimeFValidationError(f"TimeSeriesSpec.categories is only for dtype 'enum', got dtype={dtype!r}")
+    if dtype == "str":
         return
     try:
         normalized_dtype = np.dtype(dtype).name
@@ -91,6 +106,8 @@ class TimeSeriesSpec:
     """Origin that produced this modality, if known."""
     dtype: str = "float32"
     """Value dtype: a NumPy scalar dtype, ``"str"`` for text, or ``"enum"`` for a categorical value."""
+    categories: tuple[str, ...] = ()
+    """Ordered codebook for ``dtype="enum"``. Empty for every other dtype."""
     value_shape: tuple[int, ...] = ()
     """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[str, ...] = ()
@@ -116,7 +133,7 @@ class TimeSeriesSpec:
             raise TimeFValidationError(
                 f"TimeSeriesSpec.spec_type must not be one of {sorted(_RESERVED_SPEC_TYPES)}, got {self.spec_type!r}"
             )
-        _validate_dtype(self.dtype)
+        _validate_dtype(self.dtype, self.categories)
         if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in self.value_shape):
             raise TimeFValidationError(
                 f"TimeSeriesSpec.value_shape dimensions must be positive integers, got {self.value_shape!r}"

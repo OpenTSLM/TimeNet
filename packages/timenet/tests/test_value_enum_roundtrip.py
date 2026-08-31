@@ -24,12 +24,13 @@ from timenet.writer import TimeFWriter
 pytestmark = pytest.mark.value_dtypes
 
 
-def _spec() -> TimeSeriesSpec:
+def _spec(categories: tuple[str, ...] = ("awake", "light", "deep", "rem")) -> TimeSeriesSpec:
     return TimeSeriesSpec(
         spec_type="sleep_stage",
         name="Sleep stage",
         unit_value=ureg.dimensionless,
         dtype="enum",
+        categories=categories,
     )
 
 
@@ -74,6 +75,50 @@ def _write(tmp_path: Path, dataset: TimeFDataset, **writer_kwargs) -> Path:
 def test_enum_spec_construction():
     spec = _spec()
     assert spec.dtype == "enum"
+    assert spec.categories == ("awake", "light", "deep", "rem")
+
+
+def test_enum_spec_rejects_empty_categories():
+    with pytest.raises(TimeFValidationError, match="must be non-empty"):
+        TimeSeriesSpec(
+            spec_type="stage",
+            name="s",
+            unit_value=ureg.dimensionless,
+            dtype="enum",
+        )
+
+
+def test_enum_spec_rejects_duplicates():
+    with pytest.raises(TimeFValidationError, match="must be unique"):
+        TimeSeriesSpec(
+            spec_type="stage",
+            name="s",
+            unit_value=ureg.dimensionless,
+            dtype="enum",
+            categories=("a", "b", "a"),
+        )
+
+
+def test_non_enum_rejects_categories():
+    with pytest.raises(TimeFValidationError, match="only for dtype 'enum'"):
+        TimeSeriesSpec(
+            spec_type="hr",
+            name="h",
+            unit_value=ureg.dimensionless,
+            dtype="float32",
+            categories=("a",),
+        )
+
+
+def test_enum_rejects_values_outside_codebook():
+    spec = _spec()
+    with pytest.raises(TimeFValidationError, match="outside its categories"):
+        TimeSeries.from_values(
+            ["awake", "unknown"],
+            spec=spec,
+            channel="stage",
+            time_axis=RegularAxis.from_rate_hz(1),
+        )
 
 
 def test_enum_round_trips_labels(tmp_path):
@@ -95,11 +140,12 @@ def test_enum_shard_leaf_is_dictionary(tmp_path):
     assert leaf.value_type == pa.string()
 
 
-def test_enum_manifest_records_dtype(tmp_path):
+def test_enum_manifest_records_dtype_and_categories(tmp_path):
     version_dir = _write(tmp_path, _dataset(["awake", "deep"]))
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     spec = manifest.schema.time_series_specs[0]
     assert spec.dtype == "enum"
+    assert spec.categories == ("awake", "light", "deep", "rem")
 
 
 def test_enum_read_range_returns_labels(tmp_path):
@@ -125,7 +171,7 @@ def test_enum_multi_shard_different_value_subsets(tmp_path):
     labels, so the per-shard dictionaries differ. Reading back must still produce correct labels.
     """
     labels = ["awake"] * 20 + ["deep"] * 20 + ["rem"] * 20 + ["light"] * 20
-    dataset = _dataset(labels, n_samples=4)
+    dataset = _dataset(labels, n_samples=4)  # default categories cover all four labels
     version_dir = _write(
         tmp_path,
         dataset,
@@ -194,7 +240,7 @@ def test_enum_streaming_write_read(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    spec = _spec()
+    spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
     for i, labels in enumerate(samples_labels):
         ts = TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
         dataset.add_sample(time_series=(ts,), sample_id=f"s-{i}")
@@ -226,27 +272,27 @@ def test_torch_maps_enum_to_integer_codes():
     codes = item["series"][0]
     assert codes.dtype == torch.int64
     assert len(codes) == 4
+    assert codes.tolist() == [0, 2, 3, 0]
 
 
 def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     """Shard 1 encodes only ["a", "b", "c"], shard 2 encodes only ["c", "d", "e"]. After reading,
-    the dictionary must be unified so "c" has one consistent index, and the torch bridge produces
-    stable integer codes.
+    the torch bridge produces stable integer codes from the codebook order.
     """
     pytest.importorskip("torch")
     from timenet.torch import _series_tensor  # noqa: PLC0415
 
+    spec = _spec(categories=("a", "b", "c", "d", "e"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/enum-cross",
             dataset_version=Version(1, 0, 0),
             name="Cross-shard enum",
-            description="Tests dictionary unification across shards.",
+            description="Tests codebook-based indices across shards.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
-    spec = _spec()
     ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
     ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
     dataset.add_sample(time_series=(ts1,), sample_id="s-0")

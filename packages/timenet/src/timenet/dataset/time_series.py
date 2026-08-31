@@ -1,6 +1,6 @@
 """The :class:`TimeSeries` reference type: one logical stream with a lazy Arrow loader."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import assert_never
 
@@ -11,6 +11,28 @@ import pyarrow as pa
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
+
+
+def _validate_enum_values(
+    spec: TimeSeriesSpec,
+    values: Iterable[object],
+) -> None:
+    """Reject enum values outside the spec's codebook.
+
+    Args:
+        spec: The series' spec with its ``categories``.
+        values: The label values to check.
+
+    Raises:
+        TimeFValidationError: If any value is not in ``spec.categories``.
+    """
+    allowed = set(spec.categories)
+    unknown = {v for v in values if v not in allowed}
+    if unknown:
+        raise TimeFValidationError(
+            f"enum series for {spec.spec_type!r} has values outside its categories "
+            f"({list(spec.categories)!r}): {sorted(unknown, key=str)}"
+        )
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -126,6 +148,7 @@ class TimeSeries:
             The constructed :class:`TimeSeries`.
         """
         if spec.dtype == "enum":
+            _validate_enum_values(spec, values)
             array = pa.array(values, type=pa.string()).dictionary_encode()
         elif spec.dtype == "str":
             array = pa.array(values)
@@ -175,6 +198,7 @@ class TimeSeries:
                 value.
         """
         if spec.dtype == "enum":
+            _validate_enum_values(spec, values)
             array = pa.array(values, type=pa.string()).dictionary_encode()
         elif spec.dtype == "str":
             array = pa.array(values)
