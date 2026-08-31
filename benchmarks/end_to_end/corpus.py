@@ -113,15 +113,22 @@ def _scalar_series(
     )
 
 
-def _nonfloat_series(name: str, dtype: str, values: tuple[str, ...] | np.ndarray, scale: int) -> TimeSeries:
+def _nonfloat_series(
+    name: str,
+    dtype: str,
+    values: tuple[str, ...] | np.ndarray,
+    scale: int,
+    categories: tuple[str, ...] = (),
+) -> TimeSeries:
     """Construct one portable scalar non-float series, shareable by both backends.
 
     Args:
         name: The modality and channel tag.
-        dtype: A scalar dtype both values backends can store (int/bool/float64/str).
-        values: Deterministic per-series values. A ``str`` dtype takes a tuple of label strings;
-            every other dtype takes a NumPy array already in the target dtype.
+        dtype: A scalar dtype both values backends can store (int/bool/float64/str/enum).
+        values: Deterministic per-series values. A ``str`` or ``enum`` dtype takes a tuple of
+            label strings; every other dtype takes a NumPy array already in the target dtype.
         scale: Positive step multiplier, repeating each value ``scale`` times.
+        categories: Ordered codebook for ``dtype="enum"``.
 
     Returns:
         The fully described series.
@@ -132,10 +139,13 @@ def _nonfloat_series(name: str, dtype: str, values: tuple[str, ...] | np.ndarray
         unit_value=ureg.dimensionless,
         data_source=_SOURCE,
         dtype=dtype,
+        categories=categories,
     )
-    if dtype == "str":
+    if dtype in {"str", "enum"}:
         labels = [label for label in values for _ in range(scale)]
         array = pa.array(labels, type=pa.string())
+        if dtype == "enum":
+            array = array.dictionary_encode()
     else:
         array = pa.array(np.repeat(np.asarray(values), scale, axis=0))
     return TimeSeries(
@@ -149,11 +159,12 @@ def _nonfloat_series(name: str, dtype: str, values: tuple[str, ...] | np.ndarray
     )
 
 
-_NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray], ...] = (
-    ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16)),
-    ("alarm", "bool", np.array([False, False, True, False, True, False, False, True])),
-    ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64)),
-    ("rhythm", "str", ("normal", "afib", "vt", "normal")),
+_NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
+    ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16), ()),
+    ("alarm", "bool", np.array([False, False, True, False, True, False, False, True]), ()),
+    ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64), ()),
+    ("rhythm", "str", ("normal", "afib", "vt", "normal"), ()),
+    ("activity", "enum", ("walk", "run", "sit", "walk"), ("walk", "run", "sit", "stand")),
 )
 """Portable scalar non-float channels, appended to a dedicated sample."""
 
@@ -363,7 +374,9 @@ def _add_nonfloat_sample(dataset: TimeFDataset, scale: int) -> None:
         scale: Positive step multiplier.
     """
     channels = _NONFLOAT_CHANNELS
-    series = tuple(_nonfloat_series(name, dtype, values, scale) for name, dtype, values in channels)
+    series = tuple(
+        _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in channels
+    )
     sample = dataset.add_sample(
         time_series=series,
         sample_id="sample-nonfloat",

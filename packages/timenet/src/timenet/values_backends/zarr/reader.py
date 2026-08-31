@@ -94,6 +94,10 @@ class ZarrValuesReader(BaseValuesReader):
         total = sum(row["n_values"] for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
+            if spec.dtype == "enum":
+                return pa.DictionaryArray.from_arrays(
+                    pa.array([], type=pa.int32()), pa.array(spec.categories, type=pa.string())
+                )
             empty = np.empty((0, *spec.value_shape), dtype=spec.dtype)
             return _to_arrow(empty, spec)
         runs = _coalesce_runs(rows)
@@ -240,6 +244,10 @@ def _to_arrow(values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec) 
     """
     if spec.dtype == "str":
         return pa.array(values.tolist(), type=pa.string())
+    if spec.dtype == "enum":
+        indices = pa.array(values.ravel().astype(np.int32, copy=False))
+        dictionary = pa.array(spec.categories, type=pa.string())
+        return pa.DictionaryArray.from_arrays(indices, dictionary)
     contiguous = np.ascontiguousarray(values)
     value_type = pa.from_numpy_dtype(np.dtype(spec.dtype))
     if spec.value_shape:
