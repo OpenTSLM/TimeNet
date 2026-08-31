@@ -160,7 +160,7 @@ def test_enum_read_range_returns_labels(tmp_path):
 def test_enum_rejected_on_zarr(tmp_path):
     dataset = _dataset(["awake"])
     with (
-        pytest.raises(TimeFValidationError, match="does not support the str or enum dtype"),
+        pytest.raises(TimeFValidationError, match="does not support the enum dtype"),
         TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer,
     ):
         writer.write()
