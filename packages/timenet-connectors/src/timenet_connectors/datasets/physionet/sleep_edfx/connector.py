@@ -33,9 +33,9 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import TimeInterval
+from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, reader, tables, timeseries
+from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, reader, tables, tasks, timeseries
 from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
@@ -311,6 +311,15 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             sample.add_annotations(sleep_stages)
             sample.add_annotations(recording_metadata)
 
+        # A closed set belongs to the dataset and to no sample, so it is registered rather
+        # than attached.
+        dataset.register_annotations(tasks.build_vocabularies(_ID_PREFIX))
+        # Far more tasks than samples, so the writer streams them rather than holding them.
+        # The source gives a fresh iterator on each call, because the writer walks it twice.
+        dataset.set_task_stream(
+            [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
+            lambda: tasks.iter_tasks(dataset.samples, _ID_PREFIX),
+        )
         return dataset
 
 

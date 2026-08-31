@@ -12,6 +12,7 @@ No task carries a prompt. The release states no question in words.
 
 from collections.abc import Iterator, Sequence
 
+from timenet.dataset import Sample
 from timenet.errors import TimeFFormatError
 from timenet.types import (
     US_PER_S,
@@ -362,3 +363,33 @@ def _one_of(sample_id: str, stated: dict[str, object], key: AnnotationKey, permi
         raise TimeFFormatError(f"{sample_id}: states a {key} of {value!r}, which the release does not write")
 
     return str(value)
+
+
+def iter_tasks(samples: Sequence[Sample], id_prefix: str) -> Iterator[Task]:
+    """Give every task of a build, one recording at a time.
+
+    This reads no file. ``convert`` already read each scoring, and a second read of a
+    hypnogram can disagree with the annotations the samples carry.
+
+    The writer calls the source more than once, so the caller passes a callable that gives a
+    fresh iterator each time.
+
+    Args:
+        samples: The samples of the build, each carrying its annotations.
+        id_prefix: The prefix every id of this connector carries.
+
+    Yields:
+        The epoch tasks of each recording, then its whole-sample tasks.
+
+    Raises:
+        TimeFFormatError: If a scoring cannot be expanded into whole epochs. The message names
+            the recording, because a task is one of hundreds of thousands.
+    """  # noqa: DOC502 (raised by build_epoch_tasks, not directly here)
+    for sample in samples:
+        span_annotations = [one for one in sample.annotations if one.key == AnnotationKey.SLEEP_STAGE]
+        # A whole-sample question comes from an annotation with no span. A test on the key
+        # instead holds only while the keys hold. ``lights_off`` states a fact about the
+        # recording and carries a span, so a key test hands it over.
+        non_span_annotations = [one for one in sample.annotations if one.span is None]
+        yield from build_epoch_tasks(sample.sample_id, id_prefix, span_annotations)
+        yield from build_sample_tasks(sample.sample_id, id_prefix, non_span_annotations, span_annotations)
