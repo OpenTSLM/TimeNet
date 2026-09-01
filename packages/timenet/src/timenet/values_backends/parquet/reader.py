@@ -28,8 +28,9 @@ _ROW_GROUP_CACHE_SIZE = 16  # decoded row groups kept, so one shared by many ser
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     """Return the Arrow type a spec's values should come back as.
 
-    A ``"str"`` dtype reads back as plain text; every other dtype maps through NumPy so the
-    in-memory and stored types match.
+    A ``"str"`` reads back as plain text. An ``"enum"`` reads back as a dictionary array (the shard
+    already stores one). Every other dtype maps through NumPy so the in-memory and stored types
+    match.
 
     Args:
         spec: The series' spec.
@@ -39,6 +40,10 @@ def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     """
     if spec.dtype == "str":
         return pa.string()
+    if spec.dtype == "enum":
+        from timenet.values_backends.parquet.writer import _ENUM_LEAF  # noqa: PLC0415
+
+        return _ENUM_LEAF
     return pa.from_numpy_dtype(np.dtype(spec.dtype))
 
 

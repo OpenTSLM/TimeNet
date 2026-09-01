@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 import numpy as np
+import pyarrow as pa
 
 from benchmarks.end_to_end.corpus import build_corpus
 from timenet.reader import TimeFReader
@@ -129,7 +130,10 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 ).encode()
             )
             for series in sample.time_series:
-                values = np.ascontiguousarray(series.to_numpy())
+                is_text_kind = series.spec.dtype in {"str", "enum"}
+                if is_text_kind:
+                    labels = series.to_arrow().cast(pa.string()).to_pylist()
+                values = np.ascontiguousarray(series.to_numpy()) if not is_text_kind else np.array(labels)
                 digest.update(
                     json.dumps(
                         {
@@ -146,9 +150,6 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                         separators=(",", ":"),
                     ).encode()
                 )
-                # A string/object array exposes only raw pointer bytes via tobytes(), which differ
-                # across processes. Fingerprint string values by their text instead so a str series
-                # (dtype="str") produces a stable digest.
                 if values.dtype == object:
                     digest.update(json.dumps(values.tolist(), sort_keys=False, separators=(",", ":")).encode())
                 else:

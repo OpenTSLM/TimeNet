@@ -72,6 +72,8 @@ def _scalar_bytes(dtype: str) -> int:
     """
     if dtype == "str":
         return np.dtypes.StringDType().itemsize
+    if dtype == "enum":
+        return np.dtype(np.int32).itemsize
     return np.dtype(dtype).itemsize
 
 
@@ -156,11 +158,12 @@ class ZarrValuesBackend(BaseValuesBackend):
         chunk_len = max(1, self._chunk_max_bytes // bytes_per_step)
         shard_len = max(1, (self._shard_target_bytes // bytes_per_step) // chunk_len) * chunk_len
         trailing = ts.spec.value_shape
+        zarr_dtype = "int32" if ts.spec.dtype == "enum" else ts.spec.dtype
         return _ArrayAppender(
             group.create_array(
                 name=array_path,
                 shape=(0, *trailing),
-                dtype=ts.spec.dtype,
+                dtype=zarr_dtype,
                 chunks=(chunk_len, *trailing),
                 shards=(shard_len, *trailing),
                 compressors=codec,
@@ -226,14 +229,7 @@ class ZarrValuesBackend(BaseValuesBackend):
 
         Raises:
             ImportError: If the ``zarr`` extra is not installed.
-            TimeFValidationError: If a spec uses the ``enum`` dtype.
         """
-        enum_spec_types = sorted({ts.spec.spec_type for ts in unique_series if ts.spec.dtype == "enum"})
-        if enum_spec_types:
-            raise TimeFValidationError(
-                "the Zarr values backend does not support the enum dtype (no dictionary layer); "
-                f"use values_backend='parquet' for enum channels: {enum_spec_types}"
-            )
         try:
             import zarr  # noqa: PLC0415
             from zarr.codecs import BloscCname, BloscCodec, BloscShuffle  # noqa: PLC0415
@@ -257,11 +253,13 @@ class ZarrValuesBackend(BaseValuesBackend):
         ordered = sorted(unique_series, key=lambda ts: (ts.spec.spec_type, ts.time_offsets_loader is not None))
         for completed, ts in enumerate(ordered, start=1):
             arrow_values = read_and_validate(ts)
-            values = (
-                arrow_values.to_numpy_ndarray()
-                if isinstance(arrow_values, pa.FixedShapeTensorArray)
-                else arrow_values.to_numpy(zero_copy_only=False)
-            )
+            if ts.spec.dtype == "enum":
+                code_map = {label: i for i, label in enumerate(ts.spec.categories)}
+                values = np.array([code_map[v] for v in arrow_values.to_pylist()], dtype=np.int32)
+            elif isinstance(arrow_values, pa.FixedShapeTensorArray):
+                values = arrow_values.to_numpy_ndarray()
+            else:
+                values = arrow_values.to_numpy(zero_copy_only=False)
             arrow_time_offsets = read_time_offsets(ts)
             spec_type = ts.spec.spec_type
             stores_time_offsets = arrow_time_offsets is not None

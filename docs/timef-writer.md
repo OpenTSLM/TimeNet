@@ -71,8 +71,8 @@ annotations, tasks, and the time-series index are always Parquet. The manifest r
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<{dtype}>` rows. Each file also has a `list<int64>` `time_offsets_us` column, null unless the series stores per-value time offsets. One shard carries one modality, so its `values` element type is the spec's dtype. `str` stores text and auto-selects the dictionary encoding. The backend supports scalar values only. | `(shard path, row group, row offset)` |
-| `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. The backend stores every scalar dtype except `str`. | `(array path, step start, –)` |
+| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<{dtype}>` rows. Each file also has a `list<int64>` `time_offsets_us` column, null unless the series stores per-value time offsets. One shard carries one modality, so its `values` element type is the spec's dtype. `str` stores text and `enum` stores its category codebook, both with the dictionary encoding. The backend supports scalar values only. | `(shard path, row group, row offset)` |
+| `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. The backend stores every scalar dtype except `str`. An `enum` stores int32 codebook indices; the reader reconstructs the dictionary array from the spec's categories. | `(array path, step start, –)` |
 
 Each backend chunks the data in its own way. Parquet needs the logical `chunk_max_bytes` split to
 pack series into row groups. Zarr chunks the storage itself. As a result, its index carries one
@@ -86,11 +86,12 @@ imports the extra. A Zarr series can hold embeddings, pose tensors, spectrogram 
 sequences. Recordings can have different durations. Every series that shares a `spec_type` must have
 the same dtype and trailing shape. Parquet deliberately rejects N-D specs, which stay on Zarr. The
 Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer types,
-`bool`, and `str`. The Zarr backend stores every scalar dtype **except `str`**: it has no dictionary
-layer, so string channels inflate on disk and read slowly, and the writer rejects them. A dataset's
+`bool`, `str`, and `enum`. The Zarr backend stores every scalar dtype **except `str`**: it
+has no dictionary layer, so free-form string channels inflate on disk and read slowly, and the writer
+rejects them. An `enum` channel stores int32 codebook indices compactly. A dataset's
 values plane uses **one** backend for the whole dataset (the manifest's single `values_backend`
-field), so a dataset with a `str` channel must be entirely Parquet, and a dataset needing N-D
-tensors must be entirely Zarr. They cannot be mixed per channel.
+field), so a dataset with a `str` channel must be entirely Parquet, and a dataset needing
+N-D tensors must be entirely Zarr. They cannot be mixed per channel.
 A [copy-on-write edit](#copy-on-write-edits) keeps the backend of
 the base version, unless overridden.
 

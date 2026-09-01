@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -88,7 +89,7 @@ class TimeFWriter:
 
         Args:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
-            dataset: The populated dataset. Call ``derive_schema()`` on it before writing.
+            dataset: The populated dataset. The writer derives the schema automatically if needed.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             control_shard_target_bytes: Split a control table (samples, annotations, index, tasks) into
                 a new part once the in-memory Arrow size of the emitted rows exceeds this.
@@ -199,14 +200,9 @@ class TimeFWriter:
     # ---- lifecycle -----------------------------------------------------------------------------
 
     def write(self) -> None:
-        """Serialize every artifact except the manifest into the staging directory.
-
-        Raises:
-            TimeFValidationError: If the caller never derived the schema, a shared annotation id is
-                not field-equal across samples, or a series array violates the per-series contract.
-        """
+        """Serialize every artifact except the manifest into the staging directory."""
         if self._dataset.schema is None:
-            raise TimeFValidationError("call dataset.derive_schema() before writing")
+            self._dataset.derive_schema()
         self._validate_shared_annotations()
         self._resolve_id_types()
 
@@ -383,32 +379,38 @@ class TimeFWriter:
                 non-finite inexact values, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
-        expected_type = pa.string() if ts.spec.dtype == "str" else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
-        if ts.spec.value_shape:
-            valid_type = (
-                isinstance(values, pa.FixedShapeTensorArray)
-                and values.type.value_type == expected_type
-                and tuple(values.type.shape) == ts.spec.value_shape
-            )
+        if ts.spec.dtype == "enum":
+            valid_type = isinstance(values, pa.DictionaryArray) and values.type.value_type == pa.string()
         else:
-            valid_type = (
-                isinstance(values, pa.Array)
-                and not isinstance(values, pa.ExtensionArray)
-                and values.type == expected_type
-            )
+            expected_type = pa.string() if ts.spec.dtype == "str" else pa.from_numpy_dtype(np.dtype(ts.spec.dtype))
+            if ts.spec.value_shape:
+                valid_type = (
+                    isinstance(values, pa.FixedShapeTensorArray)
+                    and values.type.value_type == expected_type
+                    and tuple(values.type.shape) == ts.spec.value_shape
+                )
+            else:
+                valid_type = (
+                    isinstance(values, pa.Array)
+                    and not isinstance(values, pa.ExtensionArray)
+                    and values.type == expected_type
+                )
         if not valid_type:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r} must load dtype={ts.spec.dtype}, "
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        as_numpy = (
-            values.to_numpy_ndarray()
-            if isinstance(values, pa.FixedShapeTensorArray)
-            else values.to_numpy(zero_copy_only=False)
-        )
-        if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
-            raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
+        if ts.spec.dtype == "enum":
+            _validate_enum_values(ts.spec, values.to_pylist())
+        if ts.spec.dtype not in {"str", "enum"}:
+            as_numpy = (
+                values.to_numpy_ndarray()
+                if isinstance(values, pa.FixedShapeTensorArray)
+                else values.to_numpy(zero_copy_only=False)
+            )
+            if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
+                raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "

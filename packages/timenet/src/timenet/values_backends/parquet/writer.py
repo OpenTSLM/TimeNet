@@ -56,7 +56,7 @@ def _bytes_per_value(spec: TimeSeriesSpec, values: pa.Array) -> int:
     Returns:
         The uncompressed bytes one value costs.
     """
-    if spec.dtype == "str":
+    if spec.dtype in {"str", "enum"}:
         return max(1, values.nbytes // max(1, len(values)))
     return np.dtype(spec.dtype).itemsize
 
@@ -79,6 +79,11 @@ def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
     return bytes_per_value + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
 
 
+#: Arrow leaf type for ``"enum"`` values. Each shard carries a self-contained dictionary so it stays
+#: readable on its own.
+_ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())
+
+
 class ParquetValuesBackend(BaseValuesBackend):
     """The default values backend. It streams series into rotating Parquet shards of typed chunks."""
 
@@ -92,10 +97,12 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Returns:
             The shard Arrow schema with ``values`` as ``list<element>`` for that dtype. A ``"str"``
-            dtype stores variable-width text as ``string``.
+            dtype stores variable-width text; an ``"enum"`` dtype uses a dictionary leaf.
         """
         if dtype == "str":
             return shard_schema(self._id_types, pa.string())
+        if dtype == "enum":
+            return shard_schema(self._id_types, _ENUM_LEAF)
         return shard_schema(self._id_types, pa.from_numpy_dtype(np.dtype(dtype)))
 
     def __init__(self, config: ParquetValuesConfig) -> None:
@@ -190,6 +197,9 @@ class ParquetValuesBackend(BaseValuesBackend):
         forced = self._forced_encoding
         if dtype == "bool":
             return ValueEncoding.PLAIN
+        if dtype == "enum":
+            _LOG.info("values encoding for %r: dictionary (enum)", spec_type)
+            return ValueEncoding.DICTIONARY
         if forced is not None:
             if forced is ValueEncoding.BYTE_STREAM_SPLIT and not encodings.byte_stream_split_supported(dtype):
                 raise TimeFValidationError(
@@ -436,6 +446,8 @@ def _plan_chunks(
     chunks: list[_Chunk] = []
     for chunk_idx, start in enumerate(range(0, len(values), max_values)):
         sub = values.slice(start, max_values)
+        if ts.spec.dtype == "enum":
+            sub = sub.cast(_ENUM_LEAF)
         chunks.append(
             _Chunk(
                 time_series_id=ts.time_series_id,

@@ -19,7 +19,7 @@ def test_portable_corpus_covers_scenarios_connector_patterns_and_tasks():
     for spec in schema.time_series_specs:
         assert spec.value_shape == ()
         if spec.dtype != "float32":
-            assert spec.dtype in {"int16", "bool", "float64", "str"}
+            assert spec.dtype in {"int16", "bool", "float64", "str", "enum"}
 
 
 def test_rich_corpus_adds_varied_dtypes_and_shapes():
