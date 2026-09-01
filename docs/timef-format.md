@@ -50,7 +50,7 @@ TimeF splits a dataset into a control plane and a values plane.
 The **control plane** is the sample, annotation, task, and index tables. These are always Parquet,
 and they do not depend on how the values are stored.
 
-The **values plane** is the float32 waveform of every series. This is the one part whose storage is
+The **values plane** is the typed waveform of every series. This is the one part whose storage is
 swappable. The manifest's `values_backend` field names the backend: `parquet` (the default,
 rotating shards) or `zarr` (a chunked array store). The control plane stays the same either way.
 
@@ -153,7 +153,7 @@ rotating Parquet shards.
 | `spec_type`, `channel` | string | The series' modality and channel. |
 | `chunk_idx` | int32 | The chunk's position within the series. |
 | `n_values` | int32 | How many values the chunk holds. |
-| `values` | list of float32 | The chunk's values. |
+| `values` | list of the spec dtype | The chunk's values. A `"str"` chunk stores text. |
 | `time_offsets_us` | list of int64 | Per-value time offsets, for an irregular axis. Null for a regular one. |
 
 The writer builds the shards in a fixed order. It dedupes series by `time_series_id`, sorts them by
@@ -201,15 +201,17 @@ re-stores only the pages that changed on a deduplicating backend such as Xet.
 ### Choosing the values encoding
 
 No single encoding is best for every waveform, so the writer measures the data instead of pinning
-one. It samples the values it has already buffered for a modality, counts the distinct float32 bit
-patterns, and picks:
+one. It samples the values it has already buffered for a modality, counts the distinct values (bit
+patterns for floats), and picks:
 
 - **dictionary** at or below **65,536** distinct values,
-- **BYTE_STREAM_SPLIT** above that.
+- **BYTE_STREAM_SPLIT** above that for floats,
+- **plain** above that for strings and integers (byte-plane splitting has no
+  meaning for these types).
 
-`plain` is never chosen automatically. It stays reachable as a manual override. The writer takes one
-decision per `spec_type`, before that modality's first shard opens. The decision reads only buffered
-data, so re-building an unchanged source reaches the same encoding and writes the same bytes.
+Bool channels always use plain. The writer takes one decision per `spec_type`, before that
+modality's first shard opens. The decision reads only buffered data, so re-building an unchanged
+source reaches the same encoding and writes the same bytes.
 
 The rule follows the measurements. On real data, at zstd level 3, the values column measures:
 

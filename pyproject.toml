@@ -97,6 +97,7 @@ addopts = ["--import-mode=importlib", "--strict-markers"]
 testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
+    "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
 ]
 
 [tool.ty.environment]

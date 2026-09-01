@@ -243,3 +243,72 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     scalar_empty = series["sine"].read_steps(6, 6)  # start == total
     assert len(scalar_empty) == 0
     assert scalar_empty.type == pa.float32()
+
+
+def test_str_round_trip(tmp_path):
+    spec = TimeSeriesSpec(
+        spec_type="stage",
+        name="Stage",
+        unit_value=ureg.dimensionless,
+        dtype="str",
+    )
+    labels = ["normal", "afib", "vt", "wörld", ""]
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="t/str",
+            dataset_version=Version(1, 0, 0),
+            name="Str",
+            description="Str series on the Zarr backend.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(
+        time_series=(
+            TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1)),
+        ),
+        sample_id="sample-0",
+    )
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
+        writer.write()
+    version_dir = tmp_path / "t/str/1.0.0"
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = next(iter(reader.iter_samples())).time_series[0]
+        assert restored.to_arrow().type == pa.string()
+        assert restored.to_arrow().to_pylist() == labels
+
+
+def test_str_empty_range_read(tmp_path):
+    spec = TimeSeriesSpec(
+        spec_type="stage",
+        name="Stage",
+        unit_value=ureg.dimensionless,
+        dtype="str",
+    )
+    labels = ["a", "b", "c"]
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="t/str-empty",
+            dataset_version=Version(1, 0, 0),
+            name="Str empty range",
+            description="Empty range read for str.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(
+        time_series=(
+            TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1)),
+        ),
+        sample_id="sample-0",
+    )
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
+        writer.write()
+    version_dir = tmp_path / "t/str-empty/1.0.0"
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        ts = next(iter(reader.iter_samples())).time_series[0]
+        empty = ts.read_steps(3, 3)
+        assert len(empty) == 0
+        assert empty.type == pa.string()

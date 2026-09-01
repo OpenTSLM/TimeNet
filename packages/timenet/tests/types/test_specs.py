@@ -136,3 +136,13 @@ def test_data_source_rejects_empty_or_non_string_identifiers(dst, name):
 def test_spec_rejects_a_non_data_source_data_source():
     with pytest.raises(TimeFValidationError, match="must be a DataSource or None"):
         TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless, data_source="acme")  # ty: ignore[invalid-argument-type]
+
+
+def test_str_dtype_validates():
+    assert _ecg_spec(dtype="str").dtype == "str"
+
+
+def test_pickle_round_trips_str_dtype():
+    spec = _ecg_spec(dtype="str")
+    restored = pickle.loads(pickle.dumps(spec))
+    assert restored == spec

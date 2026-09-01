@@ -1,10 +1,10 @@
-"""The default values backend. It streams ``list<float32>`` chunks into rotating Parquet shards.
+"""The default values backend. It streams typed chunks into rotating Parquet shards.
 
 Each shard uses zstd compression and holds one modality. Each shard carries the values encoding
 chosen for its ``spec_type`` (see :mod:`timenet.writer.value_encoding`). The backend-neutral
-time-series index records each chunk's placement. This record has a ``chunk_file`` plus a
-:class:`~timenet.values_backends.writer.ChunkDataIndex`. For Parquet, this index gives the shard
-path, the row group (``major_idx``), and the row offset (``minor_idx``).
+time-series index records each chunk's placement. This record supplies a ``chunk_file`` plus a
+:class:`~timenet.values_backends.writer.ChunkDataIndex`. For Parquet, this index gives the
+row group (``major_idx``) and the row offset (``minor_idx``).
 """
 
 from collections.abc import Callable
@@ -18,6 +18,7 @@ from timenet.dataset import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE, part_path
 from timenet.format.schemas import IdCodec, shard_schema
+from timenet.types import TimeSeriesSpec
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.writer import (
@@ -38,32 +39,64 @@ from timenet.writer.value_encoding import (
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
-_BYTES_PER_FLOAT32 = 4
 _BYTES_PER_TIME_OFFSET = 8
 _LOG = logging.getLogger(__name__)
 
 
-def _step_bytes(stores_time_offsets: bool) -> int:
+def _bytes_per_value(spec: TimeSeriesSpec, values: pa.Array) -> int:
+    """Return the bytes one stored value costs, used to size chunks, row groups, and shards.
+
+    Fixed-width dtypes charge their declared itemsize. A string's width is data-dependent, so its
+    buffer bytes per element is the honest budget.
+
+    Args:
+        spec: The series' spec, for its dtype.
+        values: The series' values, whose buffer size fixes a string's per-value cost.
+
+    Returns:
+        The uncompressed bytes one value costs.
+    """
+    if spec.dtype == "str":
+        return max(1, values.nbytes // max(1, len(values)))
+    return np.dtype(spec.dtype).itemsize
+
+
+def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
     """Return the uncompressed bytes that one step of a series costs.
 
-    An irregular series stores an int64 time offset next to each float32 value. So its step costs
-    three times more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
-    use this unit as their budget. If the code charges every series at the float32 rate, an
-    irregular series will overrun each target by three times.
+    An irregular series stores an int64 time offset next to each value. So its step costs eight
+    bytes more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
+    use this unit as their budget. If the code charged every series at the float32 rate, an
+    irregular series would overrun each target by three times.
 
     Args:
         stores_time_offsets: True if the series stores one time offset for each value.
+        bytes_per_value: The bytes one value costs for this series' dtype.
 
     Returns:
         The number of bytes for one step.
     """
-    return _BYTES_PER_FLOAT32 + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
+    return bytes_per_value + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
 
 
 class ParquetValuesBackend(BaseValuesBackend):
-    """The default values backend. It streams series into rotating Parquet shards of ``list<float32>`` chunks."""
+    """The default values backend. It streams series into rotating Parquet shards of typed chunks."""
 
     name = ValuesBackend.PARQUET
+
+    def _schema_for(self, dtype: str) -> pa.Schema:
+        """Return the shard schema whose values element matches a spec dtype.
+
+        Args:
+            dtype: The spec's dtype tag.
+
+        Returns:
+            The shard Arrow schema with ``values`` as ``list<element>`` for that dtype. A ``"str"``
+            dtype stores variable-width text as ``string``.
+        """
+        if dtype == "str":
+            return shard_schema(self._id_types, pa.string())
+        return shard_schema(self._id_types, pa.from_numpy_dtype(np.dtype(dtype)))
 
     def __init__(self, config: ParquetValuesConfig) -> None:
         """Configure the Parquet values backend.
@@ -73,7 +106,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         """
         self._staging_dir = config.staging_dir
         self._codec = config.codec
-        self._shard_schema = shard_schema(config.id_types)
+        self._id_types = config.id_types
         self._shard_target_bytes = config.shard_target_bytes
         self._row_group_target_bytes = config.row_group_target_bytes
         self._chunk_max_bytes = config.chunk_max_bytes
@@ -95,7 +128,7 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Args:
             unique_series: The deduped, sorted series to serialize.
-            read_and_validate: Loads and validates one series' float32 values.
+            read_and_validate: Loads and validates one series' values against its dtype and shape.
             read_time_offsets: Loads an irregular series' int64 time offsets. Returns ``None`` for
                 other shapes.
             on_series_done: Progress callback. This method calls it with ``(completed, total)``
@@ -108,13 +141,13 @@ class ParquetValuesBackend(BaseValuesBackend):
             ``spec_type``.
 
         Raises:
-            TimeFValidationError: If a spec uses an N-D shape or a dtype other than float32.
+            TimeFValidationError: If a spec uses an N-D shape.
         """
-        unsupported = [ts.spec.spec_type for ts in unique_series if ts.spec.value_shape or ts.spec.dtype != "float32"]
+        unsupported = [ts.spec.spec_type for ts in unique_series if ts.spec.value_shape]
         if unsupported:
             raise TimeFValidationError(
-                "the Parquet values backend currently supports scalar float32 series only; "
-                f"use values_backend='zarr' for N-D/dtyped specs: {sorted(set(unsupported))}"
+                "the Parquet values backend currently supports scalar series only; "
+                f"use values_backend='zarr' for N-D specs: {sorted(set(unsupported))}"
             )
         stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes, on_file_done)
         total = len(unique_series)
@@ -130,7 +163,7 @@ class ParquetValuesBackend(BaseValuesBackend):
             value_encoding={spec_type: str(encoding) for spec_type, encoding in stream.encodings.items()},
         )
 
-    def encoding_for(self, spec_type: str, buffered: list[pa.Array]) -> ValueEncoding:
+    def encoding_for(self, spec_type: str, dtype: str, buffered: list[pa.Array]) -> ValueEncoding:
         """Return the encoding to use for a modality. Decide it on first sight and log the choice.
 
         The caller passes the values it buffered for the modality's first row group. So the
@@ -142,20 +175,32 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Args:
             spec_type: The modality for this decision. The log line names it.
+            dtype: The modality's values dtype. It fixes the legal encodings: BYTE_STREAM_SPLIT is
+                floats-only.
             buffered: The buffered chunks' values. The backend uses them only the first time a
                 modality appears.
 
         Returns:
-            The forced encoding, if the caller set one. Otherwise, the encoding chosen from the
-            sample.
+            The forced encoding, if the caller set one and it is legal for ``dtype``. Otherwise,
+            the encoding chosen from the sample.
+
+        Raises:
+            TimeFValidationError: If a forced ``byte_stream_split`` targets a non-float dtype.
         """
-        if self._forced_encoding is not None:
-            _LOG.info("values encoding for %r: %s (forced)", spec_type, self._forced_encoding.value)
-            return self._forced_encoding
-        arrays = [np.asarray(values.to_numpy(zero_copy_only=False), dtype=np.float32) for values in buffered]
+        forced = self._forced_encoding
+        if dtype == "bool":
+            return ValueEncoding.PLAIN
+        if forced is not None:
+            if forced is ValueEncoding.BYTE_STREAM_SPLIT and not encodings.byte_stream_split_supported(dtype):
+                raise TimeFValidationError(
+                    f"BYTE_STREAM_SPLIT is not supported for dtype {dtype!r} on spec {spec_type!r}"
+                )
+            _LOG.info("values encoding for %r: %s (forced)", spec_type, forced.value)
+            return forced
+        arrays = [np.asarray(values.to_numpy(zero_copy_only=False)) for values in buffered]
         sample = sample_values(arrays)
         distinct = distinct_bit_patterns(sample)
-        encoding = encoding_for_cardinality(distinct)
+        encoding = encoding_for_cardinality(distinct, dtype=dtype)
         _LOG.info(
             "values encoding for %r: %s (auto; %d distinct in %d sampled values, dictionary up to %d)",
             spec_type,
@@ -219,6 +264,8 @@ class _Chunk:
     channel: str
     chunk_idx: int
     n_values: int
+    dtype: str
+    bytes_per_value: int
     values: pa.Array
     time_offsets: pa.Array | None = None
     """This chunk's int64 time offsets, sliced at the same boundary as its values, or ``None``."""
@@ -226,7 +273,7 @@ class _Chunk:
     @property
     def n_bytes(self) -> int:
         """Uncompressed bytes this chunk contributes to the row-group and shard budgets."""
-        return self.n_values * _step_bytes(self.time_offsets is not None)
+        return self.n_values * _step_bytes(self.time_offsets is not None, self.bytes_per_value)
 
 
 class _ShardStream:
@@ -261,6 +308,7 @@ class _ShardStream:
         self._shard_target_bytes = shard_target_bytes
         self._on_file_done = on_file_done
         self._core: RotatingPartWriter | None = None
+        self._schema: pa.Schema | None = None
         self._spec_type: str | None = None
         self._shard_base = 0
         self._buffer: list[_Chunk] = []
@@ -295,11 +343,14 @@ class _ShardStream:
         """Open a rotating-part writer for the buffered modality. Choose its encoding on first sight.
 
         Returns:
-            The rotating-part writer bound to this modality's encoding and shard-index offset.
+            The rotating-part writer bound to this modality's encoding, schema, and shard-index offset.
         """
         spec_type = self._buffer[0].spec_type
+        dtype = self._buffer[0].dtype
         if spec_type not in self.encodings:
-            self.encodings[spec_type] = self._backend.encoding_for(spec_type, [chunk.values for chunk in self._buffer])
+            self.encodings[spec_type] = self._backend.encoding_for(
+                spec_type, dtype, [chunk.values for chunk in self._buffer]
+            )
         encoding = self.encodings[spec_type]
         base = self._shard_base
 
@@ -307,9 +358,10 @@ class _ShardStream:
             self._backend._verify_values_encoding(rel_path, encoding)
             self._on_file_done(base + parts_written)
 
+        self._schema = self._backend._schema_for(dtype)
         self._core = RotatingPartWriter(
             self._backend._staging_dir,
-            self._backend._shard_schema,
+            self._schema,
             lambda index: part_path(SHARD_TEMPLATE, base + index),
             part_target_bytes=self._shard_target_bytes,
             parquet_kwargs=self._backend._shard_parquet_kwargs(encoding),
@@ -325,6 +377,7 @@ class _ShardStream:
         self._shard_paths.extend(self._core.parts)
         self._shard_base += len(self._core.parts)
         self._core = None
+        self._schema = None
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -332,7 +385,7 @@ class _ShardStream:
         if sum(chunk.n_values for chunk in self._buffer) >= MAX_ELEMENTS_PER_ROW_GROUP:
             raise TimeFValidationError("row group would exceed the 2^31 element limit")
         core = self._core if self._core is not None else self._open_modality()
-        table = _shard_table(self._buffer, self._backend._shard_schema, self._backend._codec)
+        table = _shard_table(self._buffer, self._schema, self._backend._codec)
         shard_path, row_group = core.write(table, self._buffer_bytes)
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(
@@ -371,14 +424,15 @@ def _plan_chunks(
 
     Args:
         ts: Series metadata used for chunk identity and timing.
-        values: Validated float32 values.
+        values: Validated values in the spec's canonical Arrow type.
         chunk_max_bytes: Maximum uncompressed bytes in one chunk.
         time_offsets: Validated int64 time offsets, one per value, or ``None``.
 
     Returns:
         Logical chunks in series order.
     """
-    max_values = max(1, chunk_max_bytes // _step_bytes(time_offsets is not None))
+    bytes_per_value = _bytes_per_value(ts.spec, values)
+    max_values = max(1, chunk_max_bytes // _step_bytes(time_offsets is not None, bytes_per_value))
     chunks: list[_Chunk] = []
     for chunk_idx, start in enumerate(range(0, len(values), max_values)):
         sub = values.slice(start, max_values)
@@ -389,6 +443,8 @@ def _plan_chunks(
                 channel=ts.channel,
                 chunk_idx=chunk_idx,
                 n_values=len(sub),
+                dtype=ts.spec.dtype,
+                bytes_per_value=bytes_per_value,
                 values=sub,
                 time_offsets=None if time_offsets is None else time_offsets.slice(start, max_values),
             )
@@ -418,13 +474,14 @@ def _time_offsets_column(chunks: list[pa.Array | None]) -> pa.ListArray:
 
 
 def _values_column(chunks: list[pa.Array]) -> pa.ListArray:
-    """Pack per-chunk float32 arrays into one ``list<float32>`` column without boxing to Python floats.
+    """Pack per-chunk arrays into one ``list<element>`` column without boxing to Python values.
 
     Args:
-        chunks: The per-row float32 value arrays (one per chunk in the row group).
+        chunks: The per-row element arrays, one per chunk in the row group. Each array has the
+            modality's value type.
 
     Returns:
-        A ``list<float32>`` array with one row per chunk.
+        A ``list<element>`` array with one row per chunk.
     """
     offsets = np.zeros(len(chunks) + 1, dtype=np.int32)
     offsets[1:] = np.cumsum([len(chunk) for chunk in chunks])

@@ -5,9 +5,19 @@ torch = pytest.importorskip("torch")
 
 from torch.utils.data import Dataset  # noqa: E402
 
+from timenet.dataset import TimeFDataset, TimeSeries  # noqa: E402
+from timenet.dataset.axis import RegularAxis  # noqa: E402
 from timenet.errors import TimeFValidationError  # noqa: E402
 from timenet.testing import make_dataset  # noqa: E402
 from timenet.torch import TimeFTorchDataset  # noqa: E402
+from timenet.types import (  # noqa: E402
+    DatasetMetadata,
+    Domain,
+    License,
+    TimeSeriesSpec,
+    Version,
+    ureg,
+)
 
 
 def _ds():
@@ -50,4 +60,43 @@ def test_dangling_task_id_raises():
     dataset = make_dataset()
     dataset.samples[0].task_ids = ("no-such-task",)
     with pytest.raises(TimeFValidationError, match="unknown task id"):
+        TimeFTorchDataset(dataset)[0]
+
+
+def _typed_dataset(dtype, values):
+    spec = TimeSeriesSpec(
+        spec_type=f"chan_{dtype}",
+        name=dtype,
+        unit_value=ureg.dimensionless,
+        dtype=dtype,
+    )
+    ts = TimeSeries.from_values(values, spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1))
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="timenet/torch",
+            dataset_version=Version(1, 0, 0),
+            name="Torch typed fixture",
+            description="A single series of one dtype.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    dataset.add_sample(time_series=(ts,), sample_id="sample-0")
+    return dataset
+
+
+def test_bool_series_stays_a_bool_tensor():
+    item = TimeFTorchDataset(_typed_dataset("bool", [True, False, True]))[0]
+    assert item["series"][0].dtype == torch.bool
+    assert item["series"][0].tolist() == [True, False, True]
+
+
+def test_int16_series_stays_an_int16_tensor():
+    item = TimeFTorchDataset(_typed_dataset("int16", [1, 2, 3]))[0]
+    assert item["series"][0].dtype == torch.int16
+
+
+def test_str_series_has_no_tensor_representation():
+    dataset = _typed_dataset("str", ["awake", "deep"])
+    with pytest.raises(TimeFValidationError, match="no tensor representation"):
         TimeFTorchDataset(dataset)[0]

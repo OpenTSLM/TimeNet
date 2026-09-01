@@ -146,7 +146,13 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                         separators=(",", ":"),
                     ).encode()
                 )
-                digest.update(values.tobytes())
+                # A string/object array exposes only raw pointer bytes via tobytes(), which differ
+                # across processes. Fingerprint string values by their text instead so a str series
+                # (dtype="str") produces a stable digest.
+                if values.dtype == object:
+                    digest.update(json.dumps(values.tolist(), sort_keys=False, separators=(",", ":")).encode())
+                else:
+                    digest.update(values.tobytes())
                 series_count += 1
                 value_bytes += values.nbytes
     read_ns = time.perf_counter_ns() - started
