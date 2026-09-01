@@ -80,11 +80,10 @@ def test_default_ids_are_uuid7():
     assert str(uuid.UUID(sid)) == sid  # canonical
 
 
-def test_uuid_ids_marked_uuid16_in_manifest(tmp_path):
+def test_manifest_has_no_id_encoding(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset())
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    for logical in ("sample_id", "time_series_id", "annotation_id", "task_id"):
-        assert manifest.id_encoding.get(logical) == "uuid16", logical
+    assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
 
 
 def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
@@ -191,12 +190,8 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
 
 def test_non_uuid_ids_stay_string(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset(sample_id="sample-0"))
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert "sample_id" not in manifest.id_encoding  # not all canonical UUIDs -> string
     samples = pq.read_table(version_dir / "samples/part-00000000.parquet").schema
     assert samples.field("sample_id").type == pa.string()
-    # a sibling id space that is all-uuid still packs to binary(16)
-    assert manifest.id_encoding.get("time_series_id") == "uuid16"
 
 
 def test_span_series_ids_round_trip_as_binary16(tmp_path):

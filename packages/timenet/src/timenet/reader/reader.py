@@ -34,8 +34,9 @@ from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
 from timenet.format.schemas import (
     TASK_COMMON_NAMES,
     IdCodec,
+    IdTypes,
     annotations_schema,
-    id_types_from_encoding,
+    id_types_from_samples_schema,
     task_schema,
 )
 from timenet.types import (
@@ -285,7 +286,8 @@ class TimeFReader:
         self._root = version.root
         self._manifest = version.manifest
 
-        self._codec = IdCodec.from_encoding(self._manifest.id_encoding)
+        self.__id_types: IdTypes | None = None
+        self.__codec: IdCodec | None = None
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
         # This is per-process scratch space. The reader builds it on demand and drops it on pickle.
@@ -296,6 +298,27 @@ class TimeFReader:
         self._index: _PrunedControlTable | None = None
         self._annotations: _PrunedControlTable | None = None
         self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
+
+    # ---- lazy id inference ---------------------------------------------------------------------
+
+    def _resolve_id_types(self) -> tuple[IdTypes, IdCodec]:
+        if self.__id_types is None:
+            if self._samples_data is not None:
+                schema = self._samples_data.schema
+            else:
+                first_samples_part = self._version.path(self._manifest.files.samples[0].path)
+                schema = pq.ParquetFile(first_samples_part, filesystem=self._fs).schema_arrow
+            self.__id_types = id_types_from_samples_schema(schema)
+            self.__codec = IdCodec.from_id_types(self.__id_types)
+        return self.__id_types, cast("IdCodec", self.__codec)
+
+    @property
+    def _id_types(self) -> IdTypes:
+        return self._resolve_id_types()[0]
+
+    @property
+    def _codec(self) -> IdCodec:
+        return self._resolve_id_types()[1]
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -615,7 +638,7 @@ class TimeFReader:
             return ()
         # Read against the current schema, so a partition written before a column (source) was added
         # back-fills it as null rather than failing the read.
-        schema = annotations_schema(id_types_from_encoding(self._manifest.id_encoding))
+        schema = annotations_schema(self._id_types)
         registered: list[Annotation] = []
         with self._as_format_error():
             for part in self._manifest.files.annotations:

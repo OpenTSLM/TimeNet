@@ -199,7 +199,6 @@ def test_edit_version_round_trip(tmp_path):
 
     manifest = Manifest.from_json((out / "manifest.json").read_text())
     assert str(manifest.metadata.dataset_version) == "1.0.1"
-    assert manifest.derived_from == {"dataset_version": "1.0.0", "op": "remove_samples"}
 
     index = pq.read_table(out / "time_series_index/part-00000000.parquet").to_pylist()
     assert all(row["sample_id"] != "sample-1" for row in index)  # no orphaned index rows

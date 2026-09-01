@@ -83,7 +83,6 @@ class TimeFWriter:
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-        derived_from: dict[str, str] | None = None,
     ) -> None:
         """Configure the writer.
 
@@ -103,8 +102,6 @@ class TimeFWriter:
                 forces one for every modality. Only the Parquet backend applies an encoding, so the
                 writer rejects forcing one on another backend.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
-            derived_from: Lineage recorded in the manifest when this version is a copy-on-write edit of
-                another (for example ``{"dataset_version": "1.0.0", "op": "remove_samples"}``).
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, ``values_backend`` or
@@ -129,7 +126,6 @@ class TimeFWriter:
             )
         self._root = Path(root)
         self._dataset = dataset
-        self._derived_from = derived_from
         self._shard_target_bytes = shard_target_bytes
         self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
@@ -240,11 +236,7 @@ class TimeFWriter:
     # ---- id storage ----------------------------------------------------------------------------
 
     def _resolve_id_types(self) -> None:
-        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string.
-
-        Stores the resolved Arrow types, the set of ``uuid16`` logical ids, the manifest ``id_encoding``
-        map, and the shared codec. The map holds only the uuid16 entries. An absent entry means string.
-        """
+        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
         for sample in self._dataset.samples:
             values["sample_id"].append(sample.sample_id)
@@ -276,7 +268,6 @@ class TimeFWriter:
             id_types[name] = UUID16 if is_uuid16 else pa.string()
         self._id_types = id_types
         self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
-        self._id_encoding = dict.fromkeys(self._uuid16, "uuid16")
         self._codec = IdCodec.from_uuid16(self._uuid16)
 
     # ---- values --------------------------------------------------------------------------------
@@ -668,10 +659,8 @@ class TimeFWriter:
                 tasks=self._file_parts(self._task_files),
                 time_series=self._file_parts(self._value_files),
             ),
-            id_encoding=self._id_encoding,
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
-            derived_from=self._derived_from,
             build_env=build_env(),
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

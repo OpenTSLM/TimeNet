@@ -37,34 +37,29 @@ Manifest(
     files=files,                # ManifestFiles (required)
     schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
-    id_encoding={},             # logical id -> "uuid16" (absent => string)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    derived_from=None,          # copy-on-write lineage (see below)
     build_env=None,             # environment provenance (see below)
     timef_format_version=1,     # validated against the supported set {1}
 )
 ```
 
-`id_encoding` records which logical ids the [writer](timef-writer.md#id-storage) stored as
-`binary(16)`. If an entry is absent, that id is a UTF-8 string. `values_backend` names the
-[values backend](timef-writer.md#values-backends) that wrote `files.time_series`. The reader uses
-this value to choose the backend. A format-v2 manifest without this key reads as `"parquet"`. Only
-a version from a [copy-on-write edit](timef-writer.md#copy-on-write-edits) has `derived_from` set.
+`values_backend` names the [values backend](timef-writer.md#values-backends) that wrote
+`files.time_series`. The reader uses this value to select the backend. If the key is absent, the
+reader uses `"parquet"`.
 
-`value_encoding` reports the [values encoding](timef-writer.md#values-encoding) used to write each
-modality's shards. No code reads this field to make a decision: Parquet already records the applied
-encoding in each file's footer. The field exists so that a builder can inspect what a build chose.
-The field is empty for a backend that has no such choice.
+`value_encoding` gives the [values encoding](timef-writer.md#values-encoding) that wrote the shards
+of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
+each file, so the reader does not need it. The field lets a builder see which encoding a build
+selected. The field is empty for a backend that has no such choice.
 
-`build_env` records the environment that produced the version: the interpreter version and every
-installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only, so no code reads it to interpret the data.
+`build_env` records the environment that produced the version. It gives the interpreter version and
+every installed package with its version. `timenet.provenance.build_env` collects this data. Like
+`value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
 
-Format v2 introduces a backend-neutral schema for the values locator. This schema applies to both
-scalar and multidimensional datasets. Multidimensional specs also require format v2. As a result, an
-older reader rejects the incompatible values layout. It does not try to read the layout as scalar
-data.
+The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
+multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
+separate format version.
 
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `TimeNetInvalidManifestError`.

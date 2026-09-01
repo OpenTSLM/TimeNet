@@ -21,6 +21,18 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
       "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Empty or absent for a backend with no such choice."
+    },
+    "build_env": {
+      "type": "object",
+      "description": "Provenance for the environment that produced the version. No reader consults it to interpret the data. Empty when a build records no provenance.",
+      "properties": {
+        "python": { "type": "string", "description": "The Python interpreter version, for example '3.13.12'." },
+        "packages": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Installed distribution name to version, sorted by name."
+        }
+      }
     }
   },
   "$defs": {
@@ -178,6 +190,7 @@
       "properties": {
         "samples": { "type": "integer" },
         "annotations": { "type": "integer" },
+        "registered_annotations": { "type": "integer" },
         "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
         "time_series_chunks": { "type": "integer" },
         "time_series_index_rows": { "type": "integer" },

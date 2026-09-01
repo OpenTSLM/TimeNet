@@ -96,3 +96,10 @@ def test_invalid_manifests_are_rejected(mutate):
     mutate(data)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(data, MANIFEST_SCHEMA)
+
+
+def test_every_serialized_key_is_documented():
+    """Every key to_dict() emits must be a documented schema property, so the contract never lags the codec."""
+    emitted = set(_manifest().to_dict())
+    documented = set(MANIFEST_SCHEMA["properties"])
+    assert emitted <= documented, f"manifest keys missing from the schema: {sorted(emitted - documented)}"

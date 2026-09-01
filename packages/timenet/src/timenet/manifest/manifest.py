@@ -49,8 +49,6 @@ class Manifest:
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    id_encoding: dict[str, str] = field(default_factory=dict)
-    """Logical id -> ``"uuid16"`` for ids stored as ``binary(16)``. An id not listed here is a string."""
     values_backend: str = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
     value_encoding: dict[str, str] = field(default_factory=dict)
@@ -60,8 +58,6 @@ class Manifest:
     file's footer, so a reader does not need this field. The field lets a builder see what a build
     chose without opening a shard. The field is empty for a backend with no such choice.
     """
-    derived_from: dict[str, str] | None = None
-    """Copy-on-write lineage (base version and operation), or ``None`` for a newly built version."""
     build_env: dict[str, Any] = field(default_factory=dict)
     """The Python version and package set that produced this version.
 
@@ -112,11 +108,9 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
-            "id_encoding": dict(self.id_encoding),
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
-            "derived_from": dict(self.derived_from) if self.derived_from is not None else None,
-            "build_env": dict(self.build_env) if self.build_env is not None else None,
+            "build_env": dict(self.build_env),
         }
 
     def to_json(self) -> str:
@@ -143,19 +137,15 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
-        id_encoding = _dict_block(data, "id_encoding")
-        derived_from = _optional_dict_block(data, "derived_from")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
-            id_encoding=id_encoding,
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
-            derived_from=derived_from,
-            build_env=data.get("build_env", {}),
+            build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
         )
 
@@ -194,28 +184,6 @@ def _dict_block(data: dict[str, Any], key: str) -> dict:
     """
     try:
         return dict(data.get(key, {}))
-    except (ValueError, TypeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
-
-
-def _optional_dict_block(data: dict[str, Any], key: str) -> dict | None:
-    """Convert a nullable manifest dict block to a ``dict`` or ``None``. Name the block in the error on failure.
-
-    Args:
-        data: The manifest dict.
-        key: The block's key.
-
-    Returns:
-        The block as a ``dict``, or ``None`` when the value is ``null`` or absent.
-
-    Raises:
-        TimeNetInvalidManifestError: If the block is present, is not null, and is not a mapping.
-    """
-    value = data.get(key)
-    if value is None:
-        return None
-    try:
-        return dict(value)
     except (ValueError, TypeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
 
