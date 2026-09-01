@@ -135,7 +135,12 @@ class TimeFWriter:
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
         self._compression_level = compression_level
-        self._data_page_size = data_page_size if data_page_size is not None else row_group_target_bytes
+        if data_page_size is not None:
+            self._data_page_size = data_page_size
+        elif row_group_target_bytes > (1 << 20):
+            self._data_page_size = row_group_target_bytes
+        else:
+            self._data_page_size = None
         self._values_backend_name = values_backend
         self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
         self._value_encoding: dict[str, str] = {}
