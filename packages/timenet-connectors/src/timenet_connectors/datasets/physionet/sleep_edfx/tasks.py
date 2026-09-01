@@ -334,10 +334,51 @@ def iter_tasks(samples: Sequence[Sample], id_prefix: str) -> Iterator[Task]:
             the recording, because a task is one of hundreds of thousands.
     """  # noqa: DOC502 (raised by build_epoch_tasks, not directly here)
     for sample in samples:
-        span_annotations = [one for one in sample.annotations if one.key == AnnotationKey.SLEEP_STAGE]
-        # A whole-sample question comes from an annotation with no span. A test on the key
-        # instead holds only while the keys hold. ``lights_off`` states a fact about the
-        # recording and carries a span, so a key test hands it over.
+        # The two lists partition the annotations, so a key that neither builder asks about is
+        # in one of them rather than in neither. Each builder then takes the part it reads.
+        span_annotations = [one for one in sample.annotations if one.span is not None]
         non_span_annotations = [one for one in sample.annotations if one.span is None]
-        yield from build_epoch_tasks(sample.sample_id, id_prefix, span_annotations)
-        yield from build_sample_tasks(sample.sample_id, id_prefix, non_span_annotations, span_annotations)
+        stages = [one for one in span_annotations if one.key == AnnotationKey.SLEEP_STAGE]
+
+        yield from build_epoch_tasks(sample.sample_id, id_prefix, stages)
+        yield from build_sample_tasks(sample.sample_id, id_prefix, non_span_annotations, stages)
+        moment = build_lights_off_task(sample.sample_id, sample.time_span, span_annotations)
+        if moment is not None:
+            yield moment
+
+
+def build_lights_off_task(
+    sample_id: str, session: TimeInterval | None, span_annotations: Sequence[Annotation]
+) -> TemporalLocalizationTask | None:
+    """Ask where the lights went out, on a recording that holds that moment.
+
+    The subject table states a clock time and no date, so the offset onto the timeline wraps
+    forward across midnight. Three recordings of the release start seconds after the lights
+    went out, and the wrap then puts the moment about a day later, past the end of the session.
+    Those carry no task, because a recording cannot be asked for a moment it does not hold.
+
+    The mode is sparse. One point marks one instruction to the subject, and the rest of the
+    recording is unmarked rather than something else.
+
+    Args:
+        sample_id: The sample the question is about.
+        session: Its declared session span.
+        span_annotations: Its annotations that carry a span.
+
+    Returns:
+        The task, or ``None`` where the recording states no lights-off moment or does not hold
+        the one it states.
+    """
+    stated = [one for one in span_annotations if one.key == AnnotationKey.LIGHTS_OFF]
+    if not stated or session is None:
+        return None
+
+    at = stated[0].span
+    if at is None or at.start_us < session.start_us or at.exclusive_end > session.exclusive_end:
+        return None
+
+    return TemporalLocalizationTask(
+        target=(at,),
+        mode=LocalizationMode.SPARSE,
+        sample_ids=(sample_id,),
+    )
