@@ -15,7 +15,20 @@ import numpy as np
 import pint
 
 from timenet.errors import TimeFValidationError
-from timenet.types.units import ureg
+from timenet.types.units import normalize_unit, ureg
+
+
+def _to_unit(value: str | pint.Unit) -> pint.Unit:
+    """Return ``value`` as a :data:`ureg`-bound :class:`pint.Unit`, coercing strings and foreign registries.
+
+    Returns:
+        The resolved unit bound to :data:`ureg`.
+    """
+    if isinstance(value, str):
+        return ureg.Unit(cast("str", normalize_unit(value)))
+    if isinstance(value, pint.Unit) and value._REGISTRY is not ureg:
+        return ureg.Unit(str(value))
+    return value
 
 
 #: Spec types the Zarr backend cannot encode as its own array path segment.
@@ -114,12 +127,13 @@ class TimeSeriesSpec:
     """Optional names for the dimensions in :attr:`value_shape`."""
 
     def __post_init__(self) -> None:
-        """Validate the spec type tag plus the per-timestep dtype and shape contract.
+        """Coerce the unit and validate the spec contract.
 
         Raises:
-            TimeFValidationError: If the spec type, data source, dtype, shape, or dimension names are
-                invalid.
+            TimeFValidationError: If the unit, spec type, data source, dtype, shape, or dimension
+                names are invalid.
         """
+        object.__setattr__(self, "unit_value", _to_unit(self.unit_value))
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.data_source is not None and not isinstance(self.data_source, DataSource):
@@ -178,7 +192,7 @@ class TimeSeriesSpec:
         for name in cast("list[str]", restored.pop(_UNIT_FIELDS_KEY, [])):
             restored[name] = ureg.Unit(str(restored[name]))
         for key, value in restored.items():
-            object.__setattr__(self, key, value)  # frozen dataclass
+            object.__setattr__(self, key, value)
 
 
 #: Key under which :meth:`TimeSeriesSpec.__getstate__` records which attributes held units.

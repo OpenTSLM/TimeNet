@@ -1,7 +1,9 @@
 import pint
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import ureg
+from timenet.types.units import normalize_unit
 
 
 def test_standard_units_available():
@@ -33,6 +35,24 @@ def test_import_does_not_touch_the_application_registry():
     # A library must not reassign pint's process-wide registry behind the host's back; TimeNet's own
     # types pickle units by name instead, so nothing here needs the global.
     assert pint.get_application_registry().get() is not ureg
+
+
+@pytest.mark.parametrize("bad_unit", ["/min", "10*3/uL", "not_a_unit"])
+def test_normalize_unit_rejects_malformed_and_unknown_strings(bad_unit):
+    with pytest.raises(TimeFValidationError, match="unknown unit"):
+        normalize_unit(bad_unit)
+
+
+def test_normalize_unit_passes_a_valid_string_through():
+    assert normalize_unit("millivolt") == "millivolt"
+
+
+def test_normalize_unit_converts_pint_unit_to_string():
+    assert normalize_unit(ureg.millivolt) == "millivolt"
+
+
+def test_normalize_unit_passes_none_through():
+    assert normalize_unit(None) is None
 
 
 def test_use_as_application_registry_is_opt_in_and_works():

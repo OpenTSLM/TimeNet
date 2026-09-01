@@ -15,6 +15,51 @@ from timenet.types.tasks import Task
 from timenet.types.version import Version
 
 
+def _to_license(value: str | License) -> License:
+    """Return ``value`` as a :class:`License`, coercing from string if needed.
+
+    Returns:
+        The resolved license.
+
+    Raises:
+        TimeFValidationError: If the string does not match a known license.
+    """
+    if isinstance(value, License):
+        return value
+    try:
+        return License(value)
+    except ValueError as exc:
+        raise TimeFValidationError(f"invalid license {value!r}") from exc
+
+
+def _to_domains(value: tuple[str | Domain, ...]) -> tuple[Domain, ...]:
+    """Return ``value`` as a tuple of :class:`Domain` enums, coercing strings if needed.
+
+    Returns:
+        The resolved domains.
+
+    Raises:
+        TimeFValidationError: If a string does not match a known domain.
+    """
+    if all(isinstance(d, Domain) for d in value):
+        return value  # ty: ignore[invalid-return-type]
+    try:
+        return tuple(Domain(d) for d in value)
+    except ValueError as exc:
+        raise TimeFValidationError(f"invalid domain in {value!r}") from exc
+
+
+def _to_version(value: str | Version) -> Version:
+    """Return ``value`` as a :class:`Version`, parsing from string if needed.
+
+    Returns:
+        The resolved version.
+    """
+    if isinstance(value, Version):
+        return value
+    return Version.parse(value)
+
+
 # A HuggingFace-style ``org/name`` pair: exactly one slash, no leading/trailing/empty segment.
 _DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
@@ -85,18 +130,17 @@ class DatasetMetadata:
     """Version of the card's own field schema."""
 
     def __post_init__(self) -> None:
-        """Validate the ``dataset_id`` shape via :func:`validate_dataset_id`.
-
-        No segment can start with ``.``. The registry, the writer, and the download cache join
-        dataset ids into filesystem paths. A ``.`` or ``..`` segment can escape the registry or
-        storage root. A leading-dot name like ``.git`` writes to disk, but discovery skips it
-        because discovery drops hidden directories.
+        """Coerce typed fields and validate constraints.
 
         Raises:
-            TimeFValidationError: If ``license`` is ``License.OTHER`` without a ``license_url``, or
-                ``access`` is not open without an ``access_url``.
+            TimeFValidationError: If a typed field cannot be coerced, ``license`` is
+                ``License.OTHER`` without a ``license_url``, or ``access`` is not open without an
+                ``access_url``.
         """
         validate_dataset_id(self.dataset_id)
+        object.__setattr__(self, "license", _to_license(self.license))
+        object.__setattr__(self, "dataset_version", _to_version(self.dataset_version))
+        object.__setattr__(self, "domains", _to_domains(self.domains))
         if self.license is License.OTHER and not self.license_url:
             raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:

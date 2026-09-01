@@ -56,7 +56,7 @@ def normalize_unit(unit: "str | pint.Unit | None") -> str | None:
         return str(unit)
     try:
         ureg.Unit(unit)
-    except pint.UndefinedUnitError as exc:
+    except (pint.UndefinedUnitError, pint.errors.DefinitionSyntaxError, ValueError) as exc:
         raise TimeFValidationError(
             f"unknown unit {unit!r}; pass a pint unit (e.g. ureg.millivolt) or a unit string pint "
             f"recognizes, or omit unit="

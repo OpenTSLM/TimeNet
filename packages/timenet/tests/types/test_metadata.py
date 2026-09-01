@@ -121,6 +121,31 @@ def test_metadata_round_trips_access_and_license_fields():
     assert DatasetMetadata.from_dict(_metadata_to_dict(m)) == m
 
 
+def test_metadata_coerces_string_license():
+    m = _metadata(license="MIT")
+    assert m.license is License.MIT
+
+
+def test_metadata_coerces_string_domains():
+    m = _metadata(domains=("health", "cardiology"))
+    assert m.domains == (Domain.HEALTH, Domain.CARDIOLOGY)
+
+
+def test_metadata_coerces_string_dataset_version():
+    m = _metadata(dataset_version="2.1.0")
+    assert m.dataset_version == Version(2, 1, 0)
+
+
+def test_metadata_rejects_invalid_string_license():
+    with pytest.raises(TimeFValidationError, match="invalid license"):
+        _metadata(license="not-a-license")
+
+
+def test_metadata_rejects_invalid_string_domain():
+    with pytest.raises(TimeFValidationError, match="invalid domain"):
+        _metadata(domains=("not_a_domain",))
+
+
 def test_metadata_from_dict_defaults_when_access_fields_absent():
     m = DatasetMetadata.from_dict(
         {"dataset_id": "org/name", "dataset_version": "1.0.0", "name": "N", "description": "D", "license": "MIT"}
