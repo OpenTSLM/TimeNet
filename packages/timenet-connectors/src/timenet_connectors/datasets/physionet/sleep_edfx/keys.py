@@ -32,6 +32,7 @@ class Question(StrEnum):
     SEX = "sex"
     CONDITION = "condition"
     SLEEP_PERIOD = "sleep_period"
+    LIGHTS_OFF = "lights_off"
 
 
 class Condition(StrEnum):
