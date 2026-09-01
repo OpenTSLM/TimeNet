@@ -15,6 +15,54 @@ from timenet.types.tasks import Task
 from timenet.types.version import Version
 
 
+_frozen_set = object.__setattr__
+
+
+def _to_license(value: str | License) -> License:
+    """Return ``value`` as a :class:`License`, coercing from string if needed.
+
+    Returns:
+        The resolved license.
+
+    Raises:
+        TimeFValidationError: If the string does not match a known license.
+    """
+    if isinstance(value, License):
+        return value
+    try:
+        return License(value)
+    except ValueError as exc:
+        raise TimeFValidationError(f"invalid license {value!r}") from exc
+
+
+def _to_domains(value: tuple[str | Domain, ...]) -> tuple[Domain, ...]:
+    """Return ``value`` as a tuple of :class:`Domain` enums, coercing strings if needed.
+
+    Returns:
+        The resolved domains.
+
+    Raises:
+        TimeFValidationError: If a string does not match a known domain.
+    """
+    if all(isinstance(d, Domain) for d in value):
+        return value  # ty: ignore[invalid-return-type]
+    try:
+        return tuple(Domain(d) for d in value)
+    except ValueError as exc:
+        raise TimeFValidationError(f"invalid domain in {value!r}") from exc
+
+
+def _to_version(value: str | Version) -> Version:
+    """Return ``value`` as a :class:`Version`, parsing from string if needed.
+
+    Returns:
+        The resolved version.
+    """
+    if isinstance(value, Version):
+        return value
+    return Version.parse(value)
+
+
 # A HuggingFace-style ``org/name`` pair: exactly one slash, no leading/trailing/empty segment.
 _DATASET_ID = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
@@ -85,10 +133,7 @@ class DatasetMetadata:
     """Version of the card's own field schema."""
 
     def __post_init__(self) -> None:
-        """Validate and coerce typed fields.
-
-        Coerces ``license``, ``domains``, and ``dataset_version`` from plain strings to their enum
-        or value types when passed as strings, matching what :meth:`from_dict` does.
+        """Coerce typed fields and validate constraints.
 
         Raises:
             TimeFValidationError: If a typed field cannot be coerced, ``license`` is
@@ -96,18 +141,9 @@ class DatasetMetadata:
                 ``access_url``.
         """
         validate_dataset_id(self.dataset_id)
-        if isinstance(self.license, str) and not isinstance(self.license, License):
-            try:
-                object.__setattr__(self, "license", License(self.license))
-            except ValueError as exc:
-                raise TimeFValidationError(f"invalid license {self.license!r}") from exc
-        if isinstance(self.dataset_version, str):
-            object.__setattr__(self, "dataset_version", Version.parse(self.dataset_version))
-        if self.domains and not all(isinstance(d, Domain) for d in self.domains):
-            try:
-                object.__setattr__(self, "domains", tuple(Domain(d) for d in self.domains))
-            except ValueError as exc:
-                raise TimeFValidationError(f"invalid domain in {self.domains!r}") from exc
+        _frozen_set(self, "license", _to_license(self.license))
+        _frozen_set(self, "dataset_version", _to_version(self.dataset_version))
+        _frozen_set(self, "domains", _to_domains(self.domains))
         if self.license is License.OTHER and not self.license_url:
             raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:
