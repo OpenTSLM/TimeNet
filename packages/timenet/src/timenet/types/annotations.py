@@ -23,9 +23,6 @@ from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 
 
-_frozen_set = object.__setattr__
-
-
 @unique
 class AnnotationType(StrEnum):
     """Name the shape an annotation key takes across the dataset. It is a schema-level projection in the manifest."""
@@ -83,8 +80,8 @@ class Annotation:
                 the annotation has neither a value nor a span.
         """
         if isinstance(self.value, tuple):
-            _frozen_set(self, "value", list(self.value))
-        _frozen_set(self, "unit", normalize_unit(self.unit))
+            object.__setattr__(self, "value", list(self.value))
+        object.__setattr__(self, "unit", normalize_unit(self.unit))
         if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
@@ -127,7 +124,7 @@ class AnnotationDescriptor:
 
     def __post_init__(self) -> None:
         """Validate ``unit`` against the shared registry."""
-        _frozen_set(self, "unit", normalize_unit(self.unit))
+        object.__setattr__(self, "unit", normalize_unit(self.unit))
 
 
 def value_type_of(value: Any) -> str | None:

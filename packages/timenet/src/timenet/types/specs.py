@@ -18,9 +18,6 @@ from timenet.errors import TimeFValidationError
 from timenet.types.units import normalize_unit, ureg
 
 
-_frozen_set = object.__setattr__
-
-
 def _to_unit(value: str | pint.Unit) -> pint.Unit:
     """Return ``value`` as a :data:`ureg`-bound :class:`pint.Unit`, coercing strings and foreign registries.
 
@@ -136,7 +133,7 @@ class TimeSeriesSpec:
             TimeFValidationError: If the unit, spec type, data source, dtype, shape, or dimension
                 names are invalid.
         """
-        _frozen_set(self, "unit_value", _to_unit(self.unit_value))
+        object.__setattr__(self, "unit_value", _to_unit(self.unit_value))
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.data_source is not None and not isinstance(self.data_source, DataSource):
@@ -195,7 +192,7 @@ class TimeSeriesSpec:
         for name in cast("list[str]", restored.pop(_UNIT_FIELDS_KEY, [])):
             restored[name] = ureg.Unit(str(restored[name]))
         for key, value in restored.items():
-            _frozen_set(self, key, value)
+            object.__setattr__(self, key, value)
 
 
 #: Key under which :meth:`TimeSeriesSpec.__getstate__` records which attributes held units.

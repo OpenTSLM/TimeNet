@@ -15,9 +15,6 @@ from timenet.types.tasks import Task
 from timenet.types.version import Version
 
 
-_frozen_set = object.__setattr__
-
-
 def _to_license(value: str | License) -> License:
     """Return ``value`` as a :class:`License`, coercing from string if needed.
 
@@ -141,9 +138,9 @@ class DatasetMetadata:
                 ``access_url``.
         """
         validate_dataset_id(self.dataset_id)
-        _frozen_set(self, "license", _to_license(self.license))
-        _frozen_set(self, "dataset_version", _to_version(self.dataset_version))
-        _frozen_set(self, "domains", _to_domains(self.domains))
+        object.__setattr__(self, "license", _to_license(self.license))
+        object.__setattr__(self, "dataset_version", _to_version(self.dataset_version))
+        object.__setattr__(self, "domains", _to_domains(self.domains))
         if self.license is License.OTHER and not self.license_url:
             raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:
