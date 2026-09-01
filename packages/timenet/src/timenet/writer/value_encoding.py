@@ -75,14 +75,11 @@ is nearly free, overshooting is not.
 """
 
 ENCODING_SAMPLE_SOURCE_BYTES = 4 * (1 << 20)
-"""Uncompressed leading bytes the encoding rule draws its sample from, independent of the row group.
+"""Leading bytes the encoding rule draws its sample from, independent of the row-group size.
 
-The rule reads a modality's first buffered values to choose its encoding. Sampling the whole first row
-group would tie the choice to ``row_group_target_bytes``: a larger row group buffers more series before
-the first flush, which shifts the sampled cardinality and can flip a borderline modality between
-dictionary and BYTE_STREAM_SPLIT. Capping the source to this fixed leading budget makes the choice
-depend only on the data. The value equals the default row-group target, so a dataset written with the
-default row group keeps the encoding it had before this cap existed.
+Equals the default row-group target so existing datasets keep their prior encoding. A fixed cap
+prevents a larger ``row_group_target_bytes`` from shifting the sampled cardinality and flipping a
+borderline modality's encoding.
 """
 
 SAMPLE_MAX_VALUES = 200_000

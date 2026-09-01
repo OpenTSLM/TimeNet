@@ -98,8 +98,7 @@ class TimeFWriter:
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned level (applied for zstd) for reproducible output.
             data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` to match
-                ``row_group_target_bytes``. A larger page shrinks the file and costs nothing at read
-                time, since the reader decodes a whole row group at once. Ignored by the Zarr backend.
+                ``row_group_target_bytes``. Ignored by the Zarr backend.
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
                 ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``

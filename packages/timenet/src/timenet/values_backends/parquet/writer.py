@@ -86,19 +86,9 @@ _ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())
 
 
 def _leading_sample_source(buffered: list[pa.Array], budget_bytes: int) -> list[np.ndarray]:
-    """Take the leading buffered chunks that fill a fixed byte budget, as NumPy arrays.
+    """Return the leading buffered chunks (as NumPy) that fit within ``budget_bytes``.
 
-    The encoding rule reads these to choose a modality's encoding. Capping the source to a fixed leading
-    budget keeps that choice independent of ``row_group_target_bytes``: a larger row group buffers more
-    chunks, but the rule still sees the same leading values. At least one chunk is always returned, so a
-    modality whose first chunk alone exceeds the budget still gets sampled.
-
-    Args:
-        buffered: The modality's first buffered chunk values, in order.
-        budget_bytes: Uncompressed leading bytes to draw the sample from.
-
-    Returns:
-        One NumPy array per selected leading chunk.
+    At least one chunk is always returned.
     """
     arrays: list[np.ndarray] = []
     used = 0

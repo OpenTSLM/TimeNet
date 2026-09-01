@@ -180,10 +180,7 @@ def parquet_kwargs(
             values column.
         compression: Codec name (``"zstd"``, ``"snappy"``, ``"none"``).
         compression_level: Compression level, used only for the zstd codec.
-        data_page_size: Target uncompressed bytes per data page, or ``None`` for pyarrow's default. A
-            page never spans more than one row group. A larger page gives the codec a wider window,
-            which shrinks the file, and the reader decodes a whole row group at once regardless of how
-            many pages it holds, so a larger page costs nothing at read time.
+        data_page_size: Target uncompressed bytes per data page, or ``None`` for pyarrow's default.
 
     Returns:
         Keyword arguments for :class:`pyarrow.parquet.ParquetWriter` or ``write_table``.
