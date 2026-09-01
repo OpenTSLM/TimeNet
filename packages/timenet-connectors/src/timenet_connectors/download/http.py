@@ -148,14 +148,12 @@ async def _download_one(
                 await response.aread()
                 response.raise_for_status()
             total = int(response.headers["content-length"]) if "content-length" in response.headers else None
-            downloaded = 0
             async with aiofiles.open(part, "wb") as handle:
                 async for chunk in response.aiter_bytes(_DOWNLOAD_CHUNK_BYTES):
                     await handle.write(chunk)
                     if digest is not None:
                         digest.update(chunk)
-                    downloaded += len(chunk)
-                    report_progress(DownloadProgress(artifact.url, downloaded, total))
+                    report_progress(DownloadProgress(artifact.url, response.num_bytes_downloaded, total))
         if artifact.sha256 is not None and digest is not None and digest.hexdigest() != artifact.sha256.lower():
             raise TimeFFormatError(
                 f"SHA-256 mismatch downloading {artifact.url!r}: "
