@@ -7,6 +7,12 @@ from timenet.format.schemas import IdCodec, IdTypes
 from timenet.writer.value_encoding import ValueEncoding
 
 
+DEFAULT_PARQUET_COMPRESSION_LEVEL = 19
+"""Default zstd level for Parquet shards. Write-once data reads faster than it writes, so pay the
+higher level. Levels above 19 add nothing because pyarrow's zstd binding does not enable
+long-distance matching."""
+
+
 @dataclass(frozen=True)
 class ParquetValuesConfig:
     """Typed construction options for the Parquet values backend."""
@@ -25,7 +31,7 @@ class ParquetValuesConfig:
     """Maximum uncompressed values size of one logical chunk."""
     compression: str
     """Parquet compression codec."""
-    compression_level: int
+    compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
     """Parquet compression level."""
     data_page_size: int | None = None
     """Target uncompressed bytes per data page, or ``None`` for pyarrow's default."""

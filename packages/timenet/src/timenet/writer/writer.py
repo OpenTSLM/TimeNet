@@ -28,11 +28,9 @@ from timenet.format.constants import (
     ANNOTATIONS_TEMPLATE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
-    DEFAULT_COMPRESSION_LEVEL,
     DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
-    DEFAULT_ZARR_COMPRESSION_LEVEL,
     INDEX_TEMPLATE,
     MANIFEST_FILE,
     SAMPLES_TEMPLATE,
@@ -55,12 +53,14 @@ from timenet.provenance import build_env
 from timenet.types import Annotation, Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
+from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
 from timenet.values_backends.writer import (
     ChunkPlacement,
     ParquetValuesConfig,
     ZarrValuesConfig,
     make_values_backend,
 )
+from timenet.values_backends.zarr.config import DEFAULT_ZARR_COMPRESSION_LEVEL
 from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet.writer.sharded import ShardedTableWriter
@@ -80,7 +80,7 @@ class TimeFWriter:
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
-        compression_level: int = DEFAULT_COMPRESSION_LEVEL,
+        compression_level: int | None = None,
         data_page_size: int | None = None,
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
@@ -97,8 +97,8 @@ class TimeFWriter:
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
-            compression_level: Pinned zstd level. Defaults to 19 for Parquet, 9 for Zarr (Blosc's
-                maximum). An explicit value overrides the backend default.
+            compression_level: Pinned compression level, or ``None`` for the backend default
+                (19 for Parquet zstd, 9 for Zarr Blosc).
             data_page_size: Target uncompressed bytes per Parquet data page. Defaults to
                 ``row_group_target_bytes`` when that exceeds 1 MiB, otherwise pyarrow's own
                 default. Ignored by the Zarr backend.
@@ -139,10 +139,15 @@ class TimeFWriter:
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
-        if values_backend == ValuesBackend.ZARR and compression_level == DEFAULT_COMPRESSION_LEVEL:
-            self._compression_level = DEFAULT_ZARR_COMPRESSION_LEVEL
+        self._parquet_compression_level = (
+            compression_level if compression_level is not None else DEFAULT_PARQUET_COMPRESSION_LEVEL
+        )
+        if values_backend == ValuesBackend.ZARR:
+            self._values_compression_level = (
+                compression_level if compression_level is not None else DEFAULT_ZARR_COMPRESSION_LEVEL
+            )
         else:
-            self._compression_level = compression_level
+            self._values_compression_level = self._parquet_compression_level
         if data_page_size is not None:
             self._data_page_size = data_page_size
         elif row_group_target_bytes > (1 << 20):
@@ -350,7 +355,7 @@ class TimeFWriter:
                 row_group_target_bytes=self._row_group_target_bytes,
                 chunk_max_bytes=self._chunk_max_bytes,
                 compression=self._compression,
-                compression_level=self._compression_level,
+                compression_level=self._values_compression_level,
                 data_page_size=self._data_page_size,
                 value_encoding=self._forced_value_encoding,
             )
@@ -360,7 +365,7 @@ class TimeFWriter:
                 shard_target_bytes=self._shard_target_bytes,
                 chunk_max_bytes=self._chunk_max_bytes,
                 compression=self._compression,
-                compression_level=self._compression_level,
+                compression_level=self._values_compression_level,
             )
         values_backend = make_values_backend(config)
         result = values_backend.write_series(
@@ -498,7 +503,7 @@ class TimeFWriter:
                 dictionary_columns=dictionary_columns,
                 column_encoding=column_encoding,
                 compression=self._compression,
-                compression_level=self._compression_level,
+                compression_level=self._parquet_compression_level,
                 data_page_size=self._data_page_size,
             ),
         )
