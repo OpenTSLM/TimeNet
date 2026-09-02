@@ -55,7 +55,7 @@ parts and does not assume fixed names.
 | `row_group_target_bytes` | 4 MiB | Flush a row group when the buffered values exceed this size (Parquet only). |
 | `chunk_max_bytes` | 1 MiB | Split a series into chunks no larger than this. |
 | `compression` | `"zstd"` | Codec for the values (Parquet codec, or Zarr Blosc inner codec). |
-| `compression_level` | 3 | Fixed zstd level, for reproducible output. |
+| `compression_level` | 19 (Parquet) / 9 (Zarr) | Fixed compression level, for reproducible output. |
 | `values_backend` | `"parquet"` | Storage backend for the values plane: `"parquet"` or `"zarr"`. |
 | `progress_cb` | `None` | The writer calls this with each `WriteProgressEvent`. |
 

@@ -74,7 +74,9 @@ well past the crossover costs more: 9% at 80k distinct values and 27% at 107k. U
 is nearly free, overshooting is not.
 """
 
-ENCODING_SAMPLE_SOURCE_BYTES = 4 * (1 << 20)
+_MIB = 1 << 20
+
+ENCODING_SAMPLE_SOURCE_BYTES = 4 * _MIB
 """Leading bytes the encoding rule draws its sample from, independent of the row-group size.
 
 Equals the default row-group target so existing datasets keep their prior encoding. A fixed cap

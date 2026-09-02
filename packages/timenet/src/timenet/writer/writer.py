@@ -32,6 +32,7 @@ from timenet.format.constants import (
     DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
+    DEFAULT_ZARR_COMPRESSION_LEVEL,
     INDEX_TEMPLATE,
     MANIFEST_FILE,
     SAMPLES_TEMPLATE,
@@ -96,9 +97,11 @@ class TimeFWriter:
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
-            compression_level: Pinned level (applied for zstd) for reproducible output.
-            data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` to match
-                ``row_group_target_bytes``. Ignored by the Zarr backend.
+            compression_level: Pinned zstd level. Defaults to 19 for Parquet, 9 for Zarr (Blosc's
+                maximum). An explicit value overrides the backend default.
+            data_page_size: Target uncompressed bytes per Parquet data page. Defaults to
+                ``row_group_target_bytes`` when that exceeds 1 MiB, otherwise pyarrow's own
+                default. Ignored by the Zarr backend.
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
                 ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
@@ -127,6 +130,8 @@ class TimeFWriter:
                 f"value_encoding {value_encoding!r} is only applied by the "
                 f"{ValuesBackend.PARQUET.value!r} values backend, not {values_backend!r}"
             )
+        if data_page_size is not None and data_page_size <= 0:
+            raise TimeFValidationError(f"data_page_size must be positive, got {data_page_size}")
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
@@ -134,7 +139,10 @@ class TimeFWriter:
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
-        self._compression_level = compression_level
+        if values_backend == ValuesBackend.ZARR and compression_level == DEFAULT_COMPRESSION_LEVEL:
+            self._compression_level = DEFAULT_ZARR_COMPRESSION_LEVEL
+        else:
+            self._compression_level = compression_level
         if data_page_size is not None:
             self._data_page_size = data_page_size
         elif row_group_target_bytes > (1 << 20):

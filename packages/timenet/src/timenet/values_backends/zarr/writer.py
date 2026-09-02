@@ -47,6 +47,7 @@ from timenet.values_backends.zarr.config import ZarrValuesConfig
 
 _STORE_DIR = "time_series.zarr"
 _BLOSC_CNAMES = frozenset({"zstd", "lz4", "lz4hc", "zlib", "blosclz"})
+_BLOSC_MAX_CLEVEL = 9
 # One placement normally spans a whole series. The writer splits only to keep n_values inside int32 (the
 # index column type). 2^30 values is 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
@@ -140,9 +141,11 @@ class ZarrValuesBackend(BaseValuesBackend):
         self._chunk_max_bytes = config.chunk_max_bytes
         self._shard_target_bytes = config.shard_target_bytes
         self._cname = config.compression
-        # Blosc accepts clevel 0-9 and errors outside it, while the shared compression_level default is
-        # tuned for Parquet's zstd (0-22). Clamp so a high Parquet default does not crash a Zarr write.
-        self._clevel = max(0, min(config.compression_level, 9))
+        if not 0 <= config.compression_level <= _BLOSC_MAX_CLEVEL:
+            raise TimeFValidationError(
+                f"Blosc compression level must be 0-{_BLOSC_MAX_CLEVEL}, got {config.compression_level}"
+            )
+        self._clevel = config.compression_level
 
     def _value_appender(self, group: Any, ts: TimeSeries, array_path: str, codec: Any) -> "_ArrayAppender":
         """Create the values array for one partition and wrap it in an appender.
