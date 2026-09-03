@@ -34,6 +34,7 @@ from typing import ClassVar
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.types import TimeInterval
+from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, tables
@@ -283,7 +284,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         dataset = TimeFDataset(metadata=self.metadata())
         metadata_annotation = metadata.MetadataAnnotation()
         subject_tables = metadata.SubjectTables(
-            {study: tables.read_table_rows(path) for study, path in source.subject_tables}, dict(self._STUDIES)
+            {study: excel.read_table_rows(path) for study, path in source.subject_tables}, dict(self._STUDIES)
         )
         for recording in _iter_recordings(source):
             # Named and not generated, thus two builds of one archive give one set of ids.

@@ -1,8 +1,8 @@
 """Turn the rows of a subject table into the facts it states.
 
-:func:`read_table_rows` opens the
-workbook and gives the rows. Nothing here takes a path, so a test checks the decoding, the
-reshape and the join with rows it wrote itself, and no ``.xls`` binary.
+:func:`~timenet_connectors.bases.excel.read_table_rows` opens the workbook and gives the rows.
+Nothing here takes a path, so a test checks the decoding, the reshape and the join with rows it
+wrote itself, and no ``.xls`` binary.
 
 The release ships one workbook for each study, and the two sheets are two shapes. One parser
 takes both. A per-sheet description states the difference: the header rows to skip, the columns
@@ -20,17 +20,17 @@ its own sheet, and both decode into the two letters ``F`` and ``M``. A raw code 
 this module, because one code means the opposite thing in the other study.
 
 Both sheets state a lights-off time as a number. Excel stores a bare time as the fraction of a
-day past midnight, so a value below 0.5 is a time after midnight and not an error.
+day past midnight, so a value below 0.5 is a time after midnight and not an error. The base
+reads that fraction, because it is what Excel means by a bare time and not what this release
+means by one.
 """
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import time
-from pathlib import Path
-
-import xlrd
 
 from timenet.errors import TimeFFormatError
+from timenet_connectors.bases.excel import decode_day_fraction_as_time, decode_whole_number
 
 
 # The two workbooks of the release, named here and by the description of each sheet.
@@ -47,6 +47,7 @@ TEMAZEPAM = "temazepam"
 SUBJECT = "subject"
 NIGHT = "night"
 
+# The length of a day, which ``metadata.py`` wraps a clock difference by.
 SECONDS_PER_DAY = 24 * 60 * 60
 
 
@@ -144,7 +145,8 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
 
     Args:
         shape: The description of that sheet.
-        rows: The rows of the sheet, from :func:`read_table_rows`, with its header rows first.
+        rows: The rows of the sheet, from
+            :func:`~timenet_connectors.bases.excel.read_table_rows`, with its header rows first.
 
     Returns:
         The facts of each row, keyed as the description states.
@@ -163,17 +165,17 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
         if len(row) < columns:
             raise TimeFFormatError(f"{shape.table_name} row {row_number}: holds {len(row)} columns and needs {columns}")
 
-        subject = _decode_whole_number(row[shape.subject], SUBJECT, shape.table_name, row_number)
+        subject = decode_whole_number(row[shape.subject], SUBJECT, shape.table_name, row_number)
         nights = tuple(
             SubjectNight(
-                night=_decode_whole_number(
+                night=decode_whole_number(
                     row[columns_of_night.night],
                     NIGHT if columns_of_night.condition is None else f"{columns_of_night.condition} night",
                     shape.table_name,
                     row_number,
                 ),
                 condition=columns_of_night.condition,
-                lights_off=_decode_lights_off(row[columns_of_night.lights_off], shape.table_name, row_number),
+                lights_off=decode_day_fraction_as_time(row[columns_of_night.lights_off], shape.table_name, row_number),
             )
             for columns_of_night in shape.nights
         )
@@ -187,7 +189,7 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
 
         table[key] = SubjectRow(
             subject=subject,
-            age=_decode_whole_number(row[shape.age], "age", shape.table_name, row_number),
+            age=decode_whole_number(row[shape.age], "age", shape.table_name, row_number),
             sex=_decode_sex(row[shape.sex], shape.sex_codes, shape.table_name, row_number),
             nights=nights,
         )
@@ -277,27 +279,6 @@ def find_night(row: SubjectRow, night: int, recording_id: str) -> SubjectNight:
     return matches[0]
 
 
-def _decode_whole_number(cell: object, field: str, workbook: str, row_number: int) -> int:
-    """Decode the whole number that a cell holds.
-
-    Args:
-        cell: The value of the cell, as the workbook states it.
-        field: The name of the column, for the error message.
-        workbook: The name of the workbook, for the error message.
-        row_number: The row of the sheet, counted from 1, for the error message.
-
-    Returns:
-        The value as a whole number.
-
-    Raises:
-        TimeFFormatError: If the cell holds no whole number.
-    """
-    if isinstance(cell, bool) or not isinstance(cell, int | float) or not float(cell).is_integer():
-        raise TimeFFormatError(f"{workbook} row {row_number}: {field} holds {cell!r}, which is not a whole number")
-
-    return int(cell)
-
-
 def _decode_sex(cell: object, codes: Mapping[int, str], workbook: str, row_number: int) -> str:
     """Decode a sex code with the map of the sheet it was read from.
 
@@ -313,7 +294,7 @@ def _decode_sex(cell: object, codes: Mapping[int, str], workbook: str, row_numbe
     Raises:
         TimeFFormatError: If the sheet defines no such code.
     """
-    code = _decode_whole_number(cell, "sex", workbook, row_number)
+    code = decode_whole_number(cell, "sex", workbook, row_number)
     sex = codes.get(code)
     if sex is None:
         raise TimeFFormatError(
@@ -321,74 +302,3 @@ def _decode_sex(cell: object, codes: Mapping[int, str], workbook: str, row_numbe
         )
 
     return sex
-
-
-def _decode_lights_off(cell: object, workbook: str, row_number: int) -> time:
-    """Convert an Excel day fraction into a time of day.
-
-    Excel stores a bare time as the fraction of a day past midnight. A fraction below 0.5 is a
-    time after midnight, which most of the lights-off times of this release are.
-
-    A string reaches this function only by accident. A sheet whose column has become text is
-    a release this connector does not know.
-
-    Args:
-        cell: The value of the cell, as the workbook states it.
-        workbook: The name of the workbook, for the error message.
-        row_number: The row of the sheet, counted from 1, for the error message.
-
-    Returns:
-        The clock time that the fraction states, to the second.
-
-    Raises:
-        TimeFFormatError: If the cell holds no number, or a number outside 0 up to 1.
-    """
-    if isinstance(cell, bool) or not isinstance(cell, int | float):
-        raise TimeFFormatError(
-            f"{workbook} row {row_number}: the lights-off column holds {cell!r}, which is not a number. "
-            "Excel states a bare time as the fraction of a day past midnight"
-        )
-
-    seconds = round(cell * SECONDS_PER_DAY)
-    if not 0 <= seconds < SECONDS_PER_DAY:
-        raise TimeFFormatError(
-            f"{workbook} row {row_number}: the lights-off column holds {cell!r}, which is not a day "
-            "fraction from 0 up to 1"
-        )
-
-    hours, rest = divmod(seconds, 60 * 60)
-    minutes, seconds_of_minute = divmod(rest, 60)
-    return time(hours, minutes, seconds_of_minute)
-
-
-def read_table_rows(path: Path) -> list[tuple[object, ...]]:
-    """Open a subject table and give every row of its data sheet, header rows included.
-
-    This gives the cells as the workbook states them and decodes nothing.
-    The functions of this module state what a column means.
-
-    Both workbooks carry three sheets, and only the first holds data. This takes the first sheet
-    and searches for no sheet by name.
-
-    Args:
-        path: The ``.xls`` workbook.
-
-    Returns:
-        One tuple of cell values for each row of the first sheet, in sheet order.
-
-    Raises:
-        TimeFFormatError: If the file does not open as a workbook, or holds no data sheet.
-    """
-    try:
-        # These are legacy BIFF8 workbooks that Excel wrote. openpyxl reads only the ZIP-based
-        # .xlsx format and cannot open them at all.
-        book = xlrd.open_workbook(path)
-    # xlrd has no single exception type for a bad file, so catch broadly and re-raise.
-    except Exception as exc:
-        raise TimeFFormatError(f"{path}: cannot read this file as a workbook") from exc
-
-    if book.nsheets == 0:
-        raise TimeFFormatError(f"{path}: holds no data sheet")
-
-    sheet = book.sheet_by_index(0)
-    return [tuple(sheet.row_values(index)) for index in range(sheet.nrows)]
