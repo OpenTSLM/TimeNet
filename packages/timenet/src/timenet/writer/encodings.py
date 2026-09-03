@@ -15,6 +15,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -159,7 +160,7 @@ class ParquetEncoding:
 
     dictionary_columns: list[str]
     compression: str
-    compression_level: int
+    compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
     column_encoding: dict[str, str] | None = None
     data_page_size: int | None = None
 

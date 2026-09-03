@@ -41,6 +41,7 @@ from timenet.writer.value_encoding import (
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
 _BYTES_PER_TIME_OFFSET = 8
+_PYARROW_DEFAULT_PAGE_BYTES = 1 << 20
 _LOG = logging.getLogger(__name__)
 
 
@@ -135,7 +136,12 @@ class ParquetValuesBackend(BaseValuesBackend):
         self._chunk_max_bytes = config.chunk_max_bytes
         self._compression = config.compression
         self._compression_level = config.compression_level
-        self._data_page_size = config.data_page_size
+        if config.data_page_size is not None:
+            self._data_page_size = config.data_page_size
+        elif config.row_group_target_bytes > _PYARROW_DEFAULT_PAGE_BYTES:
+            self._data_page_size = config.row_group_target_bytes
+        else:
+            self._data_page_size = None
         self._forced_encoding = config.value_encoding
         self._time_offsets_checked = False
 
