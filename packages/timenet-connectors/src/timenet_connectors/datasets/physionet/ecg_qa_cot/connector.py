@@ -33,7 +33,7 @@ from timenet.types import (
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.download import Artifact, download_files, ensure_archive
+from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
 
 
 # PTB-XL 500 Hz records from PhysioNet's open S3 bucket. ``_hr`` means high-rate (500 Hz) recordings.
@@ -155,24 +155,6 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[dict[str, str]]:
         yield from csv.DictReader(handle)
 
 
-def _find_dir_containing(root: Path, relative: str) -> Path:
-    """Find the directory under ``root`` that contains ``relative`` (archives extract nested).
-
-    Args:
-        root: The extraction root to search.
-        relative: A file name expected inside the wanted directory.
-
-    Returns:
-        The parent directory of the first match.
-
-    Raises:
-        FileNotFoundError: If nothing matches.
-    """
-    for match in root.rglob(relative):
-        return match.parent
-    raise FileNotFoundError(f"{relative!r} not found under {root}")
-
-
 class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
     """Connector for the ECG-QA CoT dataset (PTB-XL signals + OpenTSLM chain-of-thought QA)."""
 
@@ -196,7 +178,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             A single-element list holding the :class:`EcgQaCotSource` handle.
         """
         # PTB-XL is an S3 archive. Fetch it first (boto3 blocks the loop but parallelizes the transfer).
-        ptbxl_root = _find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
+        ptbxl_root = find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
@@ -204,7 +186,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             ensure_archive(ECG_QA_COT_URL, cache_dir),
         )
         cot_csvs = tuple(
-            (split, _find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
+            (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
         )
         return [EcgQaCotSource(records_root=ptbxl_root / "records500", answers_path=answers_path, cot_csvs=cot_csvs)]
 

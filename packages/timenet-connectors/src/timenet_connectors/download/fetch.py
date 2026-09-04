@@ -9,7 +9,8 @@ extract it once, and delete the archive. S3 objects go through boto3
 ``download_async``. The S3 branch is a plain blocking call, because boto3 already parallelizes a single
 object's transfer. A list mixing schemes runs its S3 entries one at a time and its HTTP entries
 concurrently. Progress flows through the ambient :mod:`~timenet_connectors.download.progress` sink, so
-neither takes a progress argument.
+neither takes a progress argument. :func:`find_dir_containing` locates a file inside an extracted
+tree, whose layout differs from archive to archive.
 """
 
 from collections.abc import Iterable, Mapping
@@ -27,7 +28,7 @@ from timenet_connectors.download.s3 import download_s3_object
 _DEFAULT_MAX_CONCURRENCY = 8
 
 
-__all__ = ["Artifact", "download_files", "ensure_archive"]
+__all__ = ["Artifact", "download_files", "ensure_archive", "find_dir_containing"]
 
 
 def _safe_filename(url: str) -> str:
@@ -150,3 +151,21 @@ async def ensure_archive(  # noqa: PLR0913
     marker.touch()
     zip_path.unlink(missing_ok=True)
     return target
+
+
+def find_dir_containing(root: Path, relative: str) -> Path:
+    """Find the directory under ``root`` that contains ``relative`` (archives extract nested).
+
+    Args:
+        root: The extraction root to search.
+        relative: A file name expected inside the wanted directory.
+
+    Returns:
+        The parent directory of the first match.
+
+    Raises:
+        FileNotFoundError: If nothing matches.
+    """
+    for match in root.rglob(relative):
+        return match.parent
+    raise FileNotFoundError(f"{relative!r} not found under {root}")

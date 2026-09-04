@@ -7,7 +7,7 @@ import zipfile
 import pytest
 
 from timenet_connectors.download import fetch
-from timenet_connectors.download.fetch import Artifact, download_files, ensure_archive
+from timenet_connectors.download.fetch import Artifact, download_files, ensure_archive, find_dir_containing
 
 
 def _zip_bytes(name: str, content: str) -> bytes:
@@ -259,3 +259,15 @@ def test_download_files_forwards_sha256_to_the_download(monkeypatch, tmp_path):
     monkeypatch.setattr(fetch, "download_http_many", _fake_many)
     asyncio.run(download_files([Artifact("https://h/a", tmp_path / "a", sha256="abc123")]))
     assert seen["sha256"] == "abc123"
+
+
+def test_find_dir_containing_returns_the_parent_of_a_nested_match(tmp_path):
+    nested = tmp_path / "release-1.0.3" / "records"
+    nested.mkdir(parents=True)
+    (nested / "database.csv").touch()
+    assert find_dir_containing(tmp_path, "database.csv") == nested
+
+
+def test_find_dir_containing_raises_when_nothing_matches(tmp_path):
+    with pytest.raises(FileNotFoundError, match="not found under"):
+        find_dir_containing(tmp_path, "database.csv")
