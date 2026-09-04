@@ -15,3 +15,11 @@ class AnnotationKey(StrEnum):
     """
 
     SLEEP_STAGE = "sleep_stage"
+    LIGHTS_OFF = "lights_off"
+    STUDY = "study"
+    NIGHT = "night"
+    SEX = "sex"
+    AGE = "age"
+    CONDITION = "condition"
+    RECORDING_START_LOCAL = "recording_start_local"
+    DEMOGRAPHICS_NOTE = "demographics_note"
