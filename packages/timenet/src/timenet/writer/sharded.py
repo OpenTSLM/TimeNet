@@ -160,6 +160,7 @@ class ShardedTableWriter:
                 column_encoding=encoding.column_encoding,
                 compression=encoding.compression,
                 compression_level=encoding.compression_level,
+                data_page_size=encoding.data_page_size,
             ),
         )
         self._row_group_bytes = min(row_group_target_bytes, control_target_bytes)

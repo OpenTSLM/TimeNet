@@ -31,6 +31,7 @@ from timenet.writer import encodings
 from timenet.writer.sharded import RotatingPartWriter
 from timenet.writer.value_encoding import (
     DICT_MAX_CARDINALITY,
+    ENCODING_SAMPLE_SOURCE_BYTES,
     ValueEncoding,
     distinct_bit_patterns,
     encoding_for_cardinality,
@@ -40,6 +41,7 @@ from timenet.writer.value_encoding import (
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
 _BYTES_PER_TIME_OFFSET = 8
+_PYARROW_DEFAULT_PAGE_BYTES = 1 << 20
 _LOG = logging.getLogger(__name__)
 
 
@@ -84,6 +86,21 @@ def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
 _ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())
 
 
+def _leading_sample_source(buffered: list[pa.Array], budget_bytes: int) -> list[np.ndarray]:
+    """Return the leading buffered chunks (as NumPy) that fit within ``budget_bytes``.
+
+    At least one chunk is always returned.
+    """
+    arrays: list[np.ndarray] = []
+    used = 0
+    for values in buffered:
+        arrays.append(np.asarray(values.to_numpy(zero_copy_only=False)))
+        used += values.nbytes
+        if used >= budget_bytes:
+            break
+    return arrays
+
+
 class ParquetValuesBackend(BaseValuesBackend):
     """The default values backend. It streams series into rotating Parquet shards of typed chunks."""
 
@@ -119,6 +136,12 @@ class ParquetValuesBackend(BaseValuesBackend):
         self._chunk_max_bytes = config.chunk_max_bytes
         self._compression = config.compression
         self._compression_level = config.compression_level
+        if config.data_page_size is not None:
+            self._data_page_size = config.data_page_size
+        elif config.row_group_target_bytes > _PYARROW_DEFAULT_PAGE_BYTES:
+            self._data_page_size = config.row_group_target_bytes
+        else:
+            self._data_page_size = None
         self._forced_encoding = config.value_encoding
         self._time_offsets_checked = False
 
@@ -207,7 +230,7 @@ class ParquetValuesBackend(BaseValuesBackend):
                 )
             _LOG.info("values encoding for %r: %s (forced)", spec_type, forced.value)
             return forced
-        arrays = [np.asarray(values.to_numpy(zero_copy_only=False)) for values in buffered]
+        arrays = _leading_sample_source(buffered, ENCODING_SAMPLE_SOURCE_BYTES)
         sample = sample_values(arrays)
         distinct = distinct_bit_patterns(sample)
         encoding = encoding_for_cardinality(distinct, dtype=dtype)
@@ -227,6 +250,7 @@ class ParquetValuesBackend(BaseValuesBackend):
             column_encoding=encodings.shard_encoding(value_encoding),
             compression=self._compression,
             compression_level=self._compression_level,
+            data_page_size=self._data_page_size,
         )
 
     def _verify_values_encoding(self, rel_path: str, value_encoding: ValueEncoding) -> None:

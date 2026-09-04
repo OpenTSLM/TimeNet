@@ -88,6 +88,11 @@ def test_shard_aligned_appends_round_trip(tmp_path):
         assert_datasets_equal(make_dataset(), reader.read())
 
 
+def test_high_compression_level_is_rejected_for_blosc(tmp_path):
+    with pytest.raises(TimeFValidationError, match="compression level"):
+        _write(tmp_path, compression_level=22)
+
+
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_sample_ids=("sample-1",))

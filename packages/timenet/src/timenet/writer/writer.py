@@ -28,7 +28,6 @@ from timenet.format.constants import (
     ANNOTATIONS_TEMPLATE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
-    DEFAULT_COMPRESSION_LEVEL,
     DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
@@ -79,7 +78,8 @@ class TimeFWriter:
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
-        compression_level: int = DEFAULT_COMPRESSION_LEVEL,
+        compression_level: int | None = None,
+        data_page_size: int | None = None,
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
@@ -95,7 +95,9 @@ class TimeFWriter:
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
-            compression_level: Pinned level (applied for zstd) for reproducible output.
+            compression_level: Pinned compression level, or ``None`` for the backend default.
+            data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` for
+                the backend default. Ignored by the Zarr backend.
             values_backend: Storage backend for the values plane.
             value_encoding: ``"auto"`` (the default) selects the values-column encoding per
                 ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
@@ -124,6 +126,8 @@ class TimeFWriter:
                 f"value_encoding {value_encoding!r} is only applied by the "
                 f"{ValuesBackend.PARQUET.value!r} values backend, not {values_backend!r}"
             )
+        if data_page_size is not None and data_page_size <= 0:
+            raise TimeFValidationError(f"data_page_size must be positive, got {data_page_size}")
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
@@ -132,6 +136,7 @@ class TimeFWriter:
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
         self._compression_level = compression_level
+        self._data_page_size = data_page_size
         self._values_backend_name = values_backend
         self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
         self._value_encoding: dict[str, str] = {}
@@ -325,25 +330,30 @@ class TimeFWriter:
             A mapping from ``(time_series_id, chunk_idx)`` to its on-disk placement.
         """
         if self._values_backend_name == ValuesBackend.PARQUET:
-            config = ParquetValuesConfig(
-                staging_dir=self._staging_dir,
-                id_types=self._id_types,
-                codec=self._codec,
-                shard_target_bytes=self._shard_target_bytes,
-                row_group_target_bytes=self._row_group_target_bytes,
-                chunk_max_bytes=self._chunk_max_bytes,
-                compression=self._compression,
-                compression_level=self._compression_level,
-                value_encoding=self._forced_value_encoding,
-            )
+            parquet_kwargs: dict[str, Any] = {
+                "staging_dir": self._staging_dir,
+                "id_types": self._id_types,
+                "codec": self._codec,
+                "shard_target_bytes": self._shard_target_bytes,
+                "row_group_target_bytes": self._row_group_target_bytes,
+                "chunk_max_bytes": self._chunk_max_bytes,
+                "compression": self._compression,
+                "data_page_size": self._data_page_size,
+                "value_encoding": self._forced_value_encoding,
+            }
+            if self._compression_level is not None:
+                parquet_kwargs["compression_level"] = self._compression_level
+            config = ParquetValuesConfig(**parquet_kwargs)
         else:
-            config = ZarrValuesConfig(
-                staging_dir=self._staging_dir,
-                shard_target_bytes=self._shard_target_bytes,
-                chunk_max_bytes=self._chunk_max_bytes,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            )
+            zarr_kwargs: dict[str, Any] = {
+                "staging_dir": self._staging_dir,
+                "shard_target_bytes": self._shard_target_bytes,
+                "chunk_max_bytes": self._chunk_max_bytes,
+                "compression": self._compression,
+            }
+            if self._compression_level is not None:
+                zarr_kwargs["compression_level"] = self._compression_level
+            config = ZarrValuesConfig(**zarr_kwargs)
         values_backend = make_values_backend(config)
         result = values_backend.write_series(
             unique_series,
@@ -470,18 +480,21 @@ class TimeFWriter:
         Returns:
             A sink ready to accept rows via :meth:`ShardedTableWriter.add`.
         """
+        encoding_kwargs: dict[str, Any] = {
+            "dictionary_columns": dictionary_columns,
+            "column_encoding": column_encoding,
+            "compression": self._compression,
+            "data_page_size": self._data_page_size,
+        }
+        if self._compression_level is not None:
+            encoding_kwargs["compression_level"] = self._compression_level
         return ShardedTableWriter(
             schema,
             part_path,
             staging_dir=self._staging_dir,
             control_target_bytes=self._control_shard_target_bytes,
             row_group_target_bytes=self._row_group_target_bytes,
-            encoding=encodings.ParquetEncoding(
-                dictionary_columns=dictionary_columns,
-                column_encoding=column_encoding,
-                compression=self._compression,
-                compression_level=self._compression_level,
-            ),
+            encoding=encodings.ParquetEncoding(**encoding_kwargs),
         )
 
     def _write_control_table(

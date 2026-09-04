@@ -163,7 +163,7 @@ and flushes them as one row group. A shard rotates once it reaches `shard_target
 never spans two shards, so the index locators are exact.
 
 The defaults are a 128 MiB shard target, a 4 MiB row-group target, a 1 MiB chunk limit, and zstd
-compression at level 3.
+compression at level 19 (Parquet) or 9 (Zarr).
 
 ## How the parts link together
 

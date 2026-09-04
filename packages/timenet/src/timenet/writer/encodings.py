@@ -15,6 +15,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -159,8 +160,9 @@ class ParquetEncoding:
 
     dictionary_columns: list[str]
     compression: str
-    compression_level: int
+    compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
     column_encoding: dict[str, str] | None = None
+    data_page_size: int | None = None
 
 
 def parquet_kwargs(
@@ -169,6 +171,7 @@ def parquet_kwargs(
     column_encoding: dict[str, str] | None,
     compression: str,
     compression_level: int,
+    data_page_size: int | None = None,
 ) -> dict[str, Any]:
     """Build the shared Parquet write options for one file.
 
@@ -178,6 +181,7 @@ def parquet_kwargs(
             values column.
         compression: Codec name (``"zstd"``, ``"snappy"``, ``"none"``).
         compression_level: Compression level, used only for the zstd codec.
+        data_page_size: Target uncompressed bytes per data page, or ``None`` for pyarrow's default.
 
     Returns:
         Keyword arguments for :class:`pyarrow.parquet.ParquetWriter` or ``write_table``.
@@ -187,6 +191,7 @@ def parquet_kwargs(
         "column_encoding": dict(column_encoding) if column_encoding else None,
         "compression": compression,
         "compression_level": compression_level if compression == "zstd" else None,
+        "data_page_size": data_page_size,
         "write_statistics": True,
         "write_page_index": True,
         "write_page_checksum": True,
