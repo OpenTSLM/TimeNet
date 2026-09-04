@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the physionet/sleep-edfx connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: both studies of the release. `sleep-cassette` recorded each subject at home on a
+# cassette recorder, and `sleep-telemetry` recorded each subject in hospital on a telemetry
+# system. The two use different equipment, so their channel sets and their spans differ.
+#
+# Training convention: the target of each ClassificationTask is the label the scorer wrote, so
+# `Sleep stage 4` stays `Sleep stage 4`. The 5-class problem most papers report merges stage 3
+# with stage 4 into N3 and drops the epochs labeled `Movement time` or `Sleep stage ?`. Signals
+# are archival raw (every channel at the rate and in the unit its own EDF header states, no
+# resampling); a recording can span about a day, so trim it to the scored sleep at load time.
+yaml_schema_version: 1
+dataset_id: physionet/sleep-edfx
+dataset_version: 1.0.0
+name: Sleep-EDF Expanded
+description: >-
+  Whole-night polysomnograms from two studies, one recorded at home and one in hospital, with
+  sleep stages a technician scored in 30 s epochs.
+license: ODC-By-1.0
+domains:
+  - sleep
+  - health
+tags:
+  - eeg
+  - eog
+  - emg
+  - polysomnography
+  - sleep-staging
+  - physionet
+source_url: https://physionet.org/content/sleep-edfx/1.0.0/
