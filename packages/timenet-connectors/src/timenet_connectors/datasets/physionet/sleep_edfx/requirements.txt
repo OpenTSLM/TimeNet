@@ -1,2 +1,5 @@
+# edfio parses the EDF container: the header, the per-signal ranges and the data
+# records. Pure Python, with numpy its only dependency.
+edfio>=0.4.14
 # boto3 gets the archive from the physionet-open S3 bucket.
 boto3>=1.34
