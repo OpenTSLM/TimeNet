@@ -33,11 +33,11 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import TimeInterval
+from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, tables
+from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, tables, tasks
 from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
@@ -313,6 +313,11 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             sample.add_annotations(sleep_stages)
             sample.add_annotations(recording_metadata)
 
+        dataset.register_annotations(tasks.build_vocabularies(_ID_PREFIX))
+        dataset.set_task_stream(
+            [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
+            lambda: tasks.iter_tasks(dataset.samples, _ID_PREFIX),
+        )
         return dataset
 
 

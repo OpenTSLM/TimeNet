@@ -31,16 +31,12 @@ from datetime import time
 
 from timenet.errors import TimeFFormatError
 from timenet_connectors.bases.excel import decode_day_fraction_as_time, decode_whole_number
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
 
 
 # The two workbooks of the release, named here and by the description of each sheet.
 CASSETTE_TABLE_NAME = "SC-subjects.xls"
 TELEMETRY_TABLE_NAME = "ST-subjects.xls"
-
-# The two arms of the telemetry experiment. The sheet names them in a merged header cell over
-# the pair of columns that holds each one.
-PLACEBO = "placebo"
-TEMAZEPAM = "temazepam"
 
 # The parts a key holds. A description names the parts of its own key, and one function builds
 # that key from a row and from the numbers a recording name states.
@@ -131,8 +127,8 @@ TELEMETRY_SHEET = SheetShape(
     sex_codes={1: "M", 2: "F"},
     key=(SUBJECT,),
     nights=(
-        NightColumns(night=3, lights_off=4, condition=PLACEBO),
-        NightColumns(night=5, lights_off=6, condition=TEMAZEPAM),
+        NightColumns(night=3, lights_off=4, condition=Condition.PLACEBO),
+        NightColumns(night=5, lights_off=6, condition=Condition.TEMAZEPAM),
     ),
 )
 
