@@ -37,7 +37,7 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -64,8 +64,8 @@ class Manifest:
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int | None = None
-    """The TimeF format version; omitted values derive version 2 for nullable specs, else version 1."""
+    timef_format_version: int = 1
+    """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
         """Validate the format version, the values backend, and the denormalized ``dataset_id``.
@@ -77,9 +77,6 @@ class Manifest:
             TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
                 not match ``metadata.dataset_id``.
         """
-        has_nullable = any(spec.nullable for spec in self.schema.time_series_specs)
-        if self.timef_format_version is None:
-            object.__setattr__(self, "timef_format_version", 2 if has_nullable else 1)
         if (
             type(self.timef_format_version) is not int
             or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
@@ -88,8 +85,6 @@ class Manifest:
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
             )
-        if has_nullable and self.timef_format_version == 1:
-            raise TimeNetInvalidManifestError("nullable time-series specs require format version 2")
         if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
             raise TimeNetInvalidManifestError(
                 f"unsupported values_backend {self.values_backend!r}; "

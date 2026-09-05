@@ -87,7 +87,9 @@ def test_default_format_version():
     assert _manifest().timef_format_version == 1
 
 
-def test_nullable_schema_derives_v2_and_roundtrips():
+def test_nullable_schema_roundtrips_at_format_version_1():
+    # Nullability is additive, so a nullable schema ships at version 1 and every reader that
+    # predates it can still read the dataset. It just reads no nullable specs.
     base = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=()))
     spec = replace(base.schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
@@ -96,28 +98,19 @@ def test_nullable_schema_derives_v2_and_roundtrips():
         files=base.files,
         schema=replace(base.schema, time_series_specs=(spec,)),
     )
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 1
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.from_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
 
 
-def test_v1_missing_nullable_defaults_to_false():
+def test_missing_nullable_defaults_to_false():
     data = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=())).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
     assert restored.timef_format_version == 1
     assert restored.schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
-
-
-def test_v1_cannot_claim_nullable_schema():
-    data = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=())).to_dict()
-    data["schema"]["time_series_specs"][0]["nullable"] = True
-    with pytest.raises(TimeNetInvalidManifestError, match="version 2"):
-        Manifest.from_dict(data)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
 @pytest.mark.parametrize("nullable", [1, None, "true"])
