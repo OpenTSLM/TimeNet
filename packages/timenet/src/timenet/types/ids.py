@@ -1,6 +1,6 @@
 """Generate entity ids.
 
-TimeF entity ids (samples, series, annotations, tasks) default to a canonical UUIDv7 string. UUIDv7
+TimeF entity ids (records, series, annotations, tasks) default to a canonical UUIDv7 string. UUIDv7
 (RFC 9562 §5.7) puts a 48-bit millisecond Unix timestamp in the high bits, so ids sort by creation
 time. The writer sorts rows by id. The shared timestamp prefix then forms long runs that compress
 well, and the writer can store canonical-UUID id columns as 16 raw bytes. ``uuid.uuid7()`` arrives

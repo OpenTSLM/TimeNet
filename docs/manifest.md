@@ -89,13 +89,13 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 ## `ManifestCounts`
 
-The fields are `samples`, `annotations`, `tasks` (a dict of `task_type -> count`),
+The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
 `time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
 `spec_type -> series count`). All fields default to `0` or `{}`.
 
 ## `ManifestFiles`
 
-`ManifestFiles` groups file descriptors by kind: `samples`, `annotations`, and
+`ManifestFiles` groups file descriptors by kind: `records`, `annotations`, and
 `time_series_index` (required), plus `tasks` and `time_series` (tuples, empty by default). A
 reader uses this list. It never uses a directory glob.
 

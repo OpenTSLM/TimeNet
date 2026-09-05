@@ -8,12 +8,12 @@ tags:
 
 # Datasets
 
-A dataset is a versioned collection of [samples](samples.md). Its address is `org/name@version`, for
+A dataset is a versioned collection of [records](records.md). Its address is `org/name@version`, for
 example `chengsenwang/tsqa@1.0.0`. The id is a HuggingFace-style `org/name` pair. The version is the
 semantic version of the upstream source.
 
 <figure markdown="span">
-  ![Six small sample signals under the header org/name@1.0.0, a versioned collection of samples](../assets/figures/dataset-example.svg)
+  ![Six small record signals under the header org/name@1.0.0, a versioned collection of records](../assets/figures/dataset-example.svg)
 </figure>
 
 ## Versions are immutable

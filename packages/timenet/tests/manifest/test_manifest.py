@@ -52,7 +52,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
         metadata=metadata,
         schema=schema,
         counts=ManifestCounts(
-            samples=2,
+            records=2,
             annotations=4,
             tasks={"classification": 2},
             time_series_chunks=3,
@@ -60,7 +60,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             time_series_specs={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            samples=(FilePart("samples.parquet", "sha256:aa", 10),),
+            records=(FilePart("records.parquet", "sha256:aa", 10),),
             annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
             tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
@@ -73,7 +73,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
 def test_files_all_parts_concatenates_in_order():
     files = _manifest().files
     assert files.all_parts() == (
-        *(p.path for p in files.samples),
+        *(p.path for p in files.records),
         *(p.path for p in files.annotations),
         *(p.path for p in files.time_series_index),
         *(p.path for p in files.tasks),
@@ -173,7 +173,7 @@ def test_from_dict_requires_core_blocks(missing):
     "entry",
     [
         "oops",  # a bare string where a file descriptor object is required
-        {"path": "samples/part-00000000.parquet"},  # missing checksum and size
+        {"path": "records/part-00000000.parquet"},  # missing checksum and size
         {"path": "x", "checksum": "sha256:" + "a" * 64},  # missing size
         {"path": 123, "checksum": "sha256:" + "a" * 64, "size": 10},  # path not a string
         {"path": "", "checksum": "sha256:" + "a" * 64, "size": 10},  # empty path
@@ -182,14 +182,14 @@ def test_from_dict_requires_core_blocks(missing):
         {"path": "x", "checksum": "sha256:" + "a" * 64, "size": True},  # bool masquerading as an int
         {"path": "/etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # absolute path
         {"path": "../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal above root
-        {"path": "samples/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
+        {"path": "records/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
     ],
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
     # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
     # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
     d = _manifest().to_dict()
-    d["files"]["samples"] = [entry]
+    d["files"]["records"] = [entry]
     with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
@@ -269,10 +269,10 @@ def test_null_block_rejected(block):
 
 @given(
     version=st.tuples(st.integers(0, 50), st.integers(0, 50), st.integers(0, 50)),
-    samples=st.integers(0, 10_000),
+    records=st.integers(0, 10_000),
     task_counts=st.dictionaries(st.sampled_from(["classification", "labeling"]), st.integers(0, 999)),
 )
-def test_codec_roundtrip_property(version, samples, task_counts):
+def test_codec_roundtrip_property(version, records, task_counts):
     manifest = Manifest(
         dataset_id="demo/ds",
         metadata=DatasetMetadata(
@@ -282,9 +282,9 @@ def test_codec_roundtrip_property(version, samples, task_counts):
             description="d",
             license=License.MIT,
         ),
-        counts=ManifestCounts(samples=samples, tasks=task_counts),
+        counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(
-            samples=(FilePart("samples.parquet", "sha256:aa", 10),),
+            records=(FilePart("records.parquet", "sha256:aa", 10),),
             annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
         ),

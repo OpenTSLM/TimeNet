@@ -2,8 +2,8 @@
 
 This module lives outside ``dataset.py`` to keep the model small. It uses only the dataset's public
 surface and the standard library, so it needs no CLI or rich dependency. It recomputes counts from the
-in-memory samples and tasks, because a loaded dataset drops the manifest counts block. The sample preview
-reads only span metadata. The code samples value dtypes from one series per spec.
+in-memory records and tasks, because a loaded dataset drops the manifest counts block. The record preview
+reads only span metadata. The code checks value dtypes from one series per spec.
 """
 
 from __future__ import annotations
@@ -35,13 +35,13 @@ def describe_text(dataset: TimeFDataset, *, rows: int) -> str:
 
     Args:
         dataset: The dataset to summarize.
-        rows: Number of samples to show in the preview.
+        rows: Number of records to show in the preview.
 
     Returns:
         The formatted summary string.
     """
-    samples = dataset.samples
-    unique_series = {ts.time_series_id: ts for sample in samples for ts in sample.time_series}
+    records = dataset.records
+    unique_series = {ts.time_series_id: ts for record in records for ts in record.time_series}
 
     blocks = [
         _identity(dataset),
@@ -67,10 +67,10 @@ def _identity(dataset: TimeFDataset) -> str:
 
 def _counts(dataset: TimeFDataset, unique_series: dict[str, TimeSeries]) -> str:
     task_counts = Counter(str(task.task_type) for task in dataset.tasks)
-    annotation_ids = {ann.id for sample in dataset.samples for ann in sample.annotations}
+    annotation_ids = {ann.id for record in dataset.records for ann in record.annotations}
     spec_counts = Counter(ts.spec.spec_type for ts in unique_series.values())
     fields = {
-        "samples": str(len(dataset.samples)),
+        "records": str(len(dataset.records)),
         "series": _histogram(spec_counts),
         "annotations": str(len(annotation_ids)),
         "tasks": _histogram(task_counts),
@@ -100,23 +100,23 @@ def _specs(unique_series: dict[str, TimeSeries]) -> str:
 
 
 def _preview(dataset: TimeFDataset, rows: int) -> str:
-    samples = dataset.samples
-    if not samples:
+    records = dataset.records
+    if not records:
         return ""
-    header = ("sample_id", "channels", "length", "tasks", "annotations")
+    header = ("record_id", "signals", "length", "tasks", "annotations")
     table_rows = []
-    for sample in samples[:rows]:
-        length = point_count(sample.time_series[0]) if sample.time_series else None
+    for record in records[:rows]:
+        length = point_count(record.time_series[0]) if record.time_series else None
         table_rows.append(
             (
-                sample.sample_id,
-                str(len(sample.time_series)),
+                record.record_id,
+                str(len(record.time_series)),
                 "?" if length is None else str(length),
-                str(len(sample.task_ids)),
-                str(len(sample.annotations)),
+                str(len(record.task_ids)),
+                str(len(record.annotations)),
             )
         )
-    heading = f"samples (first {min(rows, len(samples))} of {len(samples)})"
+    heading = f"records (first {min(rows, len(records))} of {len(records)})"
     return f"{heading}\n" + _fixed_width(header, table_rows)
 
 

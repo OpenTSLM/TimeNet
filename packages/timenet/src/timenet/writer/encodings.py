@@ -26,7 +26,7 @@ TIME_OFFSETS_COLUMN = "time_offsets_us.list.element"
 """Parquet path of the shard time-offsets column. This is the nested element of the irregular-series
 list."""
 
-SHARD_CATEGORICAL = ["spec_type", "channel"]
+SHARD_CATEGORICAL = ["spec_type", "signal"]
 """These shard columns always use dictionary encoding, independent of the values encoding choice."""
 
 _PARQUET_COLUMN_ENCODING = {
@@ -41,16 +41,16 @@ _DICTIONARY_MARKERS = frozenset({"RLE_DICTIONARY", "PLAIN_DICTIONARY"})
 """Footer names for dictionary-encoded indices. PLAIN_DICTIONARY is the name used before Parquet
 version 2.4."""
 
-INDEX_DICTIONARY = ["spec_type", "channel", "chunk_file"]
+INDEX_DICTIONARY = ["spec_type", "signal", "chunk_file"]
 INDEX_ENCODING = {
     "chunk_idx": "DELTA_BINARY_PACKED",
     "chunk_major_idx": "DELTA_BINARY_PACKED",
     "chunk_minor_idx": "DELTA_BINARY_PACKED",
 }
 
-SAMPLES_DICTIONARY = [
+RECORDS_DICTIONARY = [
     "time_series.list.element.spec_type",
-    "time_series.list.element.channel",
+    "time_series.list.element.signal",
     "time_series.list.element.axis_type",
 ]
 

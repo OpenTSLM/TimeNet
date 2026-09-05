@@ -88,7 +88,7 @@ def _stage(label, onset_s, end_s):
     return Annotation(
         key=AnnotationKey.SLEEP_STAGE,
         value=label,
-        span=TimeInterval.micros(onset_s * US_PER_S, end_s * US_PER_S, time_series_ids=("a-channel",)),
+        span=TimeInterval.micros(onset_s * US_PER_S, end_s * US_PER_S, time_series_ids=("a-signal",)),
         id=f"{_SAMPLE_ID}-stage-{onset_s}",
     )
 
@@ -232,7 +232,7 @@ def _schemas(built):
 
 
 def test_age_is_a_scalar_with_a_unit():
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
     age = _pick(built, ScalarPredictionTask)
     assert age.target == pytest.approx(33.0)
     assert age.unit == "year"
@@ -241,7 +241,7 @@ def test_age_is_a_scalar_with_a_unit():
 
 
 def test_sex_carries_the_decoded_letter():
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
     sex = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex")
     assert sex.target == "F"
     assert sex.target_schema == "sleep-edfx-vocabulary-sex"
@@ -252,20 +252,20 @@ def test_the_same_sheet_code_decodes_to_the_other_letter_elsewhere():
     # The two subject tables code sex with opposite meanings. The task takes the value that the
     # decoder gave.
     telemetry = [_fact("sex", "M"), _fact("age", 40)]
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, telemetry, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, telemetry, []))
     assert _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex").target == "M"
 
 
 def test_a_telemetry_night_carries_its_condition():
     facts = [*_CASSETTE_FACTS, _fact("condition", "placebo")]
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, facts, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, facts, []))
     condition = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-condition")
     assert condition.target == "placebo"
     assert condition.scope is None
 
 
 def test_a_cassette_recording_carries_no_condition_task():
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, []))
     assert "sleep-edfx-vocabulary-condition" not in _schemas(built)
 
 
@@ -275,7 +275,7 @@ def test_provenance_becomes_no_task():
         _fact("recording_start_local", "1989-04-24T16:13:00"),
         _fact("demographics_note", "header says Male_31yr"),
     ]
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, facts, []))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, facts, []))
     # This recording can answer these two questions. The builder draws nothing from the four
     # provenance keys that the input carries.
     assert [type(one) for one in built] == [ScalarPredictionTask, ClassificationTask]
@@ -284,30 +284,30 @@ def test_provenance_becomes_no_task():
 
 def test_a_missing_age_raises_rather_than_dropping_the_question():
     with pytest.raises(TimeFFormatError, match="states no age"):
-        list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, [_fact("sex", "F")], []))
+        list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, [_fact("sex", "F")], []))
 
 
 def test_a_missing_sex_raises_rather_than_dropping_the_question():
     with pytest.raises(TimeFFormatError, match="states no sex"):
-        list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, [_fact("age", 33)], []))
+        list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, [_fact("age", 33)], []))
 
 
 def test_an_age_that_is_not_a_whole_number_raises():
     facts = [_fact("age", "thirty-three"), _fact("sex", "F")]
     with pytest.raises(TimeFFormatError, match="not a whole number of years"):
-        list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, facts, []))
+        list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, facts, []))
 
 
 def test_a_sex_the_release_does_not_write_raises():
     facts = [_fact("age", 33), _fact("sex", 1)]
     with pytest.raises(TimeFFormatError, match="does not write"):
-        list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, facts, []))
+        list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, facts, []))
 
 
 def test_a_key_stated_twice_raises():
     facts = [*_CASSETTE_FACTS, _fact("age", 40)]
     with pytest.raises(TimeFFormatError, match="twice"):
-        list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, facts, []))
+        list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, facts, []))
 
 
 def test_the_night_runs_from_the_first_sleep_to_the_last():
@@ -335,7 +335,7 @@ def test_a_scoring_with_no_sleep_gives_no_night():
 
 def test_the_localization_task_is_sparse_and_names_no_series():
     stages = [_stage("Sleep stage 2", 3600, 25200)]
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, stages))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, stages))
     night = _pick(built, TemporalLocalizationTask)
     assert night.mode == LocalizationMode.SPARSE
     assert night.target == (TimeInterval.micros(3600 * US_PER_S, 25200 * US_PER_S),)
@@ -343,7 +343,7 @@ def test_the_localization_task_is_sparse_and_names_no_series():
 
 
 def test_a_recording_with_no_scored_sleep_carries_no_night_task():
-    built = list(tasks.build_sample_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, [_stage("Sleep stage W", 0, 30)]))
+    built = list(tasks.build_record_tasks(_SAMPLE_ID, _PREFIX, _CASSETTE_FACTS, [_stage("Sleep stage W", 0, 30)]))
     assert not any(isinstance(t, TemporalLocalizationTask) for t in built)
 
 

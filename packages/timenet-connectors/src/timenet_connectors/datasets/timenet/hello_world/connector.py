@@ -2,9 +2,9 @@
 
 ``HelloWorldConnector`` needs no network. It creates a fully deterministic dataset. The writer and
 reader test suites use this dataset as a fixture for round-trip tests. The connector covers two
-modalities, a shared data source, a series shared across samples, and a windowed sample. It also
+modalities, a shared data source, a series shared across records, and a windowed record. It also
 covers a longer series. The writer tests split this longer series into chunks under a small chunk
-cap. The connector covers all three annotation shapes, including one shared across samples, and a
+cap. The connector covers all three annotation shapes, including one shared across records, and a
 task chain.
 """
 
@@ -68,7 +68,7 @@ def _wave_values(
 
     Args:
         fn: The wave function to apply to the angular time base, for example ``np.sin``.
-        n: The number of samples.
+        n: The number of records.
         phase: The phase offset in radians.
 
     Returns:
@@ -87,7 +87,7 @@ def _wave(
 
     Args:
         fn: The wave function to apply to the angular time base, for example ``np.sin``.
-        n: The number of samples.
+        n: The number of records.
         phase: The phase offset in radians.
 
     Returns:
@@ -127,28 +127,28 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset = TimeFDataset(metadata=self.metadata())
         short, long = raw_refs[0], raw_refs[1]
 
-        # A series shared across two samples. This uses the dedupe-by-id path.
+        # A series shared across two records. This uses the dedupe-by-id path.
         shared = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values, phase=0.0),
             spec=_SINE,
-            channel="a",
+            signal="a",
             time_axis=_AXIS,
             source_id="rec-0",
             time_series_id="ts-shared",
         )
-        # An annotation shared across two samples. This uses the dedupe-by-id path.
+        # An annotation shared across two records. This uses the dedupe-by-id path.
         cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
-        # Sample 0: the full recording, with two modalities, all annotation shapes, and a task chain.
+        # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = TimeSeries.from_values(
             _wave_values(np.cos, short.n_values, phase=0.0),
             spec=_COSINE,
-            channel="b",
+            signal="b",
             time_axis=_AXIS,
             source_id="rec-0",
             time_series_id="ts-cos-0",
         )
-        sample0 = dataset.add_sample(time_series=(shared, cosine), subject_ids=("subj-0",), sample_id="sample-0")
+        record0 = dataset.add_record(time_series=(shared, cosine), subject_ids=("subj-0",), record_id="record-0")
         # These annotations have names. The localization task below can reference them by id instead
         # of repeating the literal values.
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
@@ -157,7 +157,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
             id="art-0",
         )
-        sample0.add_annotations(
+        record0.add_annotations(
             [
                 Annotation(key="age", value=64, unit="years", id="age-0"),
                 cohort,
@@ -167,7 +167,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         )
         classification = ClassificationTask(target="normal", id="task-cls-0")
         dataset.add_tasks(
-            sample0,
+            record0,
             [
                 classification,
                 AnswerTask(
@@ -195,21 +195,21 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ],
         )
 
-        # Sample 1: this reuses the shared series and adds a longer series. The writer tests split the
+        # Record 1: this reuses the shared series and adds a longer series. The writer tests split the
         # longer series into chunks under a small chunk cap.
         long_series = TimeSeries(
             spec=_SINE,
-            channel="a",
+            signal="a",
             time_axis=_AXIS,
             loader=_wave(np.sin, long.n_values, phase=1.0),
             source_id="rec-1",
             time_series_id="ts-long-1",
             n_values=long.n_values,
         )
-        sample1 = dataset.add_sample(time_series=(shared, long_series), subject_ids=("subj-1",), sample_id="sample-1")
-        sample1.add_annotation(cohort)  # same instance and id, so the annotation is shared
+        record1 = dataset.add_record(time_series=(shared, long_series), subject_ids=("subj-1",), record_id="record-1")
+        record1.add_annotation(cohort)  # same instance and id, so the annotation is shared
 
-        # Sample 2: a windowed slice with a scoped classification task. This window covers the second
+        # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
         # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
         # window.
@@ -217,17 +217,17 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         window = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
             spec=_SINE,
-            channel="a",
+            signal="a",
             time_axis=_AXIS.at_index(window_start),
             source_id="rec-0",
             time_series_id="ts-window-2",
         )
-        sample2 = dataset.add_sample(time_series=(window,), subject_ids=("subj-0",), sample_id="sample-2")
-        # A scope narrows the input to a region. This task has the same task type as the whole-sample
+        record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+        # A scope narrows the input to a region. This task has the same task type as the whole-record
         # label above, but it supplies the window. Span times use the source recording timeline, so
         # this task's span sits inside the window's span.
         dataset.add_task(
-            sample2,
+            record2,
             ClassificationTask(
                 target="onset",
                 id="task-cls-2",

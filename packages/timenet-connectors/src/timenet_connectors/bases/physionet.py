@@ -107,7 +107,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
         Raises:
             TimeFFormatError: If the header is malformed: an unparseable gain, a signal line with no
-                channel name, or fewer signal lines than the record declares.
+                signal name, or fewer signal lines than the record declares.
         """
         text = Path(f"{record_base}.hea").read_text(encoding="utf-8")
         lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
@@ -121,7 +121,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             if match is None:
                 raise TimeFFormatError(f"{record_base}.hea: cannot parse the gain field {fields[2]!r}")
             if len(fields) <= _DESCRIPTION_FIELD:
-                raise TimeFFormatError(f"{record_base}.hea: signal line names no channel: {line!r}")
+                raise TimeFFormatError(f"{record_base}.hea: signal line names no signal: {line!r}")
             gain = float(match["gain"])
             dat_names.append(fields[0])
             raw_formats.append(raw_format)

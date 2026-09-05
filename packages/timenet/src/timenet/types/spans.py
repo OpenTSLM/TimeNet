@@ -5,8 +5,8 @@ steps). The frame changes what the numbers mean, so the frame is the type. Shape
 twice, so it is a subtype within each frame.
 
 A time span reads its bounds as microseconds on the **source recording timeline**, the frame a series'
-axis places its values in. This keeps it meaningful on a windowed sample that starts partway into the
-recording. It covers the whole sample, or a subset of series named by ``time_series_ids``.
+axis places its values in. This keeps it meaningful on a windowed record that starts partway into the
+recording. It covers the whole record, or a subset of series named by ``time_series_ids``.
 
 A step span reads its bounds as ordinal indices into one series' own array. A step index means nothing
 without a series to count on, so a step span names exactly one ``time_series_id``. Steps exist for a
@@ -90,7 +90,7 @@ class Span:
 class TimeSpan(Span):
     """Abstract base for a region on the recording timeline. Bounds are microseconds.
 
-    Covers the whole sample when ``time_series_ids`` is ``None``, or a subset of series when it names
+    Covers the whole record when ``time_series_ids`` is ``None``, or a subset of series when it names
     them. Valid only on a series whose axis is a timeline (regular or irregular).
     """
 
@@ -100,7 +100,7 @@ class TimeSpan(Span):
     start_us: int
     """The position, or the start of the interval, in microseconds on the source recording timeline."""
     time_series_ids: tuple[str, ...] | None = None
-    """Series the span is scoped to. ``None`` covers every series in the sample."""
+    """Series the span is scoped to. ``None`` covers every series in the record."""
 
     def __post_init__(self) -> None:
         """Validate the base, then the start bound and the series scope.
@@ -117,7 +117,7 @@ class TimeSpan(Span):
             hint="Use seconds() to convert from recording seconds",
         )
         if self.time_series_ids is not None and not self.time_series_ids:
-            raise TimeFValidationError("TimeSpan time_series_ids must be None (whole sample) or non-empty, got ()")
+            raise TimeFValidationError("TimeSpan time_series_ids must be None (whole record) or non-empty, got ()")
 
 
 @dataclass(frozen=True, kw_only=True)

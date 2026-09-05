@@ -26,7 +26,7 @@ Figures produced: `dataset-example`, `time-series-example`, `annotation-static`,
 
 ## Structural diagrams (mermaid, inline)
 
-The pipeline, sample-composition, and annotation/task diagrams are **mermaid**, written directly in the
+The pipeline, record-composition, and annotation/task diagrams are **mermaid**, written directly in the
 doc pages as ` ```mermaid ` code blocks (the `superfences` mermaid fence is enabled in `zensical.toml`).
 The block on the page is the source; there is nothing to pre-render and no separate `.mmd` files to keep
 in sync. Zensical renders them client-side, so they pick up the site fonts and adapt to the light and

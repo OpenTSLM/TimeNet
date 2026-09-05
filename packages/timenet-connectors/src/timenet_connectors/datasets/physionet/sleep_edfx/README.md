@@ -19,7 +19,7 @@ source wins for a named reason, and the connector keeps the other beside it.**
 | --- | --- | --- |
 | age, sex | the subject table | the EDF header, kept in a `demographics_note` |
 | lights off | the subject table | — |
-| rate, gain, unit of a channel | that file's own EDF header | — |
+| rate, gain, unit of a signal | that file's own EDF header | — |
 | sleep stage | the hypnogram | — |
 | where the session ends | the later of the signals and the scoring | the connector keeps both |
 
@@ -31,21 +31,21 @@ published work joins against it.
 
 The release ships a scoring and two subject tables. It ships no task. What those become is a
 decision, and this section states the decisions that this connector takes. A build gives 484 248
-tasks over 197 samples *(measured)*.
+tasks over 197 records *(measured)*.
 
 
 | the question | type | count | scope |
 | --- | --- | --- | --- |
 | what stage is this 30 s epoch | `ClassificationTask` | 483 419 | one epoch |
-| where did the subject sleep | `TemporalLocalizationTask` | 197 | the whole sample |
-| how old is this subject | `ScalarPredictionTask` | 197 | the whole sample |
-| what sex is this subject | `ClassificationTask` | 197 | the whole sample |
-| was this night drug or placebo | `ClassificationTask` | 44 | the whole sample |
-| where did the lights go out | `TemporalLocalizationTask` | 194 | the whole sample |
+| where did the subject sleep | `TemporalLocalizationTask` | 197 | the whole record |
+| how old is this subject | `ScalarPredictionTask` | 197 | the whole record |
+| what sex is this subject | `ClassificationTask` | 197 | the whole record |
+| was this night drug or placebo | `ClassificationTask` | 44 | the whole record |
+| where did the lights go out | `TemporalLocalizationTask` | 194 | the whole record |
 
 
 `Task.scope` is what separates the two kinds. A scope names a region of the recording. No scope
-means the question is about the whole sample.
+means the question is about the whole record.
 
 ### The scoring
 
@@ -75,10 +75,10 @@ connector. The eight labels count as `Sleep stage W` 290 365, `Sleep stage 2` 88
 `Sleep stage R` 34 184, `Sleep stage 1` 25 175, `Sleep stage ?` 25 047, `Sleep stage 3` 12 191,
 `Sleep stage 4` 7263 and `Movement time` 211 *(measured)*.
 
-**An epoch task names no channel.** Its `scope` covers the epoch and leaves `time_series_ids`
-unset. A sleep-stage annotation names the four channels that the technician read, because that is
+**An epoch task names no signal.** Its `scope` covers the epoch and leaves `time_series_ids`
+unset. A sleep-stage annotation names the four signals that the technician read, because that is
 what the release states. A task states what a model must answer, which is a different thing. If a
-task names four channels, a model cannot read the respiration or the temperature channel. That is
+task names four signals, a model cannot read the respiration or the temperature signal. That is
 a modeling decision, and this connector does not make it for a consumer.
 
 **Where sleep begins and ends is its own task.** A `TemporalLocalizationTask` asks for the region
@@ -97,7 +97,7 @@ omits the task, because nothing can ask a recording for a moment it does not hol
 ### The subject tables
 
 **A fact about the whole recording becomes a task with no scope.** Age, sex and the drug condition
-each carry no span as an annotation, and each becomes a whole-sample task. These are the questions
+each carry no span as an annotation, and each becomes a whole-record task. These are the questions
 that the two studies asked. The cassette study measured the effect of age on sleep, and the
 telemetry study measured the effect of temazepam.
 
@@ -123,15 +123,15 @@ where the recording came from.
 
 **The connector registers the label vocabularies, and does not attach them.** Three closed sets
 exist: the eight sleep stages, the two sexes and the two conditions. Each becomes one annotation
-that no sample carries, and `target_schema` on a task names the set that its target draws from. A
+that no record carries, and `target_schema` on a task names the set that its target draws from. A
 name alone tells a consumer nothing about what is in the set.
 
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
-a dataset with far more tasks than samples, and this release has about 2450 tasks for each
+a dataset with far more tasks than records, and this release has about 2450 tasks for each
 recording. Streamed tasks are trusted and not validated, so each task carries its own
-`sample_ids`, and none appears in `Sample.task_ids`.
+`record_ids`, and none appears in `Record.task_ids`.
 
-**The stream reads no file.** It expands the sleep-stage annotations that the samples already
+**The stream reads no file.** It expands the sleep-stage annotations that the records already
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.
 
 **The connector invents no prompt.** The release states no question in words. A consumer who wants
@@ -147,11 +147,11 @@ of the 197 scorings end after their own signals stop *(measured)*. The last entr
 toward a full day, whatever time the recorder stopped.
 
 **Decision.** The connector keeps both readings. It writes the scoring as the file states that
-scoring. The sample then declares a session span that covers the later of the two readings. To
+scoring. The record then declares a session span that covers the later of the two readings. To
 trim the scoring is a preprocessing decision, and this connector does not make it.
 
-**Consequence.** A sleep stage names the four channels that the technician read. TimeF thus checks
-it against the windows of those channels, and not against the declared span. The last entry of
+**Consequence.** A sleep stage names the four signals that the technician read. TimeF thus checks
+it against the windows of those signals, and not against the declared span. The last entry of
 those 155 recordings falls outside, and `add_annotations` warns one time for each. A consumer that
 reads the end of a recording finds labeled epochs with no signal beneath them. This consumer must
 decide whether to keep them.
@@ -164,11 +164,11 @@ differ by a year, which is the age at the recording against the age at enrollmen
 contradict the table on sex.
 
 **Decision.** The table wins, because it is the registry of the study and published work joins
-against it. The sample carries a `demographics_note` that gives both readings. Neither the `age`
+against it. The record carries a `demographics_note` that gives both readings. Neither the `age`
 nor the `sex` annotation changes.
 
 **Consequence.** A consumer who reads `age` and `sex` gets the answer of the table on every
-sample. The reading of the header survives only in the note, on those 24 recordings and nowhere
+record. The reading of the header survives only in the note, on those 24 recordings and nowhere
 else. The age task takes the table value, so a model that predicts age answers for age at
 enrollment.
 
@@ -201,8 +201,8 @@ nothing, because the release states the clock time and this connector does not c
 three carry no lights-off task, because nothing validates a streamed task. Such a target ships
 56 000 s past the end of its own recording with no warning.
 
-**Consequence.** 194 of the 197 samples answer the lights-off question, and three do not. A consumer
-that counts tasks thus finds fewer tasks than samples. All 197 carry the annotation, and on those
+**Consequence.** 194 of the 197 records answer the lights-off question, and three do not. A consumer
+that counts tasks thus finds fewer tasks than records. All 197 carry the annotation, and on those
 three it names a moment that the recording does not contain. A consumer that reads a lights-off
 moment must check it against the session span. A moment past that end means the lights were already
 off when the recorder started.
@@ -210,14 +210,14 @@ off when the recorder started.
 ### The two subject tables code sex with opposite meanings — **Handled**
 
 **Problem.** The cassette table heads its sex column `sex (F=1)`. The telemetry table codes its
-own sex column in the opposite way. A raw code on a sample merges two opposite facts under one
+own sex column in the opposite way. A raw code on a record merges two opposite facts under one
 value.
 
 **Decision.** The connector decodes each subject table with its own map before it builds an
-annotation. A sample never carries a raw code.
+annotation. A record never carries a raw code.
 
-**Consequence.** `sex` reads `F` or `M` on every sample of both studies, and the sex task draws
-from a two-member vocabulary. It is not necessary for a consumer to know the origin of a sample.
+**Consequence.** `sex` reads `F` or `M` on every record of both studies, and the sex task draws
+from a two-member vocabulary. It is not necessary for a consumer to know the origin of a record.
 
 ### The connector does not repair a truncated file — **Handled**
 
@@ -228,6 +228,6 @@ short file then looks like a whole one.
 `TimeFFormatError`. A repair with no error hides a changed release.
 
 **Consequence.** A build stops on a truncated file. It writes no short recording that says nothing
-about its own length. A consumer never receives a sample whose signals end early with no warning.
+about its own length. A consumer never receives a record whose signals end early with no warning.
 Whoever runs the build learns that this copy of the release is not the copy that this connector
 expects.

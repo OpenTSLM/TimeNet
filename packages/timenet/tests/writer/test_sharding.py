@@ -38,7 +38,7 @@ _SMALL_TARGETS = {
 }
 
 
-def _sharded_dataset(n_samples: int, series_len: int) -> TimeFDataset:
+def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     """Build a synthetic dataset large enough to shard every artifact type under small byte targets."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -51,12 +51,12 @@ def _sharded_dataset(n_samples: int, series_len: int) -> TimeFDataset:
     )
     spec = TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless)
     axis = RegularAxis.from_rate_hz(16)
-    for i in range(n_samples):
+    for i in range(n_records):
         values = [float((i + j) % 11) for j in range(series_len)]
-        ts = TimeSeries.from_values(values, spec=spec, channel="a", time_axis=axis, time_series_id=f"ts-{i:03d}")
-        sample = dataset.add_sample(time_series=(ts,), subject_ids=(f"subj-{i}",), sample_id=f"sample-{i:03d}")
-        sample.add_annotation(Annotation(key="label", value=f"cls-{i % 3}", id=f"ann-{i:03d}"))
-        dataset.add_task(sample, ClassificationTask(target=f"c{i % 2}", id=f"task-{i:03d}"))
+        ts = TimeSeries.from_values(values, spec=spec, signal="a", time_axis=axis, time_series_id=f"ts-{i:03d}")
+        record = dataset.add_record(time_series=(ts,), subject_ids=(f"subj-{i}",), record_id=f"record-{i:03d}")
+        record.add_annotation(Annotation(key="label", value=f"cls-{i % 3}", id=f"ann-{i:03d}"))
+        dataset.add_task(record, ClassificationTask(target=f"c{i % 2}", id=f"task-{i:03d}"))
     return dataset
 
 
@@ -74,13 +74,13 @@ def _index_rows(version_dir, manifest):
 # ---- round trip ------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("n_samples", "series_len"), [(12, 128), (5, 300), (20, 40)])
-def test_all_artifact_types_shard_and_round_trip(tmp_path, n_samples, series_len):
-    original = _sharded_dataset(n_samples, series_len)
-    version_dir = _write(tmp_path, _sharded_dataset(n_samples, series_len), **_SMALL_TARGETS)
+@pytest.mark.parametrize(("n_records", "series_len"), [(12, 128), (5, 300), (20, 40)])
+def test_all_artifact_types_shard_and_round_trip(tmp_path, n_records, series_len):
+    original = _sharded_dataset(n_records, series_len)
+    version_dir = _write(tmp_path, _sharded_dataset(n_records, series_len), **_SMALL_TARGETS)
     files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
     classification_parts = [part for part in files.tasks if "task=classification" in part.path]
-    assert len(files.samples) >= 3
+    assert len(files.records) >= 3
     assert len(files.annotations) >= 3
     assert len(files.time_series_index) >= 3
     assert len(classification_parts) >= 3
@@ -96,14 +96,14 @@ def test_all_artifact_types_shard_and_round_trip(tmp_path, n_samples, series_len
 
 
 def test_index_is_globally_sorted_across_parts(tmp_path):
-    # The bounded-memory index writer emits rows in encoded (sample_id, time_series_id, chunk_idx) order
+    # The bounded-memory index writer emits rows in encoded (record_id, time_series_id, chunk_idx) order
     # by nested iteration; across dozens of parts the concatenation must stay globally sorted, which is
     # what lets the reader concatenate parts in manifest order and bisect.
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert len(manifest.files.time_series_index) >= 3
     rows = _index_rows(version_dir, manifest)
-    keys = [(r["sample_id"], r["time_series_id"], r["chunk_idx"]) for r in rows]
+    keys = [(r["record_id"], r["time_series_id"], r["chunk_idx"]) for r in rows]
     assert keys == sorted(keys)
     assert len(rows) == manifest.counts.time_series_index_rows
 
@@ -131,8 +131,8 @@ def test_open_and_build_samples_reads_no_value_shard(tmp_path, monkeypatch):
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
-        _ = [s.time_series for s in dataset.samples]  # touch every sample's series metadata
-    # values are lazy; building samples may open control-plane tables but no value shard (under time_series/)
+        _ = [s.time_series for s in dataset.records]  # touch every record's series metadata
+    # values are lazy; building records may open control-plane tables but no value shard (under time_series/)
     assert not [p for p in opened if "/time_series/" in p]
 
 
@@ -150,7 +150,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
-        series = next(ts for s in dataset.samples for ts in s.time_series if ts.time_series_id == series_id)
+        series = next(ts for s in dataset.records for ts in s.time_series if ts.time_series_id == series_id)
         series.to_arrow()
     opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened if "/time_series/" in p}
     assert opened_rel == expected_shards  # exactly the series' value shards, nothing else
@@ -174,6 +174,6 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
 
     monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = next(ts for s in reader.read().samples for ts in s.time_series if ts.time_series_id == "ts-006")
+        series = next(ts for s in reader.read().records for ts in s.time_series if ts.time_series_id == "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards

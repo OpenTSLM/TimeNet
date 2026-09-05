@@ -251,7 +251,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         closed = 0
         active: tuple[str, bool] | None = None  # one partition is open at a time, see the sort below
         total = len(unique_series)
-        # The sort is stable, so the caller's (spec_type, channel, time_series_id) order survives within a
+        # The sort is stable, so the caller's (spec_type, signal, time_series_id) order survives within a
         # partition. The group by whether a series stores time offsets keeps its values array and its time
         # offsets array the same length. Every series in an irregular partition writes to both, so one
         # element offset addresses either.
@@ -293,7 +293,7 @@ class ZarrValuesBackend(BaseValuesBackend):
                     chunk_file=rel,
                     data_index=ChunkDataIndex(major_idx=base + start, minor_idx=None),
                     spec_type=spec_type,
-                    channel=ts.channel,
+                    signal=ts.signal,
                     n_values=n,
                 )
             on_series_done(completed, total)

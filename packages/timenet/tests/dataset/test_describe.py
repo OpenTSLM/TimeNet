@@ -11,13 +11,13 @@ def test_describe_text_has_all_sections():
     assert "timenet/hello-world @ 1.0.0" in text
     assert "CC-BY-4.0" in text
     assert "counts" in text
-    # Counts are asserted loosely: make_dataset() gains samples and specs further up the stack, and
+    # Counts are asserted loosely: make_dataset() gains records and specs further up the stack, and
     # this test is about the sections rendering, not the fixture's exact size.
     assert "classification=" in text  # tasks histogram
     assert "sine=" in text  # series-by-spec histogram
     assert "specs" in text
     assert "sine" in text
-    assert "sample-0" in text  # sample preview
+    assert "record-0" in text  # record preview
 
 
 def test_describe_works_without_derived_schema():
@@ -25,14 +25,14 @@ def test_describe_works_without_derived_schema():
     assert dataset.schema is None
     text = describe_text(dataset, rows=5)
     assert "timenet/hello-world @ 1.0.0" in text
-    assert "sample-0" in text
+    assert "record-0" in text
 
 
 def test_describe_rows_limits_preview():
     text = describe_text(make_dataset(), rows=1)
     assert "first 1 of " in text
-    assert "sample-0" in text
-    assert "sample-1" not in text
+    assert "record-0" in text
+    assert "record-1" not in text
 
 
 def test_describe_prints_to_stdout(capsys):
@@ -48,4 +48,4 @@ def test_describe_empty_dataset_does_not_crash():
     )
     text = describe_text(empty, rows=5)
     assert "demo/empty @ 1.0.0" in text
-    assert "samples      0" in text
+    assert "records      0" in text

@@ -55,7 +55,7 @@ def _spec(dtype: str = "float32") -> TimeSeriesSpec:
     )
 
 
-def _dataset(spec: TimeSeriesSpec, values, channel: str = "c", sample_id: str = "sample-0") -> TimeFDataset:
+def _dataset(spec: TimeSeriesSpec, values, signal: str = "c", record_id: str = "record-0") -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/dtypes",
@@ -69,11 +69,11 @@ def _dataset(spec: TimeSeriesSpec, values, channel: str = "c", sample_id: str = 
     ts = TimeSeries.from_values(
         values,
         spec=spec,
-        channel=channel,
+        signal=signal,
         time_axis=RegularAxis.from_rate_hz(1),
-        time_series_id=f"ts-{channel}",
+        time_series_id=f"ts-{signal}",
     )
-    dataset.add_sample(time_series=(ts,), sample_id=sample_id)
+    dataset.add_record(time_series=(ts,), record_id=record_id)
     dataset.derive_schema()
     return dataset
 
@@ -86,7 +86,7 @@ def _write(tmp_path, dataset, **kwargs) -> Path:
 
 def _first_series(version_dir):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        return reader.read().samples[0].time_series[0]
+        return reader.read().records[0].time_series[0]
 
 
 @pytest.mark.parametrize("dtype", SCALAR_DTYPES)
@@ -133,41 +133,41 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
         metadata=DatasetMetadata(
             dataset_id="timenet/dtypes",
             dataset_version=Version(1, 0, 0),
-            name="Two samples",
-            description="Two samples so a copy-on-write edit can drop one.",
+            name="Two records",
+            description="Two records so a copy-on-write edit can drop one.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
     bool_spec = _spec(dtype="bool")
     bool0 = TimeSeries.from_values(
-        [True, False, True], spec=bool_spec, channel="active", time_axis=RegularAxis.from_rate_hz(1)
+        [True, False, True], spec=bool_spec, signal="active", time_axis=RegularAxis.from_rate_hz(1)
     )
     str0 = TimeSeries.from_values(
         ["normal", "afib"],
         spec=_spec(dtype="str"),
-        channel="stage",
+        signal="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
     bool1 = TimeSeries.from_values(
-        [False, False, True], spec=bool_spec, channel="active", time_axis=RegularAxis.from_rate_hz(1)
+        [False, False, True], spec=bool_spec, signal="active", time_axis=RegularAxis.from_rate_hz(1)
     )
     str1 = TimeSeries.from_values(
         ["vt", "normal"],
         spec=_spec(dtype="str"),
-        channel="stage",
+        signal="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
-    dataset.add_sample(time_series=(bool0, str0), sample_id="sample-0")
-    dataset.add_sample(time_series=(bool1, str1), sample_id="sample-1")
+    dataset.add_record(time_series=(bool0, str0), record_id="record-0")
+    dataset.add_record(time_series=(bool1, str1), record_id="record-1")
     dataset.derive_schema()
     version_dir = _write(tmp_path / "base", dataset)
     edited = edit_version(
-        version_dir, tmp_path / "out", dataset_version=Version(1, 1, 0), remove_sample_ids=["sample-1"]
+        version_dir, tmp_path / "out", dataset_version=Version(1, 1, 0), remove_record_ids=["record-1"]
     )
     with TimeFReader(DatasetVersion.open_local(edited)) as reader:
-        sample = reader.read().samples[0]
-    series = {ts.channel: ts for ts in sample.time_series}
+        record = reader.read().records[0]
+    series = {ts.signal: ts for ts in record.time_series}
     assert series["active"].to_arrow().type == pa.bool_()
     assert series["active"].to_numpy().tolist() == [True, False, True]
     assert series["stage"].to_arrow().type == pa.string()
@@ -194,7 +194,7 @@ def test_log_book_strings_round_trip_byte_identical(tmp_path):
 
     version_dir = _write(tmp_path, _dataset(_spec(dtype="str"), entries), values_backend="parquet")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().samples[0].time_series[0]
+        series = reader.read().records[0].time_series[0]
 
     # Byte-identical: the whole series and a ranged read must equal the original utf-8 bytes.
     assert series.to_arrow().equals(original)
@@ -204,35 +204,35 @@ def test_log_book_strings_round_trip_byte_identical(tmp_path):
 
 @pytest.mark.parametrize("values_backend", _BACKEND_IDS)
 def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
-    # One sample with float32, int16, and bool channels must read back byte-identical on both
+    # One record with float32, int16, and bool signals must read back byte-identical on both
     # backends, so a dataset's logical content does not depend on the storage engine. (str is
-    # excluded here because Zarr does not support it; str channels are covered on Parquet above.)
-    channels = [
+    # excluded here because Zarr does not support it; str signals are covered on Parquet above.)
+    signals = [
         ("acc", _spec("float32"), np.array([0.1, 0.2, 0.3], dtype=np.float32)),
         ("steps", _spec("int16"), np.array([1, 2, 3], dtype=np.int16)),
         ("active", _spec("bool"), np.array([True, False, True])),
     ]
     series = tuple(
-        TimeSeries.from_values(values, spec=spec, channel=name, time_axis=RegularAxis.from_rate_hz(1))
-        for name, spec, values in channels
+        TimeSeries.from_values(values, spec=spec, signal=name, time_axis=RegularAxis.from_rate_hz(1))
+        for name, spec, values in signals
     )
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/mixed",
             dataset_version=Version(1, 0, 0),
             name="Mixed",
-            description="Mixed-dtype channels on any backend.",
+            description="Mixed-dtype signals on any backend.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(time_series=series, sample_id="sample-0")
+    dataset.add_record(time_series=series, record_id="record-0")
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset, values_backend=values_backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        sample = reader.read().samples[0]
-    by_channel = {ts.channel: ts for ts in sample.time_series}
-    for name, spec, values in channels:
+        record = reader.read().records[0]
+    by_signal = {ts.signal: ts for ts in record.time_series}
+    for name, spec, values in signals:
         expected = pa.array(np.asarray(values), type=pa.from_numpy_dtype(np.dtype(spec.dtype)))
-        assert by_channel[name].to_arrow().equals(expected), name
+        assert by_signal[name].to_arrow().equals(expected), name

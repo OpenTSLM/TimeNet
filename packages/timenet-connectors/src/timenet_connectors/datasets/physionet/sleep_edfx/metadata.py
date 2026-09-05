@@ -5,14 +5,14 @@ path. ``connector.py`` reads the release and the subject tables, then passes the
 A test can call these functions with values alone.
 
 Some facts repeat across the release. The study, the night number, the sex and the drug
-condition each come from a set that the release fixes. One annotation covers every sample that
+condition each come from a set that the release fixes. One annotation covers every record that
 states that value. :class:`MetadataAnnotation` holds one instance for each value. The writer
-keys its annotation table by id, and lists the samples that carry each one. Many samples that
+keys its annotation table by id, and lists the records that carry each one. Many records that
 share one annotation write one row.
 
-The age, the note and the lights-off time measure one recording. Each sample gets its own.
+The age, the note and the lights-off time measure one recording. Each record gets its own.
 
-An annotation with a span is always per-sample. One shared annotation carries one span, and
+An annotation with a span is always per-record. One shared annotation carries one span, and
 these spans differ for each recording.
 """
 
@@ -50,10 +50,10 @@ class MetadataAnnotation:
     builds its own copy of the same few annotations.
 
     This class builds the annotation for a value one time. It gives the same instance back for
-    every later recording that states that value. Two samples with the same sex then carry one
+    every later recording that states that value. Two records with the same sex then carry one
     annotation between them, and the writer stores it one time.
 
-    Each instance carries one id. Every sample that states the value points at that id, so the
+    Each instance carries one id. Every record that states the value points at that id, so the
     writer stores the annotation one time and no caller must keep two copies in step.
 
     Nothing reads the values up front. The build walks the release one time.
@@ -102,17 +102,17 @@ def build_age(years: int) -> Annotation:
     )
 
 
-def build_recording_start_local(sample_id: str, start_time: datetime) -> Annotation:
+def build_recording_start_local(record_id: str, start_time: datetime) -> Annotation:
     """Give the annotation that carries the start moment of an EDF header.
 
-    A sample of this connector sets no ``start_time``. Every header of this release states a
+    A record of this connector sets no ``start_time``. Every header of this release states a
     date and a time and no zone, and TimeF refuses a naive datetime for that field. This
     annotation keeps the fact the header does state. Its text carries no offset and names no
     zone, so nothing is lost and nothing is invented. A consumer who knows the zone can anchor
     the text themselves.
 
     Args:
-        sample_id: The id of the sample, which the error message names.
+        record_id: The id of the record, which the error message names.
         start_time: The start moment the header states, as a local wall clock.
 
     Returns:
@@ -124,13 +124,13 @@ def build_recording_start_local(sample_id: str, start_time: datetime) -> Annotat
     """
     if start_time.tzinfo is not None:
         raise TimeFValidationError(
-            f"{sample_id}: the header start moment names the zone {start_time.tzinfo}, and this release states none"
+            f"{record_id}: the header start moment names the zone {start_time.tzinfo}, and this release states none"
         )
 
     return Annotation(
         key=AnnotationKey.RECORDING_START_LOCAL,
         value=start_time.isoformat(timespec="seconds"),
-        description="The local date and time the EDF header states for the first sample. The release names no zone.",
+        description="The local date and time the EDF header states for the first record. The release names no zone.",
     )
 
 
@@ -141,7 +141,7 @@ def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation
     differ. The table wins, and this note keeps both readings. The connector README states why.
     A header with no second reading gives no note.
 
-    The note is per-sample. It states what these two sources say about this recording, and a
+    The note is per-record. It states what these two sources say about this recording, and a
     shared note claims that two recordings disagree for one reason.
 
     Args:
@@ -166,7 +166,7 @@ def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation
         key=AnnotationKey.DEMOGRAPHICS_NOTE,
         value=(
             f"the EDF header states sex {header_sex} and age {header_years}. The subject table states "
-            f"sex {sex} and age {years}. This sample carries what the table states."
+            f"sex {sex} and age {years}. This record carries what the table states."
         ),
         description="The EDF header and the subject table disagree here on age or sex. See the connector README.",
     )
@@ -201,18 +201,18 @@ class SubjectTables:
 
     def build_annotations(
         self,
-        sample_id: str,
+        record_id: str,
         metadata_annotation: MetadataAnnotation,
         recording: RecordingIdentity,
         header: reader.EdfHeader,
     ) -> list[Annotation]:
         """Give every metadata annotation one recording carries.
 
-        A value from a closed set comes from ``metadata_annotation``, so every sample that
+        A value from a closed set comes from ``metadata_annotation``, so every record that
         states it carries one instance. A value measured for this recording is built here.
 
         Args:
-            sample_id: The sample these annotations belong to.
+            record_id: The record these annotations belong to.
             metadata_annotation: The holder of the annotations whose values are a closed set.
             recording: What the filename of the recording states.
             header: The header of its signal file, which keeps a clock and a second reading.
@@ -234,7 +234,7 @@ class SubjectTables:
             metadata_annotation.get_annotation(AnnotationKey.NIGHT, recording.night),
             metadata_annotation.get_annotation(AnnotationKey.SEX, row.sex),
             build_age(row.age),
-            build_recording_start_local(sample_id, header.start_time),
+            build_recording_start_local(record_id, header.start_time),
         ]
 
         if night.condition is not None:
@@ -261,7 +261,7 @@ def build_lights_off(at: time, start_time: datetime) -> Annotation:
     midnight, so it is the first occurrence of that clock time at or after the start.
 
     The span names no time series. Lights off is a fact about the room and not a reading taken
-    from a channel, so TimeF checks it against the span the sample declares.
+    from a signal, so TimeF checks it against the span the record declares.
 
     Args:
         at: The clock time the subject table states.

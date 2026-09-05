@@ -25,9 +25,9 @@ import pyarrow as pa
 import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 
-from timenet.dataset import Sample, TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
-from timenet.dataset.sample import check_span_within_window
+from timenet.dataset.record import check_span_within_window
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.constants import ANNOTATIONS_SORT_KEY, INDEX_SORT_KEY
@@ -36,7 +36,7 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
     annotations_schema,
-    id_types_from_samples_schema,
+    id_types_from_records_schema,
     task_schema,
 )
 from timenet.types import (
@@ -59,11 +59,11 @@ if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
 
 
-#: The number of rows in each batch when the reader streams ``samples.parquet``.
+#: The number of rows in each batch when the reader streams ``records.parquet``.
 _SAMPLE_BATCH_ROWS = 4096
 
 #: The maximum number of decoded annotations that the cache keeps for reuse. This lets an
-#: annotation shared across samples decode only once.
+#: annotation shared across records decode only once.
 _ANNOTATION_CACHE_SIZE = 4096
 
 #: The byte budget for decoded control-table row groups. The budget counts total bytes, not the
@@ -107,7 +107,7 @@ class _PrunedControlTable:
     Parquet footers. It bisects the directory on the sorted key column's statistics, and this
     prunes the groups that a lookup cannot match. Then it decodes the matching groups into a
     byte-bounded LRU cache. Inside a decoded group, it bisects a materialized sorted list of the
-    lookup-key column to select the matching rows. The time-series index (keyed by ``sample_id``,
+    lookup-key column to select the matching rows. The time-series index (keyed by ``record_id``,
     many rows per key) and the annotations table (keyed by ``id``, one row per key) both use this
     method. The key column is the first entry of ``lookup_columns``.
     """
@@ -266,7 +266,7 @@ class TimeFReader:
         This constructor reads nothing. The handle already carries the parsed manifest. The handle
         also wraps the filesystem and root that every later read uses. The reader resolves tasks,
         annotations, the time-series index, and each series' values only on first use. As a result,
-        the cost to open a version is the same for three samples or three million.
+        the cost to open a version is the same for three records or three million.
 
         This constructor no longer decodes the control plane up front, and it no longer stat-sweeps
         every file on open. As a result, a structurally corrupt or missing file now fails on its
@@ -294,7 +294,7 @@ class TimeFReader:
         # ``__getstate__`` must stay in step with these fields.
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
-        self._samples_data: pads.Dataset | None = None
+        self._records_data: pads.Dataset | None = None
         self._index: _PrunedControlTable | None = None
         self._annotations: _PrunedControlTable | None = None
         self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
@@ -303,12 +303,12 @@ class TimeFReader:
 
     def _resolve_id_types(self) -> tuple[IdTypes, IdCodec]:
         if self.__id_types is None:
-            if self._samples_data is not None:
-                schema = self._samples_data.schema
+            if self._records_data is not None:
+                schema = self._records_data.schema
             else:
-                first_samples_part = self._version.path(self._manifest.files.samples[0].path)
+                first_samples_part = self._version.path(self._manifest.files.records[0].path)
                 schema = pq.ParquetFile(first_samples_part, filesystem=self._fs).schema_arrow
-            self.__id_types = id_types_from_samples_schema(schema)
+            self.__id_types = id_types_from_records_schema(schema)
             self.__codec = IdCodec.from_id_types(self.__id_types)
         return self.__id_types, cast("IdCodec", self.__codec)
 
@@ -331,7 +331,7 @@ class TimeFReader:
         state = self.__dict__.copy()
         state["_values"] = None
         state["_tasks"] = None
-        state["_samples_data"] = None
+        state["_records_data"] = None
         state["_index"] = None
         state["_annotations"] = None
         state["_annotation_cache"] = OrderedDict()
@@ -428,42 +428,42 @@ class TimeFReader:
         Returns:
             A :class:`TimeFDataset` with lazy per-series loaders and the reconstructed schema/tasks.
         """
-        samples = list(self.iter_samples())
+        records = list(self.iter_records())
         tasks = self.tasks
-        # A streamed-written dataset stores empty sample.task_ids: its tasks were never held in memory
+        # A streamed-written dataset stores empty record.task_ids: its tasks were never held in memory
         # to populate them. read() materializes every task, so rebuild the reverse map here, or
         # tasks_for() and the torch view would return no tasks. This is idempotent for a materialized
-        # dataset, whose task_ids already round-trip through the sample rows.
-        by_id = {sample.sample_id: sample for sample in samples}
+        # dataset, whose task_ids already round-trip through the record rows.
+        by_id = {record.record_id: record for record in records}
         for task in tasks:
-            for sample_id in task.sample_ids:
-                sample = by_id.get(sample_id)
-                if sample is not None and task.id not in sample.task_ids:
-                    sample.task_ids = (*sample.task_ids, task.id)
+            for record_id in task.record_ids:
+                record = by_id.get(record_id)
+                if record is not None and task.id not in record.task_ids:
+                    record.task_ids = (*record.task_ids, task.id)
         return TimeFDataset.from_parts(
             metadata=self._manifest.metadata,
-            samples=samples,
+            records=records,
             tasks=tasks,
             schema=self._manifest.schema,
             registered_annotations=self._read_registered_annotations(),
         )
 
-    def iter_samples(self, sample_ids: Iterable[str] | None = None) -> Iterator[Sample]:
-        """Yield samples lazily without materializing a :class:`TimeFDataset`.
+    def iter_records(self, record_ids: Iterable[str] | None = None) -> Iterator[Record]:
+        """Yield records lazily without materializing a :class:`TimeFDataset`.
 
-        When you pass ``sample_ids``, this method filters the read on the stored id column. This
+        When you pass ``record_ids``, this method filters the read on the stored id column. This
         prunes the row groups that cannot hold a requested id, and it does not scan the whole file.
-        Samples come back in stored order (sorted by ``sample_id``), not in the order you asked for
+        Records come back in stored order (sorted by ``record_id``), not in the order you asked for
         them. An id that the dataset does not contain raises ``TimeFValidationError``.
 
         Args:
-            sample_ids: The samples to yield, or ``None`` to yield every sample.
+            record_ids: The records to yield, or ``None`` to yield every record.
 
         Yields:
-            Each reconstructed :class:`Sample`.
+            Each reconstructed :class:`Record`.
         """
-        for row in self._iter_sample_rows(sample_ids):
-            yield self._build_sample(row)
+        for row in self._iter_sample_rows(record_ids):
+            yield self._build_record(row)
 
     # ---- loading -------------------------------------------------------------------------------
 
@@ -490,38 +490,38 @@ class TimeFReader:
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
-    def _iter_sample_rows(self, sample_ids: Iterable[str] | None) -> Iterator[dict]:
-        """Stream ``samples.parquet`` in batches, optionally restricted to a set of ids.
+    def _iter_sample_rows(self, record_ids: Iterable[str] | None) -> Iterator[dict]:
+        """Stream ``records.parquet`` in batches, optionally restricted to a set of ids.
 
         Args:
-            sample_ids: The samples to read, or ``None`` for all of them.
+            record_ids: The records to read, or ``None`` for all of them.
 
         Yields:
-            Each sample row as a dict.
+            Each record row as a dict.
 
         Raises:
-            TimeFValidationError: If ``sample_ids`` names an id that the dataset does not contain,
+            TimeFValidationError: If ``record_ids`` names an id that the dataset does not contain,
                 the error raises after the iterator is fully consumed, not at the offending id. A
                 lazy reader cannot know that an id is absent until it has read every part.
         """
-        if self._samples_data is None:
-            parts = [self._version.path(part.path) for part in self._manifest.files.samples]
-            self._samples_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
-        data = self._samples_data
-        if sample_ids is None:
+        if self._records_data is None:
+            parts = [self._version.path(part.path) for part in self._manifest.files.records]
+            self._records_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
+        data = self._records_data
+        if record_ids is None:
             for batch in data.to_batches(batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
                 yield from batch.to_pylist()
             return
-        stored = {self._codec.encode("sample_id", sid): sid for sid in dict.fromkeys(sample_ids)}
-        stored_type = data.schema.field("sample_id").type
-        expression = pads.field("sample_id").isin(pa.array(list(stored), type=stored_type))
+        stored = {self._codec.encode("record_id", sid): sid for sid in dict.fromkeys(record_ids)}
+        stored_type = data.schema.field("record_id").type
+        expression = pads.field("record_id").isin(pa.array(list(stored), type=stored_type))
         for batch in data.to_batches(filter=expression, batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
             for row in batch.to_pylist():
-                stored.pop(row["sample_id"], None)
+                stored.pop(row["record_id"], None)
                 yield row
         if stored:
             raise TimeFValidationError(
-                f"no such sample(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
+                f"no such record(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
             )
 
     def _load_tasks(self) -> tuple[Task, ...]:
@@ -539,7 +539,7 @@ class TimeFReader:
                 }
                 task = cls(
                     id=self._codec.decode("task_id", row["id"]),
-                    sample_ids=tuple(self._codec.decode_list("sample_id", row["sample_ids"])),
+                    record_ids=tuple(self._codec.decode_list("record_id", row["record_ids"])),
                     prompt=row["prompt"],
                     scope=self._codec.decode_span(row["scope"]),
                     input_annotation_ids=tuple(self._codec.decode_list("annotation_id", row["input_annotation_ids"])),
@@ -562,7 +562,7 @@ class TimeFReader:
         """Return the pruned view over the annotations table, built on first annotation access.
 
         A decode reads only four columns, and this method pulls only those columns. It skips
-        ``sample_ids``, the widest column.
+        ``record_ids``, the widest column.
 
         Returns:
             The cached pruned annotations view.
@@ -624,10 +624,10 @@ class TimeFReader:
         return annotation
 
     def _read_registered_annotations(self) -> tuple[Annotation, ...]:
-        """Rebuild annotations that no sample carries: they exist only for tasks to reference.
+        """Rebuild annotations that no record carries: they exist only for tasks to reference.
 
-        These rows store an empty ``sample_ids``. :meth:`iter_samples` never reaches them, since no
-        sample lists them, so :meth:`read` pulls them here to restore the dataset's registered
+        These rows store an empty ``record_ids``. :meth:`iter_records` never reaches them, since no
+        record lists them, so :meth:`read` pulls them here to restore the dataset's registered
         annotations. The manifest count gates the scan, so a dataset with none (the common case) pays
         nothing.
 
@@ -644,9 +644,9 @@ class TimeFReader:
             for part in self._manifest.files.annotations:
                 table = pads.dataset(
                     self._version.path(part.path), filesystem=self._fs, schema=schema, format="parquet"
-                ).to_table(columns=["id", "key", "value", "source", "span", "sample_ids"])
+                ).to_table(columns=["id", "key", "value", "source", "span", "record_ids"])
                 for row in table.to_pylist():
-                    if not row["sample_ids"]:
+                    if not row["record_ids"]:
                         registered.append(self._decode_annotation(row))
         return tuple(registered)
 
@@ -666,11 +666,11 @@ class TimeFReader:
             )
         return self._index
 
-    def _index_rows(self, sample_id: str, time_series_id: str) -> list[dict]:
+    def _index_rows(self, record_id: str, time_series_id: str) -> list[dict]:
         """Return one series' index rows, in ``chunk_idx`` order.
 
         Args:
-            sample_id: The owning sample's id.
+            record_id: The owning record's id.
             time_series_id: The series id.
 
         Returns:
@@ -678,29 +678,29 @@ class TimeFReader:
         """
         with self._as_format_error():
             probe: tuple[_StoredId, ...] = (
-                cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, sample_id)),
+                cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, record_id)),
                 cast(_StoredId, self._codec.encode("time_series_id", time_series_id)),
             )
             return self._index_table().rows_for(probe)
 
-    # ---- sample construction -------------------------------------------------------------------
+    # ---- record construction -------------------------------------------------------------------
 
-    def _build_sample(self, row: dict) -> Sample:
-        sample_id = self._codec.decode("sample_id", row["sample_id"])
-        series = tuple(self._build_series(sample_id, struct) for struct in row["time_series"])
+    def _build_record(self, row: dict) -> Record:
+        record_id = self._codec.decode("record_id", row["record_id"])
+        series = tuple(self._build_series(record_id, struct) for struct in row["time_series"])
         annotations = tuple(
-            self._resolve_annotation(sample_id, aid)
+            self._resolve_annotation(record_id, aid)
             for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
         )
-        # A stored span or time_span that no longer fits the sample is a corrupt artifact, not a caller
-        # mistake. As a result, the sample's own invariants surface as a format error, not a ``ValueError``.
-        # This code decodes and builds the sample inside the try block below. This lets
-        # ``Sample.__post_init__`` reject a malformed time_span (bad bounds, or point-shaped) before the
+        # A stored span or time_span that no longer fits the record is a corrupt artifact, not a caller
+        # mistake. As a result, the record's own invariants surface as a format error, not a ``ValueError``.
+        # This code decodes and builds the record inside the try block below. This lets
+        # ``Record.__post_init__`` reject a malformed time_span (bad bounds, or point-shaped) before the
         # code uses it to recheck the stored annotation spans.
         try:
             time_span = cast("TimeInterval | None", self._codec.decode_span(row.get("time_span")))
-            sample = Sample(
-                sample_id=sample_id,
+            record = Record(
+                record_id=record_id,
                 time_series=series,
                 subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
                 task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
@@ -713,30 +713,30 @@ class TimeFReader:
                     # A stored span is already written. Refusing to load it hides a dataset that a
                     # writer accepted on purpose, and the span is still there for a caller to judge.
                     check_span_within_window(
-                        f"annotation {annotation.key!r}", annotation.span, series, sample_id, time_span
+                        f"annotation {annotation.key!r}", annotation.span, series, record_id, time_span
                     )
-            return sample
+            return record
         except TimeFValidationError as exc:
             raise TimeFFormatError(str(exc)) from exc
 
-    def _build_series(self, sample_id: str, struct: dict) -> TimeSeries:
+    def _build_series(self, record_id: str, struct: dict) -> TimeSeries:
         spec_type = struct["spec_type"]
         if spec_type not in self._spec_by_type:
-            raise TimeFFormatError(f"sample {sample_id!r} references unknown spec_type {spec_type!r}")
+            raise TimeFFormatError(f"record {record_id!r} references unknown spec_type {spec_type!r}")
         time_series_id = self._codec.decode("time_series_id", struct["time_series_id"])
-        axis = self._axis(struct, sample_id)
+        axis = self._axis(struct, record_id)
         n_values = struct["n_values"]
         time_offsets_loader = None
         if isinstance(axis, IrregularAxis):
             time_offsets_loader = _TimeOffsetsLoader(
-                self, sample_id, time_series_id, axis.first_us, axis.last_us, n_values
+                self, record_id, time_series_id, axis.first_us, axis.last_us, n_values
             )
         try:
             return TimeSeries(
                 spec=self._spec_by_type[spec_type],
-                channel=struct["channel"],
+                signal=struct["signal"],
                 time_axis=axis,
-                loader=_SeriesLoader(self, sample_id, time_series_id),
+                loader=_SeriesLoader(self, record_id, time_series_id),
                 time_offsets_loader=time_offsets_loader,
                 source_id=self._codec.decode_opt("source_id", struct["source_id"]),
                 time_series_id=time_series_id,
@@ -745,10 +745,10 @@ class TimeFReader:
         except TimeFValidationError as exc:
             # A series rebuilt from a corrupt struct (bad n_values, a time offsets/axis mismatch) is a
             # format failure, not a caller mistake, even though TimeSeries raises the same type for both.
-            raise TimeFFormatError(f"sample {sample_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
+            raise TimeFFormatError(f"record {record_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
     @staticmethod
-    def _axis(struct: dict, sample_id: str) -> TimeAxis:
+    def _axis(struct: dict, record_id: str) -> TimeAxis:
         """Rebuild a series' time axis from the stored discriminator.
 
         This method reads the tag before any shape-specific column. As a result, a corrupt row
@@ -756,7 +756,7 @@ class TimeFReader:
 
         Args:
             struct: The stored time-series struct.
-            sample_id: The owning sample, for the error message.
+            record_id: The owning record, for the error message.
 
         Returns:
             The axis.
@@ -778,7 +778,7 @@ class TimeFReader:
             )
             if any(struct[c] is not None for c in shape_cols):
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series tagged {kind!r} but carries regular- or "
+                    f"record {record_id!r} has a series tagged {kind!r} but carries regular- or "
                     f"irregular-axis columns; an ordinal series has neither"
                 )
             return OrdinalAxis()
@@ -787,7 +787,7 @@ class TimeFReader:
             start_index = struct["start_index"]
             if numerator is None or denominator is None or start_index is None:
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series tagged {kind!r} with no period or start "
+                    f"record {record_id!r} has a series tagged {kind!r} with no period or start "
                     f"index; a regular axis needs both. pyarrow only enforces non-null when the file "
                     f"is written, so this is the check that catches a corrupt row"
                 )
@@ -795,14 +795,14 @@ class TimeFReader:
                 return RegularAxis(period_us=Fraction(numerator, denominator), start_index=start_index)
             except (ZeroDivisionError, TypeError, TimeFValidationError) as exc:
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series with an unbuildable regular axis "
+                    f"record {record_id!r} has a series with an unbuildable regular axis "
                     f"(period {numerator}/{denominator}, start_index {start_index}): {exc}"
                 ) from exc
         if kind == AxisType.IRREGULAR:
             first, last = struct["first_time_offset_us"], struct["last_time_offset_us"]
             if first is None or last is None:
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series tagged {kind!r} with no endpoints; an "
+                    f"record {record_id!r} has a series tagged {kind!r} with no endpoints; an "
                     f"irregular axis needs both. pyarrow only enforces non-null when the file is "
                     f"written, so this check catches a corrupt row"
                 )
@@ -810,17 +810,17 @@ class TimeFReader:
                 return IrregularAxis(first_us=first, last_us=last)
             except TimeFValidationError as exc:
                 raise TimeFFormatError(
-                    f"sample {sample_id!r} has a series with unbuildable irregular endpoints ({first}, {last}): {exc}"
+                    f"record {record_id!r} has a series with unbuildable irregular endpoints ({first}, {last}): {exc}"
                 ) from exc
         raise TimeFFormatError(
-            f"sample {sample_id!r} has a series with axis_type {kind!r}; expected one of {[t.value for t in AxisType]}"
+            f"record {record_id!r} has a series with axis_type {kind!r}; expected one of {[t.value for t in AxisType]}"
         )
 
-    def _load_time_offsets(self, sample_id: str, time_series_id: str) -> pa.Array:
+    def _load_time_offsets(self, record_id: str, time_series_id: str) -> pa.Array:
         """Read an irregular series' per-value time offsets through the values backend.
 
         Args:
-            sample_id: The owning sample's id.
+            record_id: The owning record's id.
             time_series_id: The series id to read.
 
         Returns:
@@ -829,19 +829,19 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If the series has no index entry or its time offsets cannot be read.
         """
-        rows = self._index_rows(sample_id, time_series_id)
+        rows = self._index_rows(record_id, time_series_id)
         if not rows:
-            raise TimeFFormatError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
+            raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
             return self._values.load_time_offsets(self._version, rows)
         except (KeyError, OSError, IndexError, ValueError) as exc:
             raise TimeFFormatError(
-                f"failed to read time offsets for series {time_series_id!r} for sample {sample_id!r}: {exc}"
+                f"failed to read time offsets for series {time_series_id!r} for record {record_id!r}: {exc}"
             ) from exc
 
-    def _resolve_annotation(self, sample_id: str, annotation_id: str) -> Annotation:
+    def _resolve_annotation(self, record_id: str, annotation_id: str) -> Annotation:
         """Return one annotation, decoding it on first use and caching it in a bounded LRU.
 
         This method looks up the id through the pruned annotations table. As a result, it decodes
@@ -849,7 +849,7 @@ class TimeFReader:
         serves it after that.
 
         Args:
-            sample_id: The referencing sample, for the error message.
+            record_id: The referencing record, for the error message.
             annotation_id: The annotation to resolve.
 
         Returns:
@@ -866,7 +866,7 @@ class TimeFReader:
             probe = cast(_StoredId, self._codec.encode("annotation_id", annotation_id))
             rows = self._annotations_table().rows_for((probe,))
             if not rows:
-                raise TimeFFormatError(f"sample {sample_id!r} references unknown annotation {annotation_id!r}")
+                raise TimeFFormatError(f"record {record_id!r} references unknown annotation {annotation_id!r}")
             annotation = self._decode_annotation(rows[0])
         self._annotation_cache[annotation_id] = annotation
         if len(self._annotation_cache) > _ANNOTATION_CACHE_SIZE:
@@ -875,11 +875,11 @@ class TimeFReader:
 
     # ---- id decoding ---------------------------------------------------------------------------
 
-    def _load_values(self, sample_id: str, time_series_id: str) -> pa.Array:
+    def _load_values(self, record_id: str, time_series_id: str) -> pa.Array:
         """Read and concatenate a series' chunk values through the values backend.
 
         Args:
-            sample_id: The owning sample's id.
+            record_id: The owning record's id.
             time_series_id: The series id to read.
 
         Returns:
@@ -888,16 +888,16 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If the series has no index entry or a chunk cannot be read.
         """
-        rows = self._index_rows(sample_id, time_series_id)
+        rows = self._index_rows(record_id, time_series_id)
         if not rows:
-            raise TimeFFormatError(f"no index entry for sample {sample_id!r} series {time_series_id!r}")
+            raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
             spec_type = rows[0]["spec_type"]
             return self._values.load(self._version, rows, self._spec_by_type[spec_type])
         except (KeyError, OSError, IndexError, ValueError) as exc:
-            raise TimeFFormatError(f"failed to read series {time_series_id!r} for sample {sample_id!r}: {exc}") from exc
+            raise TimeFFormatError(f"failed to read series {time_series_id!r} for record {record_id!r}: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -911,8 +911,8 @@ class _SeriesLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' values."""
-    sample_id: str
-    """The owning sample's id."""
+    record_id: str
+    """The owning record's id."""
     time_series_id: str
     """The id of the series to read."""
 
@@ -922,7 +922,7 @@ class _SeriesLoader:
         Returns:
             The series values in the spec's canonical Arrow representation.
         """
-        return self.reader._load_values(self.sample_id, self.time_series_id)
+        return self.reader._load_values(self.record_id, self.time_series_id)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a temporal subsection through the selected values backend.
@@ -933,9 +933,9 @@ class _SeriesLoader:
         Raises:
             TimeFFormatError: If this series has no index entry.
         """
-        rows = self.reader._index_rows(self.sample_id, self.time_series_id)
+        rows = self.reader._index_rows(self.record_id, self.time_series_id)
         if not rows:
-            raise TimeFFormatError(f"no index entry for sample {self.sample_id!r} series {self.time_series_id!r}")
+            raise TimeFFormatError(f"no index entry for record {self.record_id!r} series {self.time_series_id!r}")
         if self.reader._values is None:
             self.reader._values = make_values_reader(self.reader._manifest.values_backend)
         spec = self.reader._spec_by_type[rows[0]["spec_type"]]
@@ -971,8 +971,8 @@ class _TimeOffsetsLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' time offsets."""
-    sample_id: str
-    """The owning sample's id."""
+    record_id: str
+    """The owning record's id."""
     time_series_id: str
     """The id of the series to read."""
     first_us: int
@@ -996,9 +996,9 @@ class _TimeOffsetsLoader:
             TimeFFormatError: If the stored time offsets disagree with the axis endpoints or the
                 value count, or if they decrease at any point.
         """
-        time_offsets = self.reader._load_time_offsets(self.sample_id, self.time_series_id)
+        time_offsets = self.reader._load_time_offsets(self.record_id, self.time_series_id)
         values = time_offsets.to_numpy(zero_copy_only=False)
-        where = f"series {self.time_series_id!r} on sample {self.sample_id!r}"
+        where = f"series {self.time_series_id!r} on record {self.record_id!r}"
         if len(values) != self.n_values:
             raise TimeFFormatError(f"{where} stores {len(values)} time offsets but declares n_values={self.n_values}")
         if len(values) and (int(values[0]) != self.first_us or int(values[-1]) != self.last_us):

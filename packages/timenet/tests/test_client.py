@@ -89,7 +89,7 @@ def test_download_rejects_path_traversal(registry_root, tmp_path):
     manifest = client.get("timenet/hello-world")
     bad = dataclasses.replace(
         manifest,
-        files=dataclasses.replace(manifest.files, samples=(FilePart("../../escape.txt", "sha256:0", 0),)),
+        files=dataclasses.replace(manifest.files, records=(FilePart("../../escape.txt", "sha256:0", 0),)),
     )
     with pytest.raises(TimeFFormatError, match="escapes"):
         client._registry.download_version("timenet/hello-world", "1.0.0", tmp_path / "target", manifest=bad)
@@ -151,7 +151,7 @@ def test_load_torch(registry_root, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     ds = client.load_torch("timenet/hello-world")
     assert isinstance(ds, Dataset)
-    assert len(ds) == len(make_dataset().samples)
+    assert len(ds) == len(make_dataset().records)
     assert isinstance(ds[0]["series"][0], torch.Tensor)
 
 

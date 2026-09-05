@@ -52,8 +52,8 @@ def continuous(n=_N, seed=1):
     return np.random.default_rng(seed).normal(size=n).astype(np.float32)
 
 
-def _dataset(channels, dataset_id="timenet/encoding", **metadata_kwargs):
-    """Build a dataset from ``{(spec_type, channel): values}``."""
+def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
+    """Build a dataset from ``{(spec_type, signal): values}``."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id=dataset_id,
@@ -68,15 +68,15 @@ def _dataset(channels, dataset_id="timenet/encoding", **metadata_kwargs):
     series = [
         TimeSeries(
             spec=_spec(spec_type),
-            channel=channel,
+            signal=signal,
             time_axis=RegularAxis.from_rate_hz(_RATE_HZ),
             loader=(lambda captured=values: pa.array(captured, type=pa.float32())),
-            time_series_id=f"ts-{spec_type}-{channel}",
+            time_series_id=f"ts-{spec_type}-{signal}",
             n_values=len(values),
         )
-        for (spec_type, channel), values in channels.items()
+        for (spec_type, signal), values in signals.items()
     ]
-    dataset.add_sample(time_series=tuple(series), sample_id="sample-0")
+    dataset.add_record(time_series=tuple(series), record_id="record-0")
     dataset.derive_schema()
     return dataset
 
@@ -124,9 +124,9 @@ def test_signed_zeros_count_as_two_patterns():
 
 def test_sample_is_bounded_and_strides_the_whole_chunk():
     values = np.arange(SAMPLE_MAX_VALUES * 4, dtype=np.float32)
-    sample = sample_values([values])
-    assert sample.size == SAMPLE_MAX_VALUES
-    assert sample[-1] > values.size / 2, "a prefix would only ever see the start of a chunk"
+    record = sample_values([values])
+    assert record.size == SAMPLE_MAX_VALUES
+    assert record[-1] > values.size / 2, "a prefix would only ever see the start of a chunk"
 
 
 def test_selection_is_deterministic():
@@ -135,8 +135,8 @@ def test_selection_is_deterministic():
 
 
 def test_default_row_group_holds_a_full_sample():
-    # The rule decides from one buffered row group, so a row-group target below the sample size would
-    # silently shrink the sample and invalidate the calibration behind DICT_MAX_CARDINALITY.
+    # The rule decides from one buffered row group, so a row-group target below the record size would
+    # silently shrink the record and invalidate the calibration behind DICT_MAX_CARDINALITY.
     # Lowering DEFAULT_ROW_GROUP_TARGET_BYTES means re-running the value-encoding sweep.
     assert DEFAULT_ROW_GROUP_TARGET_BYTES // 4 >= SAMPLE_MAX_VALUES
 
@@ -171,7 +171,7 @@ def test_encoding_for_cardinality_delegates_high_cardinality_to_dtype():
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="uint16") is ValueEncoding.PLAIN
 
 
-# ---- encoding sample source -------------------------------------------------------------------
+# ---- encoding record source -------------------------------------------------------------------
 
 
 def test_encoding_sample_source_stops_at_the_budget():
@@ -186,11 +186,11 @@ def test_encoding_sample_source_returns_at_least_one_chunk():
 
 
 def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
-    channels = {("ecg", "I"): quantized(), ("embedding", "e"): continuous(n=5 * 262_144)}
+    signals = {("ecg", "I"): quantized(), ("embedding", "e"): continuous(n=5 * 262_144)}
     default = _manifest(
         _write(
             tmp_path / "a",
-            _dataset(channels),
+            _dataset(signals),
             row_group_target_bytes=DEFAULT_ROW_GROUP_TARGET_BYTES,
             compression_level=1,
         )
@@ -198,7 +198,7 @@ def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
     large = _manifest(
         _write(
             tmp_path / "b",
-            _dataset(channels),
+            _dataset(signals),
             row_group_target_bytes=4 * DEFAULT_ROW_GROUP_TARGET_BYTES,
             compression_level=1,
         )
@@ -329,7 +329,7 @@ def test_round_trip_is_bit_exact(tmp_path, forced):
     values = quantized()
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): values}), value_encoding=forced)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read().samples[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().records[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 
@@ -345,7 +345,7 @@ def test_reader_needs_no_encoding_hint(tmp_path):
 
     assert Manifest.from_json(manifest_path.read_text()).value_encoding == {}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read().samples[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().records[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 
@@ -388,7 +388,7 @@ def test_a_wrong_column_path_is_caught(tmp_path):
         {
             "time_series_id": ["ts-0"],
             "spec_type": ["ecg"],
-            "channel": ["I"],
+            "signal": ["I"],
             "chunk_idx": [0],
             "n_values": [_N],
             "values": values,

@@ -1,7 +1,7 @@
-"""Tasks: labeled training targets that reference one or more samples.
+"""Tasks: labeled training targets that reference one or more records.
 
 Every task has the same shape: inputs give one typed answer. The shared frame lives on the
-:class:`Task` base. The base holds the samples the task is about, an optional ``prompt``, and an
+:class:`Task` base. The base holds the records the task is about, an optional ``prompt``, and an
 optional ``scope`` that narrows the input to a region. It also holds the annotations given as
 context, the answer (``target``, inline or by reference to stored annotations), and an optional
 ``rationale`` chain of thought. A subclass adds only what makes its answer a different kind of
@@ -13,7 +13,7 @@ The class is the type tag (for example, a filter such as ``search(task=Classific
 instance carries the payload. Task payload shapes are fixed in code, unlike specs and annotations.
 So the reader resolves tasks against the built-in :data:`TASKS` registry. It does not rebuild them
 from the manifest. Tasks are mutable, so :meth:`~timenet.dataset.TimeFDataset.add_task` can set
-``sample_ids`` after construction.
+``record_ids`` after construction.
 """
 
 from collections.abc import Iterable
@@ -65,19 +65,19 @@ class TaskRefs:
     """Which of a task's payload fields hold references. Each task declares this next to its class.
 
     The writer, the reader, and the copy-on-write editor must know that
-    ``ForecastingTask.target_sample_id`` is a sample id, and that ``ScalarPredictionTask.target`` is a
+    ``ForecastingTask.target_record_id`` is a record id, and that ``ScalarPredictionTask.target`` is a
     plain number. The declaration on the class keeps that knowledge next to the field. The other place
     for it is a lookup table in the format layer and an ``isinstance`` chain in the editor. Those two
     drift the moment someone adds a task.
 
-    The base fields (``sample_ids``, ``scope``, the annotation id tuples) are common to every task. The
+    The base fields (``record_ids``, ``scope``, the annotation id tuples) are common to every task. The
     format layer handles them directly. This declaration covers only the type-specific payload.
     """
 
-    sample_id_fields: tuple[str, ...] = ()
-    """Payload fields that hold a sample id or a tuple of them. If one id is lost, the task is not valid."""
+    record_id_fields: tuple[str, ...] = ()
+    """Payload fields that hold a record id or a tuple of them. If one id is lost, the task is not valid."""
     time_series_id_fields: tuple[str, ...] = ()
-    """Payload fields that hold a time-series id or a tuple of them, resolved against the task's samples."""
+    """Payload fields that hold a time-series id or a tuple of them, resolved against the task's records."""
     span_fields: tuple[str, ...] = ()
     """Payload fields that hold a :class:`~timenet.types.spans.Span` or a tuple of them."""
 
@@ -93,28 +93,28 @@ class Task:
     task_type: ClassVar[TaskType]
     """The subclass's stable type tag. Deliberately absent here: the base is not a task."""
     refs: ClassVar[TaskRefs] = TaskRefs()
-    """Which payload fields hold sample ids or spans (see :class:`TaskRefs`)."""
+    """Which payload fields hold record ids or spans (see :class:`TaskRefs`)."""
     answer_fields: ClassVar[tuple[str, ...]] = ("target",)
     """The payload fields holding the inline answer. A subclass whose answer is not (only) ``target``
     overrides this, so the answer-exclusivity check stays generic instead of hardcoding ``target``."""
-    answer_is_sample: ClassVar[bool] = False
-    """True when the answer is a produced series, found by a payload sample id and not ``target``."""
+    answer_is_record: ClassVar[bool] = False
+    """True when the answer is a produced series, found by a payload record id and not ``target``."""
     target_is_scalar: ClassVar[bool] = False
     """True when ``to_features_and_targets`` can return ``target`` as a scalar."""
 
     id: str = field(default_factory=new_id)
     """Unique task identifier, a UUIDv7 string by default."""
-    sample_ids: tuple[str, ...] = ()
-    """Ids of the samples this task is about. ``add_task`` sets them."""
+    record_ids: tuple[str, ...] = ()
+    """Ids of the records this task is about. ``add_task`` sets them."""
     prompt: str | None = None
     """What the model is asked, when the task is prompted. ``None`` for an unprompted task."""
     scope: Span | None = None
-    """The region of the input the task is about. ``None`` means the whole sample."""
+    """The region of the input the task is about. ``None`` means the whole record."""
     input_annotation_ids: tuple[str, ...] = ()
     """Annotations given to the model as context, not ones it must produce."""
     target: object | None = None
     """The answer, typed by the subclass. ``None`` when the answer is stored by reference, or produced
-    as a series (see ``answer_is_sample``)."""
+    as a series (see ``answer_is_record``)."""
     target_annotation_ids: tuple[str, ...] = ()
     """The answer by reference: it is these stored annotations, not an inline copy of them. It is
     exclusive with ``target``. :meth:`~timenet.dataset.TimeFDataset.add_task` enforces that."""
@@ -161,7 +161,7 @@ class Task:
 
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """One categorical label: over the whole sample, or over ``scope`` when one is set.
+    """One categorical label: over the whole record, or over ``scope`` when one is set.
 
     A whole-recording class ("this ECG shows atrial fibrillation") and a scoped label ("this 30 s
     epoch is sleep stage N2") differ in one way. The only difference is whether ``scope`` narrows
@@ -258,78 +258,78 @@ class TemporalLocalizationTask(Task):
 class ForecastingTask(Task):
     """A series out: continue the context into the future.
 
-    The future is either a whole separate sample (``target_sample_id``) or a region of the attached
-    sample (``target_span``). Exactly one of the two is set, never both and never neither. The second
+    The future is either a whole separate record (``target_record_id``) or a region of the attached
+    record (``target_span``). Exactly one of the two is set, never both and never neither. The second
     shape lets one unsplit series carry a horizon. So the dataset can ship the raw recording, not a
     context/target pair. ``target_span`` also needs ``scope``. Without it, the base ``Task.scope``
-    default of ``None`` means the whole sample, which then covers the region that ``target_span``
+    default of ``None`` means the whole record, which then covers the region that ``target_span``
     predicts.
     """
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
     refs: ClassVar[TaskRefs] = TaskRefs(
-        sample_id_fields=("context_sample_ids", "target_sample_id"),
+        record_id_fields=("context_record_ids", "target_record_id"),
         span_fields=("target_span",),
     )
-    answer_is_sample: ClassVar[bool] = True
-    context_sample_ids: tuple[str, ...] = ()
-    """Ids of the samples that provide forecasting context."""
-    target_sample_id: str | None = None
-    """Id of the sample whose future values the task predicts. ``None`` when ``target_span`` names the
-    region to predict in the attached sample instead."""
+    answer_is_record: ClassVar[bool] = True
+    context_record_ids: tuple[str, ...] = ()
+    """Ids of the records that provide forecasting context."""
+    target_record_id: str | None = None
+    """Id of the record whose future values the task predicts. ``None`` when ``target_span`` names the
+    region to predict in the attached record instead."""
     target_span: TimeInterval | StepInterval | None = None
-    """The region to predict, inside the sample the task is attached to. It is an interval, not a point
-    (the type says so), and it is exclusive with ``target_sample_id``. It is in the same frame as
+    """The region to predict, inside the record the task is attached to. It is an interval, not a point
+    (the type says so), and it is exclusive with ``target_record_id``. It is in the same frame as
     ``scope``. For a series with a timeline, that is a :class:`~timenet.types.spans.TimeInterval` in
     microseconds. For a series that counts in steps, it is a :class:`~timenet.types.spans.StepInterval`,
     the only frame an ordinal series can carry. :meth:`~timenet.dataset.TimeFDataset.add_task` checks that
-    it falls inside the sample, because that method has the sample. It needs an explicit ``scope`` for
-    the context region. A ``scope`` of ``None`` means the whole sample, which covers the region to
+    it falls inside the record, because that method has the record. It needs an explicit ``scope`` for
+    the context region. A ``scope`` of ``None`` means the whole record, which covers the region to
     predict."""
 
     def __post_init__(self) -> None:
         """Reject a forecasting task with a bad target or a self-referential context.
 
         Raises:
-            TimeFValidationError: If the task sets neither ``target_sample_id`` nor ``target_span``.
-                If it sets ``target_sample_id`` with an empty ``context_sample_ids``, which is a
-                forecast with no input. If it sets ``target_sample_id`` and that same id also appears
-                in ``context_sample_ids``, its own answer as input. If ``target_span`` and
-                ``target_sample_id`` are both set. If ``target_span`` carries ``context_sample_ids``.
-                Its context is already ``scope``, so a context sample would re-expose the target
+            TimeFValidationError: If the task sets neither ``target_record_id`` nor ``target_span``.
+                If it sets ``target_record_id`` with an empty ``context_record_ids``, which is a
+                forecast with no input. If it sets ``target_record_id`` and that same id also appears
+                in ``context_record_ids``, its own answer as input. If ``target_span`` and
+                ``target_record_id`` are both set. If ``target_span`` carries ``context_record_ids``.
+                Its context is already ``scope``, so a context record would re-expose the target
                 region. If ``target_span`` is a point, which spans no values. :meth:`check_against_scope`
                 checks for a missing scope, a frame mismatch, or a context that leaks the target. It
                 runs once ``add_task`` has stamped any ``scope=``, and also here when the task is built
                 with its own ``scope``.
         """
         if self.target_span is None:
-            if self.target_sample_id is None:
+            if self.target_record_id is None:
                 raise TimeFValidationError(
-                    "ForecastingTask requires either target_sample_id or target_span to name the future "
+                    "ForecastingTask requires either target_record_id or target_span to name the future "
                     "to predict. Got neither"
                 )
-            if not self.context_sample_ids:
+            if not self.context_record_ids:
                 raise TimeFValidationError(
-                    "ForecastingTask got a target_sample_id with an empty context_sample_ids, which is a "
-                    "forecast with no input. The separate-sample form forecasts from context_sample_ids, so "
+                    "ForecastingTask got a target_record_id with an empty context_record_ids, which is a "
+                    "forecast with no input. The separate-record form forecasts from context_record_ids, so "
                     "give at least one id. The target_span form takes its context from scope instead"
                 )
-            if self.target_sample_id in self.context_sample_ids:
+            if self.target_record_id in self.context_record_ids:
                 raise TimeFValidationError(
-                    f"ForecastingTask target_sample_id {self.target_sample_id!r} also appears in "
-                    f"context_sample_ids, so the forecast would read its own answer as input. Drop it from "
+                    f"ForecastingTask target_record_id {self.target_record_id!r} also appears in "
+                    f"context_record_ids, so the forecast would read its own answer as input. Drop it from "
                     f"the context"
                 )
             return
-        if self.target_sample_id is not None:
+        if self.target_record_id is not None:
             raise TimeFValidationError(
-                f"ForecastingTask target_span names a region of the attached sample, so it cannot be "
-                f"combined with target_sample_id={self.target_sample_id!r}. Use one or the other"
+                f"ForecastingTask target_span names a region of the attached record, so it cannot be "
+                f"combined with target_record_id={self.target_record_id!r}. Use one or the other"
             )
-        if self.context_sample_ids:
+        if self.context_record_ids:
             raise TimeFValidationError(
-                f"ForecastingTask target_span takes its context from scope, so context_sample_ids must be "
-                f"empty in this form, got {list(self.context_sample_ids)}. A whole context sample would "
+                f"ForecastingTask target_span takes its context from scope, so context_record_ids must be "
+                f"empty in this form, got {list(self.context_record_ids)}. A whole context record would "
                 f"re-expose the target region; put covariate context on another series of scope with "
                 f"time_series_ids instead"
             )
@@ -345,7 +345,7 @@ class ForecastingTask(Task):
         """Reject a ``target_span`` forecast whose context scope is missing, misframed, or leaks the target.
 
         Raises:
-            TimeFValidationError: If ``target_span`` is set with no ``scope``, the whole-sample default
+            TimeFValidationError: If ``target_span`` is set with no ``scope``, the whole-record default
                 would include the region to predict. If ``scope`` and ``target_span`` are in different
                 frames. If ``scope`` reaches into or past ``target_span`` on a series they share.
         """
@@ -354,7 +354,7 @@ class ForecastingTask(Task):
         if self.scope is None:
             raise TimeFValidationError(
                 "ForecastingTask target_span needs an explicit scope for the context region. A scope of "
-                "None means the whole sample (see Task.scope), which covers the region that target_span "
+                "None means the whole record (see Task.scope), which covers the region that target_span "
                 "predicts. Pass scope= on the task or to add_task"
             )
         self._check_scope_against_target(self.scope, self.target_span)
@@ -406,19 +406,19 @@ class ForecastingTask(Task):
 
 @dataclass(kw_only=True)
 class TSEditingTask(Task):
-    """A series out: transform the source sample into the target sample, as the ``prompt`` instructs.
+    """A series out: transform the source record into the target record, as the ``prompt`` instructs.
 
     This covers denoising, filtering, and deliberate corruption ("add baseline wander"). The ``prompt``
-    is the instruction, and both sides of the edit are stored samples.
+    is the instruction, and both sides of the edit are stored records.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TS_EDITING
-    refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("source_sample_id", "target_sample_id"))
-    answer_is_sample: ClassVar[bool] = True
-    source_sample_id: str
-    """Id of the sample to edit."""
-    target_sample_id: str
-    """Id of the sample that holds the edited result."""
+    refs: ClassVar[TaskRefs] = TaskRefs(record_id_fields=("source_record_id", "target_record_id"))
+    answer_is_record: ClassVar[bool] = True
+    source_record_id: str
+    """Id of the record to edit."""
+    target_record_id: str
+    """Id of the record that holds the edited result."""
 
 
 @dataclass(kw_only=True)
@@ -426,41 +426,41 @@ class TSGenerationTask(Task):
     """A series out from a text specification alone: the ``prompt`` describes what to synthesize."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_GENERATION
-    refs: ClassVar[TaskRefs] = TaskRefs(sample_id_fields=("target_sample_id",))
-    answer_is_sample: ClassVar[bool] = True
-    target_sample_id: str
-    """Id of the sample that holds the series to generate."""
+    refs: ClassVar[TaskRefs] = TaskRefs(record_id_fields=("target_record_id",))
+    answer_is_record: ClassVar[bool] = True
+    target_record_id: str
+    """Id of the record that holds the series to generate."""
 
 
 @dataclass(kw_only=True)
 class TSCorrespondenceTask(Task):
-    """Relate one series to others: which candidate sample corresponds to the samples in ``sample_ids``.
+    """Relate one series to others: which candidate record corresponds to the records in ``record_ids``.
 
-    This covers retrieval, nearest-neighbor, and match questions. The base ``sample_ids`` are the query.
-    ``candidate_sample_ids`` is the pool for the answer, and ``target`` names the correct one or ones. An
-    empty pool keeps the answer open. Then any sample in the dataset can be the answer.
+    This covers retrieval, nearest-neighbor, and match questions. The base ``record_ids`` are the query.
+    ``candidate_record_ids`` is the pool for the answer, and ``target`` names the correct one or ones. An
+    empty pool keeps the answer open. Then any record in the dataset can be the answer.
     """
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
     refs: ClassVar[TaskRefs] = TaskRefs(
-        sample_id_fields=("candidate_sample_ids", "target"),
+        record_id_fields=("candidate_record_ids", "target"),
         time_series_id_fields=("target_time_series_ids",),
     )
     answer_fields: ClassVar[tuple[str, ...]] = ("target", "target_time_series_ids")
-    candidate_sample_ids: tuple[str, ...] = ()
-    """Ids of the samples that supply the answer. Empty means the pool has no limit."""
+    candidate_record_ids: tuple[str, ...] = ()
+    """Ids of the records that supply the answer. Empty means the pool has no limit."""
     target: tuple[str, ...] | None = None
-    """Ids of the corresponding sample(s), which must be in ``candidate_sample_ids`` when it is set."""
+    """Ids of the corresponding record(s), which must be in ``candidate_record_ids`` when it is set."""
     target_time_series_ids: tuple[str, ...] | None = None
-    """Ids of the corresponding series, when the answer names channels rather than whole samples (for
-    example "which channels correlate with X"). Each id must resolve to a series on the task's samples."""
+    """Ids of the corresponding series, when the answer names signals rather than whole records (for
+    example "which signals correlate with X"). Each id must resolve to a series on the task's records."""
 
     def __post_init__(self) -> None:
         """Reject an empty ``target``/``target_time_series_ids``, or a ``target`` outside the pool.
 
         Raises:
             TimeFValidationError: If ``target`` or ``target_time_series_ids`` is ``()`` rather than
-                ``None`` or non-empty. Also if ``target`` names a sample the candidate pool lacks.
+                ``None`` or non-empty. Also if ``target`` names a record the candidate pool lacks.
         """
         if self.target is not None and not self.target:
             raise TimeFValidationError(
@@ -468,13 +468,13 @@ class TSCorrespondenceTask(Task):
             )
         if self.target_time_series_ids is not None and not self.target_time_series_ids:
             raise TimeFValidationError("TSCorrespondenceTask target_time_series_ids must be None or non-empty, got ()")
-        if not self.candidate_sample_ids:  # no limit on the pool: any sample can be the answer
+        if not self.candidate_record_ids:  # no limit on the pool: any record can be the answer
             return
-        outside = tuple(sid for sid in self.target or () if sid not in self.candidate_sample_ids)
+        outside = tuple(sid for sid in self.target or () if sid not in self.candidate_record_ids)
         if outside:
             raise TimeFValidationError(
-                f"TSCorrespondenceTask target {list(outside)} is not in candidate_sample_ids "
-                f"{list(self.candidate_sample_ids)}. The answer must be one of the candidates"
+                f"TSCorrespondenceTask target {list(outside)} is not in candidate_record_ids "
+                f"{list(self.candidate_record_ids)}. The answer must be one of the candidates"
             )
 
 
@@ -510,20 +510,20 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
         Each class keyed by its ``task_type``.
 
     Raises:
-        TimeFValidationError: If a reference declaration names an unknown field, omits a sample-id
+        TimeFValidationError: If a reference declaration names an unknown field, omits a record-id
             payload field, or two classes declare the same ``task_type``.
     """
     registry: dict[TaskType, type[Task]] = {}
     for cls in classes if classes is not None else _concrete_task_classes():
         fields = set(cls.__dataclass_fields__)
-        declared = set(cls.refs.sample_id_fields) | set(cls.refs.span_fields)
+        declared = set(cls.refs.record_id_fields) | set(cls.refs.span_fields)
         unknown = declared - fields
         if unknown:
             raise TimeFValidationError(f"{cls.__name__}.refs names unknown fields {sorted(unknown)}")
-        sample_id_fields = {name for name in fields if name.endswith(("_sample_id", "_sample_ids"))}
-        missing = sample_id_fields - set(cls.refs.sample_id_fields)
+        record_id_fields = {name for name in fields if name.endswith(("_sample_id", "_sample_ids"))}
+        missing = record_id_fields - set(cls.refs.record_id_fields)
         if missing:
-            raise TimeFValidationError(f"{cls.__name__}.refs.sample_id_fields omits sample-id fields {sorted(missing)}")
+            raise TimeFValidationError(f"{cls.__name__}.refs.record_id_fields omits record-id fields {sorted(missing)}")
         if cls.task_type in registry:
             raise TimeFValidationError(
                 f"both {registry[cls.task_type].__name__} and {cls.__name__} claim task_type {cls.task_type!r}"

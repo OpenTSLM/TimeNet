@@ -25,7 +25,7 @@ version = DatasetVersion.open_local(version_dir)
 
 with TimeFReader(version) as reader:
     dataset = reader.read()
-    values = dataset.samples[0].time_series[0].to_arrow()
+    values = dataset.records[0].time_series[0].to_arrow()
 ```
 
 You can use `TimeFReader` as a context manager. Its `close()` method, called by `__exit__`, releases
@@ -38,17 +38,17 @@ use.
 
 `TimeFReader` reads the time-series index and the annotations table one pruned row group at a time.
 It decodes only the row groups that a lookup's key statistics cannot rule out. Tasks decode on first
-access to `.tasks`. Per-series values and `Sample` construction stay lazy. `read()` and
-`iter_samples()` build samples with loader closures. When the code calls `to_arrow()`, `to_numpy()`,
+access to `.tasks`. Per-series values and `Record` construction stay lazy. `read()` and
+`iter_records()` build records with loader closures. When the code calls `to_arrow()`, `to_numpy()`,
 or `read_steps()`, these closures pull data from storage.
 
-`iter_samples(sample_ids=...)` filters on the stored id column. It streams samples one at a time and
+`iter_records(record_ids=...)` filters on the stored id column. It streams records one at a time and
 does not build a `TimeFDataset`.
 
 `TimeFReader` keeps the index as Arrow data and searches it per lookup. It does not expand the index
 into one Python object per row. As a result, when a large dataset opens, the memory it uses stays
 proportional to the size of the index file. It does not grow to a multiple of that size. Each index
-row uses about 180 bytes of memory. A row is one `(sample, series, chunk)` tuple.
+row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple.
 
 ## Type reconstruction
 
@@ -79,7 +79,7 @@ calls `close()`, it releases them.
 | Member | Description |
 | --- | --- |
 | `read()` | Materialize the full `TimeFDataset`. |
-| `iter_samples()` | Yield each `Sample` lazily. |
+| `iter_records()` | Yield each `Record` lazily. |
 | `verify()` | Hash every manifest-listed artifact and reject missing or mismatched content. |
 | `metadata` / `schema` / `tasks` / `values_backend` | Reconstructed metadata, schema, tasks, and selected values backend. |
 
@@ -91,7 +91,7 @@ unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestEr
 
 Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
 file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
-on first access to `.tasks`. Samples raise it on iteration. The index and annotations raise it on the
+on first access to `.tasks`. Records raise it on iteration. The index and annotations raise it on the
 first read that needs them.
 
 A corrupt control-plane table raises `TimeFFormatError` with its context. You can call `verify()` for
@@ -100,9 +100,9 @@ an integrity check at construction time. It reopens every listed file through th
 
 ## Round-trip guarantee
 
-For a dataset that passes writer validation, `TimeFReader(...).read()` restores every sample's
-`sample_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
-`channel`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
+For a dataset that passes writer validation, `TimeFReader(...).read()` restores every record's
+`record_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
+`signal`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
 preserved. It restores each task's payload and resolved `from_tasks`. `TimeSeries` object identity is
 not preserved. `time_series_id` is the durable handle.
 

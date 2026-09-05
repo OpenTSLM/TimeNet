@@ -57,7 +57,7 @@ def test_full_round_trip(tmp_path, backend):
 
 
 def _registered_annotation_dataset() -> TimeFDataset:
-    """A recording-as-sample dataset whose task references an annotation no sample carries.
+    """A recording-as-record dataset whose task references an annotation no record carries.
 
     Two calls produce equal datasets (fixed ids), so it works as a round-trip fixture.
 
@@ -69,25 +69,25 @@ def _registered_annotation_dataset() -> TimeFDataset:
             dataset_id="test/registered-annotation",
             dataset_version=Version(1, 0, 0),
             name="Registered",
-            description="A task references an annotation no sample carries.",
+            description="A task references an annotation no record carries.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
     options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
     dataset.register_annotations([options])
     dataset.add_task(
-        sample,
+        record,
         AnswerTask(prompt="Rhythm?", target="yes", input_annotation_ids=(options.id,), id="qa-0"),
     )
     return dataset
@@ -104,17 +104,17 @@ def test_registered_annotation_round_trips(tmp_path):
 
 
 def test_write_rejects_an_annotation_both_registered_and_sample_carried(tmp_path):
-    # A registered annotation writes with empty sample_ids and the reader restores it from that; an id
-    # also carried by a sample would write non-empty and be lost on read, so the writer rejects it.
+    # A registered annotation writes with empty record_ids and the reader restores it from that; an id
+    # also carried by a record would write non-empty and be lost on read, so the writer rejects it.
     dataset = _registered_annotation_dataset()
-    dataset.samples[0].add_annotations([Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")])
+    dataset.records[0].add_annotations([Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")])
     dataset.derive_schema()
-    with pytest.raises(TimeFValidationError, match="both registered and carried by a sample"):
+    with pytest.raises(TimeFValidationError, match="both registered and carried by a record"):
         _write(tmp_path, dataset=dataset)
 
 
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
-    """A recording-as-sample dataset whose QA tasks are added batched or via a stream (same content).
+    """A recording-as-record dataset whose QA tasks are added batched or via a stream (same content).
 
     Args:
         streaming: Feed the tasks through :meth:`TimeFDataset.set_task_stream` when true, else
@@ -135,14 +135,14 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
     options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
     dataset.register_annotations([options])
     prompts = [f"Question {i}?" for i in range(5)]
@@ -154,14 +154,14 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
                 rationale=f"reason {i}",
                 input_annotation_ids=(options.id,),
                 id=f"qa-{i}",
-                sample_ids=(sample.sample_id,),  # streamed tasks carry their own sample_ids
+                record_ids=(record.record_id,),  # streamed tasks carry their own record_ids
             )
             for i, prompt in enumerate(prompts)
         ]
         dataset.set_task_stream([AnswerTask], lambda tasks=tasks: iter(tasks))
     else:
         dataset.add_tasks(
-            sample,
+            record,
             [
                 AnswerTask(
                     prompt=prompt,
@@ -188,14 +188,14 @@ def test_streaming_tasks_round_trip(tmp_path):
     assert task.prompt == "Question 3?"
     assert task.target == "yes"
     assert task.rationale == "reason 3"
-    assert task.sample_ids == ("rec-0",)
+    assert task.record_ids == ("rec-0",)
     assert task.input_annotation_ids == ("opts-yesno",)
     assert [ann.id for ann in restored.registered_annotations] == ["opts-yesno"]
-    # After read(), streamed tasks back-populate their samples, so tasks_for() resolves them (this is
+    # After read(), streamed tasks back-populate their records, so tasks_for() resolves them (this is
     # what tasks_for and the torch view rely on).
-    rec0 = restored.samples[0]
-    expected = {t.id for t in restored.tasks if rec0.sample_id in t.sample_ids}
-    assert expected  # the sample really does carry streamed tasks
+    rec0 = restored.records[0]
+    expected = {t.id for t in restored.tasks if rec0.record_id in t.record_ids}
+    assert expected  # the record really does carry streamed tasks
     assert {t.id for t in restored.tasks_for(rec0)} == expected
 
 
@@ -233,7 +233,7 @@ def test_read_steps_matches_full_series_slice(tmp_path, backend):
         tmp_path, dataset=make_dataset(), values_backend=backend, chunk_max_bytes=64, row_group_target_bytes=64
     )
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = next(iter(reader.iter_samples())).time_series[0]
+        series = next(iter(reader.iter_records())).time_series[0]
         expected = series.to_arrow().slice(3, 7)
         assert series.read_steps(3, 10).equals(expected)
 
@@ -249,9 +249,9 @@ def test_metadata_and_schema(tmp_path):
 def test_shared_series_distinct_objects_same_id(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        samples = {s.sample_id: s for s in reader.read().samples}
-    a = next(ts for ts in samples["sample-0"].time_series if ts.time_series_id == "ts-shared")
-    b = next(ts for ts in samples["sample-1"].time_series if ts.time_series_id == "ts-shared")
+        records = {s.record_id: s for s in reader.read().records}
+    a = next(ts for ts in records["record-0"].time_series if ts.time_series_id == "ts-shared")
+    b = next(ts for ts in records["record-1"].time_series if ts.time_series_id == "ts-shared")
     assert a is not b
     assert a.to_arrow().equals(b.to_arrow())
 
@@ -259,8 +259,8 @@ def test_shared_series_distinct_objects_same_id(tmp_path):
 def test_annotation_value_types_round_trip(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        samples = {s.sample_id: s for s in reader.read().samples}
-    anns = {a.key: a for a in samples["sample-0"].annotations}
+        records = {s.record_id: s for s in reader.read().records}
+    anns = {a.key: a for a in records["record-0"].annotations}
     assert anns["age"].span is None
     assert anns["age"].value == 64 and isinstance(anns["age"].value, int)
     assert isinstance(anns["stimulus"].span, TimePoint)
@@ -282,8 +282,8 @@ def test_task_chain_round_trips(tmp_path):
 def test_shared_task_frame_round_trips(tmp_path):
     # prompt / rationale / input_annotation_ids live on the base, so they round-trip for every type.
     dataset = make_dataset()
-    sample = dataset.samples[0]
-    dataset.add_task(sample, AnswerTask(prompt="Any ectopy?", target="No.", id="task-answer-1"))  # rationale=None
+    record = dataset.records[0]
+    dataset.add_task(record, AnswerTask(prompt="Any ectopy?", target="No.", id="task-answer-1"))  # rationale=None
     version_dir = _write(tmp_path, dataset=dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {t.id: t for t in reader.tasks}
@@ -324,9 +324,9 @@ def test_scalar_target_round_trips_as_a_number(tmp_path):
 def test_iter_samples_matches_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        streamed = {s.sample_id for s in reader.iter_samples()}
+        streamed = {s.record_id for s in reader.iter_records()}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        read_ids = {s.sample_id for s in reader.read().samples}
+        read_ids = {s.record_id for s in reader.read().records}
     assert streamed == read_ids
 
 
@@ -345,8 +345,8 @@ def test_values_are_lazy(tmp_path, monkeypatch):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        ts = dataset.samples[0].time_series[0]
-        assert opens["n"] == 0  # building samples opened no shards
+        ts = dataset.records[0].time_series[0]
+        assert opens["n"] == 0  # building records opened no shards
         ts.to_arrow()
         assert opens["n"] >= 1  # reading values opened a shard
 
@@ -357,11 +357,11 @@ def test_read_back_dataset_is_picklable(tmp_path, backend):
     # even after values (and thus the backend's handles/caches) have been touched.
     version_dir = _write(tmp_path, values_backend=backend)
     dataset = TimeFReader(DatasetVersion.open_local(version_dir)).read()
-    first = dataset.samples[0].time_series[0]
+    first = dataset.records[0].time_series[0]
     original = first.to_arrow()  # populates the values backend's caches
 
     restored = pickle.loads(pickle.dumps(dataset))
-    assert restored.samples[0].time_series[0].to_arrow().equals(original)
+    assert restored.records[0].time_series[0].to_arrow().equals(original)
 
 
 def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
@@ -384,23 +384,23 @@ def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
         assert [p for p in reads if "/tasks/" in p] == opened
 
 
-# ---- filtered sample reads --------------------------------------------------------------------
+# ---- filtered record reads --------------------------------------------------------------------
 
 
 def test_iter_samples_returns_only_the_requested_ids(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        selected = list(reader.iter_samples(sample_ids=["sample-2", "sample-0"]))
-    assert [s.sample_id for s in selected] == ["sample-0", "sample-2"]  # stored order, not asked order
+        selected = list(reader.iter_records(record_ids=["record-2", "record-0"]))
+    assert [s.record_id for s in selected] == ["record-0", "record-2"]  # stored order, not asked order
     assert selected[0].time_series[0].to_arrow() is not None
 
 
 def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_samples())).time_series}
+        expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_records())).time_series}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        (only,) = reader.iter_samples(sample_ids=["sample-0"])
+        (only,) = reader.iter_records(record_ids=["record-0"])
         assert {ts.time_series_id: ts.to_arrow() for ts in only.time_series}.keys() == expected.keys()
         for ts in only.time_series:
             assert ts.to_arrow().equals(expected[ts.time_series_id])
@@ -410,15 +410,15 @@ def test_iter_samples_with_an_unknown_id_raises(tmp_path):
     version_dir = _write(tmp_path)
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
-        pytest.raises(TimeFValidationError, match="no such sample"),
+        pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        list(reader.iter_samples(sample_ids=["sample-0", "sample-nope"]))
+        list(reader.iter_records(record_ids=["record-0", "record-nope"]))
 
 
 def test_iter_samples_with_an_empty_id_list_yields_nothing(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert list(reader.iter_samples(sample_ids=[])) == []
+        assert list(reader.iter_records(record_ids=[])) == []
 
 
 def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
@@ -426,13 +426,13 @@ def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
     # exists and never reaches the check, which the docstring states explicitly.
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        got = next(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
-        assert got.sample_id == "sample-0"  # early stop: no raise
+        got = next(reader.iter_records(record_ids=["record-0", "no-such-record"]))
+        assert got.record_id == "record-0"  # early stop: no raise
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
-        pytest.raises(TimeFValidationError, match="no-such-sample"),
+        pytest.raises(TimeFValidationError, match="no-such-record"),
     ):
-        list(reader.iter_samples(sample_ids=["sample-0", "no-such-sample"]))
+        list(reader.iter_records(record_ids=["record-0", "no-such-record"]))
 
 
 # ---- pruning ----------------------------------------------------------------------------------
@@ -477,8 +477,8 @@ def test_annotations_are_decoded_only_when_a_sample_resolves_them(tmp_path, monk
     read = _count_control_plane_reads(monkeypatch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert not [p for p in read if "/annotations/" in p]
-        sample = next(iter(reader.iter_samples()))
-        assert sample.annotations
+        record = next(iter(reader.iter_records()))
+        assert record.annotations
         assert [p for p in read if "/annotations/" in p]
 
 
@@ -490,7 +490,7 @@ def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
         annotations = reader._annotations_table()
         total = len(annotations.groups())
         assert total > 1, "the fixture must span several annotation row groups for this to mean anything"
-        assert reader._resolve_annotation("sample-0", "age-0").value == 64  # one id, one row group decoded
+        assert reader._resolve_annotation("record-0", "age-0").value == 64  # one id, one row group decoded
         assert len(annotations._cache) < total
 
 
@@ -503,7 +503,7 @@ def test_annotation_resolution_builds_no_whole_table_id_map(tmp_path):
         annotations = reader._annotations_table()
         total = len(annotations.groups())
         assert total > 1, "the fixture must span several annotation row groups for this to mean anything"
-        assert reader._resolve_annotation("sample-0", "age-0").value == 64
+        assert reader._resolve_annotation("record-0", "age-0").value == 64
         assert len(annotations._cache) < total  # only the matching group was decoded, not the whole table
         assert list(reader._annotation_cache) == ["age-0"]  # one decoded annotation cached, not an id map
         for table, keys in annotations._cache.values():
@@ -511,12 +511,12 @@ def test_annotation_resolution_builds_no_whole_table_id_map(tmp_path):
 
 
 def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
-    # A small row-group target splits the index, so the sample_id statistics have something to rule out.
+    # A small row-group target splits the index, so the record_id statistics have something to rule out.
     # Without pruning, one lookup would decode every row group in the file.
     version_dir = _write(tmp_path, row_group_target_bytes=64)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        sample = next(iter(reader.iter_samples()))
-        for series in sample.time_series:
+        record = next(iter(reader.iter_records()))
+        for series in record.time_series:
             series.to_arrow()
         index = reader._index_table()
         total = len(index.groups())
@@ -527,23 +527,23 @@ def test_index_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
 def test_index_row_groups_are_pruned_by_their_statistics(tmp_path):
     version_dir = _write(tmp_path, row_group_target_bytes=64)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        probe = cast("str | bytes", reader._codec.encode("sample_id", "sample-0"))  # the stored form pruned on
+        probe = cast("str | bytes", reader._codec.encode("record_id", "record-0"))  # the stored form pruned on
         groups = reader._index_table().groups()
-        assert all(g.min_key is not None for g in groups), "the index must carry sample_id statistics"
+        assert all(g.min_key is not None for g in groups), "the index must carry record_id statistics"
         assert [g.may_hold(probe) for g in groups].count(False) > 0  # some groups provably cannot match
 
 
 def test_getstate_drops_every_control_plane_cache(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        next(iter(reader.iter_samples())).time_series[0].to_arrow()
+        next(iter(reader.iter_records())).time_series[0].to_arrow()
         _ = reader.tasks
         state = reader.__getstate__()
     assert state["_tasks"] is None
     assert state["_annotations"] is None
     assert state["_annotation_cache"] == {}
     assert state["_index"] is None
-    assert state["_samples_data"] is None
+    assert state["_records_data"] is None
     assert state["_values"] is None
 
 
@@ -553,14 +553,14 @@ def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path):
     # retains groups rather than timing anything.
     version_dir = _write(tmp_path, row_group_target_bytes=64)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        sample_ids = [s.sample_id for s in reader.iter_samples()]
-        series = {s.sample_id: [ts.time_series_id for ts in s.time_series] for s in reader.iter_samples()}
+        record_ids = [s.record_id for s in reader.iter_records()]
+        series = {s.record_id: [ts.time_series_id for ts in s.time_series] for s in reader.iter_records()}
         index = reader._index_table()
         assert len(index.groups()) > 1  # the small row-group target really did split the index
 
-        for sample_id in reversed(sample_ids):  # reverse order is the cheapest stand-in for shuffled
-            for series_id in series[sample_id]:
-                assert reader._index_rows(sample_id, series_id)
+        for record_id in reversed(record_ids):  # reverse order is the cheapest stand-in for shuffled
+            for series_id in series[record_id]:
+                assert reader._index_rows(record_id, series_id)
         # every decoded group is still resident: nothing was evicted to serve the pass
         assert len(index._cache) == len(index.groups())
 
@@ -601,12 +601,12 @@ def test_corrupt_index_locator_has_series_context(tmp_path):
     pq.write_table(table.set_column(table.schema.get_field_index("chunk_file"), "chunk_file", bogus), index_path)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        sample = next(iter(reader.iter_samples()))
-        series_id = sample.time_series[0].time_series_id
+        record = next(iter(reader.iter_records()))
+        series_id = record.time_series[0].time_series_id
         with pytest.raises(
-            TimeFFormatError, match=f"failed to read series {series_id!r} for sample {sample.sample_id!r}"
+            TimeFFormatError, match=f"failed to read series {series_id!r} for record {record.record_id!r}"
         ):
-            reader._load_values(sample.sample_id, series_id)
+            reader._load_values(record.record_id, series_id)
 
 
 def test_corrupt_index_data_page_raises_format_error(tmp_path):
@@ -619,19 +619,19 @@ def test_corrupt_index_data_page_raises_format_error(tmp_path):
         raw[i] = 0
     idx.write_bytes(raw)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        sample = next(iter(reader.iter_samples()))
+        record = next(iter(reader.iter_records()))
         with pytest.raises(TimeFFormatError):
-            sample.time_series[0].to_arrow()
+            record.time_series[0].to_arrow()
 
 
 def test_missing_listed_file_fails_lazily_on_first_access(tmp_path):
     # __init__ no longer stat-sweeps (an O(files) HEAD storm on an object store); a missing file now
     # surfaces on the first read that touches it, which the lazy stack already accepts.
     version_dir = _write(tmp_path)
-    (version_dir / "samples/part-00000000.parquet").unlink()
-    reader = TimeFReader(DatasetVersion.open_local(version_dir))  # open is happy: it never touches samples
+    (version_dir / "records/part-00000000.parquet").unlink()
+    reader = TimeFReader(DatasetVersion.open_local(version_dir))  # open is happy: it never touches records
     with pytest.raises(FileNotFoundError):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_verify_passes_on_an_intact_dataset(tmp_path):
@@ -705,29 +705,29 @@ def test_corrupt_task_partition_raises_format_error_on_first_task_access(tmp_pat
 def test_start_time_round_trips_exactly(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        samples = {s.sample_id: s for s in reader.iter_samples()}
+        records = {s.record_id: s for s in reader.iter_records()}
     # The fixture anchor is not representable in float64, so this catches any float coercion.
-    assert samples["sample-0"].start_time == 9_007_199_254_740_993
-    assert samples["sample-1"].start_time is None
-    assert samples["sample-2"].start_time is None
+    assert records["record-0"].start_time == 9_007_199_254_740_993
+    assert records["record-1"].start_time is None
+    assert records["record-2"].start_time is None
 
 
 def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
     version_dir = _write(tmp_path)
-    samples_path = version_dir / "samples/part-00000000.parquet"
-    table = pq.read_table(samples_path)
-    pq.write_table(table.drop_columns(["start_time_us"]), samples_path)
+    records_path = version_dir / "records/part-00000000.parquet"
+    table = pq.read_table(records_path)
+    pq.write_table(table.drop_columns(["start_time_us"]), records_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert all(s.start_time is None for s in reader.iter_samples())
+        assert all(s.start_time is None for s in reader.iter_records())
 
 
 def _corrupt_first_series(version_dir, field, value):
-    """Set a field on the first series' struct in samples.parquet, simulating on-disk corruption."""
-    samples_path = version_dir / "samples/part-00000000.parquet"
-    table = pq.read_table(samples_path)
+    """Set a field on the first series' struct in records.parquet, simulating on-disk corruption."""
+    records_path = version_dir / "records/part-00000000.parquet"
+    table = pq.read_table(records_path)
     rows = table.to_pylist()
     rows[0]["time_series"][0][field] = value
-    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), samples_path)
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), records_path)
 
 
 def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
@@ -738,7 +738,7 @@ def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="carries regular- or"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
@@ -749,7 +749,7 @@ def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="unbuildable regular axis"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def _corrupt_descriptor(version_dir, key, field, value):
@@ -764,14 +764,14 @@ def _corrupt_descriptor(version_dir, key, field, value):
 
 def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
     # "artifact" is an interval; a descriptor that calls it static no longer matches the decoded span.
-    # Annotations decode when a sample resolves them, so that is where the disagreement surfaces.
+    # Annotations decode when a record resolves them, so that is where the disagreement surfaces.
     version_dir = _write(tmp_path)
     _corrupt_descriptor(version_dir, "artifact", "annotation_type", "static")
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="decodes to shape"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_error(tmp_path):
@@ -782,7 +782,7 @@ def test_annotation_value_type_disagreeing_with_its_descriptor_raises_format_err
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="value type"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_annotation_span_outside_the_series_warns_and_reads_back_unchanged(tmp_path):
@@ -798,11 +798,11 @@ def test_annotation_span_outside_the_series_warns_and_reads_back_unchanged(tmp_p
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
-        pytest.warns(SpanOutsideWindowWarning, match="falls outside sample"),
+        pytest.warns(SpanOutsideWindowWarning, match="falls outside record"),
     ):
-        samples = list(reader.iter_samples())
+        records = list(reader.iter_records())
     # Only an interval was stretched; a point has no end to stretch.
-    ends = [a.span.end_us for s in samples for a in s.annotations if isinstance(a.span, TimeInterval)]
+    ends = [a.span.end_us for s in records for a in s.annotations if isinstance(a.span, TimeInterval)]
     assert 10**15 in ends, "the stretched span must survive the read"
 
 
@@ -818,23 +818,23 @@ def _time_span_dataset(tmp_path) -> Path:
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless),
-        channel="c",
+        signal="c",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
-    sample = dataset.add_sample(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0))
-    sample.add_annotation(Annotation(key="note", span=TimePoint.seconds(2.0)))  # unscoped, inside [0, 5) s
+    record = dataset.add_record(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0))
+    record.add_annotation(Annotation(key="note", span=TimePoint.seconds(2.0)))  # unscoped, inside [0, 5) s
     return _write(tmp_path, dataset)
 
 
 def _corrupt_first_time_span(version_dir, struct):
-    """Replace the first sample's time_span struct in samples.parquet, simulating on-disk corruption."""
-    samples_path = version_dir / "samples/part-00000000.parquet"
-    table = pq.read_table(samples_path)
+    """Replace the first record's time_span struct in records.parquet, simulating on-disk corruption."""
+    records_path = version_dir / "records/part-00000000.parquet"
+    table = pq.read_table(records_path)
     rows = table.to_pylist()
     rows[0]["time_span"] = struct
-    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), samples_path)
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), records_path)
 
 
 def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
@@ -846,11 +846,11 @@ def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="must be > start"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_point_shaped_time_span_raises_format_error(tmp_path):
-    # A time_span must be an interval covering the whole sample. A corrupt point-shaped one (no end) is
+    # A time_span must be an interval covering the whole record. A corrupt point-shaped one (no end) is
     # rejected as a format error, not left to reach the unscoped-span check and raise a bare TypeError.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_first_time_span(version_dir, {"start_us": 0, "end_us": None, "time_series_ids": None})
@@ -858,7 +858,7 @@ def test_point_shaped_time_span_raises_format_error(tmp_path):
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="must be a TimeInterval"),
     ):
-        list(reader.iter_samples())
+        list(reader.iter_records())
 
 
 def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
@@ -880,15 +880,15 @@ def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
-    dataset.add_task(sample, ClassificationTask(target="afib", target_schema="scp5", id="cls-0"))
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    dataset.add_task(record, ClassificationTask(target="afib", target_schema="scp5", id="cls-0"))
     version_dir = _write(tmp_path, dataset=dataset)
 
     # Simulate an older partition: drop the optional payload column from the task Parquet on disk.
@@ -912,36 +912,36 @@ def _annotation_dataset(annotations):
             dataset_id="test/annotations",
             dataset_version=Version(1, 0, 0),
             name="Annotations",
-            description="One sample carrying annotations under test.",
+            description="One record carrying annotations under test.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
     for ann in annotations:
-        sample.add_annotation(ann)
+        record.add_annotation(ann)
     return dataset
 
 
 def test_annotation_map_value_round_trips(tmp_path):
     ds = _annotation_dataset([Annotation(key="panas", value={"pa": 30, "na": 12}, id="ann-map")])
     restored = _read(_write(tmp_path, dataset=ds))
-    assert restored.samples[0].annotations[0].value == {"pa": 30, "na": 12}
+    assert restored.records[0].annotations[0].value == {"pa": 30, "na": 12}
 
 
 def test_annotation_source_round_trips(tmp_path):
     ds = _annotation_dataset([Annotation(key="stage", value="N2", source="rater-A", id="ann-src")])
     restored = _read(_write(tmp_path, dataset=ds))
-    assert restored.samples[0].annotations[0].source == "rater-A"
+    assert restored.records[0].annotations[0].source == "rater-A"
 
 
 def test_annotation_partition_missing_source_reads_none(tmp_path):
@@ -954,7 +954,7 @@ def test_annotation_partition_missing_source_reads_none(tmp_path):
     assert "source" in table.column_names
     pq.write_table(table.drop_columns(["source"]), parquets[0])
     restored = _read(version_dir)
-    assert restored.samples[0].annotations[0].source is None
+    assert restored.records[0].annotations[0].source is None
 
 
 def _registered_source_dataset(source):
@@ -963,25 +963,25 @@ def _registered_source_dataset(source):
             dataset_id="test/registered-source",
             dataset_version=Version(1, 0, 0),
             name="RegisteredSource",
-            description="A registered annotation carrying a source that no sample carries.",
+            description="A registered annotation carrying a source that no record carries.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
     options = Annotation(key="answer_options", value=["yes", "no"], source=source, id="opts-src")
     dataset.register_annotations([options])
     dataset.add_task(
-        sample,
+        record,
         AnswerTask(prompt="Rhythm?", target="yes", input_annotation_ids=(options.id,), id="qa-0"),
     )
     return dataset
@@ -1018,15 +1018,15 @@ def test_temporal_localization_empty_target_round_trips(tmp_path):
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
-    dataset.add_task(sample, TemporalLocalizationTask(prompt="Mark every P-wave", target=(), id="loc-0"))
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    dataset.add_task(record, TemporalLocalizationTask(prompt="Mark every P-wave", target=(), id="loc-0"))
     restored = _read(_write(tmp_path, dataset=dataset))
     task = restored.tasks[0]
     assert isinstance(task, TemporalLocalizationTask)
@@ -1034,28 +1034,28 @@ def test_temporal_localization_empty_target_round_trips(tmp_path):
 
 
 def test_correspondence_time_series_answer_round_trips(tmp_path):
-    """A correspondence task that answers with series ids round-trips those ids, resolved on the sample."""
+    """A correspondence task that answers with series ids round-trips those ids, resolved on the record."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="test/correspondence",
             dataset_version=Version(1, 0, 0),
             name="Correspondence",
-            description="Which channels correspond, answered with time-series ids.",
+            description="Which signals correspond, answered with time-series ids.",
             license=License.CC_BY_4_0,
             domains=(Domain.GENERAL,),
         )
     )
     series = TimeSeries(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        channel="I",
+        signal="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="rec-0")
-    dataset.add_task(sample, TSCorrespondenceTask(target_time_series_ids=("ecg-rec-0-I",), id="corr-0"))
+    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    dataset.add_task(record, TSCorrespondenceTask(target_time_series_ids=("ecg-rec-0-I",), id="corr-0"))
     restored = _read(_write(tmp_path, dataset=dataset))
     task = restored.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)

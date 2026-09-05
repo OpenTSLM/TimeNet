@@ -72,7 +72,7 @@ def test_store_derives_schema_if_needed(tmp_path):
 def test_run_pipeline_end_to_end(tmp_path):
     version_dir = run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.counts.samples == 3
+    assert manifest.counts.records == 3
     assert manifest.dataset_id == "timenet/hello-world"
 
 

@@ -1,6 +1,6 @@
 ---
 icon: lucide/shapes
-description: "The shape of a TimeNet dataset: how it is ingested, and the samples, annotations, and tasks it holds."
+description: "The shape of a TimeNet dataset: how it is ingested, and the records, annotations, and tasks it holds."
 tags:
   - guide
   - concepts
@@ -13,12 +13,12 @@ time-series datasets in one on-disk format ([TimeF](../timef-dataset.md)). Then 
 TimeNet is not a training toolkit. These pages show the shape of that data:
 
 - **[Datasets](datasets.md)**: versioned collections addressed by an `org/name` id.
-- **[Samples](samples.md)**: one recording with its signals, annotations, and tasks.
-- **[Time series](time-series.md)**: one channel's values over time. A sample has one or more.
+- **[Records](records.md)**: one recording with its signals, annotations, and tasks.
+- **[Time series](time-series.md)**: one signal's values over time. A record has one or more.
 - **[Annotations](annotations.md)**: scoped side-information in three shapes.
-- **[Tasks](tasks.md)**: the labeled training targets built from a sample.
+- **[Tasks](tasks.md)**: the labeled training targets built from a record.
 
-The code examples follow one running example: a machine's vibration and temperature channels. But the
+The code examples follow one running example: a machine's vibration and temperature signals. But the
 same primitives describe any sensor stream, from an ECG to a market series.
 
 ## Ingesting a dataset

@@ -5,12 +5,12 @@
 #
 # Scope: both studies of the release. `sleep-cassette` recorded each subject at home on a
 # cassette recorder, and `sleep-telemetry` recorded each subject in hospital on a telemetry
-# system. The two use different equipment, so their channel sets and their spans differ.
+# system. The two use different equipment, so their signal sets and their spans differ.
 #
 # Training convention: the target of each ClassificationTask is the label the scorer wrote, so
 # `Sleep stage 4` stays `Sleep stage 4`. The 5-class problem most papers report merges stage 3
 # with stage 4 into N3 and drops the epochs labeled `Movement time` or `Sleep stage ?`. Signals
-# are archival raw (every channel at the rate and in the unit its own EDF header states, no
+# are archival raw (every signal at the rate and in the unit its own EDF header states, no
 # resampling); a recording can span about a day, so trim it to the scored sleep at load time.
 yaml_schema_version: 1
 dataset_id: physionet/sleep-edfx

@@ -33,7 +33,7 @@ def test_spec_construction_modality_only():
     assert spec.spec_type == "ecg_lead"
     assert spec.unit_value == ureg.millivolt
     assert spec.data_source is None
-    assert not hasattr(spec, "channel")  # channel lives on TimeSeries, not the spec
+    assert not hasattr(spec, "signal")  # signal lives on TimeSeries, not the spec
 
 
 def test_spec_with_data_source():
@@ -76,7 +76,7 @@ def test_pickle_round_trips_a_custom_unit():
 
 
 def test_spec_value_unit_unconstrained():
-    # Any unit is a valid channel value unit (mV, g, bpm, dimensionless, ...).
+    # Any unit is a valid signal value unit (mV, g, bpm, dimensionless, ...).
     assert _ecg_spec(unit_value=ureg.dimensionless).unit_value == ureg.dimensionless
     assert _ecg_spec(unit_value=ureg.bpm).unit_value == ureg.bpm
 

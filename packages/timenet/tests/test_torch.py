@@ -29,12 +29,12 @@ def test_is_torch_dataset():
 
 
 def test_len_matches_samples():
-    assert len(_ds()) == len(make_dataset().samples)
+    assert len(_ds()) == len(make_dataset().records)
 
 
 def test_getitem_structure():
     item = _ds()[0]
-    assert isinstance(item["sample_id"], str)
+    assert isinstance(item["record_id"], str)
     assert item["series"]
     assert all(isinstance(t, torch.Tensor) and t.dtype == torch.float32 for t in item["series"])
 
@@ -42,13 +42,13 @@ def test_getitem_structure():
 def test_getitem_values_match():
     dataset = make_dataset()
     item = TimeFTorchDataset(dataset)[0]
-    expected = dataset.samples[0].time_series[0].to_numpy()
+    expected = dataset.records[0].time_series[0].to_numpy()
     assert item["series"][0].numpy().tolist() == expected.tolist()
 
 
 def test_tasks_resolved():
     ds = _ds()
-    assert any(ds[i]["tasks"] for i in range(len(ds))), "expected at least one sample with a task"
+    assert any(ds[i]["tasks"] for i in range(len(ds))), "expected at least one record with a task"
 
 
 def test_transform_applied():
@@ -58,7 +58,7 @@ def test_transform_applied():
 
 def test_dangling_task_id_raises():
     dataset = make_dataset()
-    dataset.samples[0].task_ids = ("no-such-task",)
+    dataset.records[0].task_ids = ("no-such-task",)
     with pytest.raises(TimeFValidationError, match="unknown task id"):
         TimeFTorchDataset(dataset)[0]
 
@@ -70,7 +70,7 @@ def _typed_dataset(dtype, values):
         unit_value=ureg.dimensionless,
         dtype=dtype,
     )
-    ts = TimeSeries.from_values(values, spec=spec, channel="c", time_axis=RegularAxis.from_rate_hz(1))
+    ts = TimeSeries.from_values(values, spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/torch",
@@ -81,7 +81,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(time_series=(ts,), sample_id="sample-0")
+    dataset.add_record(time_series=(ts,), record_id="record-0")
     return dataset
 
 

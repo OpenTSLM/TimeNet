@@ -9,16 +9,16 @@ one does not type-check.
 This module uses two words that are not interchangeable, because the format names two different things:
 
 **time offset**
-    A position on a series' own axis. It is an integer microsecond offset from the sample's relative
+    A position on a series' own axis. It is an integer microsecond offset from the record's relative
     zero. Every axis quantity here is a time offset, and so are a span's bounds. A time offset says
     where a value sits within its recording. It says nothing about the calendar day. A series with no
     anchor has time offsets and no timestamps.
 
 **timestamp**
     An absolute point on the wall clock, in Unix microseconds. Exactly one field carries one:
-    :attr:`~timenet.dataset.Sample.start_time`. It is what a sample's relative zero refers to.
+    :attr:`~timenet.dataset.Record.start_time`. It is what a record's relative zero refers to.
 
-The wall clock enters once and composes by addition. A value's timestamp is the sample's
+The wall clock enters once and composes by addition. A value's timestamp is the record's
 ``start_time`` plus the value's time offset. The recording's own zero anchors the time offset.
 The Unix epoch anchors the timestamp.
 
@@ -159,7 +159,7 @@ class RegularAxis:
             index: The value's index within this series.
 
         Returns:
-            Microseconds from the sample's relative zero.
+            Microseconds from the record's relative zero.
         """
         return math.floor((self.start_index + index) * self.period_us)
 
@@ -167,7 +167,7 @@ class RegularAxis:
         """Return the first value at or after a time offset.
 
         Args:
-            time_offset_us: The time offset, in microseconds from the sample's relative zero.
+            time_offset_us: The time offset, in microseconds from the record's relative zero.
 
         Returns:
             The index within this series, which is negative if the time offset precedes its first value.
@@ -187,7 +187,7 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
     both seconds and microseconds.
 
     Args:
-        time_offsets_us: The per-value time offsets, in microseconds from the sample's relative zero.
+        time_offsets_us: The per-value time offsets, in microseconds from the record's relative zero.
 
     Returns:
         A C-contiguous int64 array.
@@ -233,20 +233,20 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
 
 
 def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: datetime | int | None) -> np.ndarray:
-    """Convert wall-clock moments to time offsets on a sample's recording timeline.
+    """Convert wall-clock moments to time offsets on a record's recording timeline.
 
     This is the safe path from calendar time, and the reason :func:`to_time_offsets_us` refuses a
-    ``datetime64`` array outright. This function measures each moment against the sample's anchor.
+    ``datetime64`` array outright. This function measures each moment against the record's anchor.
     The result lands in the same frame as a span's bounds and a regular axis' computed time offsets.
 
     Args:
         moments: The wall-clock moments, each timezone-aware.
-        start_time: The target sample's ``start_time``.
+        start_time: The target record's ``start_time``.
 
     Returns:
-        A C-contiguous int64 array of microseconds from the sample's relative zero.
+        A C-contiguous int64 array of microseconds from the record's relative zero.
 
-    :func:`~timenet.types.clock.offset_us` raises if ``start_time`` is ``None``, because a sample with
+    :func:`~timenet.types.clock.offset_us` raises if ``start_time`` is ``None``, because a record with
     no wall-clock anchor has no calendar time to measure against.
     """
     return to_time_offsets_us(np.fromiter((offset_us(m, start_time) for m in moments), dtype=np.int64))
@@ -261,7 +261,7 @@ class IrregularAxis:
     them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
-    identity and round-trips as a value through the samples struct. An axis holding the array does
+    identity and round-trips as a value through the records struct. An axis holding the array does
     neither: a tuple comparison against an ndarray field raises instead of answering.
 
     The endpoints are metadata about the stream, not an identity for it. Two series whose time offsets
@@ -276,7 +276,7 @@ class IrregularAxis:
     axis_type: ClassVar[AxisType] = AxisType.IRREGULAR
     """The stored discriminator."""
     first_us: int
-    """Time offset of the first value, in microseconds from the sample's relative zero."""
+    """Time offset of the first value, in microseconds from the record's relative zero."""
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
     verified metadata, not an unbacked claim."""
@@ -296,7 +296,7 @@ class IrregularAxis:
         if self.first_us < 0:
             raise TimeFValidationError(
                 f"IrregularAxis.first_us must be >= 0, got {self.first_us}; a time offset is measured "
-                f"from the sample's relative zero"
+                f"from the record's relative zero"
             )
         if self.last_us < self.first_us:
             raise TimeFValidationError(
@@ -308,7 +308,7 @@ class IrregularAxis:
         """Build the axis describing a stream of time offsets.
 
         Args:
-            time_offsets_us: The per-value time offsets, in microseconds from the sample's relative zero.
+            time_offsets_us: The per-value time offsets, in microseconds from the record's relative zero.
 
         Returns:
             The axis carrying that stream's endpoints, after :func:`to_time_offsets_us` has vetted it.

@@ -4,8 +4,8 @@ A :class:`TimeSeriesSpec` describes one measurement modality: its tag, unit, dty
 A :class:`DataSource` describes the origin that produced it. Both are flat frozen dataclasses.
 Connectors build them directly or subclass them with field defaults for reuse.
 :class:`~timenet.reader.TimeFReader` rebuilds the identical instances from the manifest, so they
-round-trip and pickle without any runtime class synthesis. The per-channel identifier lives on
-:class:`~timenet.dataset.TimeSeries`, not here, so every channel of a modality shares one spec.
+round-trip and pickle without any runtime class synthesis. The per-signal identifier lives on
+:class:`~timenet.dataset.TimeSeries`, not here, so every signal of a modality shares one spec.
 """
 
 from dataclasses import dataclass

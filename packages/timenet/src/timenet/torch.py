@@ -19,13 +19,13 @@ from timenet.types import Task
 
 
 class TimeFTorchDataset(Dataset):
-    """Shows a dataset's samples as a map-style ``torch.utils.data.Dataset``.
+    """Shows a dataset's records as a map-style ``torch.utils.data.Dataset``.
 
-    ``__getitem__`` returns a dict. The dict has the sample's ``series`` as tensors that keep the
-    original dtype, with shape ``(n_steps, *value_shape)``. The dict also has the sample's
-    ``sample_id``, its resolved ``tasks``, and its ``annotations``. Use the ``transform`` argument
-    to reshape items for a model. Series lengths and trailing shapes can vary between samples.
-    Because of this, a ``DataLoader`` that batches samples needs a custom ``collate_fn``, or you
+    ``__getitem__`` returns a dict. The dict has the record's ``series`` as tensors that keep the
+    original dtype, with shape ``(n_steps, *value_shape)``. The dict also has the record's
+    ``record_id``, its resolved ``tasks``, and its ``annotations``. Use the ``transform`` argument
+    to reshape items for a model. Series lengths and trailing shapes can vary between records.
+    Because of this, a ``DataLoader`` that batches records needs a custom ``collate_fn``, or you
     must set ``batch_size=1``.
     """
 
@@ -36,7 +36,7 @@ class TimeFTorchDataset(Dataset):
             dataset: The dataset to view. Its per-series values load only when accessed.
             transform: An optional callable applied to each item dict before it is returned.
         """
-        self._samples = dataset.samples
+        self._samples = dataset.records
         self._tasks_by_id = {task.id: task for task in dataset.tasks}
         self._transform = transform
 
@@ -44,21 +44,21 @@ class TimeFTorchDataset(Dataset):
         return len(self._samples)
 
     def __getitem__(self, index: int) -> Any:
-        sample = self._samples[index]
+        record = self._samples[index]
         item: dict[str, Any] = {
-            "sample_id": sample.sample_id,
-            "series": tuple(_series_tensor(ts) for ts in sample.time_series),
-            "tasks": tuple(self._resolve_task(task_id, sample.sample_id) for task_id in sample.task_ids),
-            "annotations": sample.annotations,
+            "record_id": record.record_id,
+            "series": tuple(_series_tensor(ts) for ts in record.time_series),
+            "tasks": tuple(self._resolve_task(task_id, record.record_id) for task_id in record.task_ids),
+            "annotations": record.annotations,
         }
         return self._transform(item) if self._transform is not None else item
 
-    def _resolve_task(self, task_id: str, sample_id: str) -> Task:
-        """Return the task that a sample references. Raise an error if the id does not exist.
+    def _resolve_task(self, task_id: str, record_id: str) -> Task:
+        """Return the task that a record references. Raise an error if the id does not exist.
 
         Args:
-            task_id: A task id from the sample's ``task_ids``.
-            sample_id: The id of the sample that references the task. Used in the error message.
+            task_id: A task id from the record's ``task_ids``.
+            record_id: The id of the record that references the task. Used in the error message.
 
         Returns:
             The resolved :class:`~timenet.types.Task`.
@@ -68,7 +68,7 @@ class TimeFTorchDataset(Dataset):
         """
         task = self._tasks_by_id.get(task_id)
         if task is None:
-            raise TimeFValidationError(f"sample {sample_id!r} references unknown task id {task_id!r}")
+            raise TimeFValidationError(f"record {record_id!r} references unknown task id {task_id!r}")
         return task
 
 

@@ -25,7 +25,7 @@ for meta in client.search(domain=Domain.CARDIOLOGY):
 
 # read in place through the registry, lazy values
 dataset = client.load("timenet/hello-world")
-values = dataset.samples[0].time_series[0].to_numpy()
+values = dataset.records[0].time_series[0].to_numpy()
 ```
 
 ## Construction
@@ -120,8 +120,8 @@ pin a version that is not committed, TimeNet raises `TimeNetDatasetNotFoundError
 ## PyTorch
 
 `load_torch` returns a `TimeFTorchDataset`. This is a read-only, map-style
-`torch.utils.data.Dataset`. Each item is a dict. The dict contains the sample's `series` as
-dtype-preserving tensors with shape `(n_steps, *value_shape)`, plus `sample_id`, `tasks`, and
+`torch.utils.data.Dataset`. Each item is a dict. The dict contains the record's `series` as
+dtype-preserving tensors with shape `(n_steps, *value_shape)`, plus `record_id`, `tasks`, and
 `annotations`.
 
 ```python
@@ -135,7 +135,7 @@ series, question = item["series"][0], item["tasks"][0].question
 
 To feed a `DataLoader`, select the fields that your model needs. Use a `transform` on the dataset,
 or a `collate_fn` on the loader, for this selection. The item's `tasks` and `annotations` are
-Python objects, not tensors. Series lengths also vary between samples.
+Python objects, not tensors. Series lengths also vary between records.
 
 ```python
 from torch.utils.data import DataLoader

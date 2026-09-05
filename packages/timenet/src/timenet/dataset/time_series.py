@@ -40,15 +40,15 @@ class TimeSeries:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
     The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
-    across samples, or give two instances the same explicit id, they share one chunk on disk. Consumers
+    across records, or give two instances the same explicit id, they share one chunk on disk. Consumers
     read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector supplies ``loader`` at
     build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
     """
 
     spec: TimeSeriesSpec
     """Measurement-modality contract: type tag, units, dtype, and per-timestep shape."""
-    channel: str
-    """Name of this channel within the modality. The channel must be non-empty."""
+    signal: str
+    """Name of this signal within the modality. The signal must be non-empty."""
     time_axis: TimeAxis
     """Where this series' values sit in time. A :class:`~timenet.dataset.axis.RegularAxis` gives a
     cadence, an :class:`~timenet.dataset.axis.IrregularAxis` stores per-value time offsets, and an
@@ -78,10 +78,10 @@ class TimeSeries:
         Raises:
             TimeFValidationError: If ``n_values`` is not a positive integer, or if ``time_offsets_loader``
                 and the axis shape disagree about whether this series stores per-value time offsets.
-            ValueError: If ``channel`` is empty. The axis validates itself.
+            ValueError: If ``signal`` is empty. The axis validates itself.
         """
-        if not self.channel:
-            raise ValueError("TimeSeries.channel must be non-empty")
+        if not self.signal:
+            raise ValueError("TimeSeries.signal must be non-empty")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)
@@ -123,7 +123,7 @@ class TimeSeries:
         values: np.ndarray | Sequence[bool | int | float | str],
         *,
         spec: TimeSeriesSpec,
-        channel: str,
+        signal: str,
         time_axis: TimeAxis,
         source_id: str | None = None,
         time_series_id: str | None = None,
@@ -136,10 +136,10 @@ class TimeSeries:
         state the length, because nothing has read the values yet.
 
         Args:
-            values: The channel's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
+            values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
                 spec, the strings).
             spec: The series' measurement-modality spec.
-            channel: The channel name.
+            signal: The signal name.
             time_axis: Where the values sit in time.
             source_id: Optional id of the raw source recording.
             time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
@@ -156,7 +156,7 @@ class TimeSeries:
             array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         return cls(
             spec=spec,
-            channel=channel,
+            signal=signal,
             time_axis=time_axis,
             loader=lambda: array,
             source_id=source_id,
@@ -171,7 +171,7 @@ class TimeSeries:
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
-        channel: str,
+        signal: str,
         source_id: str | None = None,
         time_series_id: str | None = None,
     ) -> "TimeSeries":
@@ -182,11 +182,11 @@ class TimeSeries:
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
 
         Args:
-            values: The channel's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
+            values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
                 spec, the strings).
-            time_offsets_us: One time offset per value, in microseconds from the sample's relative zero.
+            time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
-            channel: The channel name.
+            signal: The signal name.
             source_id: Optional id of the raw source recording.
             time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
@@ -212,7 +212,7 @@ class TimeSeries:
         time_offset_array = pa.array(time_offsets)
         return cls(
             spec=spec,
-            channel=channel,
+            signal=signal,
             time_axis=IrregularAxis.spanning(time_offsets),
             loader=lambda: array,
             time_offsets_loader=lambda: time_offset_array,
