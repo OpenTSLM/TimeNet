@@ -83,6 +83,8 @@ def test_connector_defaults_to_the_parquet_values_backend():
 
 
 def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
+    pytest.importorskip("zarr")
+
     class _ZarrConnector(_DemoConnector):
         values_backend = "zarr"
 
