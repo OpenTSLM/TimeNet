@@ -159,6 +159,33 @@ def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
     assert "--keep-cache" in captured["command"]
 
 
+def test_run_isolated_forwards_an_explicit_values_backend(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake(command, env):
+        captured["command"] = command
+        return f"{tmp_path}/x\n", "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", _fake)
+    run_isolated("timenet/hello-world", tmp_path, values_backend="zarr")
+
+    command = captured["command"]
+    assert command[command.index("--values-backend") + 1] == "zarr"
+
+
+def test_run_isolated_omits_values_backend_without_an_override(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake(command, env):
+        captured["command"] = command
+        return f"{tmp_path}/x\n", "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", _fake)
+    run_isolated("timenet/hello-world", tmp_path)
+
+    assert "--values-backend" not in captured["command"]
+
+
 def test_run_isolated_forwards_quiet_ahead_of_the_subcommand(monkeypatch, tmp_path):
     captured = {}
 

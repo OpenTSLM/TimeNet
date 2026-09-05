@@ -16,7 +16,9 @@ runner = CliRunner()
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_isolated(dataset_id, root, *, force=False, keep_cache=False, quiet=False):
+    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    ):
         captured["dataset_id"] = dataset_id
         captured["root"] = root
         return Path(root) / "timenet/hello-world/1.0.0"
@@ -63,11 +65,80 @@ def test_build_runs_in_process_when_the_setting_is_off(monkeypatch, tmp_path):
     assert called["isolated"] is False
 
 
+def test_build_without_a_values_backend_uses_the_connector_default(monkeypatch, tmp_path):
+    captured = {}
+
+    class _Connector:
+        values_backend = "zarr"
+
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Connector)
+
+    def _fake_pipeline(connector, root, **kwargs):
+        captured["values_backend"] = kwargs["values_backend"]
+        return Path(root) / "timenet/hello-world/1.0.0"
+
+    monkeypatch.setattr(cli_module, "run_pipeline", _fake_pipeline)
+    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert captured["values_backend"] == "zarr"
+
+
+def test_build_forwards_an_explicit_values_backend_in_process(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+
+    def _fake_pipeline(connector, root, **kwargs):
+        captured["values_backend"] = kwargs["values_backend"]
+        return Path(root) / "timenet/hello-world/1.0.0"
+
+    monkeypatch.setattr(cli_module, "run_pipeline", _fake_pipeline)
+    result = runner.invoke(
+        app,
+        ["build", "timenet/hello-world", "--out", str(tmp_path), "--values-backend", "zarr"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["values_backend"] == "zarr"
+
+
+def test_build_forwards_an_explicit_values_backend_to_an_isolated_child(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    ):
+        captured["values_backend"] = values_backend
+        return Path(root) / "timenet/hello-world/1.0.0"
+
+    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
+    result = runner.invoke(
+        app,
+        ["build", "timenet/hello-world", "--out", str(tmp_path), "--values-backend", "zarr"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["values_backend"] == "zarr"
+
+
+def test_build_rejects_an_unknown_values_backend(tmp_path):
+    result = runner.invoke(
+        app,
+        ["build", "timenet/hello-world", "--out", str(tmp_path), "--values-backend", "unknown"],
+    )
+
+    assert result.exit_code != 0
+    assert "values backend" in result.output.lower()
+
+
 def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_path):
     called = {"isolated": False}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
-    def _fake_isolated(dataset_id, root, *, force=False, keep_cache=False, quiet=False):
+    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    ):
         called["isolated"] = True
         return Path(root) / "timenet/hello-world/1.0.0"
 
@@ -104,7 +175,9 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
-    def _fake_isolated(dataset_id, root, *, force=False, keep_cache=False, quiet=False):
+    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    ):
         captured["quiet"] = quiet
         return Path(root) / "timenet/hello-world/1.0.0"
 
