@@ -306,8 +306,8 @@ class TimeFReader:
             if self._records_data is not None:
                 schema = self._records_data.schema
             else:
-                first_samples_part = self._version.path(self._manifest.files.records[0].path)
-                schema = pq.ParquetFile(first_samples_part, filesystem=self._fs).schema_arrow
+                first_records_part = self._version.path(self._manifest.files.records[0].path)
+                schema = pq.ParquetFile(first_records_part, filesystem=self._fs).schema_arrow
             self.__id_types = id_types_from_records_schema(schema)
             self.__codec = IdCodec.from_id_types(self.__id_types)
         return self.__id_types, cast("IdCodec", self.__codec)

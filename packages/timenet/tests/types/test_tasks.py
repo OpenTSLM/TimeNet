@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import ClassVar
+
 import pytest
 
 from timenet.errors import TimeFValidationError
@@ -153,7 +156,20 @@ def test_registry_rejects_task_type_collision():
         _build_task_registry([ClassificationTask, ClassificationTask])
 
 
-def test_forecasting_target_span_names_a_region_of_the_attached_sample():
+def test_registry_rejects_an_undeclared_record_id_field():
+    # The registry finds record-id payload fields by their name suffix. If that suffix drifts from
+    # the names the task classes actually use, the check passes vacuously and a task can carry a
+    # record reference its refs never declare, so nothing validates or repairs it.
+    @dataclass(kw_only=True)
+    class _Undeclared(Task):
+        task_type: ClassVar[TaskType] = TaskType.ANSWER
+        target_record_id: str | None = None
+
+    with pytest.raises(TimeFValidationError, match="omits record-id fields"):
+        _build_task_registry([_Undeclared])
+
+
+def test_forecasting_target_span_names_a_region_of_the_attached_record():
     task = ForecastingTask(target_span=TimeInterval.seconds(132.0, 144.0), scope=TimeInterval.seconds(0.0, 132.0))
     assert task.target_span == TimeInterval.seconds(132.0, 144.0)
     assert task.target_record_id is None

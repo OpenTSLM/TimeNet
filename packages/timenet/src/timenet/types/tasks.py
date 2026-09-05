@@ -520,7 +520,7 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
         unknown = declared - fields
         if unknown:
             raise TimeFValidationError(f"{cls.__name__}.refs names unknown fields {sorted(unknown)}")
-        record_id_fields = {name for name in fields if name.endswith(("_sample_id", "_sample_ids"))}
+        record_id_fields = {name for name in fields if name.endswith(("_record_id", "_record_ids"))}
         missing = record_id_fields - set(cls.refs.record_id_fields)
         if missing:
             raise TimeFValidationError(f"{cls.__name__}.refs.record_id_fields omits record-id fields {sorted(missing)}")

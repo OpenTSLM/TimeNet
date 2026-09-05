@@ -36,15 +36,15 @@ class TimeFTorchDataset(Dataset):
             dataset: The dataset to view. Its per-series values load only when accessed.
             transform: An optional callable applied to each item dict before it is returned.
         """
-        self._samples = dataset.records
+        self._records = dataset.records
         self._tasks_by_id = {task.id: task for task in dataset.tasks}
         self._transform = transform
 
     def __len__(self) -> int:
-        return len(self._samples)
+        return len(self._records)
 
     def __getitem__(self, index: int) -> Any:
-        record = self._samples[index]
+        record = self._records[index]
         item: dict[str, Any] = {
             "record_id": record.record_id,
             "series": tuple(_series_tensor(ts) for ts in record.time_series),
