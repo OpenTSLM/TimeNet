@@ -117,7 +117,7 @@ vibration = TimeSeriesSpec(
 | `dtype` | `str` | no | Canonical NumPy scalar dtype, `"str"` for text, or `"enum"` for a categorical value. Defaults to `"float32"`. |
 | `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
-| `nullable` | `bool` | no | Whether a timestep may be absent. Defaults to `False`, which rejects any null. |
+| `nullable` | `bool` | no | Whether a timestep can be missing. The default `False` rejects all nulls. |
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
@@ -130,23 +130,17 @@ values backend.
 
 ### Missing values
 
-A missing timestep is an Arrow null, not a sentinel value. `NaN` is not a stand-in for
-missing data, because a measured `NaN` and an absent measurement are different facts, and
-because `int16`, `bool`, `str`, and `enum` have no `NaN` at all. TimeF therefore lets a float
-channel carry `NaN`, `+Infinity`, and `-Infinity` as real IEEE payloads while nullability
-governs absence independently: one channel can hold a null at one step and a `NaN` at the
-next, and they read back as different things.
+A missing timestep is an Arrow null, not a sentinel value.
 
-Set `nullable=True` to permit nulls. Nullability applies to a whole timestep, so a
-multidimensional value is either entirely present or entirely absent; partial nulls are
-rejected at write time. Constructors accept `None` for a nullable spec and reject it
-otherwise.
+`NaN` is not a stand-in for a missing value. A measured `NaN` and a missing measurement are different facts. The dtypes `int16`, `bool`, `str`, and `enum` have no `NaN` at all.
 
-Read nulls through `TimeSeries.to_arrow()`, which preserves them exactly. Dense consumers
-cannot represent them, so use `to_numpy_and_mask()`, which returns the values alongside a
-boolean mask of present timesteps. Absent positions hold a zero-equivalent placeholder that
-is not an observation. The torch view exposes the same pair as `"series"` and
-`"series_masks"`.
+TimeF lets a float channel carry `NaN`, `+Infinity`, and `-Infinity` as real IEEE payloads. Nullability controls missing values only. One channel can hold a null at one step and a `NaN` at the next. The two read back as different things.
+
+A spec with `nullable=True` permits missing timesteps. Nullability applies to a whole timestep. A multidimensional value is all present or all missing. The writer rejects partial nulls.
+
+Constructors accept `None` for a nullable spec. They reject `None` for a spec that is not nullable.
+
+`TimeSeries.to_arrow()` keeps nulls exactly. Dense arrays cannot hold them. `TimeSeries.to_numpy_and_mask()` returns the values and a boolean mask of the timesteps that are present. Missing positions hold a zero-equivalent placeholder. That placeholder is not an observation. The torch view exposes the same pair as `"series"` and `"series_masks"`.
 
 Connectors that reuse a modality can subclass with field defaults:
 
