@@ -1,13 +1,15 @@
 from pathlib import Path
 import tempfile
+from typing import cast
 
 import pytest
 
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.engine import run_pipeline, store_dataset
+from timenet.engine import publish_pipeline, run_pipeline, store_dataset
 from timenet.manifest import Manifest
+from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
 
 
@@ -74,6 +76,52 @@ def test_run_pipeline_end_to_end(tmp_path):
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.counts.records == 3
     assert manifest.dataset_id == "timenet/hello-world"
+
+
+def test_connector_defaults_to_the_parquet_values_backend():
+    assert _DemoConnector().values_backend == "parquet"
+
+
+def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
+    class _ZarrConnector(_DemoConnector):
+        values_backend = "zarr"
+
+    connector = _ZarrConnector()
+    version_dir = run_pipeline(
+        connector,
+        tmp_path,
+        cache_dir=tmp_path / "cache",
+        values_backend=connector.values_backend,
+    )
+
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    assert manifest.values_backend == "zarr"
+
+
+def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):
+    class _Registry:
+        def __init__(self) -> None:
+            self.values_backend: str | None = None
+
+        def exists(self, dataset_id: str, version: str) -> bool:
+            return False
+
+        def store(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
+            self.values_backend = values_backend
+
+    class _ZarrConnector(_DemoConnector):
+        values_backend = "zarr"
+
+    connector = _ZarrConnector()
+    registry = _Registry()
+    publish_pipeline(
+        connector,
+        cast(WritableRegistry, registry),
+        cache_dir=tmp_path / "cache",
+        values_backend=connector.values_backend,
+    )
+
+    assert registry.values_backend == "zarr"
 
 
 class _CountingConnector(_DemoConnector):

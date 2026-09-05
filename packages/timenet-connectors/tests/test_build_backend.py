@@ -46,3 +46,22 @@ def test_build_runs_in_process_when_isolation_is_off(tmp_path, monkeypatch):
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path / "registry")
 
     assert (version_dir / "manifest.json").is_file()
+
+
+def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, monkeypatch):
+    class _Connector:
+        values_backend = "parquet"
+
+    captured = {}
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    monkeypatch.setattr(backend_module, "resolve", lambda dataset_id: _Connector)
+
+    def _fake_pipeline(connector, root, *, force, values_backend):
+        captured["values_backend"] = values_backend
+        return Path(root) / "1.0.0"
+
+    monkeypatch.setattr(backend_module, "run_pipeline", _fake_pipeline)
+
+    ConnectorBuilder().build("timenet/hello-world", tmp_path)
+
+    assert captured["values_backend"] == "parquet"

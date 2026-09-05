@@ -40,7 +40,14 @@ class ConnectorBuilder:
             return None
         return str(card.dataset_version)
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:  # noqa: PLR6301 (protocol)
+    def build(  # noqa: PLR6301 (protocol)
+        self,
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool = False,
+        values_backend: str | None = None,
+    ) -> Path:
         """Build the dataset, in an isolated environment unless isolation is turned off.
 
         ``TIMENET_ISOLATION=off`` builds in this interpreter instead, as ``--no-isolation`` does on
@@ -51,10 +58,13 @@ class ConnectorBuilder:
             dataset_id: The dataset id.
             root: The output registry directory.
             force: Rebuild even if the version is already built.
+            values_backend: Storage backend for the values plane. Defaults to the connector's value.
 
         Returns:
             The committed version directory.
         """
         if settings().isolation == "off":
-            return run_pipeline(resolve(dataset_id)(), root, force=force)
+            connector = resolve(dataset_id)()
+            resolved_backend = connector.values_backend if values_backend is None else values_backend
+            return run_pipeline(connector, root, force=force, values_backend=resolved_backend)
         return Path(run_isolated(dataset_id, root, force=force))

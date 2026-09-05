@@ -20,6 +20,7 @@ def run_pipeline(  # noqa: PLR0913
     keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
+    values_backend: str = "parquet",
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
 
@@ -39,6 +40,7 @@ def run_pipeline(  # noqa: PLR0913
             after a successful build. The sources re-download on the next run.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
+        values_backend: Storage backend for the values plane.
 
     Returns:
         The committed version directory.
@@ -62,7 +64,7 @@ def run_pipeline(  # noqa: PLR0913
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
-    store_dataset(dataset, root, progress_cb=progress_cb)
+    store_dataset(dataset, root, progress_cb=progress_cb, values_backend=values_backend)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -78,6 +80,7 @@ def publish_pipeline(  # noqa: PLR0913
     keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
+    values_backend: str = "parquet",
 ) -> str:
     """Run one connector and publish the result through a writable registry.
 
@@ -92,6 +95,7 @@ def publish_pipeline(  # noqa: PLR0913
         keep_cache: Keep the cache directory instead of removing it after publishing.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
+        values_backend: Storage backend for the values plane.
 
     Returns:
         The published version string.
@@ -107,7 +111,7 @@ def publish_pipeline(  # noqa: PLR0913
 
     dataset = connector.convert(connector.download(cache))
     dataset.derive_schema()
-    registry.store(dataset, force=force, progress_cb=progress_cb)
+    registry.store(dataset, force=force, values_backend=values_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
@@ -118,6 +122,7 @@ def store_dataset(
     root: Path,
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+    values_backend: str = "parquet",
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
@@ -130,12 +135,13 @@ def store_dataset(
         dataset: The populated dataset from ``convert``.
         root: Parent directory. This function creates the version directory beneath it.
         progress_cb: Optional writer progress callback.
+        values_backend: Storage backend for the values plane.
 
     Returns:
         The committed version directory.
     """
     if dataset.schema is None:
         dataset.derive_schema()
-    with TimeFWriter(root, dataset, progress_cb=progress_cb) as writer:
+    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
