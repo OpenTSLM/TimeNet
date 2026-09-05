@@ -47,19 +47,25 @@ def _array_from_values(
     Raises:
         TimeFValidationError: If a non-nullable spec receives a null value.
     """
-    if any(value is None for value in values):
-        if not spec.nullable:
-            raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
-        arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
-        array = pa.array(values, type=arrow_type)
-    elif spec.dtype in {"str", "enum"}:
+    if spec.dtype in {"str", "enum"}:
         array = pa.array(values, type=pa.string())
     else:
-        # Keep the existing NumPy casting behavior for non-null inputs.
-        array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+        source: np.ndarray | None = values if isinstance(values, np.ndarray) else None
+        if source is not None and source.dtype.kind != "O":
+            # A NumPy cast keeps the previous behavior for lossy input from an array: it truncates,
+            # where pa.array would raise. An object array can hold a None, so it takes the other path.
+            array = pa.array(np.asarray(source, dtype=np.dtype(spec.dtype)))
+        else:
+            # pa.array turns a Python None into a null for every dtype, so one call covers the null
+            # and the non-null case. The check below reads the null count instead of scanning.
+            array = pa.array(values, type=pa.from_numpy_dtype(np.dtype(spec.dtype)))
+    if array.null_count and not spec.nullable:
+        raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
     if spec.dtype == "enum":
-        _validate_enum_values(spec, array.to_pylist())
+        # Encode first, then check the dictionary. It holds each distinct label once, so this
+        # validates a handful of values instead of materializing every value as a Python object.
         array = array.dictionary_encode()
+        _validate_enum_values(spec, array.dictionary.to_pylist())
     return array
 
 
