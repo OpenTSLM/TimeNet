@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from jaxtyping import Shaped
+import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -22,11 +23,14 @@ class TimeFTorchDataset(Dataset):
     """Shows a dataset's records as a map-style ``torch.utils.data.Dataset``.
 
     ``__getitem__`` returns a dict. The dict has the record's ``series`` as tensors that keep the
-    original dtype, with shape ``(n_steps, *value_shape)``. The dict also has the record's
-    ``record_id``, its resolved ``tasks``, and its ``annotations``. Use the ``transform`` argument
-    to reshape items for a model. Series lengths and trailing shapes can vary between records.
-    Because of this, a ``DataLoader`` that batches records needs a custom ``collate_fn``, or you
-    must set ``batch_size=1``.
+    original dtype, with shape ``(n_steps, *value_shape)``. It also has ``series_masks``: one
+    boolean tensor per nullable series, ``True`` where the timestep is present, and ``None`` for a
+    series that cannot hold nulls. An absent timestep still occupies its slot in ``series`` with a
+    zero-equivalent value, so a model must read the mask rather than treat that value as observed.
+    The dict also has the record's ``record_id``, its resolved ``tasks``, and its ``annotations``.
+    Use the ``transform`` argument to reshape items for a model. Series lengths and trailing shapes
+    can vary between records. Because of this, a ``DataLoader`` that batches records needs a custom
+    ``collate_fn``, or you must set ``batch_size=1``.
     """
 
     def __init__(self, dataset: TimeFDataset, *, transform: Callable[[dict[str, Any]], Any] | None = None) -> None:
@@ -45,9 +49,11 @@ class TimeFTorchDataset(Dataset):
 
     def __getitem__(self, index: int) -> Any:
         record = self._records[index]
+        pairs = tuple(_series_tensor_and_mask(ts) for ts in record.time_series)
         item: dict[str, Any] = {
             "record_id": record.record_id,
-            "series": tuple(_series_tensor(ts) for ts in record.time_series),
+            "series": tuple(values for values, _ in pairs),
+            "series_masks": tuple(mask for _, mask in pairs),
             "tasks": tuple(self._resolve_task(task_id, record.record_id) for task_id in record.task_ids),
             "annotations": record.annotations,
         }
@@ -76,24 +82,50 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
     """Convert one series to a tensor with its time and per-step dimensions.
 
     Args:
+        ts: The series to load. A free-form string series has no tensor representation and raises,
+            as :func:`_series_tensor_and_mask` documents.
+
+    Returns:
+        The values with shape ``(n_steps, *spec.value_shape)``. An absent timestep is filled with a
+        zero-equivalent value, so use :func:`_series_tensor_and_mask` to tell it apart from an
+        observation.
+    """
+    return _series_tensor_and_mask(ts)[0]
+
+
+def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *value"], Tensor | None]:
+    """Convert one series to a tensor plus its validity mask.
+
+    Args:
         ts: The series to load.
 
     Returns:
-        The values with shape ``(n_steps, *spec.value_shape)``.
+        The values with shape ``(n_steps, *spec.value_shape)`` and, for a nullable series, a boolean
+        tensor shaped ``(n_steps,)`` that is ``True`` where the timestep is present. A series that
+        cannot hold nulls returns ``None`` for the mask.
 
     Raises:
         TimeFValidationError: If the series holds free-form string values, which have no tensor
             representation.
     """
-    # copy(): Arrow's zero-copy numpy view is read-only. torch.from_numpy warns when an array is
-    # read-only.
     if ts.spec.dtype == "str":
         raise TimeFValidationError(
             f"string series {ts.time_series_id!r} has no tensor representation; "
             "read it via TimeSeries.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
+        labels = ts.to_arrow().to_pylist()
         code_to_index = {label: i for i, label in enumerate(ts.spec.categories)}
-        codes = [code_to_index[label] for label in ts.to_arrow().to_pylist()]
-        return torch.tensor(codes, dtype=torch.int64)
-    return torch.from_numpy(ts.to_numpy().copy())
+        codes = [0 if label is None else code_to_index[label] for label in labels]
+        values: Tensor = torch.tensor(codes, dtype=torch.int64)
+    else:
+        # copy(): Arrow's zero-copy numpy view is read-only. torch.from_numpy warns when an array
+        # is read-only.
+        dense, valid = ts.to_numpy_and_mask()
+        values = torch.from_numpy(np.ascontiguousarray(dense).copy())
+        del valid  # recomputed below, so every dtype shares one mask path
+    mask = None
+    if ts.spec.nullable:
+        present = ts.to_arrow().is_valid().to_numpy(zero_copy_only=False)
+        mask = torch.from_numpy(present.copy())
+    return values, mask

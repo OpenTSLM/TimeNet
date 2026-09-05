@@ -52,6 +52,21 @@ series = dataset.records[0].time_series[0]
 values = series.to_numpy()   # a numpy array in the spec's dtype
 ```
 
+`to_numpy()` cannot represent a missing timestep, so it is only meaningful for a series whose spec is
+not `nullable`. For a nullable one, use `to_arrow()`, which preserves nulls exactly, or
+`to_numpy_and_mask()`, which returns the values and a boolean mask of present timesteps:
+
+```python
+values, present = series.to_numpy_and_mask()
+values[present]      # only the observed timesteps
+```
+
+The values array still holds a zero-equivalent placeholder at every absent position. That placeholder
+is not an observation, so read the mask rather than the value.
+
+The torch view exposes the same pair: an item's `"series"` holds the dense tensors and its
+`"series_masks"` holds a boolean tensor per nullable series, `None` where a series cannot hold nulls.
+
 ## Sharing across records
 
 To share one signal across several records, attach the same `TimeSeries` instance to each. You can also

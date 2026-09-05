@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docs.timenet.ai/schemas/manifest-v1.schema.json",
+  "$id": "https://docs.timenet.ai/schemas/manifest.schema.json",
   "title": "TimeNet Dataset Manifest",
   "description": "The compiled manifest.json: the single source a consumer reads to interpret a dataset version. Describes the serialized shape produced by Manifest.to_dict().",
   "type": "object",
   "required": ["timef_format_version", "dataset_id", "metadata", "files"],
   "properties": {
-    "timef_format_version": { "type": "integer", "const": 1 },
+    "timef_format_version": { "type": "integer", "enum": [1, 2] },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "metadata": { "$ref": "#/$defs/metadata" },
     "schema": { "$ref": "#/$defs/schema" },
@@ -31,6 +31,18 @@
           "type": "object",
           "additionalProperties": { "type": "string" },
           "description": "Installed distribution name to version, sorted by name."
+        }
+      }
+    }
+  },
+  "if": { "properties": { "timef_format_version": { "const": 1 } } },
+  "then": {
+    "properties": {
+      "schema": {
+        "properties": {
+          "time_series_specs": {
+            "items": { "properties": { "nullable": { "const": false } } }
+          }
         }
       }
     }
@@ -157,6 +169,7 @@
         "dtype": { "type": "string", "enum": ["bool", "enum", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
         "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered codebook for dtype='enum'. Empty for every other dtype." },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
+        "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps may be missing, encoded by Arrow validity. Requires format version 2 when true." },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
       }
     },

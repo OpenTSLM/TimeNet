@@ -375,9 +375,13 @@ class TimeFWriter:
         Returns:
             The validated values in the spec's canonical Arrow representation.
 
+            ``NaN``, ``+Infinity`` and ``-Infinity`` are valid float payloads, not missing values, so
+            this method accepts them whatever the spec's nullability is. Nullability governs Arrow
+            nulls only.
+
         Raises:
-            TimeFValidationError: If the array disagrees with the spec's dtype/shape, has
-                non-finite inexact values, or its length disagrees with ``n_values``.
+            TimeFValidationError: If the array disagrees with the spec's dtype, shape, or
+                nullability, has partial tensor nulls, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
@@ -402,16 +406,12 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
+        if values.null_count and not ts.spec.nullable:
+            raise TimeFValidationError(f"series {ts.time_series_id!r} has null values but nullable=False")
+        if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
+            raise TimeFValidationError(f"series {ts.time_series_id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
             _validate_enum_values(ts.spec, values.to_pylist())
-        if ts.spec.dtype not in {"str", "enum"}:
-            as_numpy = (
-                values.to_numpy_ndarray()
-                if isinstance(values, pa.FixedShapeTensorArray)
-                else values.to_numpy(zero_copy_only=False)
-            )
-            if np.issubdtype(as_numpy.dtype, np.inexact) and not np.isfinite(as_numpy).all():
-                raise TimeFValidationError(f"series {ts.time_series_id!r} has non-finite values")
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "

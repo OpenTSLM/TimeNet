@@ -7,6 +7,7 @@ from typing import assert_never
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
@@ -27,12 +28,39 @@ def _validate_enum_values(
         TimeFValidationError: If any value is not in ``spec.categories``.
     """
     allowed = set(spec.categories)
-    unknown = {v for v in values if v not in allowed}
+    unknown = {v for v in values if v not in allowed and not (v is None and spec.nullable)}
     if unknown:
         raise TimeFValidationError(
             f"enum series for {spec.spec_type!r} has values outside its categories "
             f"({list(spec.categories)!r}): {sorted(unknown, key=str)}"
         )
+
+
+def _array_from_values(
+    spec: TimeSeriesSpec, values: np.ndarray | Sequence[bool | int | float | str | None]
+) -> pa.Array:
+    """Build the declared scalar Arrow array without discarding Python nulls.
+
+    Returns:
+        Values cast to the spec's dtype with their validity bitmap preserved.
+
+    Raises:
+        TimeFValidationError: If a non-nullable spec receives a null value.
+    """
+    if any(value is None for value in values):
+        if not spec.nullable:
+            raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
+        arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
+        array = pa.array(values, type=arrow_type)
+    elif spec.dtype in {"str", "enum"}:
+        array = pa.array(values, type=pa.string())
+    else:
+        # Keep the existing NumPy casting behavior for non-null inputs.
+        array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+    if spec.dtype == "enum":
+        _validate_enum_values(spec, array.to_pylist())
+        array = array.dictionary_encode()
+    return array
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -120,7 +148,7 @@ class TimeSeries:
     @classmethod
     def from_values(  # noqa: PLR0913
         cls,
-        values: np.ndarray | Sequence[bool | int | float | str],
+        values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         spec: TimeSeriesSpec,
         signal: str,
@@ -137,7 +165,8 @@ class TimeSeries:
 
         Args:
             values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
-                spec, the strings).
+                spec, the strings). Python ``None`` marks a missing timestep when ``spec.nullable``
+                is true.
             spec: The series' measurement-modality spec.
             signal: The signal name.
             time_axis: Where the values sit in time.
@@ -147,13 +176,7 @@ class TimeSeries:
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        if spec.dtype == "enum":
-            _validate_enum_values(spec, values)
-            array = pa.array(values, type=pa.string()).dictionary_encode()
-        elif spec.dtype == "str":
-            array = pa.array(values)
-        else:
-            array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+        array = _array_from_values(spec, values)
         return cls(
             spec=spec,
             signal=signal,
@@ -167,7 +190,7 @@ class TimeSeries:
     @classmethod
     def from_irregular(  # noqa: PLR0913
         cls,
-        values: np.ndarray | Sequence[bool | int | float | str],
+        values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
@@ -183,7 +206,8 @@ class TimeSeries:
 
         Args:
             values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
-                spec, the strings).
+                spec, the strings). Python ``None`` marks a missing timestep when ``spec.nullable``
+                is true.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             signal: The signal name.
@@ -197,13 +221,7 @@ class TimeSeries:
             TimeFValidationError: If the time offsets are unusable, or there is not exactly one per
                 value.
         """
-        if spec.dtype == "enum":
-            _validate_enum_values(spec, values)
-            array = pa.array(values, type=pa.string()).dictionary_encode()
-        elif spec.dtype == "str":
-            array = pa.array(values)
-        else:
-            array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
+        array = _array_from_values(spec, values)
         time_offsets = to_time_offsets_us(time_offsets_us)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(
@@ -258,6 +276,34 @@ class TimeSeries:
         if isinstance(values, pa.FixedShapeTensorArray):
             return values.to_numpy_ndarray()
         return values.to_numpy(zero_copy_only=False)
+
+    def to_numpy_and_mask(self) -> tuple[np.ndarray, np.ndarray]:
+        """Read values and an aligned boolean mask of observed timesteps.
+
+        Missing positions contain zero or empty strings in the dense values buffer. Use the mask
+        for missingness; these fill values are not observations. Numeric and boolean dtypes are
+        preserved, including when every timestep is missing.
+
+        Returns:
+            Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.
+        """
+        values = self.to_arrow()
+        valid = values.is_valid().to_numpy(zero_copy_only=False)
+        if isinstance(values, pa.FixedShapeTensorArray):
+            if values.null_count:
+                scalar_fill = False if pa.types.is_boolean(values.type.value_type) else 0
+                fill = pa.scalar([scalar_fill] * values.storage.type.list_size, type=values.storage.type)
+                values = pa.ExtensionArray.from_storage(values.type, pc.fill_null(values.storage, fill))
+            dense = values.storage.flatten().to_numpy(zero_copy_only=False).reshape((len(values), *values.type.shape))
+            if values.type.permutation:
+                dense = dense.transpose((0, *(axis + 1 for axis in values.type.permutation)))
+            return dense, valid
+        if values.null_count:
+            if isinstance(values, pa.DictionaryArray):
+                values = values.dictionary_decode()
+            fill_value = "" if pa.types.is_string(values.type) else False if pa.types.is_boolean(values.type) else 0
+            values = pc.fill_null(values, pa.scalar(fill_value, type=values.type))
+        return values.to_numpy(zero_copy_only=False), valid
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.

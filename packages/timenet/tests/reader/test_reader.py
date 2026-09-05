@@ -580,7 +580,7 @@ def test_missing_manifest_raises(tmp_path):
         DatasetVersion.open_local(tmp_path / "empty")
 
 
-@pytest.mark.parametrize("format_version", [2, 99])
+@pytest.mark.parametrize("format_version", [3, 99])
 def test_unsupported_format_version_raises(tmp_path, format_version):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"

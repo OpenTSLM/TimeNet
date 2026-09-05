@@ -33,6 +33,8 @@ _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
 #: Mirrors the group names in the writer module. See timenet.values_backends.zarr.writer.
 _IRREGULAR_GROUP = "_irregular"
 _TIME_OFFSETS_GROUP = "_time_offsets"
+#: Group holding the per-timestep validity of nullable series, mirroring the writer's layout.
+_VALIDITY_GROUP = "_validity"
 
 
 def _time_offsets_path(values_rel_path: str) -> str:
@@ -60,6 +62,22 @@ def _time_offsets_path(values_rel_path: str) -> str:
     return "/".join([parts[0], _TIME_OFFSETS_GROUP, *parts[2:]])
 
 
+def _validity_path(values_rel_path: str) -> str:
+    """Return the validity array path that is parallel to a values array path.
+
+    The path keeps the values array's own group, so an irregular series' validity sits under
+    ``_validity/_irregular/`` and cannot collide with the regular one of the same modality.
+
+    Args:
+        values_rel_path: The values array's path relative to the version directory.
+
+    Returns:
+        The parallel validity array's path.
+    """
+    parts = values_rel_path.split("/")
+    return "/".join([parts[0], _VALIDITY_GROUP, *parts[1:]])
+
+
 class ZarrValuesReader(BaseValuesReader):
     """Reads values from per-``spec_type`` Zarr arrays through an LRU cache of decoded chunks."""
 
@@ -81,7 +99,26 @@ class ZarrValuesReader(BaseValuesReader):
         """
         parts = [self._read_range(version, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
-        return _to_arrow(combined, spec)
+        return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
+
+    def _read_validity(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> np.ndarray | None:
+        """Read the validity mask covering a series' index rows, or ``None`` when not nullable.
+
+        Args:
+            version: The opened version handle.
+            rows: The series' index rows, sorted by ``chunk_idx``.
+            spec: The series' spec. Only a nullable one has a validity array.
+
+        Returns:
+            The per-timestep validity (``True`` = present), or ``None``.
+        """
+        if not spec.nullable:
+            return None
+        parts = [
+            self._read_range(version, _validity_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
+        ]
+        combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        return combined.astype(bool, copy=False)
 
     def load_range(
         self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
@@ -236,25 +273,41 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
     return runs
 
 
-def _to_arrow(values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec) -> pa.Array:
+def _to_arrow(
+    values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec, validity: np.ndarray | None = None
+) -> pa.Array:
     """Wrap a backend NumPy buffer in the spec's canonical Arrow representation.
 
+    Args:
+        values: The dense values read from the store.
+        spec: The series' spec.
+        validity: Per-timestep validity (``True`` = present), or ``None`` for a non-nullable spec.
+            Zarr stores values densely, so this is what turns a stored placeholder back into an
+            Arrow null.
+
     Returns:
-        A primitive array for scalar values or a fixed-shape tensor array for N-D values.
+        A primitive array for scalar values or a fixed-shape tensor array for N-D values, carrying a
+        null at every timestep the validity mask marks absent.
     """
+    absent = None if validity is None else ~validity
     if spec.dtype == "str":
-        return pa.array(values.tolist(), type=pa.string())
+        return pa.array(values.tolist(), type=pa.string(), mask=absent)
     if spec.dtype == "enum":
-        indices = pa.array(values.ravel().astype(np.int32, copy=False))
+        indices = pa.array(values.ravel().astype(np.int32, copy=False), mask=absent)
         dictionary = pa.array(spec.categories, type=pa.string())
         return pa.DictionaryArray.from_arrays(indices, dictionary)
     contiguous = np.ascontiguousarray(values)
     value_type = pa.from_numpy_dtype(np.dtype(spec.dtype))
     if spec.value_shape:
         dim_names = spec.dimension_names or None
+        tensor_type = pa.fixed_shape_tensor(value_type, spec.value_shape, dim_names=dim_names)
         if len(contiguous) == 0:
-            tensor_type = pa.fixed_shape_tensor(value_type, spec.value_shape, dim_names=dim_names)
             storage = pa.FixedSizeListArray.from_arrays(pa.array([], type=value_type), int(np.prod(spec.value_shape)))
             return pa.FixedShapeTensorArray.from_storage(tensor_type, storage)
-        return pa.FixedShapeTensorArray.from_numpy_ndarray(contiguous, dim_names=dim_names)
-    return pa.array(contiguous, type=value_type)
+        # A list-level bitmap needs a pyarrow boolean array, not a NumPy one.
+        mask = None if absent is None else pa.array(absent, type=pa.bool_())
+        storage = pa.FixedSizeListArray.from_arrays(
+            pa.array(contiguous.reshape(-1), type=value_type), int(np.prod(spec.value_shape)), mask=mask
+        )
+        return pa.FixedShapeTensorArray.from_storage(tensor_type, storage)
+    return pa.array(contiguous, type=value_type, mask=absent)

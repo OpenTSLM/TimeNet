@@ -32,7 +32,7 @@ def _to_unit(value: str | pint.Unit) -> pint.Unit:
 
 
 #: Spec types the Zarr backend cannot encode as its own array path segment.
-_RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets"})
+_RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_validity"})
 
 SUPPORTED_VALUE_DTYPES = frozenset(
     {"bool", "float32", "float64", "int8", "int16", "int32", "uint8", "uint16", "uint32", "str"}
@@ -125,6 +125,8 @@ class TimeSeriesSpec:
     """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[str, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
+    nullable: bool = False
+    """Whether the Arrow validity bitmap may mark a whole timestep as missing."""
 
     def __post_init__(self) -> None:
         """Coerce the unit and validate the spec contract.
@@ -134,6 +136,8 @@ class TimeSeriesSpec:
                 names are invalid.
         """
         object.__setattr__(self, "unit_value", _to_unit(self.unit_value))
+        if not isinstance(self.nullable, bool):
+            raise TimeFValidationError("TimeSeriesSpec.nullable must be a bool")
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.data_source is not None and not isinstance(self.data_source, DataSource):

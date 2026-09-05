@@ -61,6 +61,11 @@ The values locator is backend-neutral. One schema covers both scalar and multidi
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
+A spec records its `nullable` flag the same way. A manifest written before the flag existed simply
+omits it and reads back as `False`, so every dataset built before nullability existed still loads
+unchanged. Adding nullability therefore needed no format version bump: the flag only ever turns on
+behaviour that no older artifact used.
+
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `TimeNetInvalidManifestError`.
 
