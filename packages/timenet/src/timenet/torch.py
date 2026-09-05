@@ -10,6 +10,8 @@ from typing import Any
 
 from jaxtyping import Shaped
 import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -114,18 +116,18 @@ def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *valu
             "read it via TimeSeries.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
-        labels = ts.to_arrow().to_pylist()
-        code_to_index = {label: i for i, label in enumerate(ts.spec.categories)}
-        codes = [0 if label is None else code_to_index[label] for label in labels]
-        values: Tensor = torch.tensor(codes, dtype=torch.int64)
+        # index_in maps each label to its codebook position in C. This replaces a to_pylist() plus
+        # a Python lookup for every value in the series.
+        arrow = ts.to_arrow()
+        categories = pa.array(ts.spec.categories, type=arrow.type.value_type)
+        codes = pc.index_in(arrow, value_set=categories)  # ty: ignore[unresolved-attribute]
+        valid = codes.is_valid().to_numpy(zero_copy_only=False)
+        values: Tensor = torch.from_numpy(codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64))
     else:
-        # copy(): Arrow's zero-copy numpy view is read-only. torch.from_numpy warns when an array
-        # is read-only.
+        # to_numpy_and_mask reads the series once and returns its mask, so use that mask rather
+        # than reading the series a second time. copy() gives a writable C-contiguous array:
+        # Arrow's zero-copy view is read-only, and torch.from_numpy warns about that.
         dense, valid = ts.to_numpy_and_mask()
-        values = torch.from_numpy(np.ascontiguousarray(dense).copy())
-        del valid  # recomputed below, so every dtype shares one mask path
-    mask = None
-    if ts.spec.nullable:
-        present = ts.to_arrow().is_valid().to_numpy(zero_copy_only=False)
-        mask = torch.from_numpy(present.copy())
+        values = torch.from_numpy(dense.copy())
+    mask = torch.from_numpy(valid.copy()) if ts.spec.nullable else None
     return values, mask

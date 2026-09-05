@@ -411,7 +411,9 @@ class TimeFWriter:
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.time_series_id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
-            _validate_enum_values(ts.spec, values.to_pylist())
+            # The dictionary holds each distinct label once, so this validates a handful of values
+            # instead of materializing every value in the series as a Python object.
+            _validate_enum_values(ts.spec, values.dictionary.to_pylist())
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "

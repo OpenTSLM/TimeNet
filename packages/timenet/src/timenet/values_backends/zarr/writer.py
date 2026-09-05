@@ -32,6 +32,7 @@ from urllib.parse import quote
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from timenet.dataset import TimeSeries
 from timenet.errors import TimeFValidationError
@@ -163,15 +164,12 @@ def _dense_and_validity(
         The dense values and the validity mask (``True`` = present), or ``(values, None)`` for a
         non-nullable spec.
     """
-    present = (
-        arrow_values.is_valid().to_numpy(zero_copy_only=False)
-        if arrow_values.null_count
-        else np.ones(len(arrow_values), dtype=bool)
-    )
     if spec.dtype == "enum":
-        code_map = {label: i for i, label in enumerate(spec.categories)}
-        labels = arrow_values.to_pylist()
-        values = np.array([0 if label is None else code_map[label] for label in labels], dtype=np.int32)
+        # index_in maps each label to its codebook position in C. This replaces a to_pylist() plus
+        # a Python lookup for every value in the series.
+        categories = pa.array(spec.categories, type=arrow_values.type.value_type)
+        codes = pc.index_in(arrow_values, value_set=categories)  # ty: ignore[unresolved-attribute]
+        values = codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int32)
     elif isinstance(arrow_values, pa.FixedShapeTensorArray):
         # The tensor's storage already holds a value at every slot, absent timesteps included.
         values = arrow_values.to_numpy_ndarray()
@@ -183,7 +181,16 @@ def _dense_and_validity(
         if arrow_values.null_count:
             filled = arrow_values.fill_null(_NULL_PLACEHOLDER.get(spec.dtype, 0))
         values = filled.to_numpy(zero_copy_only=False)
-    return values, present if spec.nullable else None
+    if not spec.nullable:
+        return values, None
+    # Build the mask only when the spec wants one. A nullable series gets a full mask even with no
+    # nulls, so the values and validity arrays stay the same length.
+    present = (
+        arrow_values.is_valid().to_numpy(zero_copy_only=False)
+        if arrow_values.null_count
+        else np.ones(len(arrow_values), dtype=bool)
+    )
+    return values, present
 
 
 class ZarrValuesBackend(BaseValuesBackend):
