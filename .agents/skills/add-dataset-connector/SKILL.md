@@ -6,9 +6,9 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 # Adding a dataset connector
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
-`BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine
-drives it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that
-pipeline and writes the result into a registry.
+`BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. You write two
+things, `download` and `convert`. The engine calls them and stores what `convert` returns;
+`timenet-build build <id>` runs that and writes the result into a registry.
 
 This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
 not skip a phase, and do not write connector code before the gate.

@@ -31,9 +31,8 @@ before designing against it.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- There is **no `store` hook**. The engine stores the result itself: `engine.store_dataset` derives
-  the schema if missing and streams the dataset through `TimeFWriter`. A connector cannot override
-  it, and does not need to.
+- There is **no `store` hook**, and nothing else to implement. The engine takes the dataset `convert`
+  returns and stores it. How it does that is the engine's business, not a connector's.
 
 `list[TRaw]` does not mean one entry per record. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one record at a time.
