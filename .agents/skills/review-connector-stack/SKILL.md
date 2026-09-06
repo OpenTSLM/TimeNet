@@ -39,10 +39,10 @@ A connector review that never looks at the dataset cannot judge the mapping. Bef
 `connector.py`, get the answers to these from the PR body, the connector `README.md`, the
 `dataset.yaml` card, or by asking:
 
-- What is one sample made of — which files, and which row of which table beside them?
+- What is one record made of — which files, and which row of which table beside them?
 - Where does the join key come from? A key read out of file contents is a design fault, not a
   style one.
-- How many samples, and how many tasks per sample? The ratio decides `add_tasks` against
+- How many records, and how many tasks per record? The ratio decides `add_tasks` against
   `set_task_stream`.
 - What does the release state inconsistently? Every inconsistency needs a README entry with a
   decision and a state (**Handled**, **Not built**, **Open**).
@@ -57,7 +57,7 @@ itself the finding.
 | the phase that produced it | what this review checks |
 | --- | --- |
 | 0 — the card, and the source's own prose | the card is valid and matches the id; §3, the README quotes the sentences the scoping rests on |
-| 1 — heads, census, sample design, task count | §4 ids come from the source; §5 the task count decides `add_tasks` against `set_task_stream`; §7 the handle shape and the naming |
+| 1 — heads, census, record design, task count | §4 ids come from the source; §5 the task count decides `add_tasks` against `set_task_stream`; §7 the handle shape and the naming |
 | 2 — the gate | §3, every ruling the user gave is a README entry with a state |
 | 3 — the README | §3, one entry per inconsistency: evidence, decision, **Handled** / **Not built** / **Open**, numbers marked *(measured)* |
 | 4 — the build | §1 imports and dependencies · §2 the I/O split · §3 faithfulness · §4 ids · §5 annotations and tasks · §6 errors · §7 naming · §8 tests · §9 docs |

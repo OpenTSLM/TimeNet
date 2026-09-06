@@ -43,12 +43,12 @@ you are reviewing must resemble the connector cited.
   ask why.
 - **A file is read one time.** A function that takes a `Path` while its caller already holds the
   open file re-reads what has been read. `reader.open_edf(path)` parses the header once;
-  `read_channel(file, index)` takes the open file.
-- **A lazy loader closes over the open file**, so a recording's channels share one open file and
+  `read_signal(file, index)` takes the open file.
+- **A lazy loader closes over the open file**, so a recording's signals share one open file and
   one header parse. Note the cost in the review if the release is large: every opened file stays
   open until the writer drains the loaders.
-- **`convert` holds the loop, and the loop states what a sample is made of.** A `convert` that
-  calls one helper hiding the whole sample is worse, not tidier. `sleep_edfx` suppresses `PLR0914`
+- **`convert` holds the loop, and the loop states what a record is made of.** A `convert` that
+  calls one helper hiding the whole record is worse, not tidier. `sleep_edfx` suppresses `PLR0914`
   for exactly this, with the reason in prose above the `def`.
 - **The library's own types stay inside the base that wraps it.** No `edfio` or `wfdb` type
   crosses into a connector module.
@@ -58,27 +58,27 @@ you are reviewing must resemble the connector cited.
 From `fidelity.md`. Each of these is a fail if the diff does the opposite without a README entry:
 
 - Nothing the source states is dropped. A record that serves no task is still evidence, and every
-  sample the release ships is present — the short one, the badly scored one, and the outlier.
+  record the release ships is present — the short one, the badly scored one, and the outlier.
 - **An annotation naming a series the recording does not hold means the series is built, not the
   annotation dropped.** A span refuses a `time_series_id` that resolves to nothing, so the tempting
-  fix is to drop the annotation; the source claims the channel exists, so the sample carries it.
+  fix is to drop the annotation; the source claims the signal exists, so the record carries it.
   Built from what the source recorded, never from invented values.
 - **The README quotes the description sentences the design relies on**, beside the card's
   `source_url`. No header states which series an annotation was scored from, so if the connector
   scopes annotations to particular series, the prose that justifies it must be quoted and checkable.
 - No resampling, no interpolation, no gap filling, no normalising, no rounding. Every series keeps
   its own axis, so mixed rates need none of it.
-- The gain, the rate and the record duration come from the header of the file being read, never
-  from a constant. Check for a hard-coded sample rate.
-- Channel names, labels and units are the source's. A spec says what kind of thing it is; it does
-  not rename the channel.
+- The gain, the rate and the block duration come from the header of the file being read, never
+  from a constant. Check for a hard-coded record rate.
+- Signal names, labels and units are the source's. A spec says what kind of thing it is; it does
+  not rename the signal.
 - A derived fact is added beside a stated one, never in place of it. Where two sources disagree,
   both are kept and the README says which wins and why.
 - A broken artifact raises. A silent repair by the underlying library is caught and turned into
   `TimeFFormatError` — `bases/edf/reader.py` matches the text of `edfio`'s truncation warning.
 - An inconsistency the source ships warns rather than raises. The carve-out is an **unknown
-  channel name**, which `fidelity.md § Errors and warnings` requires to raise `TimeFFormatError`:
-  a release that grew a channel must fail loudly, not convert to a sample quietly missing a signal.
+  signal name**, which `fidelity.md § Errors and warnings` requires to raise `TimeFFormatError`:
+  a release that grew a signal must fail loudly, not convert to a record quietly missing a signal.
   Cite that section rather than the compressed form.
 - **A warning is emitted once per kind, with a count and one example**, through a module logger
   (`_LOG = logging.getLogger(__name__)`), never `warnings.warn` — a warning raised inside a lazy
@@ -87,7 +87,7 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   `SpanOutsideWindowWarning` itself. A connector that warned about the same overrun doubled the
   output.
 - **`warn_when_outside=False` is not a mute, it is the raise.** The default `True` warns and keeps
-  the span (`sample.py:142`, `:188`); `False` restores `TimeFValidationError` (`:145`, `:191`). A
+  the span (`record.py:142`, `:188`); `False` restores `TimeFValidationError` (`:145`, `:191`). A
   diff that passes it is choosing an error over a warning, and should say why.
 - Every inconsistency has a `README.md` entry beside the connector: the evidence, the decision,
   and the state. A number the author measured is marked *(measured)*.
@@ -100,16 +100,16 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 
   | the read | where |
   | --- | --- |
-  | a dataset keys its samples by `sample_id` to validate a streamed task | `dataset/dataset.py:264` |
+  | a dataset keys its records by `record_id` to validate a streamed task | `dataset/dataset.py:264` |
   | an annotation's `time_series_ids` resolves against `TimeSeries.time_series_id` | `bases/edf/timeseries.py:58` builds it; `sleep_edfx/annotations.py:39,99` reads it |
   | a `ClassificationTask.target_schema` equals a registered vocabulary annotation's id | `sleep_edfx/tasks.py` builds both from one string |
-  | a dataset keys its tasks by `id` to resolve `Sample.task_ids` | `dataset/dataset.py:334`; streamed tasks skip it, `:217` |
+  | a dataset keys its tasks by `id` to resolve `Record.task_ids` | `dataset/dataset.py:334`; streamed tasks skip it, `:217` |
 
-  A **streamed** task never reaches `Sample.task_ids`, so nothing resolves its id and it must not
+  A **streamed** task never reaches `Record.task_ids`, so nothing resolves its id and it must not
   name one.
 - **A test asserting an id is not a read.** If the finding is a needless id, the assertion goes
   with it.
-- **`sample_id` is passed, never generated**, and built from one module-level `_ID_PREFIX`, so two
+- **`record_id` is passed, never generated**, and built from one module-level `_ID_PREFIX`, so two
   builds of one archive give one set of ids.
 - **A subject id is qualified** by whatever the release numbers separately, so that two parts of a
   release each numbering subjects from one cannot collide and silently merge two people. A bare
@@ -119,29 +119,29 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 
 ## 5. Annotations and tasks
 
-- **Order: series, then the sample, then annotations, then tasks.** `add_annotation` resolves a
-  span's `time_series_ids` against the sample, so the series must exist first.
+- **Order: series, then the record, then annotations, then tasks.** `add_annotation` resolves a
+  span's `time_series_ids` against the record, so the series must exist first.
 - **Annotations attach in one batch.** `add_annotations` validates the batch before attaching any
   of it.
 - **A scoped span is measured against the intersection of the named series' windows. An unscoped
-  span is measured against the sample's `time_span` when it declares one, and against the union of
+  span is measured against the record's `time_span` when it declares one, and against the union of
   its series windows when it does not** — and a span landing in a *gap* between two merged windows
-  is outside it (`dataset/sample.py:94-116`, `_reject_outside_union`). A review that expects
-  warnings should predict which kind they are, and a sample with no `time_span` is the case that
+  is outside it (`dataset/record.py:94-116`, `_reject_outside_union`). A review that expects
+  warnings should predict which kind they are, and a record with no `time_span` is the case that
   catches people out.
 - **A closed set is one annotation whose value is the list**, registered with
   `register_annotations`, not one annotation per member.
 - **`target_schema` equals the id of that annotation**, and one function builds both from one
   string.
 - **Streamed tasks**: `source` is a callable giving a fresh iterator on every call; each task
-  carries its own `sample_ids`; the stream reads no file, only annotations the samples carry;
+  carries its own `record_ids`; the stream reads no file, only annotations the records carry;
   streamed tasks are not validated.
 - **The dedupe of a repeated annotation goes through a holder object** (`MetadataAnnotation`)
   where the annotation and its consumer are in one pass. A value-derived id (`_qtype_id`) is the
   fallback only when a stream reads it back without holding it, and both ends route through one
   function.
 - **The connector invents no prompt** where the release states no question in words.
-- **A task's scope names no channel** unless the release says a model may read only those. A
+- **A task's scope names no signal** unless the release says a model may read only those. A
   scoped annotation records what the annotator looked at; a task states what a model must answer,
   and they are different things.
 
@@ -163,7 +163,7 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 
 - **The handle type is named `<Dataset>Source`, and `download_async` returns a list holding exactly
   one of them** (`sleep_edfx/connector.py:228` returns `list[SleepEdfxSource]`, built at `:262`).
-  Not a list with an entry per sample. `convert` starts `source = raw_refs[0]` and does not iterate
+  Not a list with an entry per record. `convert` starts `source = raw_refs[0]` and does not iterate
   `raw_refs`.
 - **The generator is `_iter_<plural>`, the per-ref builder `_<plural>_for`, the id helper
   `name_<thing>`, the parser `_parse_<thing>`.** A module's single public builder is `build`; one of
