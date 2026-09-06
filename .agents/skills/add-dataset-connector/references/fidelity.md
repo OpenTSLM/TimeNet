@@ -170,7 +170,10 @@ sample.add_annotations(recording_metadata)
 - A **scoped** span, one that names `time_series_ids`, is measured against the **intersection** of
   those series' windows: the latest start and the earliest end.
 - An **unscoped** span is measured against the sample's `time_span` when the sample declares one, and
-  against the **union** of its series windows when it does not.
+  against the **union** of its series windows when it does not. The union is the case that catches
+  people out: the windows are merged, and a span landing in a **gap** between two of them is
+  outside, even though it sits between the first start and the last end. Declare a `time_span` when
+  the session spans a gap.
 
 That one rule explains a build's warning count. A sleep stage names the channels it was scored from,
 so it is measured against the signals and warns when the scoring runs past them. The metadata

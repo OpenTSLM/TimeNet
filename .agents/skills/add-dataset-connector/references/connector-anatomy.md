@@ -19,8 +19,10 @@ before designing against it.
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
 `convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
+- `download(self, cache_dir: Path) -> list[TRaw]`: fetch/discover raw source files, return
+  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`. **Not abstract** — its
+  default drives `download_async` to completion, because the engine calls connectors synchronously.
+  Override it only for a genuinely synchronous connector.
 - `download_async(self, cache_dir: Path) -> list[TRaw]`: the async form of the same step. Implement
   this one when the fetch is I/O-bound and can overlap; `physionet/sleep_edfx` does. Implement one of
   the two, not both.

@@ -170,7 +170,7 @@ flowchart LR
         hnd["SleepEdfxSource"]
         rec["SleepEdfxRecording"]
     end
-    subgraph read["what reads it: reader.py"]
+    subgraph read["what opens it"]
         edf["open_edf"]
         chn["read_channel<br/>counts -> uV"]
         anr["read_annotations"]

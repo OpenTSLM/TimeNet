@@ -40,11 +40,6 @@ Everything else under `docs/`, including `docs/catalog/benchmarks.md`, is hand-w
 Task-specific workflows live as agent skills under `.agents/skills/` (finding and loading datasets,
 adding a dataset connector). They load on demand, so they stay out of this file.
 
-`add-dataset-connector` runs the whole job from a link, but it needs two things from a person: the
-dataset card confirmed before any design starts, because `license` is a legal claim and not
-something to infer from a page, and a ruling on each open assumption at its gate. Its working
-document is `docs/notes/connectors/<org>/<name>/plan.md`, which stays local and is never committed.
-
 ## Workspace Layout
 This is a `uv` workspace. Code lives in two packages under `packages/`:
 - `packages/timenet` — the `timenet` SDK and CLI: the TimeF format plus dataset,
@@ -89,6 +84,11 @@ foundations go in lower branches and dependents above them, and the tooling (`gh
 run every `gh stack` command non-interactively (always pass branch names to `init`/`add`, `--auto` to
 `submit`, `--json` to `view`); make mid-stack changes on the branch that logically owns them and run
 `gh stack rebase --upstack` to propagate, rather than mixing concerns into a higher branch.
+
+A PR description states the **Problem** first and the **Changelog** second, in simple English, with
+the ticket reference last. The problem is what the reviewer needs to judge the change; the list of
+files is not. Each PR of a stack must stand on its own: no comment, docstring, or line that a later
+PR in the same stack deletes, and no forward-looking chatter naming work that has not landed.
 
 ## Conventions
 - Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);

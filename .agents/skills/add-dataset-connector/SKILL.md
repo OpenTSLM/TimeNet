@@ -168,9 +168,6 @@ Run in this order and stop at the first failure:
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
 
-Then invoke the `review-connector-stack` skill on the working tree. Fix what it finds. The user can
-run it again on the PR stack later.
-
 **Tell the user:** which checks ran, which numbers matched, and what the review found.
 
 ## Rules that hold in every phase

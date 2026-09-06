@@ -69,9 +69,10 @@ module and reads its `CONNECTOR`.
 
 ## What each module may do
 
-- **`reader.py` opens files and decodes nothing.** It is the only module that touches a workbook or
-  a container. `reader.open_edf(path)` parses the header; `reader.read_channel(file, index)` takes
-  that open file.
+- **The opening modules decode nothing.** `bases/edf/reader.py` opens containers and
+  `bases/excel.py` opens workbooks; neither says what the bytes mean.
+  `reader.open_edf(path)` parses the header, and `reader.read_channel(file, index)` takes that open
+  file.
 - **`tables.py` turns rows into facts and does no I/O at all.** Its imports are `collections.abc`,
   `dataclasses`, `datetime` and `timenet.errors`, and nothing else. Its test passes literal tuples
   and creates no file.
@@ -90,8 +91,8 @@ parse, not seven.
 **A function touches the disk or builds a value, never both.** The half that builds a value is then
 provable with values alone, and needs no file on disk to test it.
 `reader.convert_digital_to_physical` converts counts to microvolts and opens nothing.
-`reader.read_table_rows` is the only function that touches the workbook, which is what lets a test
-skip `xlrd` and the binary fixture it would need.
+`excel.read_table_rows` is the only function that touches the workbook, which is what lets
+`test_tables.py` skip `xlrd` entirely.
 
 ## `convert` holds the loop
 
