@@ -44,9 +44,9 @@ you are reviewing must resemble the connector cited.
 - **A file is read one time.** A function that takes a `Path` while its caller already holds the
   open file re-reads what has been read. `reader.open_edf(path)` parses the header once;
   `read_signal(file, index)` takes the open file.
-- **A lazy loader closes over the open file**, so a recording's signals share one open file and
-  one header parse. Note the cost in the review if the release is large: every opened file stays
-  open until the writer drains the loaders.
+- **A lazy loader closes over the open file**, so one sample's signals share one open file and one
+  header parse. Note the cost in the review if the release is large: whatever a loader captures
+  stays alive until it is called, and it is called after `convert` returns.
 - **`convert` holds the loop, and the loop states what a record is made of.** A `convert` that
   calls one helper hiding the whole record is worse, not tidier. `sleep_edfx` suppresses `PLR0914`
   for exactly this, with the reason in prose above the `def`.
