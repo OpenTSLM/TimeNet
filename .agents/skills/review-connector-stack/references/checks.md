@@ -9,10 +9,13 @@ code wins and the document is the finding.
 ## 1. Imports and dependencies
 
 - **A base module that every connector imports imports its library lazily.** Inside the function,
-  with `# noqa: PLC0415`, and an `ImportError` naming the connector's `requirements.txt` and the
-  `--no-isolation` escape hatch. `bases/huggingface.py:48`, `bases/physionet.py:38`,
-  `download/s3.py:38`. `discovery.resolve` imports a connector module to read `CONNECTOR`, so a
+  with `# noqa: PLC0415`, and an error whose message names the connector's `requirements.txt` and
+  the `--no-isolation` escape hatch. `bases/huggingface.py:47`, `bases/physionet.py:84`,
+  `download/s3.py:40`. `discovery.resolve` imports a connector module to read `CONNECTOR`, so a
   top-level import here breaks every connector that never touches the library.
+- **The raised type is not uniform, and that is not a finding.** `huggingface.py` and
+  `physionet.py` re-raise `ImportError`; `download/s3.py:45` raises `TimeNetBuildError`. Both name
+  the fix in the message, which is the part that matters. Do not report either one.
 - **A base only the declaring connector imports may import at the top.** `bases/edf/reader.py`
   imports `edfio`; `bases/excel.py` imports `xlrd`. Both are fine. Do not "fix" them into lazy
   imports.
@@ -71,11 +74,19 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 
 ## 4. Ids
 
-- **No `id=` unless something resolves the object by that id.** `Annotation.id`, `Task.id`,
-  `Sample.sample_id` and `TimeSeries.time_series_id` all default to a UUIDv7. Three reads make an
-  id load-bearing: a `target_schema` matching a registered vocabulary's id, a dataset keying its
-  samples by `sample_id`, and a dataset keying tasks by `id` to resolve `Sample.task_ids`. A
-  streamed task never reaches `Sample.task_ids`, so it must not name an id.
+- **No `id=` unless something resolves the object by that id.** `fidelity.md § Ids` is the rule;
+  this is the checkable form of it. Everything defaults to a UUIDv7 from `new_id()`. Four reads
+  make an id load-bearing:
+
+  | the read | where |
+  | --- | --- |
+  | a dataset keys its samples by `sample_id` to validate a streamed task | `dataset/dataset.py:264` |
+  | an annotation's `time_series_ids` resolves against `TimeSeries.time_series_id` | `bases/edf/timeseries.py:58` builds it; `sleep_edfx/annotations.py:39,99` reads it |
+  | a `ClassificationTask.target_schema` equals a registered vocabulary annotation's id | `sleep_edfx/tasks.py` builds both from one string |
+  | a dataset keys its tasks by `id` to resolve `Sample.task_ids` | `dataset/dataset.py:334`; streamed tasks skip it, `:217` |
+
+  A **streamed** task never reaches `Sample.task_ids`, so nothing resolves its id and it must not
+  name one.
 - **A test asserting an id is not a read.** If the finding is a needless id, the assertion goes
   with it.
 - **`sample_id` is passed, never generated**, and built from one module-level `_ID_PREFIX`, so two
@@ -91,9 +102,12 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   span's `time_series_ids` against the sample, so the series must exist first.
 - **Annotations attach in one batch.** `add_annotations` validates the batch before attaching any
   of it.
-- **A scoped span is measured against the intersection of the named series' windows; an unscoped
-  span against the sample's `time_span`.** A review that expects warnings should predict which
-  kind they are.
+- **A scoped span is measured against the intersection of the named series' windows. An unscoped
+  span is measured against the sample's `time_span` when it declares one, and against the union of
+  its series windows when it does not** — and a span landing in a *gap* between two merged windows
+  is outside it (`dataset/sample.py:94-116`, `_reject_outside_union`). A review that expects
+  warnings should predict which kind they are, and a sample with no `time_span` is the case that
+  catches people out.
 - **A closed set is one annotation whose value is the list**, registered with
   `register_annotations`, not one annotation per member.
 - **`target_schema` equals the id of that annotation**, and one function builds both from one
