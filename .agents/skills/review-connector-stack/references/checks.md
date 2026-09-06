@@ -52,7 +52,15 @@ code wins and the document is the finding.
 
 From `fidelity.md`. Each of these is a fail if the diff does the opposite without a README entry:
 
-- Nothing the source states is dropped. A record that serves no task is still evidence.
+- Nothing the source states is dropped. A record that serves no task is still evidence, and every
+  sample the release ships is present — the short one, the badly scored one, and the outlier.
+- **An annotation naming a series the recording does not hold means the series is built, not the
+  annotation dropped.** A span refuses a `time_series_id` that resolves to nothing, so the tempting
+  fix is to drop the annotation; the source claims the channel exists, so the sample carries it.
+  Built from what the source recorded, never from invented values.
+- **The README quotes the description sentences the design relies on**, beside the card's
+  `source_url`. No header states which series an annotation was scored from, so if the connector
+  scopes annotations to particular series, the prose that justifies it must be quoted and checkable.
 - No resampling, no interpolation, no gap filling, no normalising, no rounding. Every series keeps
   its own axis, so mixed rates need none of it.
 - The gain, the rate and the record duration come from the header of the file being read, never
