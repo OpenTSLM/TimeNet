@@ -21,7 +21,7 @@ before designing against it.
 
 - `download(self, cache_dir: Path) -> list[TRaw]`: fetch/discover raw source files, return
   lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`. **Not abstract** — its
-  default drives `download_async` to completion, because the engine calls connectors synchronously.
+  default drives `download_async` to completion, because a connector is called synchronously.
   Override it only for a genuinely synchronous connector.
 - `download_async(self, cache_dir: Path) -> list[TRaw]`: the async form of the same step. Implement
   this one when the fetch is I/O-bound and can overlap; `physionet/sleep_edfx` does. Implement one of
@@ -31,8 +31,8 @@ before designing against it.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- There is **no `store` hook**, and nothing else to implement. The engine takes the dataset `convert`
-  returns and stores it. How it does that is the engine's business, not a connector's.
+- There is **no `store` hook**, and nothing else to implement. What runs your connector takes the
+  dataset `convert` returns and stores it. How that happens is not a connector's concern.
 
 `list[TRaw]` does not mean one entry per record. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one record at a time.
@@ -41,6 +41,18 @@ row of any table. `discovery.md` says how to choose between the two shapes.
 
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.
+
+### Where the contract ends
+
+You implement `download` and `convert`. Nothing below them is yours to know, with one exception, and
+it is the exception three rules elsewhere depend on:
+
+> **`convert` returns a description, not data. The values and the task stream are read afterwards, by
+> something you do not call.**
+
+That single fact is the whole of the contract's laziness, and everything else follows from it: a
+loader must still work when it is called later, whatever it captured stays alive until then, and a
+task stream may be read more than once. You never need to know what does the reading.
 
 ## Discovery and the folder layout
 

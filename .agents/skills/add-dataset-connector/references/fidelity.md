@@ -266,8 +266,8 @@ records by orders of magnitude, they must stream — Sleep-EDF runs to about 245
 - It must already carry its `record_ids`. Nothing sets them for you.
 - It must reference only registered annotations and records that exist.
 - It does not populate `Record.task_ids`, so nothing resolves its id and it must not state one.
-- `source` must give a **fresh iterator on every call**. The writer calls it more than once, first to
-  peek at the ids and then to write, so a one-shot generator writes nothing the second time.
+- `source` must give a **fresh iterator on every call**. It is read after `convert` returns, and
+  more than once, so a one-shot generator yields nothing the second time and writes no tasks.
 - **The stream reads no file.** It expands annotations the records already carry. A second read of
   the source can disagree with what was written.
 

@@ -7,7 +7,7 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
 `BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. You write two
-things, `download` and `convert`. The engine calls them and stores what `convert` returns;
+things, `download` and `convert`. The build calls them and stores what `convert` returns;
 `timenet-build build <id>` runs that and writes the result into a registry.
 
 This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
@@ -162,7 +162,7 @@ uv run timenet-build build <org>/<name> \
 
 - `--no-isolation` runs in the current interpreter. The default builds an environment from the
   connector's `requirements.txt`, which is right for CI and slow while you write.
-- `--keep-cache` keeps the raw download. Without it the engine deletes the cache directory it
+- `--keep-cache` keeps the raw download. Without it the build deletes the cache directory it
   created after a successful build, and the next run downloads the release again. It deletes only a
   cache it created; a `cache_dir` a caller passed is user-owned and left alone.
 
@@ -182,6 +182,13 @@ Run in this order and stop at the first failure:
 4. Compare the result against the numbers the plan predicted: records, series per record, tasks, and
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
+
+**A build can fail after `convert` returned cleanly**, and the first time it happens it is
+confusing. `convert` gives back a description; the values and the tasks are read afterwards. So a
+loader that raises when called, a task naming a record that does not exist, a span outside its
+window, and a stream that yields nothing on a second pass all surface *after* the step that looks
+responsible has finished. If a failure names none of your own modules, it is that stage: check what
+your loaders do when called, and what your task stream gives on a second call.
 
 **Tell the user:** which checks ran, and which predicted numbers matched.
 

@@ -216,7 +216,7 @@ flowchart LR
     spc --> bld
     bld --> ts
     bld -->|"builds a lazy loader"| vals
-    vals -->|"the writer calls it later"| ts
+    vals -->|"called later, after convert returns"| ts
     anr --> stg --> ann
     tbl --> row --> tab --> met
     opn --> met

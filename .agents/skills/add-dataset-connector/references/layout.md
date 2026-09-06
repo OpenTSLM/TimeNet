@@ -118,12 +118,13 @@ dataset.
 Let the loader close over the open file. The signals of one recording then share one open file and
 one memory map, and the header is parsed one time.
 `reader.build_signal_loader(file, index)` holds the file that `convert` opened, so a seven-signal
-record opens its file once rather than once per series. The writer orders a record's series by
-`source_id` so it reads the source once, and a per-signal open would defeat that.
+record opens its file once rather than once per series. Give a record's series the same `source_id`
+and they are read together, which is what makes one open enough.
 
-**The cost is that a build keeps every file it opened open until the writer has called the loaders.**
-197 open files is fine. A release of a hundred thousand recordings is not, and would want a loader
-that reopens by path and pays the header parse again. Say which case you are in, in the plan.
+**The cost is that whatever a loader captures stays alive until it is called, and it is called after
+`convert` returns.** So a build holds every file it opened open until then. A couple of hundred open
+files is fine. A hundred thousand is not, and wants a loader that reopens by path and pays the header
+parse again. Say which case you are in, in the plan.
 
 ## Building the series
 
@@ -358,8 +359,8 @@ Named here so nobody resolves one by accident and calls it a convention.
   beside the card. Code keeps it type-checked; data keeps it readable to somebody who does not read
   Python.
 - **How a record states which part of a release it came from**, other than by an annotation.
-- **How far the lazy loaders scale.** They hold every opened file until the writer drains them. 197
-  is fine; a hundred thousand is not, and would want a loader that reopens by path and pays the
-  header parse again. Nobody has fixed the number where that flips.
+- **How far the lazy loaders scale.** Every file a loader captures stays open until it is called. A
+  couple of hundred is fine; a hundred thousand is not, and would want a loader that reopens by path
+  and pays the header parse again. Nobody has fixed the number where that flips.
 - **Whether a `head()` should reach the CLI** (`timenet-build head <id>`), or stay a connector's own
   module.
