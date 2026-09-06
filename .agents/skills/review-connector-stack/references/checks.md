@@ -82,7 +82,9 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   Cite that section rather than the compressed form.
 - **A warning is emitted once per kind, with a count and one example**, through a module logger
   (`_LOG = logging.getLogger(__name__)`), never `warnings.warn` — a warning raised inside a lazy
-  loader never reaches whoever started the build.
+  loader never reaches whoever started the build. The carve-out is re-emitting a warning the
+  underlying library raised, which a reader still needs to see: `bases/edf/reader.py:115` passes one
+  back through `warnings.warn_explicit` after inspecting it. That is not a finding.
 - **No warning duplicates one TimeF already gives.** `add_annotation` emits
   `SpanOutsideWindowWarning` itself. A connector that warned about the same overrun doubled the
   output.
@@ -103,7 +105,7 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   | a dataset keys its records by `record_id` to validate a streamed task | `dataset/dataset.py:264` |
   | an annotation's `time_series_ids` resolves against `TimeSeries.time_series_id` | `bases/edf/timeseries.py:58` builds it; `sleep_edfx/annotations.py:39,99` reads it |
   | a `ClassificationTask.target_schema` equals a registered vocabulary annotation's id | `sleep_edfx/tasks.py` builds both from one string |
-  | a dataset keys its tasks by `id` to resolve `Record.task_ids` | `dataset/dataset.py:334`; streamed tasks skip it, `:217` |
+  | a dataset keys its tasks by `id` to resolve `Record.task_ids` — resolved from the **generated** id, so still do not pass one | read at `dataset/dataset.py:670`; written at `:334`; streamed tasks never reach it, `:217` |
 
   A **streamed** task never reaches `Record.task_ids`, so nothing resolves its id and it must not
   name one.
@@ -134,13 +136,22 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - **`target_schema` equals the id of that annotation**, and one function builds both from one
   string.
 - **Streamed tasks**: `source` is a callable giving a fresh iterator on every call; each task
-  carries its own `record_ids`; the stream reads no file, only annotations the records carry;
-  streamed tasks are not validated.
+  carries its own `record_ids`; the stream reads no file, only annotations the records carry. A
+  streamed task **is** validated per task — `dataset.py:267` calls `_validate_streamed_task` on
+  every one, so an unknown record or an out-of-window span still raises. What it skips is the
+  *cross-task* checks that need every task at once. Do not report a streamed task as unvalidated.
 - **The dedupe of a repeated annotation goes through a holder object** (`MetadataAnnotation`)
   where the annotation and its consumer are in one pass. A value-derived id (`_qtype_id`) is the
   fallback only when a stream reads it back without holding it, and both ends route through one
   function.
 - **The connector invents no prompt** where the release states no question in words.
+- **A run-length expansion is exact, or the README says what was decided.** An entry divides into a
+  whole number of windows only if every onset sits on a boundary and every duration is a multiple of
+  one. Where it does not, the choice of where a window starts is a decision and needs an entry.
+- **Unlabelled time gets no task.** It is not the negative class and not the default label. A task
+  built over a stretch the source never labelled invents a label.
+- **`target` and `target_annotation_ids` are exclusive**, and `add_task` enforces it. `target`
+  carries the answer inline; `target_annotation_ids` says the answer *is* those stored annotations.
 - **A task's scope names no signal** unless the release says a model may read only those. A
   scoped annotation records what the annotator looked at; a task states what a model must answer,
   and they are different things.
@@ -180,9 +191,6 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   keep bare literals.
 - **A key's description sits in one dict keyed by the key**, not in each call that builds an
   annotation.
-- **A repeated annotation dedupes through a holder object** where the annotation and its consumer
-  are in one pass; a value-derived id is the fallback only when a stream reads it back, and then
-  both ends route through one function.
 - **A helper module that needs the shape of a value `connector.py` owns takes a `Protocol`**, so the
   import stays one way.
 - **A constant used once lives at its use site**; a lookup table and a source URL stay at module
