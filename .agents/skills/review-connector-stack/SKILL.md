@@ -19,6 +19,11 @@ three places, and where any of them disagrees with the code, the code wins:
 - `.agents/skills/add-dataset-connector/references/layout.md` — how the modules divide, naming,
   keys, dependencies.
 
+Those last two live in a **sibling skill**, which this one depends on. They are cited rather than
+copied so that an author and a reviewer cannot end up following two versions of one rule — the
+failure this pair exists to prevent. If the sibling is not installed, say so under **Not reviewed**
+and review against `AGENTS.md` and the code alone, rather than reconstructing the rules from memory.
+
 ## 1. Fix the target
 
 Ask what is under review if it is not obvious, then resolve it to a list of commits and a base:
