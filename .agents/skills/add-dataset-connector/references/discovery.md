@@ -33,8 +33,10 @@ editor.
 A `head()` opens one file, reads a small part of it, and gives that part back as text a person can
 read. It writes nothing and it changes nothing.
 
-Put them in `heads.py` beside the connector, one function per kind, named for the kind and not for
-the file extension:
+**No connector ships a `heads.py` yet.** This is a new convention, introduced with this skill, so
+there is nothing in the tree to copy — you are writing the first one. Put it in `heads.py` beside
+the connector, one function per kind, named for the kind and not for the file extension. These
+signatures are the shape to follow, not existing code:
 
 ```python
 def head_signals(path: Path, records: int = 1) -> str: ...

@@ -20,7 +20,7 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
   README.md        # the assumptions and the inconsistencies
-  heads.py         # one head() per raw file type
+  heads.py         # one head() per raw file type (new; none exist yet)
   specs.py         # TimeSeriesSpec values and the channel-name map
   annotations.py   # source annotations -> Annotation
   tables.py        # rows -> facts; no I/O at all
@@ -73,9 +73,9 @@ module and reads its `CONNECTOR`.
   `bases/excel.py` opens workbooks; neither says what the bytes mean.
   `reader.open_edf(path)` parses the header, and `reader.read_channel(file, index)` takes that open
   file.
-- **`tables.py` turns rows into facts and does no I/O at all.** Its imports are `collections.abc`,
-  `dataclasses`, `datetime` and `timenet.errors`, and nothing else. Its test passes literal tuples
-  and creates no file.
+- **`tables.py` turns rows into facts and does no I/O at all.** It imports the stdlib,
+  `timenet.errors`, the pure decoders in `bases.excel`, and its own `keys` — nothing that opens a
+  file. Its test passes literal tuples and creates no file.
 - **`metadata.py` turns facts into annotations.** It opens no file and takes no path.
 - **`specs.py` holds values only.** One `TimeSeriesSpec` per kind of channel, and one map from every
   channel name of the release to those specs.
@@ -249,8 +249,8 @@ Writing the release rather than checking one in is what lets a test cover the od
 release holds: a recording with no scoring beside it, one with two, one missing a scored channel.
 You cannot check in a fixture for a case the release does not contain.
 
-The `TIMENET_TESTING` and `TIMENET_ROW_LIMIT` env vars that some docs mention are **not implemented**.
-Do not rely on them.
+No connector reads an environment variable, and the ones some older docs name do not exist — see
+`AGENTS.md § Things that surprise you once`.
 
 ## Names a connector reuses
 
@@ -259,7 +259,7 @@ Do not rely on them.
 | What `download_async` returns | `<Dataset>Source` | `EcgQaCotSource`, `SleepEdfxSource` |
 | One item streamed out of it | `<Dataset>Recording` / `<Dataset>Row` | `SleepEdfxRecording` |
 | The generator that streams them | `_iter_<plural>(source)` | `_iter_recordings`, `_iter_cot_rows` |
-| A method building the series of one ref | `_<plural>_for(...)` | `_leads_for`, `_channels_for` |
+| A method building the series of one ref | `_<plural>_for(...)` | `_leads_for` |
 | The one public builder of a module | `build(...)` | `annotations.build`, `timeseries.build` |
 | One named builder among several | `build_<thing>(...)` | `build_age`, `build_epoch_tasks` |
 | A function that computes an id | `name_<thing>(...)` | `tasks.name_vocabulary` |
@@ -269,7 +269,8 @@ Do not rely on them.
 Because `download_async` gives one handle and not a list per sample, `convert` starts
 `source = raw_refs[0]`. The name `raw_refs` comes from `BaseConnector[TRaw]` and is not iterated.
 
-`__init__.py` re-exports with explicit self-aliases, so the names survive `--no-implicit-reexport`:
+`__init__.py` re-exports with explicit self-aliases, so a re-exported name is unambiguously public
+to a type checker rather than an incidental import:
 
 ```python
 from timenet_connectors.datasets.physionet.sleep_edfx.connector import (

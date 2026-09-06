@@ -121,8 +121,9 @@ PR in the same stack deletes, and no forward-looking chatter naming work that ha
   | `TimeNetDownloadError` | a fetch fails |
   | `TimeNetBuildError` | a build fails for a reason none of the above names |
 
-  `TimeFValidationError` and `TimeNetInvalidCardError` subclass `ValueError`, so existing
-  `except ValueError` handlers keep working. Warnings descend from `TimeNetWarning`;
+  Four of them subclass `ValueError`, so existing `except ValueError` handlers keep working:
+  `TimeFValidationError`, `TimeFEditError` (through it), `TimeNetInvalidCardError`, and
+  `TimeNetInvalidManifestError`. Warnings descend from `TimeNetWarning`;
   `SpanOutsideWindowWarning` is the one a connector meets.
 
 ## Docstrings

@@ -52,13 +52,14 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
   README.md        # the assumptions, the inconsistencies, the warnings
-  heads.py         # one head() per raw file type
   requirements.txt # the libraries this connector needs, installed into the
                    # environment its build runs in (optional)
   tests/           # one test module per module; no fixture files
 ```
 
-That is the smallest connector. A release that ships more than one kind of file divides further:
+That is the smallest connector. `heads.py`, one `head()` per raw file type, is a new convention that
+no connector ships yet; `discovery.md` says what it is for. A release that ships more than one kind
+of file divides further:
 `tables.py` and `metadata.py` give meaning, `specs.py` holds the channel map, `keys.py` holds the
 annotation keys. The half that **opens** a file is a base, not a connector module — `sleep_edfx`
 ships no reader of its own and imports `bases.edf.reader` and `bases.excel`. See `layout.md`.
