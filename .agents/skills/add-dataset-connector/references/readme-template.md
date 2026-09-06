@@ -8,6 +8,10 @@ Both are needed.
 
 Rules:
 
+- **Every section below is required, even when it is empty.** Write `None.` under a heading that
+  does not apply. A section saying "None" is evidence somebody looked; a missing section is
+  ambiguous, and a reader cannot tell the difference between a clean release and an unasked
+  question. `scripts/check_connector_readmes.py` enforces the headings.
 - **One entry per inconsistency and per assumption**, with three parts: the evidence, the decision,
   and the state.
 - **The state is `Handled`, `Not built`, or `Open`.** An open entry is worth more than a tidy file,
@@ -32,6 +36,14 @@ worked example.
 - **source**: <source_url>
 - **licence**: <licence>
 
+## The source of truth
+
+Where two parts of the release state the same fact differently, one wins for a named reason and the
+connector keeps the other beside it. `None.` when nothing disagrees.
+
+| fact | source of truth | the other reading |
+| --- | --- | --- |
+
 ## What the description states
 
 The prose fixes things no file header states. These sentences decide the conversion.
@@ -46,6 +58,14 @@ The prose fixes things no file header states. These sentences decide the convers
 - **Series**: <count and kinds, with units and rates, and where each rate comes from>
 - **Annotations**: <kinds, and which series each is scoped to>
 - **Tasks**: <type, what one question asks, and how many there are>
+
+## The tasks this connector builds
+
+What the release ships is not a task. What it becomes is a decision, and this states it. `None.`
+when the connector builds no tasks.
+
+| the question | type | count | scope |
+| --- | --- | --- | --- |
 
 ## Inconsistencies and decisions
 
