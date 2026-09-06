@@ -6,6 +6,11 @@ Every check is written as a claim the diff has to prove. Cite `file:line` or rec
 `physionet/sleep_edfx` and `physionet/ecg_qa_cot`. Where a document disagrees with the code, the
 code wins and the document is the finding.
 
+Every check is dataset-agnostic; it applies to whatever connector is under review. The `file:line`
+references are **citations**, not examples: they point at code in this repo that shows the
+convention is real and followed, so you can open one and compare. Nothing here says the connector
+you are reviewing must resemble the connector cited.
+
 ## 1. Imports and dependencies
 
 - **A base module that every connector imports imports its library lazily.** Inside the function,
@@ -106,8 +111,9 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   with it.
 - **`sample_id` is passed, never generated**, and built from one module-level `_ID_PREFIX`, so two
   builds of one archive give one set of ids.
-- **A subject id is qualified** by whatever the release numbers separately. `sleep-cassette-00`,
-  not `00`.
+- **A subject id is qualified** by whatever the release numbers separately, so that two parts of a
+  release each numbering subjects from one cannot collide and silently merge two people. A bare
+  ordinal is the finding.
 - **`start_time` is set only when the source states a real instant.** A local wall clock with no
   zone becomes an annotation. Inventing a timezone is inventing data.
 
@@ -136,8 +142,8 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   function.
 - **The connector invents no prompt** where the release states no question in words.
 - **A task's scope names no channel** unless the release says a model may read only those. A
-  scoped annotation records what the technician read; a task states what a model must answer, and
-  they are different things.
+  scoped annotation records what the annotator looked at; a task states what a model must answer,
+  and they are different things.
 
 ## 6. Errors
 
@@ -186,8 +192,10 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 
 - **No checked-in fixture bytes.** There is no `fixtures/` directory under `datasets/`. The test
   writes what it needs.
-- **The fixture comment says it is invented and how a reader can tell.** `sleep_edfx` numbers
-  synthetic subjects above 89 because the release numbers none that high.
+- **The fixture comment says it is invented and how a reader can tell.** The best form gives the
+  reader a property that no real record has — an id outside the range the release uses, a date
+  outside its span — and says so in the comment. `sleep_edfx` numbers synthetic subjects above 89
+  because the release numbers none that high.
 - **A module that takes values is tested with values** — no temp file, no library import.
   `test_tables.py` passes literal tuples and never imports `xlrd`.
 - Tests live at `datasets/<org>/<name>/tests/`, and `make test` excludes them; they run under
