@@ -41,9 +41,11 @@ data looks the way it does.
 
 Two things about the method are worth knowing even if you never run the skill:
 
-- **A head is not a `cat`.** Most sources are binary — EDF, WFDB, parquet, `.xls`, HDF5 — so each
-  connector ships a `head()` per raw file type, and those are how anybody, human or agent, looks at
-  the raw source. Run them against the next release of a dataset and a changed shape shows at once.
+- **A head is not a `cat`.** Most sources are binary — EDF, WFDB, parquet, `.xls`, HDF5 — so the
+  skill has you write one `head()` per raw file type into a `heads.py` beside the connector. Those
+  functions then become how anybody, human or agent, looks at the raw source, and running them
+  against a later release shows a changed shape at once. It is a new convention: no connector ships
+  one yet.
 - **A head cannot find what is odd.** Odd is a fact about the set, not about any one file: one
   recording in a hundred with a different record length, a scaling factor that varies per file where
   you assumed a constant, a handful of table rows disagreeing with their headers. Only a census over
@@ -87,15 +89,15 @@ these two forms. The engine always calls the synchronous `download()`. Its defau
 runs `download_async` to completion. As a result, an async connector needs no event loop code of its
 own.
 
-`metadata()` and `store()` are concrete methods. A connector inherits them. They are not stages that
-you implement.
+`metadata()` is the one concrete method. A connector inherits it, and does not implement it.
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
   card. `metadata().dataset_id` must match the connector's built id.
-- `store()` writes the dataset through a [`TimeFWriter`](timef-writer.md). If the schema is absent, it
-  derives the schema first. It returns the committed version directory. Most connectors never
-  override it.
+Storing is not a connector's job at all. The engine does it, through `engine.store_dataset`, which
+derives the schema when it is absent, writes the dataset through a
+[`TimeFWriter`](timef-writer.md), and returns the committed version directory. There is no `store`
+hook to override.
 
 A connector takes no constructor arguments. Where a connector needs configuration, it reads it from
 the environment rather than from a parameter; `__init__` itself only checks that the subclass
