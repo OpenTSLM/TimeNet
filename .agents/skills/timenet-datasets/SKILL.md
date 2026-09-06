@@ -28,7 +28,7 @@ The CLI needs the `cli` extra (`timenet[cli]`); `make sync` already installs it.
 | --- | --- |
 | `timenet list` | Table of every dataset in the registry (id, name, license, domains). |
 | `timenet search [filters]` | Filter datasets. See flags below. |
-| `timenet info <id> [version]` | Manifest summary: version, name, license, domains, specs, task types, and counts (samples / annotations / chunks). |
+| `timenet info <id> [version]` | Manifest summary: version, name, license, domains, specs, task types, and counts (records / annotations / chunks). |
 | `timenet download <id> [version]` | Fetch a version's parquet to local storage; prints the target directory to stdout. |
 | `timenet cache info` | Cached datasets with sizes, plus the raw download cache size. |
 | `timenet cache clear` | Delete downloads and the raw cache. `--all` also removes the local registry; `-y`/`--yes` skips the prompt. |
@@ -64,8 +64,8 @@ dataset = tn.load("chengsenwang/tsqa")                    # download-if-needed, 
 - `TimeNet(registry=None, *, storage_path=None)`. `registry` accepts a `BaseRegistry`, a URL, a
   `file://` URI, or a local path.
 - `load(...)` returns a `TimeFDataset` with lazy per-series loaders. Call `dataset.describe()` for a
-  text summary; iterate `dataset.samples` and `dataset.tasks`; get values with
-  `sample.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
+  text summary; iterate `dataset.records` and `dataset.tasks`; get values with
+  `record.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
 - `load_torch(...)` returns a read-only PyTorch `Dataset`; needs the `torch` extra (`timenet[torch]`).
 - `search` task filter takes the task **class** (e.g. `from timenet.types import AnswerTask`), not a string.
 
@@ -79,8 +79,8 @@ tn = TimeNet()
 hits = tn.search(task=AnswerTask, limit=10)          # find candidates
 tn.get(hits[0].dataset_id)                        # inspect the manifest
 ds = tn.load(hits[0].dataset_id)                  # load into memory
-ds.describe()                                     # identity, counts, per-spec columns, sample preview
-first = ds.samples[0].time_series[0].to_numpy()   # pull raw values lazily
+ds.describe()                                     # identity, counts, per-spec columns, record preview
+first = ds.records[0].time_series[0].to_numpy()   # pull raw values lazily
 ```
 
 CLI equivalent: `uv run timenet search --task answer` then `timenet info <id>` then

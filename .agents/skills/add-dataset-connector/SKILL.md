@@ -31,7 +31,7 @@ Derive an `org/name` id: lowercase, hyphens allowed in the leaf. On disk hyphens
 Understand the raw data before designing anything:
 - Fields/columns and their types; which one holds the series values and how they are encoded (JSON
   list, list-of-lists for multivariate, WFDB record, etc.).
-- Series shape: univariate vs multivariate, number of channels, length.
+- Series shape: univariate vs multivariate, number of signals, length.
 - Sampling rate and physical units (Hz, seconds, mV, dimensionless).
 - Labels, questions/answers, rationales, splits, and any per-row metadata.
 
@@ -48,11 +48,11 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 
 ### 4. Determine the task and sketch an example row
 - Choose one built-in `Task` by the *kind of answer* the dataset supervises: `ClassificationTask` (a
-  category, whole-sample or over a `scope`), `AnswerTask` (free text; a caption without a `prompt`),
+  category, whole-record or over a `scope`), `AnswerTask` (free text; a caption without a `prompt`),
   `ScalarPredictionTask` (a number with a unit), `TemporalLocalizationTask` (regions to find),
   `ForecastingTask`, `TSEditingTask`, `TSGenerationTask`, or `TSCorrespondenceTask`. Any of them can carry
   a `rationale`, so a chain-of-thought dataset is not a separate type.
-- Sketch one `Sample`: its `TimeSeries` channel(s) with their `spec` and `time_axis`;
+- Sketch one `Record`: its `TimeSeries` signal(s) with their `spec` and `time_axis`;
   the annotations you'll attach; and the task payload. Concrete values, not placeholders.
 
 ### 5. HARD GATE: confirm with the user
@@ -61,7 +61,7 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 - the proposed `org/name` id,
 - the source and the base connector you'll reuse,
 - the task type, and
-- a concrete example-row sketch (channels + units + annotations + task payload).
+- a concrete example-row sketch (signals + units + annotations + task payload).
 
 Only continue once the user confirms. If they change the task or shape, revise the sketch and re-confirm.
 
@@ -82,7 +82,7 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
 
 ### 7. Verify
 - Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at
-  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny sample of the raw shape and call
+  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny record of the raw shape and call
   `convert()` on it directly (no network). The `TIMENET_TESTING` / `TIMENET_ROW_LIMIT` env vars mentioned
   in some docs are **not implemented**, so don't rely on them.
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
