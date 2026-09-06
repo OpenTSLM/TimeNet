@@ -35,14 +35,14 @@ def test_task_types():
     assert TSCorrespondenceTask.task_type is TaskType.TS_CORRESPONDENCE
 
 
-def test_series_output_tasks_answer_with_a_sample():
+def test_series_output_tasks_answer_with_a_record():
     for cls in (ForecastingTask, TSEditingTask, TSGenerationTask):
         assert cls.answer_is_record
     for cls in (ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask):
         assert not cls.answer_is_record
 
 
-def test_classification_labels_the_whole_sample_or_a_scope():
+def test_classification_labels_the_whole_record_or_a_scope():
     whole = ClassificationTask(target="afib", target_schema="rhythm")
     assert whole.scope is None
     scoped = ClassificationTask(target="N2", scope=TimeInterval.seconds(30.0, 60.0))
@@ -176,7 +176,7 @@ def test_forecasting_target_span_names_a_region_of_the_attached_record():
     assert task.context_record_ids == ()
 
 
-def test_forecasting_still_accepts_a_whole_target_sample():
+def test_forecasting_still_accepts_a_whole_target_record():
     task = ForecastingTask(context_record_ids=("c1",), target_record_id="t1")
     assert task.target_record_id == "t1"
     assert task.target_span is None
@@ -228,7 +228,7 @@ def test_forecasting_target_span_rejects_a_point():
         )
 
 
-def test_forecasting_rejects_a_target_sample_that_is_also_its_own_context():
+def test_forecasting_rejects_a_target_record_that_is_also_its_own_context():
     # The forecast would read its own answer as input.
     with pytest.raises(TimeFValidationError, match="read its own answer as input"):
         ForecastingTask(context_record_ids=("t1", "c2"), target_record_id="t1")
@@ -245,7 +245,7 @@ def test_forecasting_target_span_rejects_context_record_ids():
         )
 
 
-def test_forecasting_rejects_an_empty_context_with_a_target_sample():
+def test_forecasting_rejects_an_empty_context_with_a_target_record():
     # The separate-target-record form draws its input from context_record_ids. An empty tuple there
     # is a forecast with no input. The target_span form takes its context from scope, so an empty
     # context_record_ids is correct in that form.

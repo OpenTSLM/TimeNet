@@ -209,7 +209,7 @@ class TimeFWriter:
 
         unique_series, series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        self._write_samples()
+        self._write_records()
         self._write_annotations()
         self._write_tasks()
         self._write_index(placements, series_to_records)
@@ -513,7 +513,7 @@ class TimeFWriter:
             sink.add(row)
         return sink.finish(write_empty_part=True)
 
-    def _write_samples(self) -> None:
+    def _write_records(self) -> None:
         codec = self._codec
         rows: list[dict] = [
             {
@@ -528,7 +528,7 @@ class TimeFWriter:
             for record in self._dataset.records
         ]
         rows.sort(key=lambda r: r["record_id"])
-        self._sample_parts = self._write_control_table(
+        self._record_parts = self._write_control_table(
             iter(rows),
             records_schema(self._id_types),
             lambda index: part_path(RECORDS_TEMPLATE, index),
@@ -666,7 +666,7 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                records=self._file_parts(self._sample_parts),
+                records=self._file_parts(self._record_parts),
                 annotations=self._file_parts(self._annotation_parts),
                 time_series_index=self._file_parts(self._index_parts),
                 tasks=self._file_parts(self._task_files),

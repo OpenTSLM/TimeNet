@@ -13,7 +13,7 @@ from timenet.types import Annotation, TSCorrespondenceTask, TSEditingTask, Versi
 from timenet.writer import TimeFWriter
 
 
-def test_remove_samples_preserves_registered_annotations_and_their_refs():
+def test_remove_records_preserves_registered_annotations_and_their_refs():
     # A registered annotation no record carries, and the task refs to it, must survive a record removal.
     dataset = make_dataset()
     dataset.register_annotations([Annotation(key="answer_options", value=["yes", "no"], id="opts-shared")])
@@ -36,7 +36,7 @@ def _base(tmp_path, dataset=None):
     return tmp_path / "base" / meta.dataset_id / str(meta.dataset_version)
 
 
-def _answer_reads_context_via_sample1():
+def _answer_reads_context_via_record1():
     """make_dataset() rewired so task-answer-0 spans record-0/1 but reaches cohort-shared only via record-1.
 
     Still a valid dataset — the annotation sits on a record the task is attached to — so it writes and
@@ -54,7 +54,7 @@ def _answer_reads_context_via_sample1():
 # ---- in-memory transform ----------------------------------------------------------------------
 
 
-def test_remove_leaf_sample():
+def test_remove_leaf_record():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-1"])
@@ -69,21 +69,21 @@ def test_remove_leaf_sample():
     }
 
 
-def test_remove_unknown_sample_raises():
+def test_remove_unknown_record_raises():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="unknown record ids"):
         remove_records(dataset, ["nope"])
 
 
-def test_remove_sample_with_task_rejects_without_cascade():
+def test_remove_record_with_task_rejects_without_cascade():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="cascade=True"):
         remove_records(dataset, ["record-0"])  # every task on record-0 would dangle
 
 
-def test_remove_sample_cascades_dependent_tasks():
+def test_remove_record_cascades_dependent_tasks():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-0"], cascade=True)
@@ -92,7 +92,7 @@ def test_remove_sample_cascades_dependent_tasks():
     assert {t.id for t in edited.tasks} == {"task-cls-2"}
 
 
-def test_shared_annotation_survives_on_remaining_sample():
+def test_shared_annotation_survives_on_remaining_record():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-0"], cascade=True)
@@ -103,7 +103,7 @@ def test_shared_annotation_survives_on_remaining_sample():
 def test_input_annotation_refs_are_stripped_when_unreachable():
     # Dropping record-1 strands cohort-shared for task-answer-0. It is context rather than the answer,
     # so the task survives with the reference pruned instead of being rejected.
-    dataset = _answer_reads_context_via_sample1()
+    dataset = _answer_reads_context_via_record1()
     dataset.derive_schema()
 
     edited = remove_records(dataset, ["record-1"])
@@ -144,29 +144,29 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     # The end-to-end guarantee: whatever a committed edit contains, every annotation a task names is
     # resolvable from the records that task is attached to. Removing record-1 strands cohort-shared for
     # task-answer-0, which previously wrote the dangling reference straight into the new version.
-    base = _base(tmp_path, _answer_reads_context_via_sample1())
+    base = _base(tmp_path, _answer_reads_context_via_record1())
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=["record-1"])
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
 
-    by_sample = {s.record_id: {a.id for a in s.annotations} for s in restored.records}
+    by_record = {s.record_id: {a.id for a in s.annotations} for s in restored.records}
     for task in restored.tasks:
-        reachable = set().union(*(by_sample[sid] for sid in task.record_ids))
+        reachable = set().union(*(by_record[sid] for sid in task.record_ids))
         named = (*task.input_annotation_ids, *task.target_annotation_ids)
         assert not [aid for aid in named if aid not in reachable], f"{task.id} dangles"
 
 
-def test_payload_sample_refs_are_required_whatever_the_task_type():
+def test_payload_record_refs_are_required_whatever_the_task_type():
     # The editor reads TaskRefs rather than special-casing forecasting, so an edit task's source and a
     # correspondence task's candidate pool are protected the same way.
     dataset = make_dataset()
-    edited_sample = dataset.records[1]
+    edited_record = dataset.records[1]
     dataset.add_task(
         dataset.records[0],
         TSEditingTask(
             prompt="Denoise it.",
             source_record_id="record-0",
-            target_record_id=edited_sample.record_id,
+            target_record_id=edited_record.record_id,
             id="task-edit-0",
         ),
     )

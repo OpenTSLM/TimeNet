@@ -124,7 +124,7 @@ def test_index_metadata_locates_every_series_in_the_shards(tmp_path):
 # ---- targeted reads: only the shards / row groups we need ------------------------------------
 
 
-def test_open_and_build_samples_reads_no_value_shard(tmp_path, monkeypatch):
+def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     opened: list[str] = []
     original = pq.ParquetFile

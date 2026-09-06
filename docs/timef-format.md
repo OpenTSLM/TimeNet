@@ -67,15 +67,14 @@ the versions it supports, and rebuilds the dataset types from the flat descripto
 | `schema` | Structural schema: the time-series specs, the annotation descriptors, and the task types. |
 | `counts` | Row and entity counts, for quick inspection. |
 | `files` | Each artifact's path, `sha256:` checksum, and size, grouped by kind. |
-| `id_encoding` | Which id columns are stored as raw bytes (see [Id storage](#id-storage)). |
 | `values_backend` | The values plane backend: `parquet` or `zarr`. |
 | `value_encoding` | The Parquet values encoding per `spec_type`, for provenance (see [below](#choosing-the-values-encoding)). |
-| `derived_from` | Copy-on-write lineage, or `null` for a freshly built version. |
+| `build_env` | The interpreter and package set that produced the version, for provenance. |
 
 ## The control-plane tables
 
-Every table is Parquet. The column layout is fixed. Only the id columns change type, and
-`id_encoding` records that choice.
+Every table is Parquet. The column layout is fixed. Only the id columns change type, and the
+records table's Parquet schema carries that choice.
 
 ### records/part-00000000.parquet
 
@@ -201,7 +200,7 @@ re-stores only the pages that changed on a deduplicating backend such as Xet.
 ### Choosing the values encoding
 
 No single encoding is best for every waveform, so the writer measures the data instead of pinning
-one. It records the values it has already buffered for a modality, counts the distinct values (bit
+one. It samples the values it has already buffered for a modality, counts the distinct values (bit
 patterns for floats), and picks:
 
 - **dictionary** at or below **65,536** distinct values,
@@ -209,9 +208,10 @@ patterns for floats), and picks:
 - **plain** above that for strings and integers (byte-plane splitting has no
   meaning for these types).
 
-Bool signals always use plain. The writer takes one decision per `spec_type`, before that
-modality's first shard opens. The decision reads only buffered data, so re-building an unchanged
-source reaches the same encoding and writes the same bytes.
+Bool signals always use plain and enum signals always use dictionary, both without measuring
+anything. The writer takes one decision per `spec_type`, before that modality's first shard opens.
+The decision reads only buffered data, so re-building an unchanged source reaches the same encoding
+and writes the same bytes.
 
 The rule follows the measurements. On real data, at zstd level 3, the values column measures:
 
@@ -226,7 +226,7 @@ wins on smooth, high-cardinality signals, where the sign and high-mantissa plane
 It loses on quantized data, where the low mantissa byte is noise the split isolates into an
 incompressible plane. Dictionary wins there, because a physical conversion onto a fixed grid (a
 0.001 mV step, an integer ADC scale) leaves only a few thousand distinct values behind tens of
-millions of records.
+millions of samples.
 
 The writer records its choice in the manifest under `value_encoding`, a `spec_type` to encoding
 map. That is provenance, not contract. Parquet already records the applied encoding in every file's
@@ -244,8 +244,8 @@ with TimeFWriter(root, dataset, value_encoding="dictionary") as writer:
 ### Id storage
 
 An entity id is a UUIDv7 string by default. When every value in an id's space is a canonical UUID,
-the writer stores that column as 16 raw bytes (`binary(16)`) instead of a 36-character string. It
-records the choice in the manifest's `id_encoding` map. A reader decodes the bytes back to the
+the writer stores that column as 16 raw bytes (`binary(16)`) instead of a 36-character string. A
+reader reads the choice off the records table's Parquet schema and decodes the bytes back to the
 canonical string, so a caller always sees a string id.
 
 ## Integrity

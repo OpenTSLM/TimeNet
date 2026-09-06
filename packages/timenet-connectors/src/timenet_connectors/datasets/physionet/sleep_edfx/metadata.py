@@ -130,7 +130,7 @@ def build_recording_start_local(record_id: str, start_time: datetime) -> Annotat
     return Annotation(
         key=AnnotationKey.RECORDING_START_LOCAL,
         value=start_time.isoformat(timespec="seconds"),
-        description="The local date and time the EDF header states for the first record. The release names no zone.",
+        description="The local date and time the EDF header states for the first sample. The release names no zone.",
     )
 
 

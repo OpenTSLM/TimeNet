@@ -67,7 +67,7 @@ def test_the_window_comes_from_the_stored_endpoints():
     assert ts.span_us == (0, 6_527_881_001)
 
 
-def test_a_mixed_sample_keeps_each_series_on_its_own_axis(tmp_path):
+def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     # Temperature and humidity written together on change, a regular signal, and a second irregular
     # signal on a different clock. One record, four axes, one shared timeline.
     dataset = _dataset()

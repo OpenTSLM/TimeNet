@@ -38,7 +38,7 @@ class TimeFDataset:
             metadata: The dataset's descriptive identity.
         """
         self._metadata = metadata
-        self._samples: list[Record] = []
+        self._records: list[Record] = []
         self._tasks: list[Task] = []
         # Annotations that tasks reference but no record carries, deduped by id. A task's metadata
         # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
@@ -106,7 +106,7 @@ class TimeFDataset:
                 start_time=start_time,
                 time_span=time_span,
             )
-        self._samples.append(record)
+        self._records.append(record)
         return record
 
     def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
@@ -261,7 +261,7 @@ class TimeFDataset:
         Raises:
             TimeFValidationError: If a streamed task fails one of the per-task checks.
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
-        by_id = {record.record_id: record for record in self._samples}
+        by_id = {record.record_id: record for record in self._records}
         declared = set(self._streamed_task_types)
         for task in self.iter_tasks():
             self._validate_streamed_task(task, by_id, declared)
@@ -426,7 +426,7 @@ class TimeFDataset:
             TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
                 across records.
         """
-        specs = self._ordered_unique(ts.spec for record in self._samples for ts in record.time_series)
+        specs = self._ordered_unique(ts.spec for record in self._records for ts in record.time_series)
         by_spec_type: dict[str, object] = {}
         for spec in specs:
             existing = by_spec_type.get(spec.spec_type)
@@ -435,7 +435,7 @@ class TimeFDataset:
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
-        record_annotations = (annotation for record in self._samples for annotation in record.annotations)
+        record_annotations = (annotation for record in self._records for annotation in record.annotations)
         annotations = self._ordered_unique(
             AnnotationDescriptor(
                 key=annotation.key,
@@ -496,7 +496,7 @@ class TimeFDataset:
             The dataset, built from these parts.
         """
         dataset = cls(metadata=metadata)
-        dataset._samples = list(records)
+        dataset._records = list(records)
         dataset._tasks = list(tasks)
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._schema = schema
@@ -564,7 +564,7 @@ class TimeFDataset:
         Raises:
             TimeFValidationError: If a payload reference names an unknown record.
         """
-        known = {record.record_id for record in self._samples}
+        known = {record.record_id for record in self._records}
         for field_name in type(task).refs.record_id_fields:
             value = getattr(task, field_name)
             record_ids = (value,) if isinstance(value, str) else value or ()
@@ -608,7 +608,7 @@ class TimeFDataset:
     @property
     def records(self) -> tuple[Record, ...]:
         """All records in insertion order."""
-        return tuple(self._samples)
+        return tuple(self._records)
 
     @property
     def tasks(self) -> tuple[Task, ...]:
@@ -664,7 +664,7 @@ class TimeFDataset:
                 dataset. It also occurs if one of the record's ``task_ids`` does not resolve to a
                 registered task that links back to the record.
         """
-        registered_ids = {registered.record_id for registered in self._samples}
+        registered_ids = {registered.record_id for registered in self._records}
         if record.record_id not in registered_ids:
             raise TimeFValidationError(f"record {record.record_id!r} is not registered in this dataset")
         by_id = {task.id: task for task in self._tasks}
@@ -801,7 +801,7 @@ class TimeFDataset:
                 matched_by_record.setdefault(record_id, []).append(candidate)
         rows: list[pa.Array] = []
         targets: list[object] = []
-        for record in self._samples:
+        for record in self._records:
             matched = matched_by_record.get(record.record_id) or []
             if len(matched) != 1:
                 raise TimeFValidationError(
@@ -839,7 +839,7 @@ class TimeFDataset:
         """Print a plain-text summary of the dataset: its identity, counts, specs and columns, and a record preview.
 
         This method works like pandas' ``describe`` and ``info`` methods. The preview reads only
-        span metadata, not series values. The method records value dtypes from one series per
+        span metadata, not series values. The method checks value dtypes from one series per
         spec. This method works even before :meth:`derive_schema` runs, because it computes
         everything from the records.
 

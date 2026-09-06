@@ -24,7 +24,7 @@ def test_add_multiple_annotations_preserves_order(make_series):
     assert record.annotations == (a, b)
 
 
-def test_channel_level_point_resolves_series_id(make_series):
+def test_signal_level_point_resolves_series_id(make_series):
     ts = make_series()
     record = Record(time_series=(ts,))
     record.add_annotation(
@@ -32,7 +32,7 @@ def test_channel_level_point_resolves_series_id(make_series):
     )
 
 
-def test_channel_level_annotation_unknown_id_rejected(make_series):
+def test_signal_level_annotation_unknown_id_rejected(make_series):
     record = Record(time_series=(make_series(),))
     with pytest.raises(ValueError, match="unknown"):
         record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
@@ -69,12 +69,12 @@ def test_trial_level_point_needs_no_common_span(make_series):
     record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0)))
 
 
-def test_to_numpy_single_channel(make_series):
+def test_to_numpy_single_signal(make_series):
     record = Record(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
     assert record.to_numpy().tolist() == [1.0, 2.0, 3.0]
 
 
-def test_to_numpy_rejects_multi_channel(make_series):
+def test_to_numpy_rejects_multi_signal(make_series):
     record = Record(time_series=(make_series(signal="I"), make_series(signal="II")))
     with pytest.raises(ValueError, match="single-signal"):
         record.to_numpy()
@@ -111,7 +111,7 @@ def test_start_time_rejects_an_ambiguous_anchor(anchor, make_series):
         Record(time_series=(make_series(),), start_time=anchor)
 
 
-def test_time_interval_measures_wall_clock_against_the_sample_anchor(make_series):
+def test_time_interval_measures_wall_clock_against_the_record_anchor(make_series):
     anchor = datetime(2026, 8, 5, 9, 0, 0, tzinfo=UTC)
     record = Record(time_series=(make_series(),), start_time=anchor)
     span = record.time_interval(
@@ -121,7 +121,7 @@ def test_time_interval_measures_wall_clock_against_the_sample_anchor(make_series
     assert span == TimeInterval.seconds(5.0, 8.0)
 
 
-def test_time_point_needs_an_anchored_sample(make_series):
+def test_time_point_needs_an_anchored_record(make_series):
     # A record with no wall-clock anchor has no calendar time to measure a moment against.
     record = Record(time_series=(make_series(),))
     with pytest.raises(TimeFValidationError, match="start_time"):
@@ -144,7 +144,7 @@ def test_has_absolute_time(make_series):
     assert Record(time_series=(make_series(),), start_time=0).has_absolute_time
 
 
-def test_a_trial_interval_is_refused_on_a_timeless_sample(make_series):
+def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
     # An unscoped span needs a timeline to be placed against. An all-ordinal record has no timed series
     # and no time_span, so there is nothing to check it against and it is refused.
     ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, signal="c", time_axis=OrdinalAxis())

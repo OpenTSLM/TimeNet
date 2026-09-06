@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
 
 #: The number of rows in each batch when the reader streams ``records.parquet``.
-_SAMPLE_BATCH_ROWS = 4096
+_RECORD_BATCH_ROWS = 4096
 
 #: The maximum number of decoded annotations that the cache keeps for reuse. This lets an
 #: annotation shared across records decode only once.
@@ -462,7 +462,7 @@ class TimeFReader:
         Yields:
             Each reconstructed :class:`Record`.
         """
-        for row in self._iter_sample_rows(record_ids):
+        for row in self._iter_record_rows(record_ids):
             yield self._build_record(row)
 
     # ---- loading -------------------------------------------------------------------------------
@@ -490,7 +490,7 @@ class TimeFReader:
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
-    def _iter_sample_rows(self, record_ids: Iterable[str] | None) -> Iterator[dict]:
+    def _iter_record_rows(self, record_ids: Iterable[str] | None) -> Iterator[dict]:
         """Stream ``records.parquet`` in batches, optionally restricted to a set of ids.
 
         Args:
@@ -509,13 +509,13 @@ class TimeFReader:
             self._records_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
         data = self._records_data
         if record_ids is None:
-            for batch in data.to_batches(batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
+            for batch in data.to_batches(batch_size=_RECORD_BATCH_ROWS, use_threads=False):
                 yield from batch.to_pylist()
             return
         stored = {self._codec.encode("record_id", sid): sid for sid in dict.fromkeys(record_ids)}
         stored_type = data.schema.field("record_id").type
         expression = pads.field("record_id").isin(pa.array(list(stored), type=stored_type))
-        for batch in data.to_batches(filter=expression, batch_size=_SAMPLE_BATCH_ROWS, use_threads=False):
+        for batch in data.to_batches(filter=expression, batch_size=_RECORD_BATCH_ROWS, use_threads=False):
             for row in batch.to_pylist():
                 stored.pop(row["record_id"], None)
                 yield row

@@ -167,7 +167,7 @@ def test_time_offsets_from_datetimes_measures_against_the_anchor():
     assert time_offsets.dtype == np.int64
 
 
-def test_time_offsets_from_datetimes_needs_an_anchored_sample():
+def test_time_offsets_from_datetimes_needs_an_anchored_record():
     with pytest.raises(TimeFValidationError, match="start_time"):
         time_offsets_from_datetimes([datetime(2026, 8, 5, tzinfo=UTC)], start_time=None)
 

@@ -61,7 +61,7 @@ def test_metadata():
     assert str(TSQAConnector().metadata().license) == "Apache-2.0"
 
 
-def test_convert_builds_one_sample_per_row():
+def test_convert_builds_one_record_per_row():
     dataset = _convert()
     assert isinstance(dataset, TimeFDataset)
     assert len(dataset.records) == len(_fixture_rows())

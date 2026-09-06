@@ -39,7 +39,7 @@ def _dataset():
     return TimeFDataset(metadata=_metadata())
 
 
-def test_add_sample_registers_and_returns(make_series):
+def test_add_record_registers_and_returns(make_series):
     ds = _dataset()
     record = ds.add_record(time_series=(make_series(),), subject_ids=("p1",))
     assert isinstance(record, Record)
@@ -47,18 +47,18 @@ def test_add_sample_registers_and_returns(make_series):
     assert record.subject_ids == ("p1",)
 
 
-def test_add_sample_rejects_empty_time_series():
+def test_add_record_rejects_empty_time_series():
     with pytest.raises(ValueError):
         _dataset().add_record(time_series=())
 
 
-def test_samples_property_is_read_only_copy(make_series):
+def test_records_property_is_read_only_copy(make_series):
     ds = _dataset()
     ds.add_record(time_series=(make_series(),))
     assert isinstance(ds.records, tuple)
 
 
-def test_add_task_links_sample_and_task(make_series):
+def test_add_task_links_record_and_task(make_series):
     ds = _dataset()
     record = ds.add_record(time_series=(make_series(),))
     task = ds.add_task(record, ClassificationTask(target="afib"))
@@ -67,7 +67,7 @@ def test_add_task_links_sample_and_task(make_series):
     assert ds.tasks == (task,)
 
 
-def test_add_task_multiple_samples(make_series):
+def test_add_task_multiple_records(make_series):
     ds = _dataset()
     s1 = ds.add_record(time_series=(make_series(),))
     s2 = ds.add_record(time_series=(make_series(),))
@@ -75,7 +75,7 @@ def test_add_task_multiple_samples(make_series):
     assert set(task.record_ids) == {s1.record_id, s2.record_id}
 
 
-def test_add_task_rejects_empty_samples():
+def test_add_task_rejects_empty_records():
     with pytest.raises(ValueError):
         _dataset().add_task((), ClassificationTask(target="x"))
 
@@ -195,7 +195,7 @@ def test_no_loader_calls_during_build():
     assert calls["n"] == 0  # building/deriving never reads values
 
 
-def test_add_sample_rejects_duplicate_time_series_ids(make_series):
+def test_add_record_rejects_duplicate_time_series_ids(make_series):
     # TimeSeries uses identity equality with an auto-uuid id, so the same instance twice would
     # silently collapse to one series on write.
     ts = make_series()
@@ -203,7 +203,7 @@ def test_add_sample_rejects_duplicate_time_series_ids(make_series):
         _dataset().add_record(time_series=(ts, ts))
 
 
-def test_add_task_warns_for_a_scope_outside_sample_span(make_series):
+def test_add_task_warns_for_a_scope_outside_record_span(make_series):
     # Span times are in the source recording timeline, so a window past the series' end warns.
     dataset = _dataset()
     record = dataset.add_record(time_series=(make_series(values=(0.0,) * 5000),))
@@ -227,7 +227,7 @@ def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series
     assert task.scope == TimeInterval.seconds(2.0, 10.0)
 
 
-def test_add_task_accepts_scope_inside_sample_span(make_series):
+def test_add_task_accepts_scope_inside_record_span(make_series):
     dataset = _dataset()
     record = dataset.add_record(time_series=(make_series(values=(0.0,) * 5000),))
     scope = TimeInterval.seconds(2.0, 8.0)
@@ -275,7 +275,7 @@ def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     assert task.target is None and task.target_annotation_ids == (annotation.id,)
 
 
-def test_add_task_rejects_an_annotation_ref_the_samples_do_not_carry(make_series):
+def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series):
     dataset = _dataset()
     record = dataset.add_record(time_series=(make_series(),))
     with pytest.raises(TimeFValidationError, match="not registered with register_annotations"):
@@ -315,7 +315,7 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
         dataset.add_task(record, AnswerTask(prompt="q", target="a"))
 
 
-def test_streamed_task_validation_rejects_an_unknown_sample(make_series):
+def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     dataset = _dataset()
     dataset.add_record(time_series=(make_series(),), record_id="s-0")
     task = AnswerTask(prompt="q", target="a")
@@ -385,7 +385,7 @@ def test_tasks_of_filters_by_type(make_series):
     assert ds.tasks_of(AnswerTask) == (qa,)
 
 
-def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
+def test_tasks_for_resolves_and_filters_record_tasks(make_series):
     ds = _dataset()
     s1 = ds.add_record(time_series=(make_series(),))
     s2 = ds.add_record(time_series=(make_series(),))
@@ -397,7 +397,7 @@ def test_tasks_for_resolves_and_filters_sample_tasks(make_series):
     assert ds.tasks_for(s2, AnswerTask) == ()
 
 
-def test_tasks_for_unregistered_sample_raises(make_series):
+def test_tasks_for_unregistered_record_raises(make_series):
     ds = _dataset()
     stranger = _dataset().add_record(time_series=(make_series(),))
     with pytest.raises(TimeFValidationError, match="not registered"):
@@ -476,7 +476,7 @@ def test_to_features_and_targets_no_matching_task_raises(make_series):
         ds.to_features_and_targets(task=ClassificationTask)
 
 
-def test_to_features_and_targets_unlabeled_sample_raises(make_series):
+def test_to_features_and_targets_unlabeled_record_raises(make_series):
     ds = _dataset()
     labeled = ds.add_record(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
     ds.add_task(labeled, ClassificationTask(target="a"))
@@ -650,14 +650,14 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
     assert task.input_annotation_ids == (record.annotations[0].id,)
 
 
-def test_add_task_rejects_a_time_series_ref_not_on_the_sample(make_series):
+def test_add_task_rejects_a_time_series_ref_not_on_the_record(make_series):
     ds = _dataset()
     record = ds.add_record(time_series=(make_series(),))
     with pytest.raises(TimeFValidationError, match="not on its records"):
         ds.add_task(record, TSCorrespondenceTask(target_time_series_ids=("no-such-series",)))
 
 
-def test_add_task_accepts_a_time_series_ref_on_the_sample(make_series):
+def test_add_task_accepts_a_time_series_ref_on_the_record(make_series):
     ds = _dataset()
     record = ds.add_record(time_series=(make_series(),))
     series_id = record.time_series[0].time_series_id

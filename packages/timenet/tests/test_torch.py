@@ -28,7 +28,7 @@ def test_is_torch_dataset():
     assert isinstance(_ds(), Dataset)
 
 
-def test_len_matches_samples():
+def test_len_matches_records():
     assert len(_ds()) == len(make_dataset().records)
 
 

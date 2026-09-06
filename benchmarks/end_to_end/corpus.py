@@ -72,14 +72,14 @@ def _loader(values: np.ndarray) -> Callable[[], pa.Array]:
     return lambda: array
 
 
-def _values(scenario_index: int, channel_index: int, steps: int, scale: int) -> np.ndarray:
+def _values(scenario_index: int, signal_index: int, steps: int, scale: int) -> np.ndarray:
     """Return deterministic, nontrivial float32 values for one signal."""
     count = steps * scale
     t = np.arange(count, dtype=np.float64)
-    slow = np.sin((scenario_index + 1) * t / 97.0 + channel_index / 3.0)
-    fast = np.cos((channel_index + 2) * t / 17.0)
+    slow = np.sin((scenario_index + 1) * t / 97.0 + signal_index / 3.0)
+    fast = np.cos((signal_index + 2) * t / 17.0)
     trend = ((t % 1_009) / 1_009.0) * (scenario_index + 1) / 10.0
-    impulses = ((t.astype(np.int64) + 31 * channel_index) % (211 + scenario_index * 17) == 0) * 0.5
+    impulses = ((t.astype(np.int64) + 31 * signal_index) % (211 + scenario_index * 17) == 0) * 0.5
     return (slow + 0.2 * fast + trend + impulses).astype(np.float32)
 
 
@@ -87,7 +87,7 @@ def _scalar_series(
     scenario: Scenario,
     scenario_index: int,
     signal: str,
-    channel_index: int,
+    signal_index: int,
     scale: int,
 ) -> TimeSeries:
     """Construct one portable scalar float32 series.
@@ -101,7 +101,7 @@ def _scalar_series(
         unit_value=ureg.Unit(scenario.unit),
         data_source=_SOURCE,
     )
-    values = pa.array(_values(scenario_index, channel_index, scenario.steps, scale), type=pa.float32())
+    values = pa.array(_values(scenario_index, signal_index, scenario.steps, scale), type=pa.float32())
     return TimeSeries(
         loader=lambda: values,
         spec=spec,
@@ -159,7 +159,7 @@ def _nonfloat_series(
     )
 
 
-_NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
+_NONFLOAT_SIGNALS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
     ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16), ()),
     ("alarm", "bool", np.array([False, False, True, False, True, False, False, True]), ()),
     ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64), ()),
@@ -278,7 +278,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
 
     finance_spec = records["finance"].time_series[0].spec
     for index in range(64 * scale):
-        channel_count = 1 + index % 3
+        signal_count = 1 + index % 3
         length = 64 + (index % 8) * 32
         series = tuple(
             TimeSeries(
@@ -290,7 +290,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 time_series_id=f"tsqa-row-{index:04d}-c{signal}",
                 n_values=length,
             )
-            for signal in range(channel_count)
+            for signal in range(signal_count)
         )
         record = dataset.add_record(time_series=series, record_id=f"record-tsqa-{index:04d}")
         record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
@@ -366,14 +366,14 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
         record.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
-def _add_nonfloat_sample(dataset: TimeFDataset, scale: int) -> None:
+def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
     """Add a record whose signals come in varied scalar dtypes (int16, bool, float64, str).
 
     Args:
         dataset: The dataset to add the record to.
         scale: Positive step multiplier.
     """
-    signals = _NONFLOAT_CHANNELS
+    signals = _NONFLOAT_SIGNALS
     series = tuple(
         _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in signals
     )
@@ -417,8 +417,8 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
     records: dict[str, Record] = {}
     for scenario_index, scenario in enumerate(SCENARIOS):
         series = tuple(
-            _scalar_series(scenario, scenario_index, signal, channel_index, scale)
-            for channel_index, signal in enumerate(scenario.signals)
+            _scalar_series(scenario, scenario_index, signal, signal_index, scale)
+            for signal_index, signal in enumerate(scenario.signals)
         )
         record = dataset.add_record(
             time_series=series,
@@ -441,7 +441,7 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
         records[scenario.name] = record
     _add_tasks(dataset, records)
     _add_connector_patterns(dataset, records, scale)
-    _add_nonfloat_sample(dataset, scale)
+    _add_nonfloat_record(dataset, scale)
     if profile == "rich":
         _add_rich_series(dataset, scale)
     dataset.derive_schema()

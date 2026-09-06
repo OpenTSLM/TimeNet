@@ -54,9 +54,9 @@ def _dataset(
     for i in range(n_records):
         start = i * per_record
         end = start + per_record if i < n_records - 1 else len(values)
-        sample_values = values[start:end]
+        record_values = values[start:end]
         ts = TimeSeries.from_values(
-            sample_values,
+            record_values,
             spec=spec,
             signal="stage",
             time_axis=RegularAxis.from_rate_hz(1),

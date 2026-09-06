@@ -68,7 +68,7 @@ def _wave_values(
 
     Args:
         fn: The wave function to apply to the angular time base, for example ``np.sin``.
-        n: The number of records.
+        n: The number of samples.
         phase: The phase offset in radians.
 
     Returns:
@@ -87,7 +87,7 @@ def _wave(
 
     Args:
         fn: The wave function to apply to the angular time base, for example ``np.sin``.
-        n: The number of records.
+        n: The number of samples.
         phase: The phase offset in radians.
 
     Returns:

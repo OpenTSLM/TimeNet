@@ -48,7 +48,7 @@ def test_schema_covers_every_feature():
     assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}
 
 
-def test_shares_a_series_across_samples_by_id():
+def test_shares_a_series_across_records_by_id():
     dataset = _convert()
     series_by_id: dict[str, int] = {}
     for record in dataset.records:
@@ -57,7 +57,7 @@ def test_shares_a_series_across_samples_by_id():
     assert any(count >= 2 for count in series_by_id.values()), "expected a series shared across records"
 
 
-def test_shares_an_annotation_across_samples_by_id():
+def test_shares_an_annotation_across_records_by_id():
     dataset = _convert()
     ann_ids: dict[str, int] = {}
     for record in dataset.records:

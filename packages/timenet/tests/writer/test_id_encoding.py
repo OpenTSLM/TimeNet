@@ -262,7 +262,7 @@ def test_correspondence_target_ids_round_trip(tmp_path):
     assert task.candidate_record_ids == (match.record_id, other.record_id)
 
 
-def test_editing_and_generation_sample_ids_round_trip(tmp_path):
+def test_editing_and_generation_record_ids_round_trip(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/uuid-test",

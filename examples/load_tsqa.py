@@ -23,7 +23,7 @@ def main() -> None:
 
     if dataset.records:
         values = dataset.records[0].time_series[0].to_numpy()
-        print(f"\nsample[0] first signal, first 5 values: {values[:5]}")
+        print(f"\nrecord[0] first signal, first 5 values: {values[:5]}")
 
 
 if __name__ == "__main__":

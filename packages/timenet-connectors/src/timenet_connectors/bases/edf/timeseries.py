@@ -1,7 +1,7 @@
 """Turn the signals of one recording into :class:`~timenet.dataset.TimeSeries`.
 
 The caller passes the signal-to-spec table and the loader factory, thus this module holds
-nothing of this dataset and reads no record. Every other attribute comes from the header.
+nothing of this dataset and reads no sample. Every other attribute comes from the header.
 """
 
 from collections.abc import Callable, Mapping

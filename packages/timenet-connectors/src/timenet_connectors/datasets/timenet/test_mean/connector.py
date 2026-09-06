@@ -18,7 +18,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.types import ClassificationTask, DataSource, TimeSeriesSpec, ureg
 
 
-_N_SAMPLES = 1000
+_N_RECORDS = 1000
 _LENGTH = 64
 _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
@@ -61,7 +61,7 @@ class TestMeanConnector(BaseConnector[None]):
         """
         dataset = TimeFDataset(metadata=self.metadata())
         rng = np.random.default_rng(_SEED)
-        for index in range(_N_SAMPLES):
+        for index in range(_N_RECORDS):
             offset = float(rng.uniform(0.3, 1.5)) * (1.0 if index % 2 == 0 else -1.0)
             values = offset + rng.normal(0.0, _NOISE_STD, _LENGTH)
             series = TimeSeries.from_values(

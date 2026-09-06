@@ -149,14 +149,17 @@ wins on smooth, high-cardinality signals, where the sign and high-mantissa plane
 constant. It loses badly on quantized data. There, the low mantissa byte is noise, and the split
 isolates this noise into an incompressible plane. Dictionary wins instead on quantized data. A
 physical conversion onto a fixed grid leaves only a few thousand distinct values behind tens of
-millions of records. Examples include the 0.001 mV step of wfdb and an integer ADC scale.
+millions of samples. Examples include the 0.001 mV step of wfdb and an integer ADC scale.
 
-The rule uses cardinality, counted on a record. If the record has at most 65,536 distinct values, the
-writer selects `dictionary`. If it has more, the writer selects `byte_stream_split`. The writer never
-selects `plain` automatically. The record is the values already buffered for the first row group of a
-modality. As a result, the decision costs only a distinct-value count, with no extra reads. The writer
-makes one decision per `spec_type`, before it opens the first shard for that type. The decision is
-deterministic in the data. As a result, re-building an unchanged source reaches the same encoding.
+The rule uses cardinality, counted on a sample. If the sample has at most 65,536 distinct values,
+the writer selects `dictionary`. Above that, floats select `byte_stream_split`, while strings and
+integers select `plain`, because a byte-plane split has no meaning for them. Two dtypes skip the
+count: bool signals always select `plain`, and enum signals always select `dictionary`. For floats,
+the writer never selects `plain` automatically. The sample is the values already buffered for the
+first row group of a modality. As a result, the decision costs only a distinct-value count, with no
+extra reads. The writer makes one decision per `spec_type`, before it opens the first shard for that
+type. The decision is deterministic in the data. As a result, re-building an unchanged source
+reaches the same encoding.
 
 The manifest records the choice as `value_encoding`, a `spec_type` -> encoding map. This record is
 provenance, not a contract. Parquet records the applied encoding in the footer of every file. As a

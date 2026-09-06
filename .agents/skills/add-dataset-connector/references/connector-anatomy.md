@@ -212,5 +212,5 @@ pattern, including sharing a series across many records.
 
 Tests live beside their connector, in `<org>/<name>/tests/`. Mirror the `chengsenwang/tsqa` one at
 `packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
-check a tiny raw record into `tests/fixtures/`, then call `convert()` on it directly and assert on
+check a tiny raw sample into `tests/fixtures/`, then call `convert()` on it directly and assert on
 records, tasks, annotations, and parsed values. No network, no env-var toggles.

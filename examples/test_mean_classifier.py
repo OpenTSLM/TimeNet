@@ -38,16 +38,16 @@ dataset.describe()
 #   tasks        classification=1000
 #
 # specs
-#   spec    name    value          rate   dtype
-#   signal  Signal  dimensionless  hertz  float
+#   spec    name    value          dtype
+#   signal  Signal  dimensionless  float
 #
 # records (first 5 of 1000)
-#   record_id   view  signals  length  tasks  annotations
-#   record-0    full  1         64      1      0
-#   record-1    full  1         64      1      0
-#   record-10   full  1         64      1      0
-#   record-100  full  1         64      1      0
-#   record-101  full  1         64      1      0
+#   record_id   signals  length  tasks  annotations
+#   record-0    1        64      1      0
+#   record-1    1        64      1      0
+#   record-10   1        64      1      0
+#   record-100  1        64      1      0
+#   record-101  1        64      1      0
 
 # Pair each record's values with its label. Materialization is deferred by default (Arrow); ask for
 # output="numpy" here since scikit-learn needs it. test-mean has one task type, so the task is inferred.

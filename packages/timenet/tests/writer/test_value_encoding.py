@@ -124,9 +124,9 @@ def test_signed_zeros_count_as_two_patterns():
 
 def test_sample_is_bounded_and_strides_the_whole_chunk():
     values = np.arange(SAMPLE_MAX_VALUES * 4, dtype=np.float32)
-    record = sample_values([values])
-    assert record.size == SAMPLE_MAX_VALUES
-    assert record[-1] > values.size / 2, "a prefix would only ever see the start of a chunk"
+    sample = sample_values([values])
+    assert sample.size == SAMPLE_MAX_VALUES
+    assert sample[-1] > values.size / 2, "a prefix would only ever see the start of a chunk"
 
 
 def test_selection_is_deterministic():
@@ -135,8 +135,8 @@ def test_selection_is_deterministic():
 
 
 def test_default_row_group_holds_a_full_sample():
-    # The rule decides from one buffered row group, so a row-group target below the record size would
-    # silently shrink the record and invalidate the calibration behind DICT_MAX_CARDINALITY.
+    # The rule decides from one buffered row group, so a row-group target below the sample size would
+    # silently shrink the sample and invalidate the calibration behind DICT_MAX_CARDINALITY.
     # Lowering DEFAULT_ROW_GROUP_TARGET_BYTES means re-running the value-encoding sweep.
     assert DEFAULT_ROW_GROUP_TARGET_BYTES // 4 >= SAMPLE_MAX_VALUES
 
@@ -171,7 +171,7 @@ def test_encoding_for_cardinality_delegates_high_cardinality_to_dtype():
     assert encoding_for_cardinality(DICT_MAX_CARDINALITY + 1, dtype="uint16") is ValueEncoding.PLAIN
 
 
-# ---- encoding record source -------------------------------------------------------------------
+# ---- encoding sample source -------------------------------------------------------------------
 
 
 def test_encoding_sample_source_stops_at_the_budget():

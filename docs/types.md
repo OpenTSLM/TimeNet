@@ -360,7 +360,7 @@ StepInterval(time_series_id="tsqa", start=132, stop=144)
       source_record_id="ecg-raw",
       target_record_id="ecg-clean",
   ))
-  dataset.add_task(spec_sample, TSGenerationTask(
+  dataset.add_task(spec_record, TSGenerationTask(
       prompt="10 s of 150 bpm sinus tachycardia at 500 Hz.",
       target_record_id="ecg-synth-0001",
   ))
@@ -379,7 +379,7 @@ StepInterval(time_series_id="tsqa", start=132, stop=144)
 
 A task can derive from earlier tasks, or from the annotations that motivated them, via `from_tasks`.
 The derived task records its source chain. This is how a handful of base labels multiply into many
-higher-level training records:
+higher-level training examples:
 
 ```python
 base = ClassificationTask(target="faulty")

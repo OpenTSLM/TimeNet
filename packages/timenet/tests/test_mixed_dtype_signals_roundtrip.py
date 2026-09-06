@@ -71,7 +71,7 @@ def test_each_dtype_persists_to_its_own_shard(tmp_path):
     assert leaf_types == {pa.float32(), pa.int16(), pa.bool_(), pa.string()}
 
 
-def test_mixed_dtype_channels_read_back_typed(tmp_path):
+def test_mixed_dtype_signals_read_back_typed(tmp_path):
     version_dir = _write(tmp_path, _dataset(_mixed_signals()))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = reader.read().records[0]

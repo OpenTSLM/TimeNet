@@ -260,7 +260,7 @@ def test_per_series_array_contract_enforced(tmp_path):
         writer.write()
 
 
-def test_samples_parquet_content(tmp_path):
+def test_records_parquet_content(tmp_path):
     version_dir = _written(tmp_path)
     rows = {r["record_id"]: r for r in pq.read_table(version_dir / "records/part-00000000.parquet").to_pylist()}
     assert set(rows) == {"record-0", "record-1", "record-2"}
@@ -348,7 +348,7 @@ def test_same_id_different_series_rejected(tmp_path):
         writer.write()
 
 
-def test_same_series_shared_across_samples_still_dedupes(tmp_path):
+def test_same_series_shared_across_records_still_dedupes(tmp_path):
     # The supported sharing path: the same instance in two records must still collapse to one shard.
     spec = TimeSeriesSpec(
         spec_type="s",

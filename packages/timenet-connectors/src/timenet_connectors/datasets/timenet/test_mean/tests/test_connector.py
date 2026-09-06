@@ -47,7 +47,7 @@ def test_target_has_no_schema():
     assert all(task.target_schema is None for task in _convert().tasks_of(ClassificationTask))
 
 
-def test_every_sample_is_a_single_channel():
+def test_every_record_is_a_single_signal():
     dataset = _convert()
     assert len(dataset.records) == 1000
     for record in dataset.records:

@@ -25,7 +25,7 @@ from timenet.dataset.axis import RegularAxis
 
 TimeSeries(
     spec=vibration,           # a TimeSeriesSpec (the modality)
-    signal="axial",          # the signal this series carries
+    signal="axial",           # the signal this series carries
     time_axis=RegularAxis.from_rate_hz(500),
     # Callable[[], pa.Array] matching the spec's dtype and value_shape
     loader=load_axial,
@@ -279,7 +279,7 @@ specs
 
 records (first 5 of 48000)
   record_id  signals  length  tasks  annotations
-  row-0      1         64      1      1
+  row-0      1        64      1      1
 ```
 
 ---

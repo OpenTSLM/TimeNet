@@ -82,7 +82,7 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
 
 ### 7. Verify
 - Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at
-  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny record of the raw shape and call
+  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny sample of the raw shape and call
   `convert()` on it directly (no network). The `TIMENET_TESTING` / `TIMENET_ROW_LIMIT` env vars mentioned
   in some docs are **not implemented**, so don't rely on them.
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own

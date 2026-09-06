@@ -103,7 +103,7 @@ def test_registered_annotation_round_trips(tmp_path):
     assert restored.tasks[0].input_annotation_ids == ("opts-yesno",)  # the ref survived, resolves in the table
 
 
-def test_write_rejects_an_annotation_both_registered_and_sample_carried(tmp_path):
+def test_write_rejects_an_annotation_both_registered_and_record_carried(tmp_path):
     # A registered annotation writes with empty record_ids and the reader restores it from that; an id
     # also carried by a record would write non-empty and be lost on read, so the writer rejects it.
     dataset = _registered_annotation_dataset()
@@ -321,7 +321,7 @@ def test_scalar_target_round_trips_as_a_number(tmp_path):
     assert task.unit == "bpm" and task.target_name == "mean_rate"
 
 
-def test_iter_samples_matches_read(tmp_path):
+def test_iter_records_matches_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         streamed = {s.record_id for s in reader.iter_records()}
@@ -387,7 +387,7 @@ def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
 # ---- filtered record reads --------------------------------------------------------------------
 
 
-def test_iter_samples_returns_only_the_requested_ids(tmp_path):
+def test_iter_records_returns_only_the_requested_ids(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         selected = list(reader.iter_records(record_ids=["record-2", "record-0"]))
@@ -395,7 +395,7 @@ def test_iter_samples_returns_only_the_requested_ids(tmp_path):
     assert selected[0].time_series[0].to_arrow() is not None
 
 
-def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
+def test_iter_records_with_a_single_id_still_reads_its_values(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         expected = {ts.time_series_id: ts.to_arrow() for ts in next(iter(reader.iter_records())).time_series}
@@ -406,7 +406,7 @@ def test_iter_samples_with_a_single_id_still_reads_its_values(tmp_path):
             assert ts.to_arrow().equals(expected[ts.time_series_id])
 
 
-def test_iter_samples_with_an_unknown_id_raises(tmp_path):
+def test_iter_records_with_an_unknown_id_raises(tmp_path):
     version_dir = _write(tmp_path)
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
@@ -415,13 +415,13 @@ def test_iter_samples_with_an_unknown_id_raises(tmp_path):
         list(reader.iter_records(record_ids=["record-0", "record-nope"]))
 
 
-def test_iter_samples_with_an_empty_id_list_yields_nothing(tmp_path):
+def test_iter_records_with_an_empty_id_list_yields_nothing(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert list(reader.iter_records(record_ids=[])) == []
 
 
-def test_iter_samples_unknown_id_raises_on_full_consumption(tmp_path):
+def test_iter_records_unknown_id_raises_on_full_consumption(tmp_path):
     # The guarantee holds when the iterator is drained; an early-stopping consumer is served what
     # exists and never reaches the check, which the docstring states explicitly.
     version_dir = _write(tmp_path)
@@ -472,7 +472,7 @@ def test_open_decodes_no_control_plane_table(tmp_path, monkeypatch):
     assert reader.metadata.dataset_id  # metadata comes from the manifest, still free
 
 
-def test_annotations_are_decoded_only_when_a_sample_resolves_them(tmp_path, monkeypatch):
+def test_annotations_are_decoded_only_when_a_record_resolves_them(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
     read = _count_control_plane_reads(monkeypatch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -547,7 +547,7 @@ def test_getstate_drops_every_control_plane_cache(tmp_path):
     assert state["_values"] is None
 
 
-def test_shuffled_sample_access_does_not_thrash_the_index_cache(tmp_path):
+def test_shuffled_record_access_does_not_thrash_the_index_cache(tmp_path):
     # A byte-bounded index cache holds the same working set for in-order and shuffled reads. A
     # count-bounded cache evicted and re-decoded a whole row group per lookup; this asserts the cache
     # retains groups rather than timing anything.
@@ -712,7 +712,7 @@ def test_start_time_round_trips_exactly(tmp_path):
     assert records["record-2"].start_time is None
 
 
-def test_samples_file_without_start_time_column_reads_as_none(tmp_path):
+def test_records_file_without_start_time_column_reads_as_none(tmp_path):
     version_dir = _write(tmp_path)
     records_path = version_dir / "records/part-00000000.parquet"
     table = pq.read_table(records_path)

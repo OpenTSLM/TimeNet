@@ -50,7 +50,7 @@ def sine_loader(
     """Build a loader that returns a deterministic float32 sine wave.
 
     Args:
-        n: Number of records.
+        n: Number of samples.
         freq_hz: Wave frequency in Hz.
         sampling_rate_hz: Sampling rate in Hz.
         phase: Phase offset in radians.
@@ -202,11 +202,11 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     act_registered = sorted(actual.registered_annotations, key=lambda a: a.id)
     assert exp_registered == act_registered, "registered annotations differ"
 
-    exp_samples = {s.record_id: s for s in expected.records}
-    act_samples = {s.record_id: s for s in actual.records}
-    assert exp_samples.keys() == act_samples.keys(), "record ids differ"
-    for record_id, exp in exp_samples.items():
-        act = act_samples[record_id]
+    exp_records = {s.record_id: s for s in expected.records}
+    act_records = {s.record_id: s for s in actual.records}
+    assert exp_records.keys() == act_records.keys(), "record ids differ"
+    for record_id, exp in exp_records.items():
+        act = act_records[record_id]
         assert exp.start_time == act.start_time, f"start_time differs for {record_id}"
         assert exp.subject_ids == act.subject_ids, f"subject_ids differ for {record_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"

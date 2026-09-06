@@ -223,13 +223,13 @@ def _io_fig(name, seeds, render_right, *, right_title, question=False, window=No
     outer = fig.add_gridspec(1, 2, width_ratios=[2, 1.2], left=0.03, right=0.97, top=0.80, bottom=0.16, wspace=0.5)
     if question:
         left = outer[0].subgridspec(1, 2, width_ratios=[3, 1], wspace=0.08)
-        chan_host = left[0]
+        signal_host = left[0]
     else:
-        chan_host = outer[0]
-    chan_gs = chan_host.subgridspec(len(seeds), 1, hspace=0.4)
+        signal_host = outer[0]
+    signal_gs = signal_host.subgridspec(len(seeds), 1, hspace=0.4)
     signals = []
     for r, s in enumerate(seeds):
-        ax = fig.add_subplot(chan_gs[r], sharex=signals[0] if signals else None)
+        ax = fig.add_subplot(signal_gs[r], sharex=signals[0] if signals else None)
         ax.plot(t, wave(t, s), color=BLUE, lw=1.6)
         bare(ax)
         ax.margins(y=0.28)
