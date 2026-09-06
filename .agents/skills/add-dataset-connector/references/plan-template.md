@@ -1,7 +1,9 @@
 # The plan format
 
-Copy this shape into `docs/notes/connectors/<org>/<name>/plan.md`. Every connector's plan reads the
-same, so a reader knows where to look. Keep the section order and the headings.
+**Phase 0 copies this file** to `docs/notes/connectors/<org>/<name>/plan.md` before it does anything
+else, ledger included, with every row `not started`. Every phase after it writes its own section and
+sets its own ledger row. Keep the section order and the headings, so every connector's plan reads the
+same and a reader knows where to look.
 
 The plan is scratch and untracked. Never `git add` it.
 

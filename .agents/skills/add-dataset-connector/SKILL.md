@@ -61,12 +61,15 @@ Every phase writes its result into the plan and updates the ledger before the ne
 
 The card comes first, because the source's prose decides things no file header states.
 
-1. Derive the `org/name` id from the link. Lowercase, hyphens allowed in the leaf. On disk hyphens
+1. **Create the plan.** Copy `references/plan-template.md` to
+   `docs/notes/connectors/<org>/<name>/plan.md`, with the phase ledger at its top and every phase
+   `not started`. It exists from here on, and every later phase writes into it.
+2. Derive the `org/name` id from the link. Lowercase, hyphens allowed in the leaf. On disk hyphens
    become underscores, so `physionet/ecg-qa-cot` maps to `datasets/physionet/ecg_qa_cot/`. The id is
    validated as `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, and no segment may start with `.`.
-2. Draft `dataset.yaml` from the source page and **ask the user to confirm it**. `license` and
+3. Draft `dataset.yaml` from the source page and **ask the user to confirm it**. `license` and
    `domains` are enums, and a wrong licence is a legal claim, not a typo. Never guess it.
-3. Read the source's description. Keep the sentences the design will rely on, with the URL they came
+4. Read the source's description. Keep the sentences the design will rely on, with the URL they came
    from. These are evidence, not metadata: they go in the plan now and in the README later, beside
    the card's `source_url`.
 
@@ -81,6 +84,8 @@ Phase 0 is done when the card loads without `TimeNetInvalidCardError` and the qu
 
 **Tell the user:** the id, the card as confirmed, and the sentences of the description the design
 will lean on.
+
+**Write it down:** section 0 of the plan, and set the ledger row to `done`.
 
 **Next:** phase 1, which reads the release. Say so and continue; this hand-off needs no approval.
 
@@ -125,6 +130,8 @@ same. `references/fidelity.md` decides what the design may and may not do to the
 **Tell the user:** what the release holds — the count of records, the shapes the census found, and
 anything odd — and that the plan is ready to read.
 
+**Write it down:** sections 1 to 5 of the plan, and set the ledger row to `done`.
+
 **Next:** phase 2, the gate. This one **stops**. Do not begin phase 3 until the user has ruled.
 
 ## Phase 2 — the gate
@@ -150,6 +157,9 @@ cannot check a claim against evidence you produced, that claim is not ready to b
 
 If the user changes the model, revise the plan and walk it again. Only continue on an explicit yes.
 
+**Write it down:** each ruling against the assumption it settles, and the ledger row as
+`approved <date>`.
+
 **Next:** on a yes, phase 3, which writes the rulings into the connector's README.
 
 ## Phase 3 — the assumptions become the README
@@ -170,6 +180,8 @@ Then delete the assumptions from the plan. The README owns them now.
 **Tell the user:** the README path, and how many entries are **Open** — an open entry is a decision
 still owed, and it should not be a surprise at review time.
 
+**Write it down:** the README path in the plan's ledger row, and the row as `done`.
+
 **Next:** phase 4, the build.
 
 ## Phase 4 — build
@@ -181,6 +193,9 @@ annotations, then tasks.
 
 Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
 the whole point of keeping them pure.
+
+**Write it down:** any place the built skeleton differs from the planned one, and why. The ledger
+row goes to `done`.
 
 **Next:** phase 5, which proves the build against the numbers phase 1 predicted.
 
@@ -213,6 +228,9 @@ Run in this order and stop at the first failure:
 4. Compare the result against the numbers the plan predicted: records, series per record, tasks, and
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
+
+**Write the measured numbers into the plan, beside the predicted ones.** A prediction nobody wrote
+the outcome against was never a test. Where the two differ, say which was wrong in the same line.
 
 **A build can fail after `convert` returned cleanly**, and the first time it happens it is
 confusing. `convert` gives back a description; the values and the tasks are read afterwards. So a
