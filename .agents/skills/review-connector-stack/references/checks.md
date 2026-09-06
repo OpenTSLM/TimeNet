@@ -24,7 +24,8 @@ code wins and the document is the finding.
   tests unrunnable after `make sync`.
 - **`requirements.txt` says why each line is there**, in a comment above it, in one sentence.
 - **`uv.lock` is in the diff** if `pyproject.toml` changed.
-- **No `typing.Final`.** It is used nowhere in either package.
+- **No `typing.Final`.** `AGENTS.md § Python Habits` states it. It is used nowhere in either
+  package, so a first use is a convention change and belongs in its own discussion.
 - **No new top-level import of a heavy library in `connector.py`** that the connector does not
   declare.
 
@@ -62,13 +63,19 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   both are kept and the README says which wins and why.
 - A broken artifact raises. A silent repair by the underlying library is caught and turned into
   `TimeFFormatError` — `bases/edf/reader.py` matches the text of `edfio`'s truncation warning.
-- An inconsistency the source ships warns; only an unreadable artifact raises.
+- An inconsistency the source ships warns rather than raises. The carve-out is an **unknown
+  channel name**, which `fidelity.md § Errors and warnings` requires to raise `TimeFFormatError`:
+  a release that grew a channel must fail loudly, not convert to a sample quietly missing a signal.
+  Cite that section rather than the compressed form.
 - **A warning is emitted once per kind, with a count and one example**, through a module logger
   (`_LOG = logging.getLogger(__name__)`), never `warnings.warn` — a warning raised inside a lazy
   loader never reaches whoever started the build.
 - **No warning duplicates one TimeF already gives.** `add_annotation` emits
   `SpanOutsideWindowWarning` itself. A connector that warned about the same overrun doubled the
   output.
+- **`warn_when_outside=False` is not a mute, it is the raise.** The default `True` warns and keeps
+  the span (`sample.py:142`, `:188`); `False` restores `TimeFValidationError` (`:145`, `:191`). A
+  diff that passes it is choosing an error over a warning, and should say why.
 - Every inconsistency has a `README.md` entry beside the connector: the evidence, the decision,
   and the state. A number the author measured is marked *(measured)*.
 
@@ -138,25 +145,12 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - `# noqa: DOC502 (reason)` is the sanctioned escape when a documented `Raises:` comes from a
   helper. Parenthesised, lowercase, no trailing period.
 
-## 7. Tests
+## 7. Naming and shape
 
-- **No checked-in fixture bytes.** There is no `fixtures/` directory under `datasets/`. The test
-  writes what it needs.
-- **The fixture comment says it is invented and how a reader can tell.** `sleep_edfx` numbers
-  synthetic subjects above 89 because the release numbers none that high.
-- **A module that takes values is tested with values** — no temp file, no library import.
-  `test_tables.py` passes literal tuples and never imports `xlrd`.
-- Tests live at `datasets/<org>/<name>/tests/`, and `make test` excludes them; they run under
-  `make test-connectors`.
-- **`ty` narrowing, never a cast.** `Annotation.span`, `Task.scope`, `TimeSeries.time_axis` and
-  `span_us` are unions. In tests, small `assert isinstance(...)`-and-return helpers.
-- **`RUF069` bans `==` between floats**, tests included. Compare the stored integer microseconds
-  or use `pytest.approx`.
-
-## 7a. Naming and shape
-
-- **`download_async` returns `<Dataset>Source`**, one handle, not a list with an entry per sample.
-  `convert` starts `source = raw_refs[0]` and does not iterate `raw_refs`.
+- **The handle type is named `<Dataset>Source`, and `download_async` returns a list holding exactly
+  one of them** (`sleep_edfx/connector.py:228` returns `list[SleepEdfxSource]`, built at `:262`).
+  Not a list with an entry per sample. `convert` starts `source = raw_refs[0]` and does not iterate
+  `raw_refs`.
 - **The generator is `_iter_<plural>`, the per-ref builder `_<plural>_for`, the id helper
   `name_<thing>`, the parser `_parse_<thing>`.** A module's single public builder is `build`; one of
   several is `build_<thing>`.
@@ -180,7 +174,22 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - **A constant used once lives at its use site**; a lookup table and a source URL stay at module
   level.
 
-## 8. Docs and prose
+## 8. Tests
+
+- **No checked-in fixture bytes.** There is no `fixtures/` directory under `datasets/`. The test
+  writes what it needs.
+- **The fixture comment says it is invented and how a reader can tell.** `sleep_edfx` numbers
+  synthetic subjects above 89 because the release numbers none that high.
+- **A module that takes values is tested with values** — no temp file, no library import.
+  `test_tables.py` passes literal tuples and never imports `xlrd`.
+- Tests live at `datasets/<org>/<name>/tests/`, and `make test` excludes them; they run under
+  `make test-connectors`.
+- **`ty` narrowing, never a cast.** `Annotation.span`, `Task.scope`, `TimeSeries.time_axis` and
+  `span_us` are unions. In tests, small `assert isinstance(...)`-and-return helpers.
+- **`RUF069` bans `==` between floats**, tests included. Compare the stored integer microseconds
+  or use `pytest.approx`.
+
+## 9. Docs and prose
 
 - Module docstring states what the module does **not** do: "This module reads no file."
 - Comments explain the release, not the code.
@@ -192,7 +201,7 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - Docstring voice matches the connector being edited. `layout.md` marks this unsettled — do not
   report a divergence as a finding.
 
-## 9. The stack itself
+## 10. The stack itself
 
 - **Each PR stands alone.** No comment, docstring or README line that a later PR in the stack
   deletes. No forward-looking chatter ("the next PR adds…").
@@ -204,11 +213,12 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   `feat(sleep-edfx): read the EDF container`. Branches are Conventional Branch.
 - **No gratuitous renames.** A function or test renamed for no reason in the diff is a finding
   against the diff, not against the old name. Prose that is still true stays.
-- **PR body is Problem, then Changelog**, in simple English, with the ticket reference last.
+- **PR body is Problem, then Changelog**, in simple English, ticket reference last —
+  `AGENTS.md § Stacked PRs`.
 - **No `--no-verify`.** A hook that failed is fixed, not skipped.
 - A PR whose commit no longer describes what the code does needs the amend called out.
 
-## 10. Checks that must have been run
+## 11. Checks that must have been run
 
 `make check`, `make test`, and — for any connector change — `make test-connectors`. `AGENTS.md`
 requires the final summary to say which ran and which could not.
