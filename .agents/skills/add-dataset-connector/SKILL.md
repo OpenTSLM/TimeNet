@@ -1,6 +1,6 @@
 ---
 name: add-dataset-connector
-description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then prove the build against what the plan predicted.
+description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then prove the build and review it.
 ---
 
 # Adding a dataset connector
@@ -379,7 +379,7 @@ marker file there named `.<first 8 hex characters of sha256(url)>-<archive name>
 extracted release in that directory, create that marker, and the build reads it. `find_dir_containing`
 searches with `rglob`, so the tree can sit at any depth.
 
-## Phase 5 — prove the build
+## Phase 5 — prove the build, then review it
 
 Run in this order and stop at the first failure:
 
