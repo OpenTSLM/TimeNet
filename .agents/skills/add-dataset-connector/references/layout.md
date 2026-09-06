@@ -3,6 +3,12 @@
 Reference for the `add-dataset-connector` skill. The plan states the skeleton in phase 1; phase 4
 builds it. This file says what goes where and why.
 
+**How to read this.** The rules are general. Two kinds of dataset-specific text appear below and they
+are not the same thing: a **citation** such as `sleep_edfx/connector.py` points at code in this repo
+that shows a convention is real and followed — a reviewer checks those. An **illustration** marked
+*Sleep-EDF:* shows one shape a rule can take, and never narrows it. Where a template uses
+`<placeholders>`, they are yours to fill.
+
 ## The one rule that places every module
 
 **The module that reads a file must not be the module that says what its contents mean.** Each module
@@ -112,7 +118,7 @@ dataset.
 Let the loader close over the open file. The channels of one recording then share one open file and
 one memory map, and the header is parsed one time.
 `reader.build_channel_loader(file, index)` holds the file that `convert` opened, so a seven-channel
-recording opens its PSG once and not seven times. The writer orders a recording's series by
+sample opens its file once rather than once per series. The writer orders a sample's series by
 `source_id` so it reads the source once, and a per-channel open would defeat that.
 
 **The cost is that a build keeps every file it opened open until the writer has called the loaders.**
@@ -132,18 +138,22 @@ Three things, in this order:
    header it is handed.
 
 ```python
-_EEG = TimeSeriesSpec(
-    spec_type="eeg", name="EEG", unit_value=ureg.microvolt, data_source=_SOURCE
+_KIND = TimeSeriesSpec(
+    spec_type="<kind>", name="<Kind>", unit_value=ureg.<unit>, data_source=_SOURCE
 )
 
 SPECS = {
-    "EEG Fpz-Cz": _EEG,
-    "EEG Pz-Oz": _EEG,
-    "EOG horizontal": _EOG,
-    "Event marker": _MARKER,  # cassette
-    "Marker": _MARKER,  # telemetry
+    # Keyed by the exact string the header writes. One entry for every name the
+    # release uses, including two spellings of the same thing.
+    "<name as the header spells it>": _KIND,
+    "<a second channel of the same kind>": _KIND,
+    "<the same kind, spelled differently elsewhere in the release>": _KIND,
+    "<a different kind>": _OTHER_KIND,
 }
 ```
+
+- *Sleep-EDF:* one `_EEG` spec serves both `EEG Fpz-Cz` and `EEG Pz-Oz`, and one `_MARKER` spec
+  serves the marker channel under both the names the two parts of the release give it.
 
 Four rules hold here:
 
@@ -161,35 +171,38 @@ but the spec comes from the study:
 
 ```mermaid
 flowchart LR
-    hdr["EdfHeader of one recording"]
-    nm["channels[i]<br/>'EEG Fpz-Cz'"]
-    ct["samples_per_record[i]<br/>3000"]
-    du["record_duration<br/>30 s, 60 s or 10 s"]
-    nr["n_records<br/>2650"]
+    hdr["the header of one file"]
+    nm["the channel's name<br/>as the header spells it"]
+    ct["values per record"]
+    du["record duration"]
+    nr["record count"]
     hdr --> nm
     hdr --> ct
     hdr --> du
     hdr --> nr
-    nm --> sp["spec<br/>SPECS[name]<br/>eeg, microvolt"]
+    nm --> sp["spec<br/>SPECS[name]<br/>kind + unit"]
     nm --> ch["channel<br/>the source's own name"]
-    nm --> id["time_series_id<br/>sleep-edfx-SC4001E0-EEG Fpz-Cz"]
-    ct --> ax["time_axis<br/>RegularAxis.from_rate_hz(3000 / 30 s)"]
+    nm --> id["time_series_id<br/>&lt;prefix&gt;-&lt;sample&gt;-&lt;channel&gt;"]
+    ct --> ax["time_axis<br/>RegularAxis.from_rate_hz(values / duration)"]
     du --> ax
-    ct --> nv["n_values<br/>2650 x 3000"]
+    ct --> nv["n_values<br/>records x values per record"]
     nr --> nv
     sp --> ts["TimeSeries"]
     ch --> ts
     id --> ts
     ax --> ts
     nv --> ts
-    ld["loader<br/>build_channel_loader -> read_channel -> uV"] --> ts
+    ld["loader<br/>built per channel, decodes on demand"] --> ts
 ```
 
 **One spec table covers every shape the census found.** A shared channel name is still worth a second
-look: `EMG submental` is a rectified envelope at 1 Hz on cassette and a raw trace at 100 Hz on
-telemetry. Both are EMG in microvolts, which is what a spec states, and the rate that separates them
-comes from the header, so the shared name costs nothing. Check every shared name before you write one
-table.
+look, because one name can cover two different measurements. Ask whether a spec — a kind and a unit
+— is still true of both, and let the header supply whatever separates them. Check every shared name
+before you write one table.
+
+- *Sleep-EDF:* `EMG submental` is a rectified envelope at 1 Hz in one part of the release and a raw
+  trace at 100 Hz in the other. Both are EMG in microvolts, which is what the spec states, and the
+  rate that separates them comes from the header — so the shared name costs nothing here.
 
 ## The census decides values, not modules
 
@@ -321,8 +334,8 @@ A comment in a connector answers "why does the data look like this". A reader wh
 needs it.
 
 ```python
-# A hypnogram name ends with the initial of the technician who scored it. The PSG name does
-# not predict that letter. Match on the prefix that the two names share instead.
+# A label file's name ends with the initial of the technician who wrote it. The signal file's
+# name does not predict that letter. Match on the prefix the two names share instead.
 ```
 
 **A module docstring states what the module does not do.** "This module reads no file." "Nothing

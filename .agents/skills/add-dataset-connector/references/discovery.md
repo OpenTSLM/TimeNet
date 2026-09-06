@@ -1,7 +1,12 @@
 # Heads, censuses, and the map
 
-Reference for phase 1 of the `add-dataset-connector` skill. This phase answers three questions, and
-each has its own tool:
+Reference for phase 1 of the `add-dataset-connector` skill.
+
+**How to read this.** The method is general. Examples are marked *Sleep-EDF:* and come from
+`physionet/sleep_edfx`; a number marked *(measured)* was counted over that one release. Your dataset
+will have different files, different shapes and different numbers, and the same three questions.
+
+This phase answers those three questions, and each has its own tool:
 
 | question | tool | cost |
 | --- | --- | --- |
@@ -25,10 +30,12 @@ Three rules follow from it:
 
 ## Give every raw file type a `head()`
 
-A connector reads more than one kind of file, and the kinds are not alike. Sleep-EDF reads three: a
-`*-PSG.edf` of signals, a `*-Hypnogram.edf` of annotations, and a `.xls` table of subjects. ECG-QA
-reads WFDB records and three CSV files. Each kind has its own shape, and none of them opens in an
-editor.
+A connector reads more than one kind of file, and the kinds are not alike. Typically there is one
+kind holding signals, one holding labels, and a table of per-subject facts beside them. Each kind
+has its own shape, and few of them open in an editor.
+
+- *Sleep-EDF:* three kinds — a container of signals, a container of annotations, and a spreadsheet
+  of subjects. *ECG-QA:* WFDB records and three CSV files.
 
 A `head()` opens one file, reads a small part of it, and gives that part back as text a person can
 read. It writes nothing and it changes nothing.
@@ -57,9 +64,9 @@ only the part it prints.
 ### Why they ship with the connector
 
 - **Scaffolding.** You cannot design a TimeF sample before you have seen the raw shape. The
-  questions that decide the design are all questions about the source: how many channels, at which
-  rates, in which units; is a label one row per epoch or one row per run of equal epochs; which
-  column holds the subject and which holds the night.
+  questions that decide the design are all questions about the source: how many series, at which
+  rates, in which units; is a label one row per window or one row per run of equal windows; which
+  columns of the table identify the sample.
 - **Review.** A reader who does not know the source sees the raw shape beside the connector that
   maps it, and can judge whether the mapping is right.
 - **A first check on a new release.** Run the heads against a new version of the dataset. A changed
@@ -69,64 +76,73 @@ only the part it prints.
 
 A census is a count, and its purpose is to find where two samples differ.
 
-**You cannot find the odd values by reading.** Every anomaly that mattered in Sleep-EDF was a fact
-about the set, not about any one file: one file of 152 writes 60 s records, there are 117 distinct
-physical ranges across 153 files, 24 recordings have a header that disagrees with the subject table,
-26 scorings start after their signals do. Reading one file would have found none of them.
+**You cannot find the odd values by reading.** An anomaly worth knowing is almost always a fact
+about the *set*: one file in a hundred that differs, a value that varies per file where you assumed a
+constant, a table that disagrees with the headers for a handful of rows. Reading one file finds none
+of them, however carefully you read it.
 
 The signature of a shape is:
 
-- the channel names, with their units and their rates,
+- the series names, with their units and their rates,
 - the labels the annotations use,
 - the shape of the table row the sample joins to.
 
-Run the signature over every set of files and count the groups. Sleep-EDF gives two:
+Run the signature over every set of files and count the groups. Write the result as one column per
+group, one row per property that differs:
 
-| | `sleep-cassette` | `sleep-telemetry` |
+| | shape A | shape B |
 | --- | --- | --- |
-| recordings | 153 | 44 |
-| channels | 7 | 5 |
-| record duration | 30 s, and 60 s in one file | 10 s |
-| `EMG submental` | 1 Hz | 100 Hz |
-| the marker channel | `Event marker`, no unit, 1 Hz | `Marker`, unit `ID+M-E`, 10 Hz |
-| table row | one for each recording | one for each subject, two nights in columns |
-| sex code | `F=1, M=2` | `M=1, F=2` |
-| physical range | 117 distinct across 153 files | one, for all 44 |
+| samples | | |
+| series per sample | | |
+| the rate of each | | |
+| names that differ for the same kind of thing | | |
+| the table row it joins to | | |
+| encodings that differ between groups | | |
+
+Then, beside it, the properties that vary *within* a group and are therefore not shape at all.
+
+- *Sleep-EDF:* the census gives two groups, `sleep-cassette` (153 recordings, 7 channels, 30 s
+  records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 channels, 10 s records)
+  *(measured)*. The same channel name `EMG submental` runs at 1 Hz in one and 100 Hz in the other;
+  the marker channel is named differently in each; the two sheets even encode sex in opposite
+  directions, `F=1, M=2` against `M=1, F=2`. One group states 117 distinct physical ranges across
+  its 153 files, the other one range for all 44.
 
 **A census that finds two shapes does not mean two modules.** It says where the code must take a
-value instead of a constant, and that is all it says. Every row above is one of two things: a value
-the file states in its own header, or a value the description states as data. Neither is a branch on
-the study.
+value instead of a constant, and that is all it says. Every row of such a table is one of two
+things: a value the file states in its own header, or a value the description states as data.
+Neither is a branch on which part of the release you are in.
 
-**Leave out of the signature what varies file by file.** Every cassette file states its own physical
-range, so one count is 20.6769 uV in one file and 22.9538 uV in another. That is calibration, not
-shape. If the census gives one group per file, the signature is too strict.
+**Leave out of the signature what varies file by file.** Per-file calibration is not shape. If the
+census gives one group per file the signature is too strict; if it gives one group for the whole
+release it is too loose, and you have not yet found the property that separates them.
 
-**Then count the samples**, whether or not the count is a `len()`. Sleep-EDF holds 197 recordings,
-one for each line of `RECORDS` *(measured)*. If you cannot count the samples before you convert, you
-do not yet know what a sample is.
+**Then count the samples**, whether or not the count is a `len()`. Prefer a count the release states
+about itself — an index file, a manifest, a row count — over one you derive, and say which you used.
+If you cannot count the samples before you convert, you do not yet know what a sample is.
 
 ## Name the set of files that one sample needs
 
-A sample is not a file. It is a set of files, and usually a row of a table beside them. For Sleep-EDF
-one sample needs three things:
+A sample is not a file. It is a set of files, and usually a row of a table beside them. Name each
+role the set needs — the values, the labels on those values, and the key into any table beside them —
+before deciding what to hand between the two halves of the connector.
 
-- `sleep-cassette/SC4001E0-PSG.edf` — the signals.
-- `sleep-cassette/SC4001EC-Hypnogram.edf` — the scoring of those signals.
-- one row of `SC-subjects.xls`, keyed by `(subject, night)`.
+- *Sleep-EDF:* a signals file, the scoring file sharing its prefix, and one row of a subject
+  spreadsheet keyed by `(subject, night)`.
 
 Four rules hold while you name them:
 
-- **The join key comes from the filename.** The EDF files are anonymous: the patient id field reads
-  `X F X Female_33yr`, and nothing inside a file names its subject. Only `SC4001E0` states that this
-  is subject 0, night 1. A connector whose key comes from file contents cannot be written for this
-  release.
-- **Do not guess a name you can match.** The initial of the technician who scored a hypnogram sits at
-  the end of its filename, and the PSG name does not predict that letter. Match on the prefix the two
-  names share, and raise when the count of matches is not one.
-- **Name the files that no sample needs.** `RECORDS`, `RECORDS-v1` and `SHA256SUMS.txt` sit at the
-  root of this release and belong to no sample. Say so once, so the next reader does not look for
-  them again.
+- **Find out where the join key lives, and do not assume it is inside the file.** Released data is
+  often de-identified, so the field that would name the subject is blanked and only the filename
+  carries the identity. A connector keyed on file contents cannot then be written at all.
+  - *Sleep-EDF:* the patient id field reads `X F X Female_33yr` in every file. Only the filename
+    states which subject and which night.
+- **Do not guess a name you can match.** Where two files of one sample differ by something you
+  cannot derive — an annotator's initial, a version suffix, a timestamp — match on the prefix they
+  share and raise when the count of matches is not exactly one. Guessing gives a connector that
+  silently skips samples.
+- **Name the files that no sample needs.** Index files, checksums and per-release manifests belong
+  to no sample. Say so once, so the next reader does not look for them again.
 - **Resolve, and open nothing.** `download` fetches, extracts and checks that each file is there. It
   parses no header and reads no row.
 
@@ -143,8 +159,7 @@ Two shapes are possible, and the plan must pick one:
 
 **The list shape does not scale and the handle shape does.** A list of 197 entries costs nothing, but
 a release of millions would build millions of dataclasses before the first sample is written. The
-handle shape is the same code at both sizes. Sleep-EDF gives one handle. Pick per dataset, and never
-assume.
+handle shape is the same code at both sizes. Pick per dataset, and never assume.
 
 How the release encodes its files decides what the handle carries:
 
@@ -156,60 +171,66 @@ How the release encodes its files decides what the handle carries:
 
 ## Draw the map
 
-Four columns, always the same: what the release ships, what pairs it into samples, what reads the
-container, and what each of its parts means. Then TimeF on the right.
+Four columns, always the same: what the release ships, what pairs it into samples, what opens each
+container, and what each of its parts means. Then TimeF on the right. Node names are yours; the
+columns are not.
 
 ```mermaid
 flowchart LR
     subgraph src["what ships"]
-        zip[("sleep-edfx-1.0.0.zip")]
-        psg[("*-PSG.edf<br/>7 signals, or 5")]
-        hyp[("*-Hypnogram.edf<br/>onset, duration, label")]
-        tbl[("SC-subjects.xls")]
+        arch[("the archive")]
+        val[("the values<br/>one file per sample")]
+        lab[("the labels<br/>onset, duration, label")]
+        tbl[("the table<br/>one row per subject")]
     end
     subgraph pair["what pairs it: download"]
-        arc["ensure_archive"]
-        hnd["SleepEdfxSource"]
-        rec["SleepEdfxRecording"]
+        ens["ensure_archive"]
+        hnd["&lt;Dataset&gt;Source<br/>one handle"]
+        ref["&lt;Dataset&gt;Recording<br/>one sample's paths"]
     end
-    subgraph read["what opens it"]
-        edf["open_edf"]
-        chn["read_channel<br/>counts -> uV"]
-        anr["read_annotations"]
-        row["read_table_rows"]
+    subgraph read["what opens it: bases/"]
+        opn["open the container<br/>header only"]
+        vals["read one series<br/>stored -> physical"]
+        anr["read the labels"]
+        row["read the table rows"]
     end
-    subgraph mean["what it means"]
-        spc["specs.SPECS"]
+    subgraph mean["what it means: this connector"]
+        spc["specs<br/>name -> TimeSeriesSpec"]
         bld["timeseries.build"]
         stg["annotations.build"]
-        tab["tables.py<br/>rows -> facts"]
-        met["metadata.py<br/>facts -> annotations"]
+        tab["tables<br/>rows -> facts"]
+        met["metadata<br/>facts -> annotations"]
     end
     subgraph out["TimeF"]
         ts["TimeSeries"]
         ann["Annotation"]
-        tsk["ClassificationTask"]
+        tsk["Task"]
         smp["Sample"]
     end
-    zip --> arc --> hnd --> rec
-    psg --> rec
-    hyp --> rec
-    rec --> edf
-    rec --> anr
-    edf --> bld
+    arch --> ens --> hnd --> ref
+    val --> ref
+    lab --> ref
+    ref --> opn
+    ref --> anr
+    opn --> bld
     spc --> bld
     bld --> ts
-    bld -->|"builds a lazy loader"| chn
-    chn -->|"the writer calls it later"| ts
+    bld -->|"builds a lazy loader"| vals
+    vals -->|"the writer calls it later"| ts
     anr --> stg --> ann
     tbl --> row --> tab --> met
-    edf --> met
+    opn --> met
     met --> ann
     ts --> smp
     ann --> smp
     ann -.-> tsk -.-> smp
     smp --> ds["TimeFDataset"]
 ```
+
+Read the columns, not the nodes. The left column is whatever your release ships; the second is
+`download`'s half, which resolves paths and opens nothing; the third is the shared readers in
+`bases/`; the fourth is the modules that name your dataset. A release with one kind of file has a
+thinner picture and the same four columns.
 
 Four rules make the map a check and not a picture:
 

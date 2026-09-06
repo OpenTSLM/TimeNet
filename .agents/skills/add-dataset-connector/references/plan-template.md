@@ -43,8 +43,10 @@ phase 3.
 
 | path | kind | count | belongs to a sample |
 | --- | --- | --- | --- |
-| `sleep-cassette/*-PSG.edf` | signals | 153 | yes |
-| `RECORDS` | index | 1 | no |
+| `<glob>` | signals | | yes |
+| `<glob>` | labels | | yes |
+| `<path>` | table | | joined, not owned |
+| `<path>` | index / checksums | | no |
 
 Every kind in this table is a node in the map below. Every file that belongs to no sample is named
 here once, so nobody looks for it again.
@@ -53,7 +55,7 @@ here once, so nobody looks for it again.
 
 One per kind. Paste the output of `heads.py`, unedited.
 
-#### signals — `SC4001E0-PSG.edf`
+#### signals — `<one file of this kind>`
 
 ```text
 <head output>

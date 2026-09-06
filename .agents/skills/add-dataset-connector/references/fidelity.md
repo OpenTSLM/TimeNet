@@ -3,15 +3,23 @@
 Reference for the `add-dataset-connector` skill. These rules decide the design in phase 1 and the
 code in phase 4. They hold for every connector.
 
+**How to read this.** Every rule is general and applies to any source. The examples are marked
+*Sleep-EDF:* and come from `physionet/sleep_edfx`, the connector these rules were first written
+against. An example illustrates a rule; it never narrows it. A number marked *(measured)* was
+counted over that one release and describes it alone — your dataset's numbers will differ, and the
+rule will not. When a rule and an example seem to disagree, the rule wins.
+
 **A TimeF dataset is a faithful copy of its source, not a cleaned one.** Convert what the source
 states, in the shape it states it. Cleaning, balancing and filtering are decisions for whoever uses
 the dataset. A connector must not make them on their behalf.
 
 ## The data
 
-**Drop nothing the source states.** A record that serves no task is still evidence. Sleep-EDF scores
-`Movement time` and `Sleep stage ?`. Neither names a sleep stage, so neither becomes a classification
-target. Both still become annotations, and the scored timeline stays whole.
+**Drop nothing the source states.** A record that serves no task is still evidence. A label outside
+the set a task predicts is still a label, and the timeline it sits on stays whole.
+
+- *Sleep-EDF:* the scoring uses `Movement time` and `Sleep stage ?`. Neither names a sleep stage, so
+  neither becomes a classification target. Both still become annotations.
 
 **Keep every sample the source ships.** The short one, the badly scored one and the outlier all stay.
 
@@ -19,37 +27,48 @@ target. Both still become annotations, and the scored timeline stays whole.
 A span carries `time_series_ids`, and a sample refuses one that resolves to nothing. The source
 claims the channel exists, so the sample carries it.
 
-- A thermistor comes loose and writes a flat trace, and the scorer still marks an event on it. Keep
-  the flat channel. Its emptiness is a fact about the study.
 - Build it from what the source recorded, never from invented values. A series must hold at least one
   value, so where the source gives none at all, keep the reference as an annotation value rather than
   deleting it.
+- *Any recording modality:* a sensor comes loose and writes a flat trace, and the annotator still
+  marks an event on it. Keep the flat channel. Its emptiness is a fact about the study.
 
-**Keep the source's names, labels and units.** Map them onto a spec; do not rename them. `EEG Fpz-Cz`
-stays `EEG Fpz-Cz`. The spec says "EEG, microvolts". The channel keeps the montage the technician
-wrote.
+**Keep the source's names, labels and units.** Map them onto a spec; do not rename them. The spec
+says what kind of thing a channel measures. The channel keeps the name the instrument or the
+technician wrote, however irregular.
+
+- *Sleep-EDF:* `EEG Fpz-Cz` stays `EEG Fpz-Cz`, and the spec says "EEG, microvolts". The channel
+  keeps its montage.
 
 **Do not resample, interpolate, or fill a gap.** Every series keeps its own time axis, so a source of
-mixed rates needs none of it. Cassette holds EEG at 100 Hz beside a rectal temperature at 1 Hz. Both
-stay at the rate they were recorded.
+mixed rates needs none of it.
+
+- *Sleep-EDF:* one recording holds EEG at 100 Hz beside a rectal temperature at 1 Hz. Both stay at
+  the rate they were recorded.
 
 **Keep the source's numbers.** Convert to the unit the file states, with the range that file states.
-No normalising, no z-scoring, no rounding. The count 220 is 20.6769 uV in one recording and
-22.9538 uV in another; the per-file range is part of the data. Read the gain from the file you are
-reading, and never apply a fixed one.
+No normalising, no z-scoring, no rounding. Read the scaling from the file you are reading, and never
+apply a fixed one — a per-file range is part of the data, not a detail to average away.
 
-**Add a derived fact, never replace a stated one. Where two sources disagree, keep both.** The EDF
-header and the subject table disagree about age or sex for 24 of 197 recordings *(measured)*. The
-table wins, because published work joins against it, and the sample carries a note giving both
-readings.
+- *Sleep-EDF:* the same stored count of 220 is 20.6769 uV in one recording and 22.9538 uV in
+  another.
+
+**Add a derived fact, never replace a stated one. Where two sources disagree, keep both.** Say in the
+README which one the connector treats as authoritative and why, and carry the other as a note.
+
+- *Sleep-EDF:* the file header and the subject table disagree about age or sex for 24 of 197
+  recordings *(measured)*. The table wins, because published work joins against it, and the sample
+  carries both readings.
 
 **Order and identity come from the source.** Channel order from the header, sample id from the
-source's own id, so two builds give the same ids. The sample id is `SC4001E0`, not a counter.
+source's own id, so two builds give the same ids. Never a counter.
 
 **Where TimeF forces a change, make the smallest one, and say so.** These rules bend for a format
-invariant and for nothing else. A hypnogram that scores past the end of its signal is neither clipped
-nor dropped: its entries are written as the file states them, and the sample declares a `time_span`
-reaching the later of the two ends.
+invariant and for nothing else.
+
+- *Sleep-EDF:* a scoring that runs past the end of its signal is neither clipped nor dropped. Its
+  entries are written as the file states them, and the sample declares a `time_span` reaching the
+  later of the two ends.
 
 ## Read the description, not just the headers
 
@@ -57,13 +76,16 @@ reaching the later of the two ends.
 annotation to those series.** No header states this. Only the prose does, and the standard a study
 cites is not a safe guess for what that study did.
 
-Sleep-EDF was scored by Rechtschaffen and Kales, but on the `Fpz-Cz` and `Pz-Oz` EEGs and not on the
-`C4-A1` and `C3-A2` that the manual prescribes. A stage annotation therefore names the two channels
-the release holds. A connector that assumed the standard montage would scope its annotations to two
-series that do not exist.
+A study cites a standard and then departs from it, and only the prose says where. Scoping an
+annotation to the series the standard prescribes, rather than the ones the study used, points it at
+series the release does not contain — and the sample refuses it.
 
-The description also fixes the epoch length, the rater, and the equipment. Take each from it, and not
-from the convention of the field.
+The description also fixes the window length, the rater, and the equipment. Take each from it, and
+not from the convention of the field.
+
+- *Sleep-EDF:* scored by Rechtschaffen and Kales, but on the `Fpz-Cz` and `Pz-Oz` EEGs and not the
+  `C4-A1` and `C3-A2` the manual prescribes. A stage annotation names the two channels the release
+  actually holds.
 
 **Quote the sentence you relied on in the connector's README**, beside the card's `source_url`, so
 the next reader can check it rather than trust it. Where the description and the files disagree, that
@@ -71,9 +93,12 @@ is an inconsistency: warn, and give it an entry in the README.
 
 ## Errors and warnings
 
-**Do not repair a broken file. Raise.** A silent repair hides a changed release. `edfio` warns and
-repairs a truncated record count; the reader compares the file size against the header and raises
-`TimeFFormatError` instead.
+**Do not repair a broken file. Raise.** A silent repair hides a changed release. Parsing libraries
+often repair by default and only warn, so check what yours does and turn its repair into a
+`TimeFFormatError`.
+
+- *Sleep-EDF:* `edfio` warns and repairs a truncated record count; the reader compares the file size
+  against the header and raises instead.
 
 **An unknown channel name raises `TimeFFormatError`. Do not drop it.** A release that adds a channel
 must fail loudly, not convert to a sample that is quietly missing a signal.
@@ -83,15 +108,18 @@ inconsistency is a fact about the study; a corrupt file is not. Neither is repai
 header and the table disagree about age or sex for 24 recordings: warn, keep both readings, and
 convert. Refusing the release over it would be the larger error.
 
-**Do not warn twice.** TimeF warns for itself where it can. `add_annotation` emits
-`SpanOutsideWindowWarning` for every span that leaves its window, so a connector that also warned
-about the same overrun doubled the output: 314 warnings for 197 recordings *(measured)*. Dropping the
-connector's own warning brought them back to 156 *(measured)*. Before you add a warning, find out
-whether the format already gives one.
+**Do not warn twice.** TimeF warns for itself where it can. Before you add a warning, find out whether the
+format already gives one. `add_annotation` emits `SpanOutsideWindowWarning` for every span that
+leaves its window, and a connector warning about the same thing doubles the output.
 
-**Warn one time for each kind, with a count and one example.** 155 of 197 scorings end after their
-signals stop *(measured)*, because the last entry pads the file toward a full day. That is one
-warning, not 155.
+- *Sleep-EDF:* the duplicate warning produced 314 lines for 197 recordings *(measured)*; dropping
+  the connector's own brought it back to 156.
+
+**Warn one time for each kind, with a count and one example.** A property shared by most of a
+release is one fact about the release, not one fact per sample.
+
+- *Sleep-EDF:* 155 of 197 scorings end after their signals stop *(measured)*, because the last entry
+  pads the file toward a full day. That is one warning, not 155.
 
 **Warn through a module logger**, `_LOG = logging.getLogger(__name__)`, and not through
 `warnings.warn`. A warning raised inside a lazy loader never reaches whoever started the build.
@@ -124,7 +152,7 @@ has to keep true.
 **Pass `sample_id`, and build it from one `_ID_PREFIX`.** A sample id is load-bearing twice over: a
 dataset keys its samples by it to validate a streamed task, and a reader refers to a sample by it
 across builds. A generated one would give two builds of one archive two sets of ids that cannot be
-compared. The source's own id is the id — `sleep-edfx-SC4001E0`, not a counter.
+compared. The source's own id is the id, under one prefix — never a counter.
 
 **Pass `time_series_id`, built on the sample id.** An annotation's `time_series_ids` resolves against
 it, so it has to be stable and predictable.
@@ -137,13 +165,16 @@ not state one at all.
 **A test asserting an id is not a read.** If an id turns out to be needless, the assertion goes with
 it.
 
-**Qualify a subject id by its study.** Cassette subject 1 and telemetry subject 1 are different
-people, so `sleep-cassette-00` and not `00`. An unqualified number leaks one person across two
-studies in any subject-grouped split.
+**Qualify a subject id by whatever the release numbers separately.** Where a release is split into
+parts that each number their subjects from one, a bare number collides, and the collision silently
+merges two people in any subject-grouped split.
 
-**Set `start_time` only when the source states a real instant.** Sleep-EDF states a local wall clock
-with no timezone, so it stays unset and the clock time becomes an annotation. Inventing a timezone
-would be inventing data. `Sample.start_time` refuses a bare `float`, because seconds and microseconds
+- *Sleep-EDF:* the two studies number subjects independently, so a subject id is
+  `sleep-cassette-00`, not `00`.
+
+**Set `start_time` only when the source states a real instant.** A local wall clock with no zone is
+not an instant. Leave the field unset and carry the stated clock time as an annotation; inventing a
+timezone is inventing data. `Sample.start_time` refuses a bare `float`, because seconds and microseconds
 are both plausible readings of one, and refuses a naive `datetime`. It takes a tz-aware `datetime`
 or whole Unix microseconds.
 
@@ -182,7 +213,7 @@ annotations name no series, so they are measured against the `time_span`, which 
 the overrun.
 
 **Attach annotations in one batch.** `add_annotations` validates the whole batch before it attaches
-any of it, so a bad hypnogram fails its sample rather than leaving it half annotated.
+any of it, so one bad annotation fails its sample rather than leaving it half annotated.
 
 **Two things are called metadata, and they are not the same.** Dataset metadata is the card,
 `dataset.yaml`, read once and passed to `TimeFDataset(metadata=...)`. Sample metadata is annotations,
@@ -190,33 +221,35 @@ attached after `add_sample`.
 
 ## Tasks
 
-**A task is not an annotation, and there are usually far more of them.** A hypnogram is run-length
-encoded: consecutive epochs carrying the same label collapse into one entry with a long duration. A
-task is one question, and an epoch task asks one question of each epoch.
+**A task is not an annotation, and there are usually far more of them.** Many sources run-length
+encode their labels: consecutive windows carrying the same label collapse into one entry with a long
+duration, and the file states that entry once. A task is one question, and a per-window task asks one
+question of each window. Count both numbers before you design.
 
-| over the whole Sleep-EDF release | *(measured)* |
-| --- | --- |
-| sleep-stage annotations | 28 529 |
-| 30 s epochs they cover | 483 419 |
-| mean epochs for each annotation | 16.9 |
-| the longest single entry | 1351 epochs |
+**Expand the runs before you count tasks.** One task per stored entry asks a different, coarser
+question than one task per window — each covering a stretch that may run from one window to hours.
+That is not a smaller version of the problem the field measures; it is a different problem.
 
-**Expand the runs before you count tasks.** A connector that made one task per annotation would ask
-28 529 questions instead of 483 419, each covering a stretch from 30 s to 11 hours. That is a coarser
-problem than the one the field measures, not a smaller version of it.
+- *Sleep-EDF:* 28 529 stored entries cover 483 419 windows of 30 s *(measured)*, a mean of 16.9
+  windows per entry, and the longest single entry covers 1351.
 
-**Check that the expansion is exact.** Every Sleep-EDF onset sits on a 30 s boundary and every
-duration is a whole multiple of 30 s *(measured over all 28 529 entries)*, so an entry divides into a
-whole number of epochs. A release with a ragged onset would force a decision about where an epoch
-starts. Find out which case you are in.
+**Check that the expansion is exact.** An entry divides into a whole number of windows only if every
+onset sits on a window boundary and every duration is a whole multiple of one. Where it does not, you
+have to decide where a window starts, and that decision belongs in the README. Measure which case you
+are in before you assume.
 
-**The scoring does not tile the recording. Build a task only where the source states a label.** 26
-telemetry scorings begin after their signals do, and two recordings hold a hole in the middle
-*(measured)*. Unscored time is not wake and it is not a stage. It has no label, so it gets no task.
-Filling it would invent a label the technician never wrote.
+- *Sleep-EDF:* every onset and duration is a whole multiple of 30 s *(measured over all 28 529
+  entries)*, so nothing rounds.
 
-**`Task.scope` makes a whole-sample label and a 30 s epoch label one type.** A scope of `None` means
-the whole sample; a scope of one interval means that epoch. `ClassificationTask` covers both, and no
+**Labels rarely tile the recording. Build a task only where the source states one.** Unlabelled time
+is not the negative class and it is not the default label. It has no label, so it gets no task.
+Filling it invents a label nobody wrote.
+
+- *Sleep-EDF:* 26 scorings begin after their signals do, and two recordings hold a hole in the
+  middle *(measured)*.
+
+**`Task.scope` makes a whole-sample label and a per-window label one type.** A scope of `None` means
+the whole sample; a scope of one interval means that window. `ClassificationTask` covers both, and no
 second task type is needed.
 
 ### The count decides the API
@@ -226,9 +259,9 @@ second task type is needed.
 - `set_task_stream(task_types, source)` streams them and does **not** validate them the way
   `add_task` does. A dataset with far more tasks than samples cannot hold every task in memory.
 
-Sleep-EDF is about 2450 tasks for each sample *(measured)*, so its epoch tasks must stream. **The
-plan states the count, so this is decided before any code is written.** Four rules hold for a streamed
-task:
+**The plan states the count, so this is decided before any code is written.** Where tasks outnumber
+samples by orders of magnitude, they must stream — Sleep-EDF runs to about 2450 tasks per sample
+*(measured)*. Four rules hold for a streamed task:
 
 - It must already carry its `sample_ids`. Nothing sets them for you.
 - It must reference only registered annotations and samples that exist.
