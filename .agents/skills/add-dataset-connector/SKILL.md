@@ -57,7 +57,10 @@ The description states what no header states, so read it for all of these:
 
 Phase 0 is done when the card loads without `TimeNetInvalidCardError` and the quotes are in the plan.
 
-**Tell the user:** the id, the card as confirmed, and that phase 1 will now read the release.
+**Tell the user:** the id, the card as confirmed, and the sentences of the description the design
+will lean on.
+
+**Next:** phase 1, which reads the release. Say so and continue; this hand-off needs no approval.
 
 ## Phase 1 — a head of each file type, then a census of all of them
 
@@ -97,7 +100,10 @@ Produce, into the plan:
 same. `references/fidelity.md` decides what the design may and may not do to the data;
 `references/layout.md` decides the module skeleton. Read both before you write the plan.
 
-**Tell the user:** what the release holds, and that the plan is ready to read.
+**Tell the user:** what the release holds — the count of samples, the shapes the census found, and
+anything odd — and that the plan is ready to read.
+
+**Next:** phase 2, the gate. This one **stops**. Do not begin phase 3 until the user has ruled.
 
 ## Phase 2 — the gate
 
@@ -112,6 +118,8 @@ An assumption is a question the source does not answer. Say what the source stat
 would do, and let the user rule. Do not resolve one silently.
 
 If the user changes the design, revise the plan and ask again. Only continue on an explicit yes.
+
+**Next:** on a yes, phase 3, which writes the rulings into the connector's README.
 
 ## Phase 3 — the assumptions become the README
 
@@ -128,6 +136,11 @@ those are evidence, and rewording them destroys them.
 
 Then delete the assumptions from the plan. The README owns them now.
 
+**Tell the user:** the README path, and how many entries are **Open** — an open entry is a decision
+still owed, and it should not be a surprise at review time.
+
+**Next:** phase 4, the build.
+
 ## Phase 4 — build
 
 Read `references/connector-anatomy.md` for the contract, the base connectors and the task types.
@@ -137,6 +150,8 @@ annotations, then tasks.
 
 Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
 the whole point of keeping them pure.
+
+**Next:** phase 5, which proves the build against the numbers phase 1 predicted.
 
 Run a build as you write it:
 
