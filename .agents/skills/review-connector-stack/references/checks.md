@@ -11,6 +11,20 @@ references are **citations**, not examples: they point at code in this repo that
 convention is real and followed, so you can open one and compare. Nothing here says the connector
 you are reviewing must resemble the connector cited.
 
+## Contents
+
+- [1. Imports and dependencies](#1-imports-and-dependencies)
+- [2. I/O apart from meaning](#2-io-apart-from-meaning)
+- [3. The data is a faithful copy](#3-the-data-is-a-faithful-copy)
+- [4. Ids](#4-ids)
+- [5. Annotations and tasks](#5-annotations-and-tasks)
+- [6. Errors](#6-errors)
+- [7. Naming and shape](#7-naming-and-shape)
+- [8. Tests](#8-tests)
+- [9. Docs and prose](#9-docs-and-prose)
+- [10. The stack itself](#10-the-stack-itself)
+- [11. Checks that must have been run](#11-checks-that-must-have-been-run)
+
 ## 1. Imports and dependencies
 
 - **A base module that every connector imports imports its library lazily.** Inside the function,
