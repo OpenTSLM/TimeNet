@@ -13,6 +13,28 @@ things, `download` and `convert`. The build calls them and stores what `convert`
 This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
 not skip a phase, and do not write connector code before the gate.
 
+## What this is for
+
+Converting a dataset is a modelling problem before it is a coding one. What counts as one record,
+which signals it holds, what an annotation is scoped to, what question a task asks — none of that is
+in the files, and getting it wrong produces a dataset that loads fine and answers the wrong question.
+
+So the job is to **agree a model with a person**, on evidence, before writing anything:
+
+1. **Gather evidence with tools, not assumptions.** A `head()` per file type shows the shape; a
+   census over every file shows what is odd. Both produce output a person can read.
+2. **Propose a model**: what one record is, its signals, its annotations, its tasks — each part
+   beside the evidence that produced it.
+3. **Let the user argue with it.** Every decision must be contestable, which means the evidence that
+   justifies it has to be next to it. A user should be able to point at one line and say "that is
+   wrong, the head shows something else". A plan they can only accept or reject is not agreement.
+4. **Write the agreement down** where it ships with the connector, so a reader a year later sees
+   what was decided and why.
+5. **Then implement it**, and review the result against the repository's conventions.
+
+The plan is the artifact that carries all of this. It is not a summary of work done; it is the thing
+being agreed, and the code follows from it.
+
 ## The two documents
 
 - **`docs/notes/connectors/<org>/<name>/plan.md`** is the working document. It holds the heads, the
@@ -107,17 +129,26 @@ anything odd — and that the plan is ready to read.
 
 ## Phase 2 — the gate
 
-**STOP. Write no connector code.** Give the user the plan and wait for explicit approval of:
+**STOP. Write no connector code.** This is where the model gets agreed, and agreement is not the
+same as approval. Walk the model with the user part by part, each part beside its evidence, so any
+one of them can be rejected on its own:
 
-- the map and what one record is,
-- the task type and how tasks are counted,
-- the module skeleton and the test plan,
-- **every open assumption**, one at a time, each with the evidence behind it.
+- **What one record is**, and the file inventory it comes from.
+- **The signals**, their units and their rates, and which header field each came from.
+- **The annotations**, and above all **what each is scoped to** — that comes from prose, not from a
+  header, so show the sentence.
+- **The tasks**: what one question asks, how many there are, and why that is the question the source
+  supports.
+- **Every open assumption**, one at a time.
 
 An assumption is a question the source does not answer. Say what the source states, say what you
 would do, and let the user rule. Do not resolve one silently.
 
-If the user changes the design, revise the plan and ask again. Only continue on an explicit yes.
+**Invite disagreement rather than confirmation.** "Does this look right?" gets a yes. Ask instead
+which part looks wrong, and be ready to show the head or census line behind any of them. If the user
+cannot check a claim against evidence you produced, that claim is not ready to be agreed.
+
+If the user changes the model, revise the plan and walk it again. Only continue on an explicit yes.
 
 **Next:** on a yes, phase 3, which writes the rulings into the connector's README.
 

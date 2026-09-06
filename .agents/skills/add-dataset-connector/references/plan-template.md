@@ -84,7 +84,11 @@ flowchart LR
 
 A dashed arrow is a part that is not written yet.
 
-## 2. What one record is
+## 2. The model
+
+This is the section the user argues with, so every line carries the evidence that produced it. Cite
+the head or the census row above — "signals head, line 4", "census: 117 distinct ranges" — not a
+belief. A line with no evidence is an assumption, and belongs in section 5 instead.
 
 Real values, not placeholders.
 
@@ -93,19 +97,23 @@ Real values, not placeholders.
 - **time_span**: <what fixes it>
 - **start_time**: set / unset, because <reason>
 
-### Series
+### Signals
 
-| signal | spec | unit | rate | axis | source of the rate |
+| signal | spec | unit | rate | axis | evidence |
 | --- | --- | --- | --- | --- | --- |
 
 ### Annotations
 
-| key | value | span | scoped to which series | where it comes from |
+| key | value | span | scoped to which signals | evidence |
 | --- | --- | --- | --- | --- |
+
+The scope is the line most often wrong and least often questioned. It comes from the description's
+prose, never from a header, so quote the sentence.
 
 ### Tasks
 
 - **type**: <Task class>, because the answer is <a category / free text / a number / regions>
+- **evidence**: <what in the source says this is the question being asked>
 - **one question is**: <what a single task asks>
 - **expansion**: <run-length? exact? what the boundary rule is>
 - **count**: <tasks per record> and <total> *(measured)*
