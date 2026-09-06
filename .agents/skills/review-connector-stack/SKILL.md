@@ -47,7 +47,28 @@ A connector review that never looks at the dataset cannot judge the mapping. Bef
 - What does the release state inconsistently? Every inconsistency needs a README entry with a
   decision and a state (**Handled**, **Not built**, **Open**).
 
-## 3. Run the checks
+## 3. What produced what you are reviewing
+
+This review is the second half of a pair. `add-dataset-connector` builds a connector in six phases,
+and every group below checks the output of one of them. Use the map to find the artifact behind a
+check: if a check has no artifact, the phase that should have produced it was skipped, and that is
+itself the finding.
+
+| the phase that produced it | what this review checks |
+| --- | --- |
+| 0 — the card, and the source's own prose | the card is valid and matches the id; §3, the README quotes the sentences the scoping rests on |
+| 1 — heads, census, sample design, task count | §4 ids come from the source; §5 the task count decides `add_tasks` against `set_task_stream`; §7 the handle shape and the naming |
+| 2 — the gate | §3, every ruling the user gave is a README entry with a state |
+| 3 — the README | §3, one entry per inconsistency: evidence, decision, **Handled** / **Not built** / **Open**, numbers marked *(measured)* |
+| 4 — the build | §1 imports and dependencies · §2 the I/O split · §3 faithfulness · §4 ids · §5 annotations and tasks · §6 errors · §7 naming · §8 tests · §9 docs |
+| 5 — smoke test | §11 the checks that must have been run, and whether the build matched the numbers the plan predicted |
+| the stack it shipped as | §10, each PR standing on its own |
+
+**A connector built without the skill is still reviewable.** The map says where to look for evidence,
+not that the phases must have been run. Where there is no plan and no README, say so under **Not
+reviewed** and check what the code alone can show.
+
+## 4. Run the checks
 
 Work through `references/checks.md` in order. Eleven groups: imports and dependencies, the I/O
 split, data faithfulness, ids, annotations and tasks, errors, naming and shape, tests, docs and
@@ -63,7 +84,7 @@ For each check, write down one of three verdicts and nothing else:
 
 Never write "looks fine". Cite or say you did not look.
 
-## 4. Verify the claims you are least sure of
+## 5. Verify the claims you are least sure of
 
 Before reporting, attack the two or three findings you are least certain about. A finding that
 does not survive is dropped, not softened.
@@ -75,7 +96,7 @@ does not survive is dropped, not softened.
   connector change. State which of the three you ran, and the result.
 - Would the fix be a gratuitous rename of an existing function or test? Then it is not a finding.
 
-## 5. Report
+## 6. Report
 
 ```markdown
 ## Verdict
@@ -96,3 +117,17 @@ What you could not check, and why.
 
 Order findings by severity, not by file. A wrong mapping of the source outranks every style
 finding in the file, however many of those there are.
+
+## 7. Say what to run next
+
+End by naming the next step, so nobody has to guess:
+
+| what the review found | what to say |
+| --- | --- |
+| blocking findings | fix them on the branch that owns each one, then run `/review-connector-stack` again on the result |
+| findings only in a lower PR of a stack | fix there and `gh stack rebase --upstack`, rather than patching the higher PR |
+| a rule that looks wrong rather than the code | the finding is against the document: `add-dataset-connector`'s references or `AGENTS.md`, and the fix is a PR to it |
+| an assumption nobody has ruled on | it belongs in the connector's README as **Open**, and the user decides it |
+| nothing blocking | say the stack is ready to merge, and that merging is the user's call |
+
+Never end a review with findings and no next step.
