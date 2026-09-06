@@ -94,10 +94,9 @@ own.
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
   card. `metadata().dataset_id` must match the connector's built id.
-Storing is not a connector's job at all. The engine does it, through `engine.store_dataset`, which
-derives the schema when it is absent, writes the dataset through a
-[`TimeFWriter`](timef-writer.md), and returns the committed version directory. There is no `store`
-hook to override.
+Storing is not a connector's job at all. The engine takes the dataset `convert` returns, derives its
+schema if it has none, and writes it into a registry. There is no `store` hook to override, and a
+connector never reaches for one.
 
 A connector takes no constructor arguments. Where a connector needs configuration, it reads it from
 the environment rather than from a parameter; `__init__` itself only checks that the subclass
