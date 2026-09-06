@@ -1,98 +1,195 @@
 ---
 name: add-dataset-connector
-description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Guides exploring the source, choosing the task type and example-row shape, confirming the plan, then implementing the connector folder that reuses the HuggingFace or PhysioNet base connectors.
+description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then smoke test and review it.
 ---
 
 # Adding a dataset connector
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
-`BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine drives
-it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
-writes the result into a registry.
+`BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine
+drives it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that
+pipeline and writes the result into a registry.
 
-Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,
-`BasePhysioNetConnector` for PhysioNet/WFDB records. Write a raw `BaseConnector` subclass only when
-neither fits.
+This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
+not skip a phase, and do not write connector code before the gate.
 
-Read `references/connector-anatomy.md` for the contract, the base-connector APIs, the task types, the
-folder layout, and a fully worked example before implementing.
+## The two documents
 
-## Workflow
+- **`docs/notes/connectors/<org>/<name>/plan.md`** is the working document. It holds the heads, the
+  census, the map, the sample design and the open assumptions. It is scratch. It is untracked, and
+  you never `git add` it.
+- **`packages/.../datasets/<org>/<name>/README.md`** ships with the connector. It holds the
+  assumptions the user ruled on, and every inconsistency the release contains. It is the document
+  somebody reads a year later.
 
-Create one task per step. Do the exploration and design first, get sign-off at the gate, then build.
+The assumptions live in the plan until the gate, then move to the README. After that the README is
+the only copy. Do not keep both.
 
-### 1. Take the input and derive the id
-Start from the link or reference the user gives (a HuggingFace dataset URL, a PhysioNet page, etc.).
-Derive an `org/name` id: lowercase, hyphens allowed in the leaf. On disk hyphens become underscores, so
-`physionet/ecg-qa-cot` maps to `datasets/physionet/ecg_qa_cot/`. The id shape is validated as
-`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, and no segment may start with `.`.
+## Where to start
 
-### 2. Explore the source structure
-Understand the raw data before designing anything:
-- Fields/columns and their types; which one holds the series values and how they are encoded (JSON
-  list, list-of-lists for multivariate, WFDB record, etc.).
-- Series shape: univariate vs multivariate, number of channels, length.
-- Sampling rate and physical units (Hz, seconds, mV, dimensionless).
-- Labels, questions/answers, rationales, splits, and any per-row metadata.
+Look for `docs/notes/connectors/<org>/<name>/plan.md`.
 
-For HuggingFace, the Hub auto-converts public datasets to parquet on the `refs/convert/parquet` branch;
-inspect columns via the dataset viewer or the datasets-server API. For PhysioNet, inspect the archive
-layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
+- **It does not exist.** Start at phase 0.
+- **It exists.** Read the phase ledger at its top and resume at the first phase that is not `done`.
+  Phase 1 walks the whole release, so never repeat it when the plan already holds its census.
 
-### 3. Pick the base connector
-- Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, inherit `download`, implement only
-  `convert`.
-- PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
-  `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
-- Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
+Every phase writes its result into the plan and updates the ledger before the next one starts.
 
-### 4. Determine the task and sketch an example row
-- Choose one built-in `Task` by the *kind of answer* the dataset supervises: `ClassificationTask` (a
-  category, whole-sample or over a `scope`), `AnswerTask` (free text; a caption without a `prompt`),
-  `ScalarPredictionTask` (a number with a unit), `TemporalLocalizationTask` (regions to find),
-  `ForecastingTask`, `TSEditingTask`, `TSGenerationTask`, or `TSCorrespondenceTask`. Any of them can carry
-  a `rationale`, so a chain-of-thought dataset is not a separate type.
-- Sketch one `Sample`: its `TimeSeries` channel(s) with their `spec` and `time_axis`;
-  the annotations you'll attach; and the task payload. Concrete values, not placeholders.
+## Phase 0 — the card and the source's own words
 
-### 5. HARD GATE: confirm with the user
+The card comes first, because the source's prose decides things no file header states.
 
-**STOP. Do not write any connector code yet.** Present, and wait for explicit approval:
-- the proposed `org/name` id,
-- the source and the base connector you'll reuse,
-- the task type, and
-- a concrete example-row sketch (channels + units + annotations + task payload).
+1. Derive the `org/name` id from the link. Lowercase, hyphens allowed in the leaf. On disk hyphens
+   become underscores, so `physionet/ecg-qa-cot` maps to `datasets/physionet/ecg_qa_cot/`. The id is
+   validated as `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, and no segment may start with `.`.
+2. Draft `dataset.yaml` from the source page and **ask the user to confirm it**. `license` and
+   `domains` are enums, and a wrong licence is a legal claim, not a typo. Never guess it.
+3. Read the source's description. Keep the sentences the design will rely on, with the URL they came
+   from. These are evidence, not metadata: they go in the plan now and in the README later, beside
+   the card's `source_url`.
 
-Only continue once the user confirms. If they change the task or shape, revise the sketch and re-confirm.
+The description states what no header states, so read it for all of these:
 
-### 6. Implement the connector folder
-Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/` with:
-- `dataset.yaml`, the dataset card: `yaml_schema_version`, `dataset_id`, `dataset_version`, `name`,
-  `description`, `license`, `domains`, `tags`.
-- `connector.py`, the `BaseConnector` subclass, ending with a module-level `CONNECTOR = <YourClass>`.
-- `__init__.py`, re-exporting `CONNECTOR` (and the class) from `connector.py`.
-- `requirements.txt`, when the connector needs a library outside `timenet-connectors`' core
-  dependencies. Import it lazily inside the connector. If it is missing, raise a clear error. A build
-  installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
-  usable while you write the connector.
+- **Which series an annotation was derived from.** Scope the annotation to those series and no
+  others. The standard a study cites is not a safe guess for what the study did.
+- The epoch length, the rater, and the equipment.
+- The units, the ranges, and what a label means.
 
-Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert` CPU-only
-with lazy value loaders (never materialize arrays in `convert`). See the worked example in
-`references/connector-anatomy.md`.
+Phase 0 is done when the card loads without `TimeNetInvalidCardError` and the quotes are in the plan.
 
-### 7. Verify
-- Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at
-  `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny sample of the raw shape and call
-  `convert()` on it directly (no network). The `TIMENET_TESTING` / `TIMENET_ROW_LIMIT` env vars mentioned
-  in some docs are **not implemented**, so don't rely on them.
-- If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
-  environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
-- Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
-  `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
-- Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
+**Tell the user:** the id, the card as confirmed, and that phase 1 will now read the release.
+
+## Phase 1 — a head of each file type, then a census of all of them
+
+Read `references/discovery.md` before you start this phase.
+
+Two reads, with different jobs.
+
+**Write one `head()` for each kind of file the release ships**, in `heads.py` beside the connector.
+A head opens one file, reads a small part of it, and gives that part back as readable text. It writes
+nothing. Most sources are binary — EDF, WFDB, parquet, xls, HDF5 — so `cat` is not an option, and
+the head function is the deliverable. It ships with the connector, so it also runs against the next
+release of the dataset and shows a changed shape at once.
+
+**Then census the whole release with a script.** A head shows the shape of one file. It cannot show
+you what is odd, because odd is a fact about the set: one file of 152 writing a different record
+length, 117 distinct physical ranges, 24 rows whose table disagrees with their header. You find
+those by counting, never by reading.
+
+**Hold this budget:** the context cost of phase 1 does not grow with the size of the release. One
+head per file *type*, not per file. The census walks every file but only its table enters the
+conversation. Run the walk in a subagent and take back the table alone.
+
+Produce, into the plan:
+
+- the file inventory, including the files that belong to no sample,
+- one head per file type,
+- the census table,
+- the map: a mermaid diagram in four columns — what ships, what pairs it into samples, what reads
+  the container, what each part means,
+- what one sample is, with real values from the heads,
+- the task type, the count of tasks per sample, and therefore whether tasks are added or streamed,
+- the module skeleton and the test plan,
+- the numbers the build should produce,
+- the assumptions and open questions.
+
+`references/plan-template.md` is the format. Use it as written, so every connector's plan reads the
+same. `references/fidelity.md` decides what the design may and may not do to the data;
+`references/layout.md` decides the module skeleton. Read both before you write the plan.
+
+**Tell the user:** what the release holds, and that the plan is ready to read.
+
+## Phase 2 — the gate
+
+**STOP. Write no connector code.** Give the user the plan and wait for explicit approval of:
+
+- the map and what one sample is,
+- the task type and how tasks are counted,
+- the module skeleton and the test plan,
+- **every open assumption**, one at a time, each with the evidence behind it.
+
+An assumption is a question the source does not answer. Say what the source states, say what you
+would do, and let the user rule. Do not resolve one silently.
+
+If the user changes the design, revise the plan and ask again. Only continue on an explicit yes.
+
+## Phase 3 — the assumptions become the README
+
+Write `README.md` beside the connector from `references/readme-template.md`. One entry for each
+assumption and each inconsistency, with three parts: the evidence, the decision, and the state —
+**Handled**, **Not built**, or **Open**. An open entry is worth more than a tidy file, because it
+names what nobody has decided.
+
+Mark any number you measured over the release yourself as *(measured)*, so a reader can tell it from
+one copied off the dataset's page. Quote the description sentences from phase 0 beside `source_url`.
+
+Use the `simple-english` skill on the prose. Do not run it over the head output or the census table;
+those are evidence, and rewording them destroys them.
+
+Then delete the assumptions from the plan. The README owns them now.
+
+## Phase 4 — build
+
+Read `references/connector-anatomy.md` for the contract, the base connectors and the task types.
+Follow the skeleton the plan states and the rules in `references/fidelity.md` and
+`references/layout.md`. Build in the order the format forces: series, then the sample, then
+annotations, then tasks.
+
+Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
+the whole point of keeping them pure.
+
+Run a build as you write it:
+
+```bash
+uv run timenet-build build <org>/<name> \
+    --no-isolation --keep-cache --out ./out
+```
+
+- `--no-isolation` runs in the current interpreter. The default builds an environment from the
+  connector's `requirements.txt`, which is right for CI and slow while you write.
+- `--keep-cache` keeps the raw download. Without it the engine deletes the cache directory it
+  created after a successful build, and the next run downloads the release again. It deletes only a
+  cache it created; a `cache_dir` a caller passed is user-owned and left alone.
+
+**Seed the cache from a copy you already have** rather than downloading twice. The cache directory is
+`~/.cache/timenet/cache/<dataset_id>/`, and `ensure_archive` skips the download when it finds a
+marker file there named `.<first 8 hex characters of sha256(url)>-<archive name>.extracted`. Put the
+extracted release in that directory, create that marker, and the build reads it. `find_dir_containing`
+searches with `rglob`, so the tree can sit at any depth.
+
+## Phase 5 — smoke test, then review
+
+Run in this order and stop at the first failure:
+
+1. `make check`, `make test`, `make test-connectors`.
+2. `uv run timenet-build build <id> --no-isolation --keep-cache --out ./out`
+3. Load it back: `TimeNet(registry="./out").load("<id>").describe()`.
+4. Compare the result against the numbers the plan predicted: samples, series per sample, tasks, and
+   the warning count with its reason. A number that does not match means the plan is wrong or the
+   code is. Find out which and say so.
+
+Then invoke the `review-connector-stack` skill on the working tree. Fix what it finds. The user can
+run it again on the PR stack later.
+
+**Tell the user:** which checks ran, which numbers matched, and what the review found.
+
+## Rules that hold in every phase
+
+- **Never `git add` the plan.** `docs/notes/` stays local, like `docs/openspec/`.
+- **Never read the data to learn about the data.** Heads show shape, censuses show anomalies.
+- **Write down what you measured, and mark it *(measured)*.** A number nobody can re-measure is a
+  claim, not evidence.
+- Follow AGENTS.md: conventional commits, no `--no-verify`, TimeNet's own errors from
+  `timenet.errors`, Google-style docstrings, type hints.
 
 ## Further reading
 
-`references/connector-anatomy.md` in this skill. Repo docs: `docs/connectors.md` and `docs/build.md`
-(design proposal; where they describe a flat-file `datasets/<org>/<name>.py` layout, the real code uses
-the folder-package layout above, so follow the code).
+- `references/discovery.md` — heads, censuses, and the map.
+- `references/fidelity.md` — what a connector may and may not do to its source.
+- `references/layout.md` — how the modules of a connector divide.
+- `references/connector-anatomy.md` — the contract, the bases, the task types, a worked example.
+- `references/plan-template.md`, `references/readme-template.md` — the two standard formats.
+
+Repo docs: `docs/connectors.md` and `docs/build.md` are a design proposal. Where they describe a
+flat-file `datasets/<org>/<name>.py` layout, the real code uses the folder-package layout. Follow
+the code.

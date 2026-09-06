@@ -7,7 +7,12 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
-- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
+- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, `physionet/sleep_edfx`, and
+  `timenet/hello_world` connectors
+
+This file is the API surface. Its siblings hold the rules: `fidelity.md` for what a connector may do
+to its source, `layout.md` for how its modules divide, `discovery.md` for how to read a release
+before designing against it.
 
 ## The `BaseConnector` contract
 
@@ -16,6 +21,9 @@ this branch. Anchor files:
 
 - `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
   lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
+- `download_async(self, cache_dir: Path) -> list[TRaw]`: the async form of the same step. Implement
+  this one when the fetch is I/O-bound and can overlap; `physionet/sleep_edfx` does. Implement one of
+  the two, not both.
 - `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
   CPU only, no network.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
@@ -23,6 +31,11 @@ this branch. Anchor files:
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
 - `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
   Most connectors never override it.
+
+`list[TRaw]` does not mean one entry per sample. A connector that would otherwise build millions of
+refs returns a **single handle** that `convert` walks, yielding one sample at a time.
+`SleepEdfxSource` is one such handle: it carries the study directories and the table paths, and no
+row of any table. `discovery.md` says how to choose between the two shapes.
 
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.
@@ -36,9 +49,19 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   __init__.py      # re-exports CONNECTOR (and the class) from connector.py
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
+  README.md        # the assumptions, the inconsistencies, the warnings
+  heads.py         # one head() per raw file type
   requirements.txt # the libraries this connector needs, installed into the
                    # environment its build runs in (optional)
+  tests/           # one test module per module; no fixture files
 ```
+
+That is the smallest connector. A release that ships more than one kind of file divides further:
+`tables.py` and `metadata.py` give meaning, `specs.py` holds the channel map, `keys.py` holds the
+annotation keys. The half that **opens** a file is a base, not a connector module — `sleep_edfx`
+ships no reader of its own and imports `bases.edf.reader` and `bases.excel`. See `layout.md`.
+`physionet/sleep_edfx` is the worked example of the divided shape, `chengsenwang/tsqa` of the
+undivided one.
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
 `discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
@@ -111,7 +134,10 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
   its `span`. No span means whole-sample; `span=TimePoint.seconds(...)` a time offset;
   `span=TimeInterval.seconds(...)` a region.
 - `dataset.add_task(sample, <Task>(...))` registers one and returns it; `dataset.add_tasks(sample, [...])`
-  takes an iterable and registers the batch all-or-nothing. Set `scope` and `from_tasks` on the task
+  takes an iterable and registers the batch all-or-nothing. When a dataset holds far more tasks than
+  samples, neither fits: `dataset.set_task_stream(task_types, source)` streams them instead, and does
+  not validate them the way `add_task` does. `fidelity.md` says how the count decides which, and the
+  four rules a streamed task must obey. Set `scope` and `from_tasks` on the task
   itself, not the call; a batch may derive from its own members in any order.
 - Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
   `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
@@ -200,17 +226,38 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
-Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `ensure_archive` / `download_files` and returns refs; `convert` shares the 12-lead
-ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
-whole-sample `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
-`AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
-`fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
-pattern, including sharing a series across many samples.
+Subclasses `BasePhysioNetConnector[EcgQaCotSource]`, where `EcgQaCotSource` is a frozen handle over
+the release rather than one ref per row. `download` calls `ensure_archive` / `download_files` and
+returns that handle; `convert` walks it.
+
+**One sample is one recording, not one QA row.** The 12-lead ECG becomes a sample, and every
+question asked of that recording becomes a task on it. An earlier version made one sample per QA row
+and cached the shared leads to avoid duplicating them; that was replaced, because a sample per row
+duplicated the recording in the dataset's own model rather than only in memory.
+
+Read `connector.py` for the current shape. Where this file and the code disagree, the code wins.
 
 ## Fixture-based test pattern
 
-Tests live beside their connector, in `<org>/<name>/tests/`. Mirror the `chengsenwang/tsqa` one at
+Tests live beside their connector, in `<org>/<name>/tests/`, one module per module they cover.
+
+**The repo ships no dataset bytes, and no `fixtures/` directory exists.** A test builds what it
+needs, synthetically.
+
+For a single-module connector, mirror the `chengsenwang/tsqa` one at
 `packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
-check a tiny raw sample into `tests/fixtures/`, then call `convert()` on it directly and assert on
-samples, tasks, annotations, and parsed values. No network, no env-var toggles.
+hand-write rows shaped exactly like the source's, in the test module, with a comment saying they are
+not derived from the real dataset. Then call `convert()` on them directly and assert on samples,
+tasks, annotations, and parsed values. No network, no env-var toggles.
+
+For a file-shaped source, mirror `sleep_edfx`, which writes a synthetic release into `tmp_path` from
+a fixture factory. That is also what lets it test the cases a real release would not hand you: a
+recording with no scoring beside it, one with two, one missing a scored channel.
+
+For a divided connector, mirror `physionet/sleep_edfx`, which has `test_connector.py`,
+`test_metadata.py`, `test_tables.py` and `test_tasks.py`. The split pays off here: `test_tables.py`
+passes literal tuples and needs no fixture at all, because `tables.py` does no I/O. Decide in the
+plan which modules get that treatment.
+
+A synthetic binary fixture must still be a valid file of its format — an EDF the reader accepts is a
+well-formed header plus its records, written by the test, not bytes copied from a real recording.
