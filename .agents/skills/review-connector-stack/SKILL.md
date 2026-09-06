@@ -49,8 +49,9 @@ A connector review that never looks at the dataset cannot judge the mapping. Bef
 
 ## 3. Run the checks
 
-Work through `references/checks.md` in order. It is grouped: imports and dependencies, the I/O
-split, data faithfulness, ids, annotations and tasks, errors, tests, and the stack itself.
+Work through `references/checks.md` in order. Eleven groups: imports and dependencies, the I/O
+split, data faithfulness, ids, annotations and tasks, errors, naming and shape, tests, docs and
+prose, the stack itself, and the checks that must have been run.
 
 For each check, write down one of three verdicts and nothing else:
 

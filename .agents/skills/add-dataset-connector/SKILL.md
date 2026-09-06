@@ -400,10 +400,19 @@ window, and a stream that yields nothing on a second pass all surface *after* th
 responsible has finished. If a failure names none of your own modules, it is that stage: check what
 your loaders do when called, and what your task stream gives on a second call.
 
-**Phase 5 is done when** every predicted number has a measured number beside it in the plan, and
-each difference is explained. A prediction with no outcome written against it was never a test.
+**Phase 5 is done when** every predicted number has a measured number beside it in the plan, each
+difference is explained, and the review reports no blocking finding.
 
-**Tell the user:** which checks ran, and which predicted numbers matched.
+Then **invoke the `review-connector-stack` skill** on the working tree. It is the second half of this
+process: every one of its check groups reads an artifact one of these phases produced, and its own
+map pairs the two. Fix what it finds, on the branch that owns each finding.
+
+A finding is not always against the code. Where the review shows a rule is wrong rather than the
+connector, the fix is a PR to `AGENTS.md` or to these references, and this skill is what has to
+change.
+
+**Tell the user:** which checks ran, which predicted numbers matched, what the review found, and
+what is left.
 
 ## How the connector ships
 
