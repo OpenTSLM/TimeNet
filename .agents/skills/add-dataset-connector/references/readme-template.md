@@ -26,7 +26,7 @@ worked example.
 ```markdown
 # <Dataset name>
 
-<One paragraph: what the release holds and what one sample is.>
+<One paragraph: what the release holds and what one record is.>
 
 - **id**: `<org>/<name>`
 - **source**: <source_url>
@@ -41,7 +41,7 @@ The prose fixes things no file header states. These sentences decide the convers
 
 <What it decides, in one line.>
 
-## What one sample holds
+## What one record holds
 
 - **Series**: <count and kinds, with units and rates, and where each rate comes from>
 - **Annotations**: <kinds, and which series each is scoped to>

@@ -41,14 +41,14 @@ phase 3.
 
 ### The inventory
 
-| path | kind | count | belongs to a sample |
+| path | kind | count | belongs to a record |
 | --- | --- | --- | --- |
 | `<glob>` | signals | | yes |
 | `<glob>` | labels | | yes |
 | `<path>` | table | | joined, not owned |
 | `<path>` | index / checksums | | no |
 
-Every kind in this table is a node in the map below. Every file that belongs to no sample is named
+Every kind in this table is a node in the map below. Every file that belongs to no record is named
 here once, so nobody looks for it again.
 
 ### Heads
@@ -67,13 +67,13 @@ One per kind. Paste the output of `heads.py`, unedited.
 
 | | shape A | shape B |
 | --- | --- | --- |
-| samples | | |
-| channels | | |
+| records | | |
+| signals | | |
 | rates | | |
 | labels | | |
 | table row | | |
 
-- **Total samples**: <count>, counted by <how>.
+- **Total records**: <count>, counted by <how>.
 - **Anomalies**: what differs in only a few files, with the count.
 
 ### The map
@@ -84,18 +84,18 @@ flowchart LR
 
 A dashed arrow is a part that is not written yet.
 
-## 2. What one sample is
+## 2. What one record is
 
 Real values, not placeholders.
 
-- **sample_id**: `<prefix>-<source id>`, from <where the source states it>
+- **record_id**: `<prefix>-<source id>`, from <where the source states it>
 - **subject_ids**: `<value>`, qualified by <what>
 - **time_span**: <what fixes it>
 - **start_time**: set / unset, because <reason>
 
 ### Series
 
-| channel | spec | unit | rate | axis | source of the rate |
+| signal | spec | unit | rate | axis | source of the rate |
 | --- | --- | --- | --- | --- | --- |
 
 ### Annotations
@@ -108,14 +108,14 @@ Real values, not placeholders.
 - **type**: <Task class>, because the answer is <a category / free text / a number / regions>
 - **one question is**: <what a single task asks>
 - **expansion**: <run-length? exact? what the boundary rule is>
-- **count**: <tasks per sample> and <total> *(measured)*
+- **count**: <tasks per record> and <total> *(measured)*
 - **therefore**: `add_tasks` / `set_task_stream`, because <the count>
 
 ## 3. The connector
 
 ### Download shape
 
-A list per sample, or one handle walked at convert time. Say which and why.
+A list per record, or one handle walked at convert time. Say which and why.
 
 ### Modules
 
@@ -136,8 +136,8 @@ code is.
 
 | | expected |
 | --- | --- |
-| samples | |
-| series per sample | |
+| records | |
+| series per record | |
 | annotations | |
 | tasks | |
 | warnings, by kind and reason | |

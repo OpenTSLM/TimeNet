@@ -201,7 +201,7 @@ Beyond picking the right type from the table above, two habits hold:
 - **`RUF069` bans `==` between floats**, tests included. Use `pytest.approx`, or compare the integer
   microseconds the format actually stores.
 - **`TimeSeriesSpec` is a frozen dataclass**, so two identically-built specs are equal and dedupe.
-- **`Sample.start_time` refuses a bare `float` and a naive `datetime`** — seconds and microseconds
+- **`Record.start_time` refuses a bare `float` and a naive `datetime`** — seconds and microseconds
   are both plausible readings of a float. Pass a tz-aware `datetime`, or whole Unix microseconds as
   an `int`; the field is `datetime | int | None`.
 - **`timenet/__init__.py` exports nothing.** Import from the submodule: `from timenet.client import

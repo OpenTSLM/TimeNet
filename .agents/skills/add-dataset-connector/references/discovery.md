@@ -24,7 +24,7 @@ Three rules follow from it:
 
 - One head for each file **type**, never one per file.
 - A head is bounded by construction, not truncated after the read. `head_signals` on an 8 GB release
-  reads one record, not one recording.
+  reads one block of the container, not one whole file.
 - The census walks every file, but only its table enters the conversation. Run the walk in a
   subagent and take back the table alone.
 
@@ -56,17 +56,17 @@ only the part it prints.
 
 ### What each kind should print
 
-- **signals** — the header fields, then one data record: the channel names, their rates, their
+- **signals** — the header fields, then one block of data: the signal names, their rates, their
   units, and the first values of each.
 - **annotations** — the first rows as `onset, duration, label`, with the count of rows.
 - **tables** — the header row and the first data rows of the sheet.
 
 ### Why they ship with the connector
 
-- **Scaffolding.** You cannot design a TimeF sample before you have seen the raw shape. The
+- **Scaffolding.** You cannot design a TimeF record before you have seen the raw shape. The
   questions that decide the design are all questions about the source: how many series, at which
   rates, in which units; is a label one row per window or one row per run of equal windows; which
-  columns of the table identify the sample.
+  columns of the table identify the record.
 - **Review.** A reader who does not know the source sees the raw shape beside the connector that
   maps it, and can judge whether the mapping is right.
 - **A first check on a new release.** Run the heads against a new version of the dataset. A changed
@@ -74,7 +74,7 @@ only the part it prints.
 
 ## Census the release
 
-A census is a count, and its purpose is to find where two samples differ.
+A census is a count, and its purpose is to find where two records differ.
 
 **You cannot find the odd values by reading.** An anomaly worth knowing is almost always a fact
 about the *set*: one file in a hundred that differs, a value that varies per file where you assumed a
@@ -85,15 +85,15 @@ The signature of a shape is:
 
 - the series names, with their units and their rates,
 - the labels the annotations use,
-- the shape of the table row the sample joins to.
+- the shape of the table row the record joins to.
 
 Run the signature over every set of files and count the groups. Write the result as one column per
 group, one row per property that differs:
 
 | | shape A | shape B |
 | --- | --- | --- |
-| samples | | |
-| series per sample | | |
+| records | | |
+| series per record | | |
 | the rate of each | | |
 | names that differ for the same kind of thing | | |
 | the table row it joins to | | |
@@ -101,10 +101,10 @@ group, one row per property that differs:
 
 Then, beside it, the properties that vary *within* a group and are therefore not shape at all.
 
-- *Sleep-EDF:* the census gives two groups, `sleep-cassette` (153 recordings, 7 channels, 30 s
-  records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 channels, 10 s records)
-  *(measured)*. The same channel name `EMG submental` runs at 1 Hz in one and 100 Hz in the other;
-  the marker channel is named differently in each; the two sheets even encode sex in opposite
+- *Sleep-EDF:* the census gives two groups, `sleep-cassette` (153 recordings, 7 signals, 30 s
+  records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 signals, 10 s records)
+  *(measured)*. The same signal name `EMG submental` runs at 1 Hz in one and 100 Hz in the other;
+  the marker signal is named differently in each; the two sheets even encode sex in opposite
   directions, `F=1, M=2` against `M=1, F=2`. One group states 117 distinct physical ranges across
   its 153 files, the other one range for all 44.
 
@@ -117,13 +117,13 @@ Neither is a branch on which part of the release you are in.
 census gives one group per file the signature is too strict; if it gives one group for the whole
 release it is too loose, and you have not yet found the property that separates them.
 
-**Then count the samples**, whether or not the count is a `len()`. Prefer a count the release states
+**Then count the records**, whether or not the count is a `len()`. Prefer a count the release states
 about itself — an index file, a manifest, a row count — over one you derive, and say which you used.
-If you cannot count the samples before you convert, you do not yet know what a sample is.
+If you cannot count the records before you convert, you do not yet know what a record is.
 
-## Name the set of files that one sample needs
+## Name the set of files that one record needs
 
-A sample is not a file. It is a set of files, and usually a row of a table beside them. Name each
+A record is not a file. It is a set of files, and usually a row of a table beside them. Name each
 role the set needs — the values, the labels on those values, and the key into any table beside them —
 before deciding what to hand between the two halves of the connector.
 
@@ -137,12 +137,12 @@ Four rules hold while you name them:
   carries the identity. A connector keyed on file contents cannot then be written at all.
   - *Sleep-EDF:* the patient id field reads `X F X Female_33yr` in every file. Only the filename
     states which subject and which night.
-- **Do not guess a name you can match.** Where two files of one sample differ by something you
+- **Do not guess a name you can match.** Where two files of one record differ by something you
   cannot derive — an annotator's initial, a version suffix, a timestamp — match on the prefix they
   share and raise when the count of matches is not exactly one. Guessing gives a connector that
-  silently skips samples.
-- **Name the files that no sample needs.** Index files, checksums and per-release manifests belong
-  to no sample. Say so once, so the next reader does not look for them again.
+  silently skips records.
+- **Name the files that no record needs.** Index files, checksums and per-release manifests belong
+  to no record. Say so once, so the next reader does not look for them again.
 - **Resolve, and open nothing.** `download` fetches, extracts and checks that each file is there. It
   parses no header and reads no row.
 
@@ -150,28 +150,28 @@ Four rules hold while you name them:
 
 Two shapes are possible, and the plan must pick one:
 
-- **A list, one entry for each sample.** `download` gives a frozen dataclass of resolved paths per
-  sample, and `convert` pairs nothing. It reads well, and the length of the list is the count of
-  samples.
+- **A list, one entry for each record.** `download` gives a frozen dataclass of resolved paths per
+  record, and `convert` pairs nothing. It reads well, and the length of the list is the count of
+  records.
 - **One handle, walked at convert time.** `download` gives a single value that names the directories
   and the tables. `convert` walks it and yields one recording at a time. Nothing holds every
   recording at once.
 
 **The list shape does not scale and the handle shape does.** A list of 197 entries costs nothing, but
-a release of millions would build millions of dataclasses before the first sample is written. The
+a release of millions would build millions of dataclasses before the first record is written. The
 handle shape is the same code at both sizes. Pick per dataset, and never assume.
 
 How the release encodes its files decides what the handle carries:
 
-- **One file per role, one set per sample** — name each role.
-- **One file holding many samples** — a path and a key: the row range, the record name, the group
-  inside the HDF5. A path alone does not name a sample.
+- **One file per role, one set per record** — name each role.
+- **One file holding many records** — a path and a key: the row range, the record name, the group
+  inside the HDF5. A path alone does not name a record.
 - **A table beside the files** — carry the key and the table's path, never a parsed row. A parsed row
   would mean `download` read the table, and reading is `convert`'s half.
 
 ## Draw the map
 
-Four columns, always the same: what the release ships, what pairs it into samples, what opens each
+Four columns, always the same: what the release ships, what pairs it into records, what opens each
 container, and what each of its parts means. Then TimeF on the right. Node names are yours; the
 columns are not.
 
@@ -179,14 +179,14 @@ columns are not.
 flowchart LR
     subgraph src["what ships"]
         arch[("the archive")]
-        val[("the values<br/>one file per sample")]
+        val[("the values<br/>one file per record")]
         lab[("the labels<br/>onset, duration, label")]
         tbl[("the table<br/>one row per subject")]
     end
     subgraph pair["what pairs it: download"]
         ens["ensure_archive"]
         hnd["&lt;Dataset&gt;Source<br/>one handle"]
-        ref["&lt;Dataset&gt;Recording<br/>one sample's paths"]
+        ref["&lt;Dataset&gt;Recording<br/>one record's paths"]
     end
     subgraph read["what opens it: bases/"]
         opn["open the container<br/>header only"]
@@ -205,7 +205,7 @@ flowchart LR
         ts["TimeSeries"]
         ann["Annotation"]
         tsk["Task"]
-        smp["Sample"]
+        smp["Record"]
     end
     arch --> ens --> hnd --> ref
     val --> ref
@@ -235,13 +235,13 @@ thinner picture and the same four columns.
 Four rules make the map a check and not a picture:
 
 - **Every file type from the inventory is a node.** A file with no arrow reaching TimeF is a file you
-  have not yet placed. That is how the files no sample needs get named instead of forgotten.
+  have not yet placed. That is how the files no record needs get named instead of forgotten.
 - **A dashed arrow is a part that is not written.** Keep it in the picture: a missing edge is easier
   to see than missing code. Tasks usually start dashed, because series must exist before an
   annotation can name them.
 - **One arrow, one function.** An arrow that needs two sentences is two arrows.
-- **Nothing in the map changes per study.** One spec table holds every channel name of the release,
+- **Nothing in the map changes per study.** One spec table holds every signal name of the release,
   and every rate comes from a header, so the same arrows draw both shapes the census found.
 
-Read the map right to left when you design: start from the sample you want, and ask which file states
+Read the map right to left when you design: start from the record you want, and ask which file states
 each part of it. Read it left to right when you code.

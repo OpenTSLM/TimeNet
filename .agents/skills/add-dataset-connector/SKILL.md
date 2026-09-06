@@ -16,7 +16,7 @@ not skip a phase, and do not write connector code before the gate.
 ## The two documents
 
 - **`docs/notes/connectors/<org>/<name>/plan.md`** is the working document. It holds the heads, the
-  census, the map, the sample design and the open assumptions. It is scratch. It is untracked, and
+  census, the map, the record design and the open assumptions. It is scratch. It is untracked, and
   you never `git add` it.
 - **`packages/.../datasets/<org>/<name>/README.md`** ships with the connector. It holds the
   assumptions the user ruled on, and every inconsistency the release contains. It is the document
@@ -85,13 +85,13 @@ conversation. Run the walk in a subagent and take back the table alone.
 
 Produce, into the plan:
 
-- the file inventory, including the files that belong to no sample,
+- the file inventory, including the files that belong to no record,
 - one head per file type,
 - the census table,
-- the map: a mermaid diagram in four columns — what ships, what pairs it into samples, what reads
+- the map: a mermaid diagram in four columns — what ships, what pairs it into records, what reads
   the container, what each part means,
-- what one sample is, with real values from the heads,
-- the task type, the count of tasks per sample, and therefore whether tasks are added or streamed,
+- what one record is, with real values from the heads,
+- the task type, the count of tasks per record, and therefore whether tasks are added or streamed,
 - the module skeleton and the test plan,
 - the numbers the build should produce,
 - the assumptions and open questions.
@@ -100,7 +100,7 @@ Produce, into the plan:
 same. `references/fidelity.md` decides what the design may and may not do to the data;
 `references/layout.md` decides the module skeleton. Read both before you write the plan.
 
-**Tell the user:** what the release holds — the count of samples, the shapes the census found, and
+**Tell the user:** what the release holds — the count of records, the shapes the census found, and
 anything odd — and that the plan is ready to read.
 
 **Next:** phase 2, the gate. This one **stops**. Do not begin phase 3 until the user has ruled.
@@ -109,7 +109,7 @@ anything odd — and that the plan is ready to read.
 
 **STOP. Write no connector code.** Give the user the plan and wait for explicit approval of:
 
-- the map and what one sample is,
+- the map and what one record is,
 - the task type and how tasks are counted,
 - the module skeleton and the test plan,
 - **every open assumption**, one at a time, each with the evidence behind it.
@@ -145,7 +145,7 @@ still owed, and it should not be a surprise at review time.
 
 Read `references/connector-anatomy.md` for the contract, the base connectors and the task types.
 Follow the skeleton the plan states and the rules in `references/fidelity.md` and
-`references/layout.md`. Build in the order the format forces: series, then the sample, then
+`references/layout.md`. Build in the order the format forces: series, then the record, then
 annotations, then tasks.
 
 Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
@@ -179,7 +179,7 @@ Run in this order and stop at the first failure:
 1. `make check`, `make test`, `make test-connectors`.
 2. `uv run timenet-build build <id> --no-isolation --keep-cache --out ./out`
 3. Load it back: `TimeNet(registry="./out").load("<id>").describe()`.
-4. Compare the result against the numbers the plan predicted: samples, series per sample, tasks, and
+4. Compare the result against the numbers the plan predicted: records, series per record, tasks, and
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
 
