@@ -107,7 +107,7 @@ for example a path, a small dataclass, or an S3 key. The connector is generic th
 
 ## Sharing data
 
-To share time-series data across samples, attach the same `TimeSeries` instance to each sample. You
+To share time-series data across records, attach the same `TimeSeries` instance to each record. You
 can also attach two instances that have the same explicit `time_series_id`. The writer removes
 duplicates by `time_series_id`, so it stores the bytes only once. The writer also removes duplicate
 annotations, by `id`.
@@ -218,7 +218,7 @@ pull their database archive.
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
   a fully deterministic dataset, so it also serves as the round-trip fixture. It covers two modalities
-  over one shared data source, a series shared across samples, and a windowed sample. It also covers a
+  over one shared data source, a series shared across records, and a windowed record. It also covers a
   series sized to force a chunk split, and all three annotation shapes, with one shared. Beyond these,
   it covers a `ClassificationTask -> AnswerTask` chain, a scalar prediction, a temporal localization,
   and a scoped classification. Its dataset card, `dataset.yaml`, sits beside it in
@@ -228,7 +228,7 @@ pull their database archive.
   `requirements.txt` names `huggingface_hub`. It is the worked example of a connector that fits in
   one module.
 - `physionet/ecg-qa-cot` pairs PTB-XL 12-lead ECGs with chain-of-thought question answering. One
-  sample is one recording, and its many questions stream as `AnswerTask`s rather than being held in
+  record is one recording, and its many questions stream as `AnswerTask`s rather than being held in
   memory.
 - `physionet/sleep-edfx` is whole-night polysomnography with expert sleep scoring. It is the worked
   example of the divided shape: `connector.py` orchestrates, and `tables.py`, `metadata.py`,
@@ -263,7 +263,7 @@ one.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
-spec, and a sample preview.
+spec, and a record preview.
 
 ---
 
