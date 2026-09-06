@@ -405,7 +405,7 @@ difference is explained, and the review reports no blocking finding.
 
 Then **invoke the `review-connector-stack` skill** on the working tree. It is the second half of this
 process: every one of its check groups reads an artifact one of these phases produced, and its own
-map pairs the two. Fix what it finds, on the branch that owns each finding.
+§3 maps the two. Fix what it finds, on the branch that owns each finding.
 
 A finding is not always against the code. Where the review shows a rule is wrong rather than the
 connector, the fix is a PR to `AGENTS.md` or to these references, and this skill is what has to
@@ -413,6 +413,15 @@ change.
 
 **Tell the user:** which checks ran, which predicted numbers matched, what the review found, and
 what is left.
+
+**Next**, whichever fits:
+
+| state | what to run |
+| --- | --- |
+| the review found blocking items | fix them, then `/review-connector-stack` again |
+| the connector is clean and uncommitted | commit it as a stack, then `/review-connector-stack` on the PRs |
+| entries in the README are still **Open** | nothing to run — they are decisions for the user |
+| everything is clean | say the connector is ready, and that merging is the user's call |
 
 ## How the connector ships
 
