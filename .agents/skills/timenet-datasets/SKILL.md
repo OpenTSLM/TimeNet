@@ -12,6 +12,15 @@ is a thin mirror of the SDK, so anything below works the same either way.
 Producing datasets (writing connectors, running `timenet-build`) is a separate concern. For that, use
 the `add-dataset-connector` skill.
 
+## Contents
+
+- [Dataset ids and versions](#dataset-ids-and-versions)
+- [CLI](#cli)
+- [Python API](#python-api)
+- [End-to-end recipe](#end-to-end-recipe)
+- [Configuration](#configuration)
+- [Further reading](#further-reading)
+
 ## Dataset ids and versions
 
 - A dataset id is `org/name` (HuggingFace-style, exactly one slash), for example `chengsenwang/tsqa`.
