@@ -163,8 +163,8 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   `name_<thing>`, the parser `_parse_<thing>`.** A module's single public builder is `build`; one of
   several is `build_<thing>`.
 - **One module-level `_ID_PREFIX`**, and every id the connector writes is built on it.
-- **`__init__.py` re-exports with explicit self-aliases** (`CONNECTOR as CONNECTOR`), so the names
-  survive `--no-implicit-reexport`.
+- **`__init__.py` re-exports with explicit self-aliases** (`CONNECTOR as CONNECTOR`), so a
+  re-exported name is unambiguously public to a type checker rather than an incidental import.
 - **An archive is located with `find_dir_containing`**, not by guessing the extracted layout, and
   fetched with `ensure_archive`.
 - **A module belongs in `bases/` when a second connector could import it unchanged.** Lift on the
