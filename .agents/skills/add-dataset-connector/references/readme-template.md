@@ -8,6 +8,11 @@ Both are needed.
 
 Rules:
 
+- **These seven sections, in this order, and no others.** A reader must be able to find a fact
+  without reading the whole file, and a section nobody expects is a section nobody finds. A new kind
+  of fact goes in the section that already covers it, or the standard changes for every connector.
+- **Each section has a shape, given below, and not just a heading.** A fixed heading over freeform
+  prose is not a standard.
 - **Every section below is required, even when it is empty.** Write `None.` under a heading that
   does not apply. A section saying "None" is evidence somebody looked; a missing section is
   ambiguous, and a reader cannot tell the difference between a clean release and an unasked
@@ -21,6 +26,25 @@ Rules:
 - **Quote the description sentences the design relies on**, beside `source_url`, so the next reader
   can check them rather than trust them.
 - Use the `simple-english` skill on the prose. Do not run it over quoted evidence.
+
+## What each section holds
+
+| section | shape | says `None.` when |
+| --- | --- | --- |
+| The source of truth | a table: fact, source of truth, the other reading — plus one line naming *why* that source wins | nothing in the release disagrees with itself |
+| What the description states | the quoted sentences, each with where it came from, each followed by one line saying what it decides | the design leans on no prose (rare — say so deliberately) |
+| What one record holds | signals with units and rates, annotations with what each is scoped to, and where each came from | never; a connector that builds no records builds nothing |
+| The tasks this connector builds | a table: the question, its type, its count, its scope | the connector builds no tasks |
+| Inconsistencies and decisions | one entry each, with **Evidence**, **Decision**, **State** in that order; state is `Handled`, `Not built`, or `Open` | the release ships none you found |
+| Warnings this build emits | a table: warning, count *(measured)*, why | a build emits none |
+| What is not built | prose naming the parts of the release the connector does not convert, and why | everything is converted |
+
+Two rules hold inside every section:
+
+- **A number you counted yourself is marked `*(measured)*`.** One copied from the dataset's page is
+  not. A reader has to be able to tell which claims they can re-measure.
+- **A decision states its reason.** "The table wins" is not a decision; "the table wins, because
+  published work joins against it" is.
 
 `packages/timenet-connectors/src/timenet_connectors/datasets/physionet/sleep_edfx/README.md` is the
 worked example.
