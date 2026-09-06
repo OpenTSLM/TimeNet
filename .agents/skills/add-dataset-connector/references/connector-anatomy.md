@@ -31,8 +31,9 @@ before designing against it.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
-  Most connectors never override it.
+- There is **no `store` hook**. The engine stores the result itself: `engine.store_dataset` derives
+  the schema if missing and streams the dataset through `TimeFWriter`. A connector cannot override
+  it, and does not need to.
 
 `list[TRaw]` does not mean one entry per record. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one record at a time.
@@ -67,7 +68,8 @@ ships no reader of its own and imports `bases.edf.reader` and `bases.excel`. See
 undivided one.
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
-`discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
+`discovery._module_name` maps the id to the module path, lowercasing and turning hyphens into
+underscores in **both** segments, so
 `chengsenwang/tsqa -> ...datasets.chengsenwang.tsqa` and `physionet/ecg-qa-cot -> ...datasets.physionet.ecg_qa_cot`.
 The org folder needs its own `__init__.py` (a namespace package that exposes no `CONNECTOR`).
 
@@ -165,7 +167,9 @@ type only says what *kind* of answer it is.
 | `TSCorrespondenceTask` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
 
 The three series-output tasks set `answer_is_record` and locate their answer by record id instead of
-filling `target`. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
+filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the record the
+task is attached to, exclusive with `target_record_id`. Use it when the future to predict lies in the
+same record rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
 points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
 the bounds of every `Span` the task carries.
 

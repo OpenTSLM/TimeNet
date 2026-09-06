@@ -105,8 +105,8 @@ must fail loudly, not convert to a record that is quietly missing a signal.
 
 **Warn on an inconsistency the source ships. Raise only when an artifact is unreadable.** An
 inconsistency is a fact about the study; a corrupt file is not. Neither is repaired in silence. The
-header and the table disagree about age or sex for 24 recordings: warn, keep both readings, and
-convert. Refusing the release over it would be the larger error.
+Where a header and a table disagree for a handful of records, warn, keep both readings, and
+convert. Refusing the whole release over it would be the larger error.
 
 **Do not warn twice.** TimeF warns for itself where it can. Before you add a warning, find out whether the
 format already gives one. `add_annotation` emits `SpanOutsideWindowWarning` for every span that

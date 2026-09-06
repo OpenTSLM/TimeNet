@@ -161,9 +161,9 @@ Four rules hold here:
   factory.
 - **Each signal keeps its own time axis.** A `RegularAxis` whose period comes from
   `samples_per_record / record_duration` for that signal.
-- **Read the rate and the block duration from the header, never from a constant.** The same signal
-  name runs at 1 Hz in one study and 100 Hz in the other, and one file writes 60 s records where 152
-  write 30 s.
+- **Read the rate and the block duration from the header, never from a constant.** One signal name
+  can run at different rates in two parts of a release, and one file can write a different block
+  duration from all the others.
 - **An unknown signal name raises `TimeFFormatError`.**
 
 Every attribute of a series comes from a named field of the header. Nothing is guessed, and nothing

@@ -1,6 +1,6 @@
 ---
 name: add-dataset-connector
-description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then smoke test and review it.
+description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then prove the build against what the plan predicted.
 ---
 
 # Adding a dataset connector
@@ -75,9 +75,9 @@ the head function is the deliverable. It ships with the connector, so it also ru
 release of the dataset and shows a changed shape at once.
 
 **Then census the whole release with a script.** A head shows the shape of one file. It cannot show
-you what is odd, because odd is a fact about the set: one file of 152 writing a different record
-length, 117 distinct physical ranges, 24 rows whose table disagrees with their header. You find
-those by counting, never by reading.
+you what is odd, because odd is a fact about the set: one file in a hundred writing a different
+block length, a scaling factor that varies per file where you assumed a constant, a handful of table
+rows disagreeing with their headers. You find those by counting, never by reading.
 
 **Hold this budget:** the context cost of phase 1 does not grow with the size of the release. One
 head per file *type*, not per file. The census walks every file but only its table enters the
@@ -172,7 +172,7 @@ marker file there named `.<first 8 hex characters of sha256(url)>-<archive name>
 extracted release in that directory, create that marker, and the build reads it. `find_dir_containing`
 searches with `rglob`, so the tree can sit at any depth.
 
-## Phase 5 — smoke test, then review
+## Phase 5 — prove the build
 
 Run in this order and stop at the first failure:
 
@@ -183,7 +183,7 @@ Run in this order and stop at the first failure:
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
 
-**Tell the user:** which checks ran, which numbers matched, and what the review found.
+**Tell the user:** which checks ran, and which predicted numbers matched.
 
 ## Rules that hold in every phase
 

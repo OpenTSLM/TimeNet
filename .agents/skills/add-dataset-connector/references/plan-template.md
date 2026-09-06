@@ -121,8 +121,12 @@ A list per record, or one handle walked at convert time. Say which and why.
 
 | module | responsibility | touches disk | test needs a fixture |
 | --- | --- | --- | --- |
-| `reader.py` | opens files, decodes nothing | yes | yes, a truncated real file |
 | `tables.py` | rows to facts | no | no, literal tuples |
+| `metadata.py` | facts to annotations | no | no, literal values |
+| `specs.py` | the signal-name to spec map | no | no |
+
+The half that **opens** a file is a base, not a module here — see `layout.md`. A test that needs a
+file writes a synthetic one into `tmp_path`; no real bytes are checked in.
 
 ### Dependencies
 
