@@ -11,6 +11,9 @@ Instructions for contributors and coding agents working in this repository.
 ## Documentation Contract
 - `README.md` is human-facing: installation, setup, and a tour of the make targets.
 - `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and repo conventions.
+- A connector's `README.md` is dataset-facing: what the release states, the assumptions the
+  conversion rests on, and every inconsistency it ships. It travels with the connector because it
+  answers questions about that dataset, not about TimeNet.
 - Keep agent operating instructions here. Don't move them into the README.
 
 ## Documentation
@@ -198,8 +201,9 @@ Beyond picking the right type from the table above, two habits hold:
 - **`RUF069` bans `==` between floats**, tests included. Use `pytest.approx`, or compare the integer
   microseconds the format actually stores.
 - **`TimeSeriesSpec` is a frozen dataclass**, so two identically-built specs are equal and dedupe.
-- **`Sample.start_time` refuses a bare `float`** — seconds and microseconds are both plausible
-  readings of one. Pass a tz-aware `datetime`.
+- **`Sample.start_time` refuses a bare `float` and a naive `datetime`** — seconds and microseconds
+  are both plausible readings of a float. Pass a tz-aware `datetime`, or whole Unix microseconds as
+  an `int`; the field is `datetime | int | None`.
 - **`timenet/__init__.py` exports nothing.** Import from the submodule: `from timenet.client import
   TimeNet`.
 - **`uv` is version-pinned** by `required-version` in the root `pyproject.toml`. A too-old `uv`

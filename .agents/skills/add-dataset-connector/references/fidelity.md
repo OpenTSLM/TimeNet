@@ -144,7 +144,8 @@ studies in any subject-grouped split.
 **Set `start_time` only when the source states a real instant.** Sleep-EDF states a local wall clock
 with no timezone, so it stays unset and the clock time becomes an annotation. Inventing a timezone
 would be inventing data. `Sample.start_time` refuses a bare `float`, because seconds and microseconds
-are both plausible readings of one.
+are both plausible readings of one, and refuses a naive `datetime`. It takes a tz-aware `datetime`
+or whole Unix microseconds.
 
 ## Windows, and the order that follows from them
 
