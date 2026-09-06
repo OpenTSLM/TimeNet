@@ -35,7 +35,7 @@ Rules:
 | What the description states | the quoted sentences, each with where it came from, each followed by one line saying what it decides | the design leans on no prose (rare — say so deliberately) |
 | What one record holds | signals with units and rates, annotations with what each is scoped to, and where each came from | never; a connector that builds no records builds nothing |
 | The tasks this connector builds | a table: the question, its type, its count, its scope | the connector builds no tasks |
-| Inconsistencies and decisions | one entry each, with **Evidence**, **Decision**, **State** in that order; state is `Handled`, `Not built`, or `Open` | the release ships none you found |
+| Inconsistencies and decisions | one `###` entry each, its state in the heading — `— **Handled**`, `**Not built**` or `**Open**` — then **Problem.**, **Decision.**, **Consequence.** in that order | the release ships none you found |
 | Warnings this build emits | a table: warning, count *(measured)*, why | a build emits none |
 | What is not built | prose naming the parts of the release the connector does not convert, and why | everything is converted |
 
@@ -93,17 +93,21 @@ when the connector builds no tasks.
 
 ## Inconsistencies and decisions
 
-### <Short title>
+### <Short title> — **Handled**
 
-- **Evidence**: <what the source states, with the count if you measured it *(measured)*>
-- **Decision**: <what the connector does>
-- **State**: Handled
+**Problem.** <What the release states, with the count if you measured it *(measured)*.>
 
-### <Short title>
+**Decision.** <What the connector does, and the reason it does that.>
 
-- **Evidence**: <...>
-- **Decision**: <what would have to be decided>
-- **State**: Open
+**Consequence.** <What somebody reading the data sees because of this.>
+
+### <Short title> — **Open**
+
+**Problem.** <...>
+
+**Decision.** <What would have to be decided, and by whom.>
+
+**Consequence.** <What a reader should not assume until it is.>
 
 ## Warnings this build emits
 
