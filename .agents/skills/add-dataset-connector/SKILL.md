@@ -47,6 +47,20 @@ being agreed, and the code follows from it.
 The assumptions live in the plan until the gate, then move to the README. After that the README is
 the only copy. Do not keep both.
 
+## The checklist
+
+Copy this into your first reply and tick items off as you go, so nothing is skipped and the user can
+see where you are.
+
+```markdown
+- [ ] 0. Plan created, card confirmed by the user, description quotes captured
+- [ ] 1. A head() per file type, census over every file, map, model, predicted numbers
+- [ ] 2. GATE — every part of the model and every assumption ruled on by the user
+- [ ] 3. Rulings written into the connector's README
+- [ ] 4. Built against the approved skeleton, tests written
+- [ ] 5. Build proved against the predicted numbers, review run, findings fixed
+```
+
 ## Where to start
 
 Look for `docs/notes/connectors/<org>/<name>/plan.md`.
@@ -130,6 +144,11 @@ same. `references/fidelity.md` decides what the design may and may not do to the
 **Tell the user:** what the release holds — the count of records, the shapes the census found, and
 anything odd — and that the plan is ready to read.
 
+**Phase 1 is done when** every file in the inventory is either a node in the map or named as
+belonging to no record, the census covers every file rather than a sample of them, and the plan
+states a number for records, tasks per record, and expected warnings. A count you cannot state is
+phase 1 unfinished.
+
 **Write it down:** sections 1 to 5 of the plan, and set the ledger row to `done`.
 
 **Next:** phase 2, the gate. This one **stops**. Do not begin phase 3 until the user has ruled.
@@ -157,6 +176,9 @@ cannot check a claim against evidence you produced, that claim is not ready to b
 
 If the user changes the model, revise the plan and walk it again. Only continue on an explicit yes.
 
+**Phase 2 is done when** the user has ruled on every open assumption individually — not approved
+the plan as a whole — and no line of the model is left that the user has not seen the evidence for.
+
 **Write it down:** each ruling against the assumption it settles, and the ledger row as
 `approved <date>`.
 
@@ -180,6 +202,9 @@ Then delete the assumptions from the plan. The README owns them now.
 **Tell the user:** the README path, and how many entries are **Open** — an open entry is a decision
 still owed, and it should not be a surprise at review time.
 
+**Phase 3 is done when** every assumption and every inconsistency has a README entry with a state,
+and the plan's assumptions section is empty because the README owns them now.
+
 **Write it down:** the README path in the plan's ledger row, and the row as `done`.
 
 **Next:** phase 4, the build.
@@ -193,6 +218,9 @@ annotations, then tasks.
 
 Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
 the whole point of keeping them pure.
+
+**Phase 4 is done when** every module the plan named exists, every test the plan named is written
+and passing, and `make check`, `make test` and `make test-connectors` are green.
 
 **Write it down:** any place the built skeleton differs from the planned one, and why. The ledger
 row goes to `done`.
@@ -238,6 +266,9 @@ loader that raises when called, a task naming a record that does not exist, a sp
 window, and a stream that yields nothing on a second pass all surface *after* the step that looks
 responsible has finished. If a failure names none of your own modules, it is that stage: check what
 your loaders do when called, and what your task stream gives on a second call.
+
+**Phase 5 is done when** every predicted number has a measured number beside it in the plan, and
+each difference is explained. A prediction with no outcome written against it was never a test.
 
 **Tell the user:** which checks ran, and which predicted numbers matched.
 

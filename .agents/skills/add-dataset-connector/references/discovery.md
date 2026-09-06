@@ -14,6 +14,15 @@ This phase answers those three questions, and each has its own tool:
 | What is odd about this release? | a census | one walk, one table |
 | How do the files reach TimeF? | the map | no reads at all |
 
+## Contents
+
+- [The budget](#the-budget)
+- [Give every raw file type a `head()`](#give-every-raw-file-type-a-head)
+- [Census the release](#census-the-release)
+- [Name the set of files that one record needs](#name-the-set-of-files-that-one-record-needs)
+- [Choose the download shape](#choose-the-download-shape)
+- [Draw the map](#draw-the-map)
+
 ## The budget
 
 **The context cost of phase 1 does not grow with the size of the release.** A release of 200

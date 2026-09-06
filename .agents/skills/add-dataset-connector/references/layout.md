@@ -9,6 +9,26 @@ that shows a convention is real and followed — a reviewer checks those. An **i
 *Sleep-EDF:* shows one shape a rule can take, and never narrows it. Where a template uses
 `<placeholders>`, they are yours to fill.
 
+## Contents
+
+- [The one rule that places every module](#the-one-rule-that-places-every-module)
+- [The folder](#the-folder)
+- [What each module may do](#what-each-module-may-do)
+- [Two rules that follow](#two-rules-that-follow)
+- [`convert` holds the loop](#convert-holds-the-loop)
+- [The lazy loader is I/O too, and it runs after `convert` has returned](#the-lazy-loader-is-io-too-and-it-runs-after-convert-has-returned)
+- [Building the series](#building-the-series)
+- [The census decides values, not modules](#the-census-decides-values-not-modules)
+- [Dependencies](#dependencies)
+- [Tests](#tests)
+- [Names a connector reuses](#names-a-connector-reuses)
+- [The keys a connector writes](#the-keys-a-connector-writes)
+- [Dedupe a closed set through one holder, not through an id literal](#dedupe-a-closed-set-through-one-holder-not-through-an-id-literal)
+- [A `Protocol` keeps the import one way](#a-protocol-keeps-the-import-one-way)
+- [Comments explain the release, not the code](#comments-explain-the-release-not-the-code)
+- [Not a rule: docstring voice](#not-a-rule-docstring-voice)
+- [Still unsettled](#still-unsettled)
+
 ## The one rule that places every module
 
 **The module that reads a file must not be the module that says what its contents mean.** Each module

@@ -14,6 +14,18 @@ This file is the API surface. Its siblings hold the rules: `fidelity.md` for wha
 to its source, `layout.md` for how its modules divide, `discovery.md` for how to read a release
 before designing against it.
 
+## Contents
+
+- [The `BaseConnector` contract](#the-baseconnector-contract)
+- [Discovery and the folder layout](#discovery-and-the-folder-layout)
+- [The dataset card (`dataset.yaml`)](#the-dataset-card-datasetyaml)
+- [Base connectors to reuse](#base-connectors-to-reuse)
+- [Building the dataset in `convert`](#building-the-dataset-in-convert)
+- [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
+- [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
+- [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
+- [Fixture-based test pattern](#fixture-based-test-pattern)
+
 ## The `BaseConnector` contract
 
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to

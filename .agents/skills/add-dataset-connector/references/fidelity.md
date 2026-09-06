@@ -13,6 +13,16 @@ rule will not. When a rule and an example seem to disagree, the rule wins.
 states, in the shape it states it. Cleaning, balancing and filtering are decisions for whoever uses
 the dataset. A connector must not make them on their behalf.
 
+## Contents
+
+- [The data](#the-data)
+- [Read the description, not just the headers](#read-the-description-not-just-the-headers)
+- [Errors and warnings](#errors-and-warnings)
+- [Write every inconsistency down](#write-every-inconsistency-down)
+- [Ids](#ids)
+- [Windows, and the order that follows from them](#windows-and-the-order-that-follows-from-them)
+- [Tasks](#tasks)
+
 ## The data
 
 **Drop nothing the source states.** A record that serves no task is still evidence. A label outside
