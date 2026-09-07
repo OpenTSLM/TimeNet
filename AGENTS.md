@@ -193,6 +193,10 @@ Beyond picking the right type from the table above, two habits hold:
   ignore `S101`, so the assert is free.
 - `Task` has no `target_schema`; only `ClassificationTask` does. Narrow by `isinstance` before
   touching a subclass field.
+- **`pyarrow.compute` does not type-check.** `ty` rejects every `pc.*` call — "Module
+  `pyarrow.compute` has no member `list_value_length`" — because those functions are generated at
+  import time. Use the real methods instead: `ListArray.value_lengths()` and `.flatten()`. Use
+  `numpy` for the rest, such as `np.isfinite` in place of `pc.is_finite`.
 
 ### Things that surprise you once
 

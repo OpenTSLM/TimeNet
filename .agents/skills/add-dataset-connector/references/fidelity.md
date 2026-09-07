@@ -63,6 +63,12 @@ apply a fixed one — a per-file range is part of the data, not a detail to aver
 - *Sleep-EDF:* the same stored count of 220 is 20.6769 uV in one recording and 22.9538 uV in
   another.
 
+**Fidelity is to the release you convert, not to the study upstream of it.** A derived release —
+windows cut out of somebody else's recordings, values another group already z-scored — is converted
+as the derived thing it is. Those numbers are what *this* source states, so they ship unchanged even
+though they are not physical units. The README says what the numbers are and what they were derived
+from. Rescaling them back toward the original instrument would invent data twice over.
+
 **Add a derived fact, never replace a stated one. Where two sources disagree, keep both.** Say in the
 README which one the connector treats as authoritative and why, and carry the other as a note.
 
@@ -70,8 +76,30 @@ README which one the connector treats as authoritative and why, and carry the ot
   recordings *(measured)*. The table wins, because published work joins against it, and the record
   carries both readings.
 
-**Order and identity come from the source.** Signal order from the header, record id from the
-source's own id, so two builds give the same ids. Never a counter.
+**A stated value is used even when it looks wrong.** The rule above covers two parts of the source
+disagreeing with each other. This one covers the converter disagreeing with the source, and it is the
+harder case, because the arithmetic feels like proof. Write the doubt into the README with the
+arithmetic that raised it. Never apply it to the data. If the value is wrong, the release is wrong,
+and the README is where a reader finds that out.
+
+- *Any release:* a card states 700 Hz for a 3000-sample window, which is 4.29 s, where 100 Hz would
+  give exactly 30 s. Build the axis at the stated 700 Hz, and give the README an entry holding both
+  numbers.
+
+**Order and identity come from the source, where the source states one.** Signal order comes from the
+header. A record id comes from the source's own id, under one prefix, so two builds of one release
+give the same ids.
+
+**Where the source states no id at all, use a position that is stable under a re-read.** The rule's
+content is reproducibility, and a position gives that as long as the release does not change. Build
+it from what the release itself is divided into — the shard and the row inside it — never from a
+counter that runs across files, because a counter changes when a file is added, renamed or read in a
+different order. Then say in the README that the id is positional and that a re-release invalidates
+it.
+
+- `chengsenwang/tsqa` is the worked example of the fallback: its corpus states no id, so
+  `connector.py:53` builds `record_id=f"row-{index}"` and `:49` the matching
+  `time_series_id=f"row-{index}-c{signal}"`.
 
 **Where TimeF forces a change, make the smallest one, and say so.** These rules bend for a format
 invariant and for nothing else.
@@ -162,7 +190,9 @@ has to keep true.
 **Pass `record_id`, and build it from one `_ID_PREFIX`.** A record id is load-bearing twice over: a
 dataset keys its records by it to validate a streamed task, and a reader refers to a record by it
 across builds. A generated one would give two builds of one archive two sets of ids that cannot be
-compared. The source's own id is the id, under one prefix — never a counter.
+compared. The source's own id is the id, under one prefix. Where the source states none, use a
+position that is stable under a re-read — see **The data** above — and never a counter that runs
+across files.
 
 **Pass `time_series_id`, built on the record id.** An annotation's `time_series_ids` resolves against
 it, so it has to be stable and predictable.
@@ -269,6 +299,14 @@ second task type is needed.
 - `set_task_stream(task_types, source)` streams them and does **not** validate them the way
   `add_task` does. A dataset with far more tasks than records cannot hold every task in memory.
 
+**Stream unless you have a reason not to.** `add_task` rebuilds the set of every registered task id
+on each call (`dataset/dataset.py:354`), so adding tasks one at a time is quadratic in the count. One
+build of 92 415 tasks ran past twenty minutes and was killed; the same build through
+`set_task_stream` took **5.6 seconds** *(measured)*. `add_tasks` is not the escape, because it
+attaches one batch to one set of records, so a connector with one task per record still makes one
+call per record. Reach for `add_task` only where the tasks are few and you want the cross-task
+validation it gives.
+
 **The plan states the count, so this is decided before any code is written.** Where tasks outnumber
 records by orders of magnitude, they must stream — Sleep-EDF runs to about 2450 tasks per record
 *(measured)*. Four rules hold for a streamed task:
@@ -278,8 +316,10 @@ records by orders of magnitude, they must stream — Sleep-EDF runs to about 245
 - It does not populate `Record.task_ids`, so nothing resolves its id and it must not state one.
 - `source` must give a **fresh iterator on every call**. It is read after `convert` returns, and
   more than once, so a one-shot generator yields nothing the second time and writes no tasks.
-- **The stream reads no file.** It expands annotations the records already carry. A second read of
-  the source can disagree with what was written.
+- **The stream holds nothing, and what it reads it can read again.** It may re-open a file — a
+  release with more tasks than fit in memory leaves no other way, and
+  `physionet/ecg_qa_cot/connector.py:297` streams straight out of its CSVs. What it must not do is
+  keep the tasks alive between calls, or read something that can answer differently the second time.
 
 Two more hold for every task, streamed or not:
 

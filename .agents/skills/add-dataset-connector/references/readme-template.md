@@ -25,6 +25,8 @@ Rules:
   it from one copied off the dataset's page. A number nobody can re-measure is a claim, not evidence.
 - **Quote the description sentences the design relies on**, beside `source_url`, so the next reader
   can check them rather than trust them.
+- **Say where the record ids come from.** Where the source states no id and the connector built one
+  from a position, the README says so, and says that a re-release invalidates every id.
 - Use the `simple-english` skill on the prose. Do not run it over quoted evidence.
 
 ## Contents
@@ -94,6 +96,8 @@ The prose fixes things no file header states. These sentences decide the convers
 - **Series**: <count and kinds, with units and rates, and where each rate comes from>
 - **Annotations**: <kinds, and which series each is scoped to>
 - **Tasks**: <type, what one question asks, and how many there are>
+- **Record ids**: <where they come from. Say if they are positional, and that a re-release changes
+  them.>
 
 ## The tasks this connector builds
 

@@ -18,6 +18,7 @@ This phase answers those three questions, and each has its own tool:
 
 - [The budget](#the-budget)
 - [Give every raw file type a `head()`](#give-every-raw-file-type-a-head)
+- [How to open each kind of file](#how-to-open-each-kind-of-file)
 - [Census the release](#census-the-release)
 - [Name the set of files that one record needs](#name-the-set-of-files-that-one-record-needs)
 - [Choose the download shape](#choose-the-download-shape)
@@ -33,10 +34,23 @@ what keeps this phase possible on a dataset you cannot download twice.
 Three rules follow from it:
 
 - One head for each file **type**, never one per file.
-- A head is bounded by construction, not truncated after the read. `head_signals` on an 8 GB release
-  reads one block of the container, not one whole file.
+- A head is bounded by construction, not truncated after the read. A head of an 8 GB release reads
+  one block of the container, not one whole file.
 - The census walks every file, but only its table enters the conversation. Run the walk in a
   subagent and take back the table alone.
+
+**A block is the smallest unit the container lets you decode, and it is not the same size in every
+format.** Read the size before you promise a bound:
+
+| format | one block | how large |
+| --- | --- | --- |
+| EDF | one data record | the header states the duration and the values per record |
+| WFDB | the header alone, or the first samples of one lead | a header is a few hundred bytes |
+| parquet | one row group | as large as the writer chose; row group 0 of one 4.3 GB release is 58 MB *(measured)* |
+| xls / xlsx | the whole sheet, then the first rows | the reader gives every row, so the head slices |
+
+A parquet row group is the case that surprises people. It is bounded, and it is not small. Say in
+the plan which unit the head read, so a reader knows what the bound was.
 
 ## Give every raw file type a `head()`
 
@@ -50,10 +64,10 @@ has its own shape, and few of them open in an editor.
 A `head()` opens one file, reads a small part of it, and gives that part back as text a person can
 read. It writes nothing and it changes nothing.
 
-**No connector ships a `heads.py` yet.** This is a new convention, introduced with this skill, so
-there is nothing in the tree to copy — you are writing the first one. Put it in `heads.py` beside
-the connector, one function per kind, named for the kind and not for the file extension. These
-signatures are the shape to follow, not existing code:
+**Write one function per kind of file, named for the kind and not for the file extension.** The kinds
+are the ones your release ships. Do not force a release into a standard set of names: a columnar
+release has no signals file and no label file, and its kinds are `head_shard`, `head_declared_schema`
+and `head_windows`. These signatures show the shape to follow, and the names are one release's kinds:
 
 ```python
 def head_signals(path: Path, blocks: int = 1) -> str: ...
@@ -64,23 +78,87 @@ def head_subjects(path: Path, rows: int = 5) -> str: ...
 Each gives a string, so a caller can print it, write it to a file, or put it in a test. Each reads
 only the part it prints.
 
+### Where a head lives
+
+**A head does not ship with the connector.** Write it at
+`docs/notes/connectors/<org>/<name>/heads.py`, beside `plan.md` and the census — the place a reader
+already goes to see how the raw release was read. A head is a tool a person runs during discovery.
+It answers a question phase 1 asks one time. Put it in the connector package and it becomes a file
+that no module imports, that no test covers, and that no gate keeps true against a changed release.
+
+**Give the file a `__main__`, so the user can run it themselves.** The user wants to open the data,
+and a command they run beats output somebody else pasted:
+
+```python
+if __name__ == "__main__":
+    import sys
+
+    print(head_signals(Path(sys.argv[1])))
+```
+
+```bash
+uv run python docs/notes/connectors/<org>/<name>/heads.py <path to one file>
+```
+
+Record that command in the plan beside the output it produced, so every block of evidence is one the
+user can run again.
+
 ### What each kind should print
 
 - **signals** — the header fields, then one block of data: the signal names, their rates, their
   units, and the first values of each.
 - **annotations** — the first rows as `onset, duration, label`, with the count of rows.
 - **tables** — the header row and the first data rows of the sheet.
+- **a cell that holds an array** — the dtype, the shape, and the first few values. Never the array.
+  One parquet cell can hold 4000 floats, so five rows printed as text are 20 000 numbers.
+- **a sidecar that describes the release** — a `dataset_info.json`, a manifest, a data dictionary.
+  Print its keys and every claim it makes about the data. Those claims are what the other heads then
+  check.
 
-### Why they ship with the connector
+**Print the dtype of every column, and put it in the plan beside the dtype the spec will declare.**
+`TimeSeriesSpec.dtype` defaults to `float32`. A source that stores `double` fails when the writer
+first calls a loader, which is long after `convert` returned, and a test written over synthetic data
+of the wrong dtype passes.
 
-- **Scaffolding.** You cannot design a TimeF record before you have seen the raw shape. The
-  questions that decide the design are all questions about the source: how many series, at which
-  rates, in which units; is a label one row per window or one row per run of equal windows; which
-  columns of the table identify the record.
-- **Review.** A reader who does not know the source sees the raw shape beside the connector that
-  maps it, and can judge whether the mapping is right.
-- **A first check on a new release.** Run the heads against a new version of the dataset. A changed
-  shape shows at once.
+**A head prints an absent column as absent. It never raises on one.** The absence is the finding:
+"this file lacks a column the others have" is exactly what phase 1 is for, and an exception throws it
+away. Write the head so it reports what it did not find.
+
+**Where the release states its own schema, print the declaration and the file, and compare them.**
+A declaration can be wrong. One release declares nine columns and ships seven, and the two it does
+not ship are the two a record id would come from *(measured)*. Believe the declaration and you design
+an identity the data cannot supply. The census then checks every file against the declaration, not
+only the first one.
+
+## How to open each kind of file
+
+The repo already opens four of these. Use the calls below rather than inventing one, and read the
+bounded call in the third column: several of the obvious calls read a whole file.
+
+| format | library or module | the bounded call | what to print |
+| --- | --- | --- | --- |
+| EDF | `bases/edf/reader.py`, over `edfio` | `reader.open_edf(path)` for the header, then `reader.read_record(file, 0)` for one data record | the signal names, rates, units, and the first values of each |
+| WFDB | `bases/physionet.py`, over `wfdb` | `BasePhysioNetConnector._read_header(record_base)`, a `@staticmethod`, so a head outside the class can call it | `fs`, `sig_len`, `sig_name`; no signal decode |
+| xls / xlsx | `bases/excel.py`, over `xlrd` | `excel.read_table_rows(path)`, then slice `[:6]` | the header row and the first data rows |
+| parquet | `pyarrow.parquet` | `pq.ParquetFile(path).schema_arrow` for the schema, `.metadata` for the row counts, `.read_row_group(0)` for values | the column names with their dtypes, the row-group sizes, and the first values of each column |
+| CSV | the stdlib `csv` module | `itertools.islice(csv.reader(handle), 6)` | the header row and the first data rows |
+
+**`reader.read_signal(file, index)` reads the whole signal.** It is the right call for a loader and
+the wrong one for a head. `reader.read_record(file, 0)` reads one data record and stops.
+
+**`bases/huggingface.py`'s `download` is not a head.** It walks every parquet file of a Hub repo and
+does `rows.extend(batch.to_pylist())`, so it materialises every row of the release as Python objects.
+It is the only parquet code in the tree, and copying it into a head loads the whole release into
+memory.
+
+**`pyarrow.compute` does not type-check.** `ty` rejects every `pc.*` call — "Module
+`pyarrow.compute` has no member `list_value_length`" — because those functions are generated at
+import time. Use the real methods instead: `ListArray.value_lengths()` gives the length of every
+list cell without decoding its values, and `.flatten()` gives the values. Use `numpy` for the rest,
+such as `np.isfinite` in place of `pc.is_finite`.
+
+**No format outside that table has a reader in this repo.** A release in a format the table does not
+name means you write the opener as well as the head, and the plan says so.
 
 ## Census the release
 
@@ -131,6 +209,17 @@ release it is too loose, and you have not yet found the property that separates 
 about itself — an index file, a manifest, a row count — over one you derive, and say which you used.
 If you cannot count the records before you convert, you do not yet know what a record is.
 
+**Census a free-text column for its shape, not only for its presence.** A count of nulls, empty
+strings and duplicates says the text is there. It does not say the text is finished. Ask whether
+every value terminates, and whether the length distribution has a cliff at one value. One release
+ships 123 098 captions that stop mid-sentence — 5.0% of the corpus, some of them mid-word
+*(measured)*, and no count of nulls or duplicates would have found one of them.
+
+**A census result is evidence, not truth.** It answers the question you asked and nothing else, and a
+question you did not think to ask leaves a hole the table does not show. Two of one release's own
+census numbers were wrong and were caught only by measuring them a second time. So state every count
+with how it was counted, and treat the build in phase 5 as what settles it.
+
 ## Name the set of files that one record needs
 
 A record is not a file. It is a set of files, and usually a row of a table beside them. Name each
@@ -171,11 +260,21 @@ Two shapes are possible, and the plan must pick one:
 a release of millions would build millions of dataclasses before the first record is written. The
 handle shape is the same code at both sizes. Pick per dataset, and never assume.
 
+**`BaseHuggingFaceConnector` implements the list shape only, so a large Hub release cannot use it.**
+Its `download` is declared `-> list[dict[str, Any]]` (`bases/huggingface.py:30`) and fills that list
+with every row of every parquet file in the repo (`:71-72`). The batch size bounds the decode, not
+the result. A release of 4.3 GB whose payload column holds 4000 floats per row becomes tens of
+gigabytes of Python objects. Two more properties bite at that size: the base reads only
+`refs/convert/parquet`, so a repo that already ships parquet is fetched a second time from the Hub's
+own conversion of it, and its own docstring says the conversion can be partial for a very large
+dataset, with no way for the connector to tell that it was. **Above roughly a gigabyte of payload,
+write `download` yourself and give back a handle.**
+
 How the release encodes its files decides what the handle carries:
 
 - **One file per role, one set per record** — name each role.
-- **One file holding many records** — a path and a key: the row range, the record name, the group
-  inside the HDF5. A path alone does not name a record.
+- **One file holding many records** — a path and a key: the row range, the row group, the record
+  name. A path alone does not name a record.
 - **A table beside the files** — carry the key and the table's path, never a parsed row. A parsed row
   would mean `download` read the table, and reading is `convert`'s half.
 

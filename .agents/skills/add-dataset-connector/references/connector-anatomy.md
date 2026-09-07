@@ -21,6 +21,7 @@ before designing against it.
 - [The dataset card (`dataset.yaml`)](#the-dataset-card-datasetyaml)
 - [Base connectors to reuse](#base-connectors-to-reuse)
 - [Building the dataset in `convert`](#building-the-dataset-in-convert)
+- [Where an answer, an annotation and a task can live](#where-an-answer-an-annotation-and-a-task-can-live)
 - [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
 - [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
 - [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
@@ -81,9 +82,9 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   tests/           # one test module per module; no fixture files
 ```
 
-That is the smallest connector. `heads.py`, one `head()` per raw file type, is a new convention that
-no connector ships yet; `discovery.md` says what it is for. A release that ships more than one kind
-of file divides further:
+That is the smallest connector. A `head()` per raw file type is **not** part of it. A head is a
+discovery tool and lives at `docs/notes/connectors/<org>/<name>/heads.py`; see
+`discovery.md § Where a head lives`. A release that ships more than one kind of file divides further:
 `tables.py` and `metadata.py` give meaning, `specs.py` holds the signal map, `keys.py` holds the
 annotation keys. The half that **opens** a file is a base, not a connector module — `sleep_edfx`
 ships no reader of its own and imports `bases.edf.reader` and `bases.excel`. See `layout.md`.
@@ -170,6 +171,31 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
 - Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
   `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
 
+## Where an answer, an annotation and a task can live
+
+Each row below is a choice, not a rule, and each one changes what the built dataset costs and what a
+reader can do with it. Pick one per connector and **say in the plan which you picked and why**. A
+facility you did not know about is not a choice you made.
+
+| the choice | reach for it when | already done in |
+| --- | --- | --- |
+| `dataset.add_task(record, task)` | the tasks are few and you want the cross-task validation | `chengsenwang/tsqa/connector.py:123` |
+| `dataset.add_tasks(record, tasks)` | one batch belongs to one record, all of it or none of it | `sleep_edfx/tasks.py` |
+| `dataset.set_task_stream(task_types, source)` | there are far more tasks than records, or more than fit in memory. `fidelity.md § Tasks` says this is the default | `physionet/ecg_qa_cot/connector.py:297` |
+| `record.add_annotation` / `add_annotations` | the annotation belongs to one record and is read back through it | `sleep_edfx/connector.py` |
+| `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no record carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
+| `Task.target` | the answer is a short value that belongs to this one task | `chengsenwang/tsqa/connector.py:123` |
+| `Task.target_annotation_ids` (`types/tasks.py:118`) | the answer **is** stored annotations: store the text one time and point many tasks at it, instead of copying it into every task row | nothing yet — the path is written and tested only for validation |
+| `Task.input_annotation_ids` | the task is asked *about* stored annotations rather than answered by them | `physionet/ecg_qa_cot/connector.py:306` |
+| `Task.from_tasks` | this task is derived from other tasks, and a reader has to be able to follow it back | — |
+
+**`target` and `target_annotation_ids` are exclusive**, and `add_task` enforces it
+(`dataset/dataset.py:525-533`). Set `scope` and `from_tasks` on the task itself, not on the call.
+
+**Copying an answer into every task is the mistake this table exists to prevent.** A release with
+four captions per record and 600 000 records writes 2.4 million copies of text it could have stored
+one time. `register_annotations` plus `target_annotation_ids` is the pair that stores it once.
+
 ## Task types (`timenet.types.tasks`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
@@ -197,6 +223,12 @@ points at stored annotations instead of copying them into the task row); `add_ta
 the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
+
+**Read this one for the two hard questions it answers, not only for its size.** Its corpus states no
+record id and no sampling rate, so it builds the id from the row's position — `record_id=f"row-{index}"`
+at line 53 and `time_series_id=f"row-{index}-c{signal}"` at line 49 — and gives every series an
+`OrdinalAxis()` at line 48 rather than inventing a rate. Those are the two questions a row-shaped
+release raises first. `fidelity.md § The data` states the rules both lines follow.
 
 `connector.py`:
 

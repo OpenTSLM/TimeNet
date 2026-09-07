@@ -46,7 +46,6 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
   README.md        # the assumptions and the inconsistencies
-  heads.py         # one head() per raw file type (new; none exist yet)
   specs.py         # TimeSeriesSpec values and the signal-name map
   annotations.py   # source annotations -> Annotation
   tables.py        # rows -> facts; no I/O at all
@@ -56,6 +55,10 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   requirements.txt # libraries this connector needs (optional)
   tests/           # one test module per module above
 ```
+
+**`heads.py` is not in that list, and it does not go in it.** A head is a discovery tool, so it lives
+at `docs/notes/connectors/<org>/<name>/heads.py` with the plan and the census. See
+`discovery.md § Where a head lives`.
 
 **The half that opens files is a base, not a connector module.** A container format is not specific
 to one dataset, so its reader is shared:
@@ -86,9 +89,20 @@ before it moved into `download/`.
 **The library's own types stay inside the base.** `edfio` types do not leave `reader.py`; it gives
 back its own `EdfHeader` and `EdfFile`, so a change of library reaches one file.
 
+**A base is not always usable at the size you need.** `BaseHuggingFaceConnector` returns a list
+holding every row of the release, so a large Hub dataset has to write its own `download` and give
+back a handle instead. `discovery.md § Choose the download shape` states the limit and the numbers.
+Check that the base fits the size before you build on it.
+
 A small connector does not need all of these. `chengsenwang/tsqa` is one `connector.py`, because it
 reads one parquet row per record and there is nothing to divide. Add a module when the census shows
 a second kind of file or a second kind of meaning, not before.
+
+**`chengsenwang/tsqa` is also the pattern for a row-shaped release that states no id and no time
+axis**, which is the harder thing it demonstrates. Its corpus has neither, so `connector.py:53`
+builds `record_id=f"row-{index}"` from the row's position and `:48` gives every series an
+`OrdinalAxis()` rather than inventing a rate. Read it when your release ships rows and no identity.
+`fidelity.md § The data` states the rule those two lines follow.
 
 The org folder needs its own `__init__.py`. `discovery.resolve(dataset_id)` imports only the one
 module and reads its `CONNECTOR`.
@@ -243,25 +257,56 @@ needs.
 
 ## Dependencies
 
-A connector that needs a library outside the core dependencies declares it in `requirements.txt` and
-**imports it lazily inside the function that uses it**. A missing library raises a clear error. The
-lazy import is what keeps `--no-isolation` usable while you write the connector, and a top-level
-import breaks it.
+**One question decides where an import goes: does importing this module cost somebody who never uses
+the library?** Answer it against `discovery.available()`
+(`packages/timenet-connectors/src/timenet_connectors/discovery.py:157-178`), whose own docstring
+says:
+
+> This imports each connector module. Use it for listings and error messages, not the build hot path.
+
+It walks every package under `datasets/` and imports each one to read its `CONNECTOR`. A module-level
+import in **any** connector module therefore runs for **every** connector. A connector that put
+`import huggingface_hub` at the top of its `connector.py` would make `available()` raise in an
+environment without that library, and dataset listing would break for everybody because one connector
+declared a dependency.
+
+Two cases follow, and where the library is declared says which one you are in:
+
+- **A library the whole package already depends on imports at the top.** `pyarrow` is a core
+  `timenet` dependency (`packages/timenet/pyproject.toml:28`), so every environment that can import
+  the package has it and a top-level import costs nobody. The stdlib, `timenet` and
+  `timenet_connectors` are the same case.
+- **A library only this connector declares in its `requirements.txt` is imported inside the function
+  that uses it**, with `# noqa: PLC0415` and a reason. Nothing else in the environment promises that
+  library, so a top-level import charges every other connector for it. Raise an `ImportError` naming
+  the connector's `requirements.txt` and the `--no-isolation` escape hatch, as
+  `bases/huggingface.py:47-52` does:
+
+  ```python
+  try:
+      from huggingface_hub import snapshot_download  # noqa: PLC0415 (see the comment above)
+  except ImportError as exc:
+      raise ImportError(
+          f"reading {self.HF_REPO!r} needs huggingface_hub, declared in this connector's "
+          "requirements.txt. Run the build without --no-isolation, or install it yourself"
+      ) from exc
+  ```
+
+**A base defers for the same reason, not a different one.** A base that **every** connector reaches
+through — `bases/huggingface.py:47`, `bases/physionet.py:84`, `download/s3.py:40` — imports its
+library inside the function, because every connector pays for that module. A base that only its
+**declaring** connector imports — `bases/edf/reader.py`, `bases/excel.py` — imports at the top,
+because nothing else reaches it and there is nobody to protect.
 
 **A requirement is declared twice.** Once in the connector's `requirements.txt`, which the build
 installs into the environment the build runs in, and once in the root dev group, which is what puts
 it in your own environment. `make sync` is `uv sync --all-groups --all-extras`, and a
 `requirements.txt` is neither a group nor an extra, so syncing alone will not install it. Without
-the second declaration `ty` reports the lazy import as unresolved and the connector's test cannot
+the second declaration `ty` reports the deferred import as unresolved and the connector's test cannot
 run.
 
-**Where the import goes depends on who imports the base:**
-
-- A base that **every** connector reaches through — `huggingface.py`, `physionet.py` — imports its
-  library lazily, inside the function, with `noqa: PLC0415`. A top-level import would make every
-  connector pay for a library it may not use.
-- A base that only its **declaring** connector imports — `bases/edf/reader.py`, `bases/excel.py` —
-  imports at the top of the module. Nothing else reaches it, so there is nobody to protect.
+**Every deferred import states its reason**, in the `noqa` or in a comment above it, so a later
+reader can retire it rather than guess at it.
 
 ## Tests
 
@@ -382,5 +427,6 @@ Named here so nobody resolves one by accident and calls it a convention.
 - **How far the lazy loaders scale.** Every file a loader captures stays open until it is called. A
   couple of hundred is fine; a hundred thousand is not, and would want a loader that reopens by path
   and pays the header parse again. Nobody has fixed the number where that flips.
-- **Whether a `head()` should reach the CLI** (`timenet-build head <id>`), or stay a connector's own
-  module.
+- **Whether a `head()` should reach the CLI** (`timenet-build head <id>`). It is settled that a head
+  is not a connector module: it lives with the discovery record and does not ship. Whether the build
+  CLI grows a command for one is open.

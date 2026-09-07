@@ -13,11 +13,17 @@ things, `download` and `convert`. The build calls them and stores what `convert`
 This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
 not skip a phase, and do not write connector code before the gate.
 
+**A TimeF dataset is a faithful copy of its source, not a cleaned one.** Convert what the source
+states, in the shape it states it, and record every assumption you had to make in the connector's
+README. That one rule decides more of this work than any other. `references/fidelity.md` carries it
+in full.
+
 ## Contents
 
 - [What this is for](#what-this-is-for)
 - [The two documents](#the-two-documents)
 - [The checklist](#the-checklist)
+- [Talk to the user before a phase, not only after it](#talk-to-the-user-before-a-phase-not-only-after-it)
 - [Where to start](#where-to-start)
 - [Phase 0 — the card and the source's own words](#phase-0--the-card-and-the-sources-own-words)
 - [Phase 1 — a head of each file type, then a census of all of them](#phase-1--a-head-of-each-file-type-then-a-census-of-all-of-them)
@@ -25,6 +31,7 @@ not skip a phase, and do not write connector code before the gate.
 - [Phase 3 — the assumptions become the README](#phase-3--the-assumptions-become-the-readme)
 - [Phase 4 — build](#phase-4--build)
 - [Phase 5 — prove the build](#phase-5--prove-the-build)
+- [How the connector ships](#how-the-connector-ships)
 - [Rules that hold in every phase](#rules-that-hold-in-every-phase)
 - [Further reading](#further-reading)
 
@@ -62,10 +69,14 @@ being agreed, and the code follows from it.
 The assumptions live in the plan until the gate, then move to the README. After that the README is
 the only copy. Do not keep both.
 
+`heads.py` sits beside the plan, in the same untracked folder, and ships with nothing. The raw
+release sits in the build cache at `~/.cache/timenet/cache/<dataset_id>/`, outside the working tree.
+Neither is ever committed.
+
 ## The checklist
 
-Copy this into your first reply and tick items off as you go, so nothing is skipped and the user can
-see where you are.
+**Post this in your first reply, before phase 0 does any work.** Then post it again with its ticks
+at every phase boundary. A checklist sent one time is a header; a checklist re-sent is a position.
 
 ```markdown
 - [ ] 0. Plan created, card confirmed by the user, description quotes captured
@@ -76,6 +87,23 @@ see where you are.
 - [ ] 5. Build proved against the predicted numbers, review run, findings fixed
 ```
 
+## Talk to the user before a phase, not only after it
+
+This skill guides a person. A person who sees nothing until a phase ends has not been guided, they
+have been given a report. Four rules, and they cost one message each:
+
+- **Say what a phase will do before it runs.** What it will do, what it will produce, and what it
+  needs from the user. Every phase below carries that as **Before you start**.
+- **Announce a long step when it begins**, and say what it counts and what it will give back. The
+  census walks the whole release and takes minutes, and the skill runs it in a subagent, which is
+  what makes it invisible. Say it is running.
+- **Show the diagrams in the conversation**, not only in the plan. The record model is the thing a
+  person can argue with. A diagram filed in a document nobody is watching was never shown.
+- **Re-post the checklist with its ticks at every phase boundary.**
+
+Every phase below therefore ends with three lines: **Tell the user**, **Write it down**, and
+**Next**. The first is a message, not a plan section.
+
 ## Where to start
 
 Look for `docs/notes/connectors/<org>/<name>/plan.md`.
@@ -84,23 +112,60 @@ Look for `docs/notes/connectors/<org>/<name>/plan.md`.
 - **It exists.** Read the phase ledger at its top and resume at the first phase that is not `done`.
   Phase 1 walks the whole release, so never repeat it when the plan already holds its census.
 
+**Check the plan's skill ref before you continue anything.** Section 0 of the plan names the branch
+the skill was read from. Run `git show <skill ref>:.agents/skills/add-dataset-connector/SKILL.md` and
+compare it against the skill you are running. If the ref is missing, or the skill it holds is not
+this one, **stop and ask the user**. A plan written by six phases and a gate, resumed by a skill with
+neither, is a plan whose ledger the new run cannot honour.
+
 Every phase writes its result into the plan and updates the ledger before the next one starts.
 
 ## Phase 0 — the card and the source's own words
 
 The card comes first, because the source's prose decides things no file header states.
 
-1. **Create the plan.** Copy `references/plan-template.md` to
-   `docs/notes/connectors/<org>/<name>/plan.md`, with the phase ledger at its top and every phase
-   `not started`. It exists from here on, and every later phase writes into it.
-2. Derive the `org/name` id from the link. Lowercase, hyphens allowed in the leaf. On disk hyphens
+**Before you start, tell the user:** phase 0 reads the source page and writes the card, the plan and
+the fetch. It needs one thing from them — a confirmation of the licence.
+
+1. **Ask how many datasets the link holds.** A release that bundles a corpus with its own benchmarks
+   is common, and one `org/name` id cannot address both. Which one you are converting changes the
+   record model, the task type and the census. If the link holds more than one, produce **one plan
+   and one card per dataset**, and say which plan is which. Do not fold two datasets into one id.
+2. **Create the plan.** Copy `references/plan-template.md` to
+   `docs/notes/connectors/<org>/<name>/plan.md`. That file is the template itself, so copying it is
+   the whole step. It exists from here on, and every later phase writes into it.
+3. **Record where the code is built.** Section 0 takes three lines and all three are load-bearing:
+   the **base ref** this connector branches from, **why** it is not `main`, and the **skill ref**,
+   the branch that holds this skill. Building on the wrong ref means writing code that contradicts
+   the skill on every line, and the skill's own references are unreadable from a branch that does not
+   carry them — see **Rules that hold in every phase**. Tell the user all three.
+4. Derive the `org/name` id from the link. Lowercase, hyphens allowed in the leaf. On disk hyphens
    become underscores, so `physionet/ecg-qa-cot` maps to `datasets/physionet/ecg_qa_cot/`. The id is
    validated as `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, and no segment may start with `.`.
-3. Draft `dataset.yaml` from the source page and **ask the user to confirm it**. `license` and
+5. **Fetch the release, into the build cache and never into the working tree.** Phase 1 opens files,
+   so the files have to be on disk, and nothing later in this skill fetches them for you. The
+   destination is `~/.cache/timenet/cache/<dataset_id>/`, which is where phase 4 looks for a seeded
+   cache. A 12 GB download inside the working tree is one `git add -A` away from a commit that
+   cannot be undone cheaply.
+
+   | source | how to fetch it |
+   | --- | --- |
+   | Hugging Face | `git clone git@hf.co:datasets/<org>/<name>` — needs `git lfs`, or the clone leaves pointer files behind |
+   | PhysioNet | `wget -r -N -c -np <url>` |
+   | S3 | `download.ensure_archive`, or the AWS CLI with `--no-sign-request` |
+
+   Record the command, the resulting size and how long it took, in section 0. Phase 1's budget rule
+   needs the size.
+6. Draft `dataset.yaml` from the source page and **ask the user to confirm it**. `license` and
    `domains` are enums, and a wrong licence is a legal claim, not a typo. Never guess it.
-4. Read the source's description. Keep the sentences the design will rely on, with the URL they came
+7. Read the source's description. Keep the sentences the design will rely on, with the URL they came
    from. These are evidence, not metadata: they go in the plan now and in the README later, beside
    the card's `source_url`.
+8. **Read the files that describe the release before you open one that holds it** — a
+   `dataset_info.json`, a manifest, a data dictionary, a `state.json`. Write every claim they make
+   into section 0. Those claims are what phase 1's heads then check, and a claim that turns out
+   false is an inconsistency the README has to carry. One release declares a schema its own shards
+   do not ship, and the two missing columns are the two a record id would have come from.
 
 The description states what no header states, so read it for all of these:
 
@@ -109,10 +174,11 @@ The description states what no header states, so read it for all of these:
 - The epoch length, the rater, and the equipment.
 - The units, the ranges, and what a label means.
 
-Phase 0 is done when the card loads without `TimeNetInvalidCardError` and the quotes are in the plan.
+Phase 0 is done when the card loads without `TimeNetInvalidCardError`, the quotes are in the plan,
+the release is on disk outside the working tree, and section 0 names the base ref and the skill ref.
 
-**Tell the user:** the id, the card as confirmed, and the sentences of the description the design
-will lean on.
+**Tell the user:** the id, the card as confirmed, the base ref and the skill ref, where the release
+was fetched to and how big it is, and the sentences of the description the design will lean on.
 
 **Write it down:** section 0 of the plan, and set the ledger row to `done`.
 
@@ -122,13 +188,19 @@ will lean on.
 
 Read `references/discovery.md` before you start this phase.
 
+**Before you start, tell the user:** phase 1 opens the release and counts it. It produces the heads,
+the census table, two diagrams and the record design. The census walks every file and takes minutes,
+and it runs in a subagent, so say when it starts and what it is counting.
+
 Two reads, with different jobs.
 
-**Write one `head()` for each kind of file the release ships**, in `heads.py` beside the connector.
-A head opens one file, reads a small part of it, and gives that part back as readable text. It writes
-nothing. Most sources are binary — EDF, WFDB, parquet, xls, HDF5 — so `cat` is not an option, and
-the head function is the deliverable. It ships with the connector, so it also runs against the next
-release of the dataset and shows a changed shape at once.
+**Write one `head()` for each kind of file the release ships**, at
+`docs/notes/connectors/<org>/<name>/heads.py`. A head opens one file, reads a small part of it, and
+gives that part back as readable text. It writes nothing. Most sources are binary — EDF, WFDB,
+parquet, xls — so `cat` is not an option, and the head is what makes the release readable. **A head
+does not ship with the connector**: it is a discovery tool, it lives with this plan, and
+`discovery.md § Where a head lives` says why. Give it a `__main__`, and record the command beside its
+output, so the user can run it again on any file they like.
 
 **Then census the whole release with a script.** A head shows the shape of one file. It cannot show
 you what is odd, because odd is a fact about the set: one file in a hundred writing a different
@@ -142,34 +214,63 @@ conversation. Run the walk in a subagent and take back the table alone.
 Produce, into the plan:
 
 - the file inventory, including the files that belong to no record,
-- one head per file type,
-- the census table,
+- one head per file type, each with the command that produced it,
+- the census table, including every file checked against whatever the release declares about itself,
 - **two mermaid diagrams, both required**: the map, in four columns — what ships, what pairs it into
   records, what opens the container, what each part means — and the record model, tracing every
   object TimeF will hold back to the exact part of the source that states it,
-- what one record is, with real values from the heads,
+- what one record is, with real values from the heads, and each signal's source dtype beside the
+  dtype its spec will declare,
 - the task type, the count of tasks per record, and therefore whether tasks are added or streamed,
+- **which facility stores each answer, annotation and task**, from
+  `connector-anatomy.md § Where an answer, an annotation and a task can live`, and why,
+- **what already exists for each part of the connector**, and whether this one reuses it,
 - the module skeleton and the test plan,
-- the numbers the build should produce,
-- the assumptions and open questions.
+- the numbers the build should produce, each derived from a census row,
+- the decisions taken and the questions genuinely left open.
+
+**Show both diagrams in the conversation.** The record model is the artifact the user accepts or
+rejects, which is the whole reason the skill requires it. A diagram written only into the plan was
+never shown.
+
+**List what already exists before you name a module.** For each part of the connector — the fetch,
+the opener, the base, and the modelling questions the release raises — name the base or the existing
+connector that already does it, and say whether this one reuses it. Where it does not, say why not.
+An author writing one connector cannot see the whole tree, and this is the step that makes them look.
+
+**Decide, do not collect.** Before you write an assumption, check whether `fidelity.md`, `layout.md`
+or an existing connector already answers it. Where one does, **take the decision, cite the rule, and
+record it as a decision**. Section 5 of the plan has two headings for exactly this: the decisions
+taken with the rule that took each, and the questions genuinely left. Putting a question the repo
+already answers in front of the user is not caution; it buries the two questions that are real.
+
+**Derive every predicted number from the census, and show the derivation.** A predicted record count
+that contradicts a table two sections above it is a mistake nobody has to make. One run predicted
+55 187 records where summing the eleven per-folder counts in its own census gives 91 094.
 
 `references/plan-template.md` is the format. Use it as written, so every connector's plan reads the
 same. `references/fidelity.md` decides what the design may and may not do to the data;
 `references/layout.md` decides the module skeleton. Read both before you write the plan.
 
 **Tell the user:** what the release holds — the count of records, the shapes the census found, and
-anything odd — and that the plan is ready to read.
+anything odd — the two diagrams, and that the plan is ready to read.
 
-**Phase 1 is done when** both diagrams are drawn, every file in the inventory is either a node in
-the map or named as belonging to no record, every node of the record model has an inbound edge, the census covers every file rather than a sample of them, and the plan
-states a number for records, tasks per record, and expected warnings. A count you cannot state is
-phase 1 unfinished.
+**Phase 1 is done when** both diagrams are drawn and shown, every file in the inventory is either a
+node in the map or named as belonging to no record, every node of the record model has an inbound
+edge, the census covers every file rather than a sample of them, and the plan states a number for
+records, tasks per record, and expected warnings, each derived from the census. A count you cannot
+state is phase 1 unfinished, and a count that does not follow from the evidence above it is worse
+than none.
 
 **Write it down:** sections 1 to 5 of the plan, and set the ledger row to `done`.
 
 **Next:** phase 2, the gate. This one **stops**. Do not begin phase 3 until the user has ruled.
 
 ## Phase 2 — the gate
+
+**Before you start, tell the user:** phase 2 walks the model with them and stops until they rule. It
+shows the decisions already taken as one list to object to, and then the open questions one at a
+time.
 
 **STOP. Write no connector code.** This is where the model gets agreed, and agreement is not the
 same as approval. Walk the model with the user part by part, each part beside its evidence, so any
@@ -183,9 +284,16 @@ one of them can be rejected on its own:
   header, so show the sentence.
 - **The tasks**: what one question asks, how many there are, and why that is the question the source
   supports.
-- **Every open assumption**, one at a time.
+- **The decisions taken**, as one short list with the rule that took each. The user reads the list
+  and overturns anything they disagree with. Do not walk these one at a time.
+- **Every open question**, one at a time.
 
-An assumption is a question the source does not answer. Say what the source states, say what you
+**A question is gate-worthy when all three hold**: the source is silent, **and** no repo rule covers
+it, **and** two defensible answers lead to different records, tasks or counts. A question that fails
+that test is a decision the author takes and the user can overturn on reading it. One run put 22
+questions through this test: 19 were decided against existing rules and 3 reached the user.
+
+For a question that passes, say what the source states, say what each answer changes, say what you
 would do, and let the user rule. Do not resolve one silently.
 
 **Invite disagreement rather than confirmation.** "Does this look right?" gets a yes. Ask instead
@@ -194,8 +302,9 @@ cannot check a claim against evidence you produced, that claim is not ready to b
 
 If the user changes the model, revise the plan and walk it again. Only continue on an explicit yes.
 
-**Phase 2 is done when** the user has ruled on every open assumption individually — not approved
-the plan as a whole — and no line of the model is left that the user has not seen the evidence for.
+**Phase 2 is done when** the user has ruled on every open question individually — not approved the
+plan as a whole — has seen the list of decisions taken, and no line of the model is left that the
+user has not seen the evidence for.
 
 **Write it down:** each ruling against the assumption it settles, and the ledger row as
 `approved <date>`.
@@ -203,6 +312,9 @@ the plan as a whole — and no line of the model is left that the user has not s
 **Next:** on a yes, phase 3, which writes the rulings into the connector's README.
 
 ## Phase 3 — the assumptions become the README
+
+**Before you start, tell the user:** phase 3 moves every ruling out of the plan and into the
+connector's README, and it needs nothing from them.
 
 Write `README.md` beside the connector from `references/readme-template.md`. One entry for each
 assumption and each inconsistency, with three parts: the evidence, the decision, and the state —
@@ -228,6 +340,9 @@ and the plan's assumptions section is empty because the README owns them now.
 **Next:** phase 4, the build.
 
 ## Phase 4 — build
+
+**Before you start, tell the user:** phase 4 writes the modules the plan named and their tests, and
+runs a build. Name the modules, and say how long the first build is likely to take.
 
 Read `references/connector-anatomy.md` for the contract, the base connectors and the task types.
 Follow the skeleton the plan states and the rules in `references/fidelity.md` and
@@ -290,9 +405,58 @@ each difference is explained. A prediction with no outcome written against it wa
 
 **Tell the user:** which checks ran, and which predicted numbers matched.
 
+## How the connector ships
+
+A connector is shipped as a stack of small pull requests, not as one commit.
+`AGENTS.md § Stacked PRs` holds the `gh stack` mechanics; this section holds only what is specific to
+a connector.
+
+**Target 100 to 500 changed lines per pull request.** One run shipped two connectors as PRs of 1290
+and 1420 lines, and neither could be reviewed. "As small as possible" is not actionable without a
+number and a seam.
+
+**The seam for a connector is this, bottom to top.** Each step is reviewable without the ones above
+it:
+
+1. **The card** — `dataset.yaml` and the org `__init__.py`. It is what a reviewer checks the model
+   against.
+2. **The pure modules with their tests** — `tables.py`, `specs.py`, `keys.py`. They take values and
+   give values, so their tests need no fixture and the review needs no dataset.
+3. **`connector.py` with its tests** — the loop, the download shape, and the synthetic release the
+   test writes.
+4. **The `README.md`** — the assumptions and the inconsistencies, last, because it describes what the
+   PRs below it built.
+
+Put a mid-stack change on the branch that owns it and run `gh stack rebase --upstack`. Do not fold it
+into a higher branch.
+
+**This skill's own phases create the forward-reference trap, so watch for it.** Each PR must stand
+alone: no comment, docstring or README line that a later PR deletes, and no forward-looking chatter
+such as "the next PR adds the tasks". The plan names a README that has not landed yet, and a module
+docstring easily names a `connector.py` two branches up. Write each file as though the branch it sits
+on is the last one.
+
+**Say what the dataset is, in the commit subject and the PR title.** `feat(slip): read the SLIP
+pretraining corpus` says nothing to a reader who has not met the dataset. Name the release and say
+that this adds a connector.
+
+**`heads.py` never enters the stack.** It lives under `docs/notes/`, which is untracked and never
+`git add`ed.
+
 ## Rules that hold in every phase
 
-- **Never `git add` the plan.** `docs/notes/` stays local, like `docs/openspec/`.
+- **Read every reference with `git show <skill ref>:<path>`, never by working-tree path.** The
+  connector is built on a branch chosen for its API, and that branch does not carry this skill, so
+  the reference files are simply not on disk. Section 0 of the plan holds the skill ref:
+
+  ```bash
+  git show <skill ref>:.agents/skills/add-dataset-connector/references/fidelity.md
+  ```
+
+  Reading relative to the skill's own base directory does **not** solve this. That directory mirrors
+  the checked-out branch and swaps when the branch swaps.
+- **Never `git add` the plan.** `docs/notes/` stays local, like `docs/openspec/`. The head and the
+  raw release live there or in the build cache, and neither is ever committed.
 - **Never read the data to learn about the data.** Heads show shape, censuses show anomalies.
 - **Write down what you measured, and mark it *(measured)*.** A number nobody can re-measure is a
   claim, not evidence.
