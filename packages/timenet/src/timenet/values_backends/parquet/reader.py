@@ -69,7 +69,10 @@ class ParquetValuesReader(BaseValuesReader):
             self._row_group_values(version, row["chunk_file"], row["chunk_major_idx"])[row["chunk_minor_idx"]].values
             for row in rows
         ]
-        return pa.concat_arrays([chunk.cast(_target_type(spec)) for chunk in chunks])
+        # A shard usually stores the type the spec asks for, and a cast that changes nothing costs
+        # a compute call.
+        target = _target_type(spec)
+        return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
 
     def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
         """Read an irregular series' time offsets, which share their values' chunk locators.
