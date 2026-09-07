@@ -1,0 +1,564 @@
+"""The SLIP evaluation benchmarks connector.
+
+The release ships eleven folders, each holding fixed-length windows cut from somebody else's
+recordings, split into train and test. One row is one window and one class. The folder fixes the
+shape: how many signals, at what rate, over what vocabulary.
+
+Three of the folders — ``PPG_CVA``, ``PPG_DM`` and ``PPG_HTN`` — hold the same 650 windows under
+three different diagnoses. They become one record each carrying up to three tasks, rather than the
+same values stored three times.
+
+A label is registered once per folder and every task points at it, because the vocabularies are
+small and one of them, ``ptbxl``, is five whole paragraphs reused across 12,970 rows.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from fractions import Fraction
+import functools
+import hashlib
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, override
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from timenet.connectors import BaseConnector
+from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
+from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.types import Annotation, ClassificationTask
+from timenet_connectors.datasets.leochen085.slip_eval import folders, specs
+from timenet_connectors.datasets.leochen085.slip_eval.keys import SlipEvalKey
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
+
+_LOG = logging.getLogger(__name__)
+
+_ID_PREFIX = "slip-eval"
+
+HF_REPO = "LeoChen085/SlipDataset"  # the Hub repo the release lives in
+_BATCH_ROWS = 512  # rows decoded per batch while walking a split
+_US_PER_S = 1_000_000
+
+
+@dataclass(frozen=True)
+class SlipEvalSource:
+    """What ``download`` hands ``convert``: the folder root, and no rows."""
+
+    root: Path  # the directory holding the eleven folders
+
+
+@dataclass
+class _Building:
+    """What the walk accumulates and the dataset needs once the walk is done."""
+
+    shared: dict[str, Annotation]  # every annotation a task references, keyed by id
+    of_window: dict[tuple[str, str, int], str]  # which record each window became
+    vocabularies: dict[str, set[str]]  # the classes seen per folder
+
+    @classmethod
+    def empty(cls) -> _Building:
+        """Give a state holding nothing yet.
+
+        Returns:
+            An empty state.
+        """
+        return cls(shared={}, of_window={}, vocabularies={})
+
+
+@dataclass(frozen=True)
+class _Window:
+    """One row of one split, without its values."""
+
+    folder: str  # the directory it came from
+    split: str  # train or test
+    index: int  # the row's position within the split, counting across that split's files
+    path: Path  # the parquet file
+    row_in_file: int  # the row's index within that file
+    signals: int  # how many signals the window holds
+    length: int  # how many values each holds; checked equal across the window when it is read
+    label: str  # the readable class, from text_label
+    participant: str | None  # the subject, where the folder ships one
+    prompt: str  # the folder's own template, verbatim
+
+
+def _label_id(folder: str, label: str) -> str:
+    """Give the id of the annotation holding one class of one folder's vocabulary.
+
+    The digest is taken over the label text rather than with the builtin ``hash``, which is salted
+    per interpreter and would give two builds of one release two sets of ids.
+
+    Args:
+        folder: The folder's directory name.
+        label: The readable class.
+
+    Returns:
+        The same id in every build, so every task with that class references the one annotation.
+    """
+    digest = hashlib.blake2b(label.encode("utf-8"), digest_size=8).hexdigest()
+    return f"{folder}-label-{digest}"
+
+
+def _splits(root: Path, folder: str) -> Iterator[tuple[str, Path]]:
+    """Give every parquet file of one folder, with the split it belongs to.
+
+    Args:
+        root: The directory holding the eleven folders.
+        folder: The folder's directory name.
+
+    Yields:
+        The split name and the file, train before test and in file-name order within each.
+    """
+    for split in ("train", "test"):
+        yield from ((split, path) for path in sorted((root / folder).glob(f"{split}-*.parquet")))
+
+
+def _walk(root: Path, folder: str) -> Iterator[_Window]:
+    """Walk one folder's splits, giving each window's facts without its values.
+
+    Args:
+        root: The directory holding the eleven folders.
+        folder: The folder's directory name.
+
+    Yields:
+        One :class:`_Window` per row.
+
+    Raises:
+        TimeFFormatError: If a file lacks a column every folder is expected to ship.
+    """
+    index = 0
+    previous = ""
+    for split, path in _splits(root, folder):
+        if split != previous:
+            index, previous = 0, split
+        reader = pq.ParquetFile(path)
+        present = set(reader.schema_arrow.names)
+        for required in ("X", "text_label", "prompt"):
+            if required not in present:
+                raise TimeFFormatError(f"{path} has no {required!r} column; it holds {sorted(present)}")
+        wanted = [name for name in ("text_label", "participant_id", "prompt") if name in present]
+        in_file = 0
+        for batch in reader.iter_batches(batch_size=_BATCH_ROWS, columns=[*wanted, "X"]):
+            scalars = batch.select(wanted).to_pylist()
+            column = batch.column("X")
+            counts = column.value_lengths().to_pylist()
+            lengths = column.flatten().value_lengths().to_pylist()
+            cursor = 0
+            for row, count in zip(scalars, counts, strict=True):
+                window = lengths[cursor : cursor + count]
+                if len(set(window)) > 1:
+                    raise TimeFFormatError(
+                        f"{path} row {in_file}: the window's signals have lengths {sorted(set(window))}, "
+                        f"but every signal of one window covers the same span"
+                    )
+                participant = row.get("participant_id")
+                yield _Window(
+                    folder=folder,
+                    split=split,
+                    index=index,
+                    path=path,
+                    row_in_file=in_file,
+                    signals=count,
+                    length=window[0],
+                    label=str(row["text_label"]),
+                    participant=None if participant is None else f"{folder}-{participant}",
+                    prompt=str(row["prompt"]),
+                )
+                cursor += count
+                in_file += 1
+                index += 1
+
+
+@functools.lru_cache(maxsize=1)
+def _x_column(path: Path) -> Any:
+    """Give one file's ``X`` column, reading the file only when it is not the one already held.
+
+    Every series reads its values through :func:`_read_signal`, and the writer asks for them roughly
+    in the order this connector built them. Holding one file's column turns a walk of a folder from
+    one whole-file read per signal into one per file. The cache holds exactly one, because the
+    release gives no bound on how many would fit.
+
+    Args:
+        path: The parquet file.
+
+    Returns:
+        The file's ``X`` column.
+    """
+    return pq.ParquetFile(path).read(columns=["X"]).column("X")
+
+
+def _read_signal(path: Path, row: int, signal: int) -> pa.Array:
+    """Read one signal of one window back out of its file.
+
+    Args:
+        path: The parquet file.
+        row: The row's index within that file.
+        signal: Which signal of the window.
+
+    Returns:
+        The values as an Arrow array.
+    """
+    return _x_column(path)[row][signal].values
+
+
+def _loader_for(path: Path, row: int, signal: int) -> Any:
+    """Give a callable that reads one signal's values when it is asked.
+
+    Args:
+        path: The parquet file.
+        row: The row's index within that file.
+        signal: Which signal of the window.
+
+    Returns:
+        A no-argument callable giving the values as an Arrow array.
+    """
+    return lambda: _read_signal(path, row, signal)
+
+
+def _series_for(window: _Window, record_id: str) -> tuple[TimeSeries, ...]:
+    """Build one :class:`TimeSeries` per signal of one window.
+
+    The axis is the rate the card states for that folder, used as stated.
+
+    Args:
+        window: The window's facts.
+        record_id: The id of the record the series belong to.
+
+    Returns:
+        The series, in the order the ``X`` column stores them.
+
+    Raises:
+        TimeFFormatError: If the window holds a different number of signals than the card names for
+            its folder, which means the release has changed shape.
+    """
+    folder = folders.BY_NAME[window.folder]
+    axis = RegularAxis(period_us=Fraction(_US_PER_S) / Fraction(folder.rate_hz))
+    names = folder.signals
+    if window.signals != len(names):
+        raise TimeFFormatError(
+            f"{window.path} row {window.row_in_file}: {window.folder} ships {window.signals} signals, "
+            f"but the card names {len(names)}: {list(names)}"
+        )
+    return tuple(
+        TimeSeries(
+            spec=specs.spec_for(window.folder, names[index]),
+            signal=names[index],
+            time_axis=axis,
+            loader=_loader_for(window.path, window.row_in_file, index),
+            n_values=window.length,
+            time_series_id=f"{record_id}-{index}",
+        )
+        for index in range(window.signals)
+    )
+
+
+class SlipEvalConnector(BaseConnector[SlipEvalSource]):
+    """Connector for the SLIP evaluation benchmarks (Hub repo ``LeoChen085/SlipDataset``)."""
+
+    @override
+    def download(self, cache_dir: Path) -> list[SlipEvalSource]:
+        """Fetch the eleven evaluation folders and give back the directory holding them.
+
+        The pretraining corpus of the same repository is not fetched; it is a different dataset.
+
+        Args:
+            cache_dir: Directory where the connector caches Hub files.
+
+        Returns:
+            One handle naming the directory the folders sit in.
+
+        Raises:
+            ImportError: If ``huggingface_hub``, declared in this connector's ``requirements.txt``,
+                is not installed.
+            TimeNetDownloadError: If the fetch returned none of the folders.
+        """
+        # discovery.available() imports every connector module to read its CONNECTOR, and
+        # huggingface_hub is declared in this connector's requirements.txt rather than by the
+        # package. A module-level import would break dataset listing for every connector in an
+        # environment without it.
+        try:
+            from huggingface_hub import snapshot_download  # noqa: PLC0415 (see the comment above)
+        except ImportError as exc:
+            raise ImportError(
+                f"reading {HF_REPO!r} needs huggingface_hub, declared in this connector's "
+                "requirements.txt. Run the build without --no-isolation, or install it yourself"
+            ) from exc
+
+        patterns = [f"{folder.name}/*.parquet" for folder in folders.FOLDERS]
+        root = Path(snapshot_download(HF_REPO, repo_type="dataset", cache_dir=str(cache_dir), allow_patterns=patterns))
+        if not any((root / folder.name).is_dir() for folder in folders.FOLDERS):
+            raise TimeNetDownloadError(f"{HF_REPO!r} returned none of the evaluation folders under {root}")
+        return [SlipEvalSource(root=root)]
+
+    @override
+    def convert(self, raw_refs: list[SlipEvalSource]) -> TimeFDataset:
+        """Build one record per window, and stream one classification task per window.
+
+        The tasks are streamed rather than added. ``add_task`` rebuilds the set of every registered
+        task id on each call (``dataset.py:354``), so adding 58,159 of them one at a time is
+        quadratic. Streaming is also what lets the labels be registered once and referenced.
+
+        Args:
+            raw_refs: The single handle :meth:`download` gave back.
+
+        Returns:
+            The populated dataset.
+        """
+        root = raw_refs[0].root
+        dataset = TimeFDataset(metadata=self.metadata())
+        state = _Building.empty()
+
+        for folder in folders.FOLDERS:
+            if folder.name not in folders.PPG_FOLDERS:
+                _add_folder(dataset, root, folder.name, state)
+        _add_ppg(dataset, root, state)
+
+        _report(root)
+        dataset.register_annotations([*state.shared.values(), *_vocabularies(state.vocabularies)])
+        dataset.set_task_stream([ClassificationTask], lambda: _iter_tasks(root, state.of_window))
+        return dataset
+
+
+def _report(root: Path) -> None:
+    """Warn once for each way the release departs from what its card states.
+
+    One warning per kind, naming the folders it applies to, rather than one per record: a property
+    of a whole folder is one fact about the release.
+
+    Args:
+        root: The directory holding the eleven folders.
+    """
+    extra_classes, leaking, duplicated = [], [], []
+    for folder in folders.FOLDERS:
+        windows = list(_walk(root, folder.name))
+        if not windows:
+            continue
+        labels = {w.label for w in windows}
+        if len(labels) != folder.classes:
+            extra_classes.append(f"{folder.name} has {len(labels)}, the card says {folder.classes}")
+        by_split = {
+            split: {w.participant for w in windows if w.split == split and w.participant is not None}
+            for split in ("train", "test")
+        }
+        shared_subjects = by_split["train"] & by_split["test"]
+        if shared_subjects:
+            leaking.append(f"{folder.name} shares {len(shared_subjects)}")
+        distinct = {
+            _read_signal(windows[0].path, windows[0].row_in_file, i).to_numpy().tobytes()
+            for i in range(windows[0].signals)
+        }
+        if len(distinct) < windows[0].signals:
+            duplicated.append(f"{folder.name} ships {windows[0].signals} signals, {len(distinct)} distinct")
+    for found, what in (
+        (extra_classes, "folders hold a different number of classes than the card states"),
+        (leaking, "folders share subjects between their train and test splits"),
+        (duplicated, "folders ship signals that are copies of one another"),
+    ):
+        if found:
+            _LOG.warning("%d %s: %s", len(found), what, "; ".join(found))
+
+
+def _iter_tasks(root: Path, of_window: dict[tuple[str, str, int], str]) -> Iterator[ClassificationTask]:
+    """Yield one :class:`ClassificationTask` per window of every folder.
+
+    Args:
+        root: The directory holding the eleven folders.
+        of_window: Which record each window belongs to, keyed by folder, split and index. The three
+            PPG folders share records, so this is not one record per window.
+
+    Yields:
+        The task each window answers, its label held by reference.
+    """
+    for folder in folders.FOLDERS:
+        for window in _walk(root, folder.name):
+            yield _task_for(window, of_window[window.folder, window.split, window.index])
+
+
+def _vocabulary_id(folder: str) -> str:
+    """Give the id of the annotation holding one folder's closed set of classes.
+
+    A task states this same string as its ``target_schema``, so the two ends are built from one
+    function and cannot drift.
+
+    Args:
+        folder: The folder's directory name.
+
+    Returns:
+        The id, which a task also states as its ``target_schema``.
+    """
+    return f"vocabulary-{folder}"
+
+
+def _benchmark_id(folder: str) -> str:
+    """Give the id of the annotation naming one folder.
+
+    Args:
+        folder: The folder's directory name.
+
+    Returns:
+        A stable id, so every task from that folder references the one annotation.
+    """
+    return f"benchmark-{folder}"
+
+
+def _split_id(split: str) -> str:
+    """Give the id of the annotation naming one split.
+
+    Args:
+        split: ``train`` or ``test``.
+
+    Returns:
+        A stable id, so every task in that split references the one annotation.
+    """
+    return f"split-{split}"
+
+
+def _task_for(window: _Window, record_id: str) -> ClassificationTask:
+    """Build the classification task one window answers.
+
+    The folder and the split are carried by the task and not by the record. A record built from the
+    three PPG folders belongs to all three, and can be in ``train`` for one diagnosis and ``test``
+    for another, so neither fact is a property of the record.
+
+    Args:
+        window: The window's facts.
+        record_id: The record the window became, or was merged into.
+
+    Returns:
+        The task, whose answer is a registered annotation rather than an inline copy.
+    """
+    # A streamed task never reaches Record.task_ids, so nothing resolves its id and it states none.
+    return ClassificationTask(
+        prompt=window.prompt,
+        target_schema=_vocabulary_id(window.folder),
+        target_annotation_ids=(_label_id(window.folder, window.label),),
+        input_annotation_ids=(_benchmark_id(window.folder), _split_id(window.split)),
+        record_ids=(record_id,),
+    )
+
+
+def _register(window: _Window, state: _Building) -> None:
+    """Register the annotations one window's task will reference, on first sight of each.
+
+    Args:
+        window: The window's facts.
+        state: What the walk accumulates. Extended in place.
+    """
+    for key, value, annotation_id in (
+        (SlipEvalKey.LABEL, window.label, _label_id(window.folder, window.label)),
+        (SlipEvalKey.SOURCE_BENCHMARK, window.folder, _benchmark_id(window.folder)),
+        (SlipEvalKey.SPLIT, window.split, _split_id(window.split)),
+    ):
+        state.shared.setdefault(annotation_id, Annotation(key=key, value=value, id=annotation_id))
+    state.vocabularies.setdefault(window.folder, set()).add(window.label)
+
+
+def _vocabularies(found: dict[str, set[str]]) -> list[Annotation]:
+    """Give one annotation per folder, holding that folder's whole closed set of classes.
+
+    Args:
+        found: The classes seen per folder.
+
+    Returns:
+        One annotation per folder, its id the ``target_schema`` its tasks state.
+    """
+    return [
+        Annotation(key=SlipEvalKey.VOCABULARY, value=sorted(labels), id=_vocabulary_id(folder))
+        for folder, labels in sorted(found.items())
+    ]
+
+
+def _add_folder(
+    dataset: TimeFDataset,
+    root: Path,
+    name: str,
+    state: _Building,
+) -> None:
+    """Add every window of one folder as its own record.
+
+    Args:
+        dataset: The dataset being built.
+        root: The directory holding the eleven folders.
+        name: The folder's directory name.
+        state: What the walk accumulates. Extended in place.
+    """
+    for window in _walk(root, name):
+        record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
+        dataset.add_record(
+            time_series=_series_for(window, record_id),
+            record_id=record_id,
+            subject_ids=() if window.participant is None else (window.participant,),
+        )
+        _register(window, state)
+        state.of_window[name, window.split, window.index] = record_id
+
+
+def _add_ppg(
+    dataset: TimeFDataset,
+    root: Path,
+    state: _Building,
+) -> None:
+    """Add the three PPG folders as one set of records, each answering up to three questions.
+
+    The three folders hold the same windows under three diagnoses. A window is matched across them
+    by its values, so the merge does not depend on the three files agreeing about row order.
+
+    Args:
+        dataset: The dataset being built.
+        root: The directory holding the eleven folders.
+        state: What the walk accumulates. Extended in place.
+    """
+    seen: dict[bytes, str] = {}
+    for name in folders.PPG_FOLDERS:
+        for window in _walk(root, name):
+            fingerprint = _fingerprint_of(window)
+            record_id = seen.get(fingerprint)
+            if record_id is None:
+                record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
+                dataset.add_record(
+                    time_series=_series_for(window, record_id),
+                    record_id=record_id,
+                    subject_ids=() if window.participant is None else (window.participant,),
+                )
+                seen[fingerprint] = record_id
+            _register(window, state)
+            state.of_window[name, window.split, window.index] = record_id
+
+
+def fingerprint(signals: Iterable[np.ndarray]) -> bytes:
+    """Give a value that is equal for two windows holding the same numbers.
+
+    Args:
+        signals: The window's signals, in the order the file stores them.
+
+    Returns:
+        A digest over the values, which is what decides whether two folders hold the same window.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    for values in signals:
+        digest.update(values.tobytes())
+    return digest.digest()
+
+
+def _fingerprint_of(window: _Window) -> bytes:
+    """Read one window's values and fingerprint them.
+
+    Args:
+        window: The window to fingerprint.
+
+    Returns:
+        The digest :func:`fingerprint` gives for its values.
+    """
+    return fingerprint(
+        _read_signal(window.path, window.row_in_file, index).to_numpy() for index in range(window.signals)
+    )
+
+
+CONNECTOR = SlipEvalConnector
