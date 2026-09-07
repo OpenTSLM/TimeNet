@@ -73,21 +73,43 @@ def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
     assert metadata.access_url == "https://example.org/access"
 
 
-def test_list_datasets_fetches_pinned_manifest_for_incomplete_other_license(version_dir, tmp_path):
+@pytest.mark.parametrize(
+    ("manifest_updates", "summary_updates"),
+    [
+        (
+            {"license": "other", "license_url": "https://example.org/license"},
+            {"license": "other"},
+        ),
+        (
+            {"access": "credentialed", "access_url": "https://example.org/credentials"},
+            {"access": "credentialed"},
+        ),
+        (
+            {"access": "restricted", "access_url": "https://example.org/dua"},
+            {"access": "restricted"},
+        ),
+    ],
+)
+def test_list_datasets_fetches_pinned_manifest_for_incomplete_summary(
+    version_dir,
+    tmp_path,
+    manifest_updates,
+    summary_updates,
+):
     _, manifest = version_dir
     manifest_payload = manifest.to_dict()
-    manifest_payload["metadata"]["license"] = "other"
-    manifest_payload["metadata"]["license_url"] = "https://example.org/license"
+    manifest_payload["metadata"].update(manifest_updates)
     expected = Manifest.from_dict(manifest_payload).metadata
     summary = {
         "dataset_id": manifest.dataset_id,
         "version": str(manifest.metadata.dataset_version),
         "name": manifest.metadata.name,
         "description": manifest.metadata.description,
-        "license": "other",
+        "license": manifest.metadata.license.value,
         "domains": [domain.value for domain in manifest.metadata.domains],
         "tags": list(manifest.metadata.tags),
     }
+    summary.update(summary_updates)
     paths = []
 
     def handler(request):
