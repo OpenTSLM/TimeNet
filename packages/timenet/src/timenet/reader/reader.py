@@ -454,7 +454,12 @@ class TimeFReader:
             registered_annotations=self._read_registered_annotations(),
         )
 
-    def iter_records(self, record_ids: Iterable[str] | None = None) -> Iterator[Record]:
+    def iter_records(
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        with_annotations: bool = True,
+    ) -> Iterator[Record]:
         """Yield records lazily without materializing a :class:`TimeFDataset`.
 
         When you pass ``record_ids``, this method filters the read on the stored id column. This
@@ -464,12 +469,15 @@ class TimeFReader:
 
         Args:
             record_ids: The records to yield, or ``None`` to yield every record.
+            with_annotations: Whether to resolve the annotations of each record. ``False`` leaves
+                :attr:`Record.annotations` empty and skips the lookup and the JSON parse that each
+                one costs. The stored spans are then not checked against the record window.
 
         Yields:
             Each reconstructed :class:`Record`.
         """
-        for row in self._iter_record_rows(record_ids):
-            yield self._build_record(row)
+        for row in self._iter_record_rows(record_ids, with_annotations=with_annotations):
+            yield self._build_record(row, with_annotations=with_annotations)
 
     # ---- loading -------------------------------------------------------------------------------
 
@@ -496,11 +504,20 @@ class TimeFReader:
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
-    def _iter_record_rows(self, record_ids: Iterable[str] | None) -> Iterator[dict]:
+    def _iter_record_rows(
+        self,
+        record_ids: Iterable[str] | None,
+        *,
+        with_annotations: bool = True,
+    ) -> Iterator[dict]:
         """Stream ``records.parquet`` in batches, optionally restricted to a set of ids.
+
+        A read that resolves no annotations does not ask for the ``annotation_ids`` column.
 
         Args:
             record_ids: The records to read, or ``None`` for all of them.
+            with_annotations: Whether the caller resolves annotations. ``False`` drops the
+                ``annotation_ids`` column from the scan.
 
         Yields:
             Each record row as a dict.
@@ -514,14 +531,16 @@ class TimeFReader:
             parts = [self._version.path(part.path) for part in self._manifest.files.records]
             self._records_data = pads.dataset(parts, filesystem=self._fs, format="parquet")
         data = self._records_data
+        columns = None if with_annotations else [n for n in data.schema.names if n != "annotation_ids"]
         if record_ids is None:
-            for batch in data.to_batches(batch_size=_RECORD_BATCH_ROWS, use_threads=False):
+            for batch in data.to_batches(columns=columns, batch_size=_RECORD_BATCH_ROWS, use_threads=False):
                 yield from batch.to_pylist()
             return
         stored = {self._codec.encode("record_id", sid): sid for sid in dict.fromkeys(record_ids)}
         stored_type = data.schema.field("record_id").type
         expression = pads.field("record_id").isin(pa.array(list(stored), type=stored_type))
-        for batch in data.to_batches(filter=expression, batch_size=_RECORD_BATCH_ROWS, use_threads=False):
+        batches = data.to_batches(columns=columns, filter=expression, batch_size=_RECORD_BATCH_ROWS, use_threads=False)
+        for batch in batches:
             for row in batch.to_pylist():
                 stored.pop(row["record_id"], None)
                 yield row
@@ -691,12 +710,16 @@ class TimeFReader:
 
     # ---- record construction -------------------------------------------------------------------
 
-    def _build_record(self, row: dict) -> Record:
+    def _build_record(self, row: dict, *, with_annotations: bool = True) -> Record:
         record_id = self._codec.decode("record_id", row["record_id"])
         series = tuple(self._build_series(record_id, struct) for struct in row["time_series"])
-        annotations = tuple(
-            self._resolve_annotation(record_id, aid)
-            for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
+        annotations = (
+            tuple(
+                self._resolve_annotation(record_id, aid)
+                for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
+            )
+            if with_annotations
+            else ()
         )
         # A stored span or time_span that no longer fits the record is a corrupt artifact, not a caller
         # mistake. As a result, the record's own invariants surface as a format error, not a ``ValueError``.
