@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from _fake_registry import build_fake, build_publish_fake
+import httpx
 import pytest
 
 from timenet.client import TimeNet
@@ -8,7 +9,7 @@ from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Domain
+from timenet.types import Access, Domain, License
 from timenet.writer import TimeFWriter
 
 
@@ -30,12 +31,81 @@ def _remote(version_dir, tmp_path, **kw):
 
 
 def test_list_datasets_maps_summaries(version_dir, tmp_path):
-    registry, _ = _remote(version_dir, tmp_path)
+    registry, requests = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     metadatas = registry.list_datasets()
     assert [m.dataset_id for m in metadatas] == [manifest.metadata.dataset_id]
     assert str(metadatas[0].dataset_version) == str(manifest.metadata.dataset_version)
     assert all(isinstance(d, Domain) for d in metadatas[0].domains)
+    assert metadatas[0].license_url is None
+    assert metadatas[0].access is Access.OPEN
+    assert metadatas[0].access_url is None
+    assert [request.url.path for request in requests] == ["/api/v1/datasets"]
+
+
+def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
+    summary = {
+        "dataset_id": "demo/restricted",
+        "version": "1.0.0",
+        "name": "Restricted",
+        "description": "A restricted dataset.",
+        "license": "other",
+        "license_url": "https://example.org/license",
+        "domains": ["general"],
+        "tags": [],
+        "access": "credentialed",
+        "access_url": "https://example.org/access",
+    }
+
+    def handler(request):
+        assert request.url.path == "/api/v1/datasets"
+        return httpx.Response(200, json={"datasets": [summary]})
+
+    registry = RemoteRegistry(
+        "http://api.local",
+        transport=httpx.MockTransport(handler),
+        cache_dir=tmp_path,
+    )
+    metadata = registry.list_datasets()[0]
+    assert metadata.license is License.OTHER
+    assert metadata.license_url == "https://example.org/license"
+    assert metadata.access is Access.CREDENTIALED
+    assert metadata.access_url == "https://example.org/access"
+
+
+def test_list_datasets_fetches_pinned_manifest_for_incomplete_other_license(version_dir, tmp_path):
+    _, manifest = version_dir
+    manifest_payload = manifest.to_dict()
+    manifest_payload["metadata"]["license"] = "other"
+    manifest_payload["metadata"]["license_url"] = "https://example.org/license"
+    expected = Manifest.from_dict(manifest_payload).metadata
+    summary = {
+        "dataset_id": manifest.dataset_id,
+        "version": str(manifest.metadata.dataset_version),
+        "name": manifest.metadata.name,
+        "description": manifest.metadata.description,
+        "license": "other",
+        "domains": [domain.value for domain in manifest.metadata.domains],
+        "tags": list(manifest.metadata.tags),
+    }
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.url.path == "/api/v1/datasets":
+            return httpx.Response(200, json={"datasets": [summary]})
+        return httpx.Response(200, json=manifest_payload)
+
+    registry = RemoteRegistry(
+        "http://api.local",
+        transport=httpx.MockTransport(handler),
+        cache_dir=tmp_path,
+    )
+    assert registry.list_datasets() == [expected]
+    assert paths == [
+        "/api/v1/datasets",
+        f"/api/v1/datasets/{manifest.dataset_id}/{manifest.metadata.dataset_version}/manifest",
+    ]
 
 
 def test_search_filters_by_domain(version_dir, tmp_path):
