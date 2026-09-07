@@ -738,11 +738,17 @@ class TimeFReader:
         registered: list[Annotation] = []
         with self._as_format_error():
             for part in self._manifest.files.annotations:
-                table = pads.dataset(
-                    self._version.path(part.path), filesystem=self._fs, schema=schema, format="parquet"
-                ).to_table(columns=["id", "key", "value", "source", "span", "record_ids"])
-                for row in table.to_pylist():
-                    if not row["record_ids"]:
+                data = pads.dataset(self._version.path(part.path), filesystem=self._fs, schema=schema, format="parquet")
+                for batch in data.to_batches(
+                    columns=["id", "key", "value", "source", "span", "record_ids"],
+                    batch_size=64 * 1024,
+                    use_threads=False,
+                ):
+                    # Match the existing empty-or-null ownership predicate before allocating
+                    # Python rows. Large corpora can have millions of owned rows and few matches.
+                    lengths = pc.list_value_length(batch.column("record_ids"))  # ty: ignore[unresolved-attribute]
+                    unowned = pc.fill_null(pc.equal(lengths, 0), True)  # ty: ignore[unresolved-attribute]
+                    for row in batch.filter(unowned).to_pylist():
                         registered.append(self._decode_annotation(row))
         return tuple(registered)
 
