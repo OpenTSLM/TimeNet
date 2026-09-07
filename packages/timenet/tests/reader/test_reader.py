@@ -565,6 +565,63 @@ def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
         assert len(annotations._cache) < total
 
 
+def test_annotation_batches_keep_shared_values_across_cache_eviction(tmp_path, monkeypatch):
+    # Two records share an annotation. Its LRU entry is evicted while the first record is built,
+    # but the prefetched batch must retain it for the second record. The third starts a new batch.
+    dataset = make_dataset()
+    cohort = dataset.records[1].annotations[0]
+    dataset.records[2].add_annotation(cohort)
+    version_dir = _write(tmp_path, dataset)
+    ann_path = version_dir / "annotations/part-00000000.parquet"
+    table = pq.read_table(ann_path)
+    pq.write_table(table, ann_path, row_group_size=2)
+    monkeypatch.setattr("timenet.reader.reader._RECORD_BATCH_ROWS", 2)
+    monkeypatch.setattr("timenet.reader.reader._ANNOTATION_CACHE_SIZE", 1)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        cached = reader._resolve_annotation("record-1", cohort.id)
+        annotations = reader._annotations_table()
+        real = annotations.rows_for_keys
+        requests = []
+
+        def fetch(keys):
+            requests.append(tuple(keys))
+            return real(keys)
+
+        monkeypatch.setattr(annotations, "rows_for_keys", fetch)
+        records = list(reader.iter_records())
+        assert [a.id for a in records[0].annotations] == [a.id for a in dataset.records[0].annotations]
+        assert records[0].annotations[1] is cached
+        assert records[1].annotations[0] is cached
+        assert records[2].annotations[0].value == cohort.value
+        assert len(requests) == 1  # three uncached ids fetched together, across annotation row groups
+        assert set(requests[0]) == {"age-0", "stim-0", "art-0"}
+
+
+@pytest.mark.parametrize("failure", ["missing", "invalid-json"])
+def test_annotation_prefetch_reports_a_later_records_failure_when_consumed(tmp_path, failure):
+    dataset = make_dataset()
+    dataset.records[1].add_annotation(Annotation(key="note", value="later", id="later-note"))
+    version_dir = _write(tmp_path, dataset)
+    ann_path = version_dir / "annotations/part-00000000.parquet"
+    table = pq.read_table(ann_path)
+    rows = table.to_pylist()
+    if failure == "missing":
+        rows = [row for row in rows if row["id"] != "later-note"]
+    else:
+        next(row for row in rows if row["id"] == "later-note")["value"] = "{broken JSON"
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        records = reader.iter_records()
+        assert next(records).record_id == "record-0"
+        with pytest.raises(
+            TimeFFormatError, match="unknown annotation 'later-note'" if failure == "missing" else "corrupt"
+        ):
+            next(records)
+    # Selecting an earlier valid record must not validate annotations belonging to other records.
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert [r.record_id for r in reader.iter_records(["record-0"])] == ["record-0"]
+
+
 def test_annotation_resolution_builds_no_whole_table_id_map(tmp_path):
     # The old reader built a {id: Annotation} map over the whole table on open. The pruned reader visits
     # only the row group(s) that can hold the id and caches just the decoded annotation, never the table.
