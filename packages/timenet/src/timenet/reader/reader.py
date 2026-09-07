@@ -66,6 +66,9 @@ _RECORD_BATCH_ROWS = 4096
 #: annotation shared across records decode only once.
 _ANNOTATION_CACHE_SIZE = 4096
 
+_INDEX_ROWS_CACHE_RECORDS = 8
+"""How many records keep their index rows. A read walks one record at a time, so this is small."""
+
 _AXIS_CACHE_SIZE = 1024
 """Maximum number of stored time axes. Series with the same timing can reuse an axis.
 After this limit, the reader builds other axes without keeping them."""
@@ -208,6 +211,32 @@ class _PrunedControlTable:
                 rows.extend(table.slice(lo, hi - lo).to_pylist())
         return rows
 
+    def rows_for_prefix(self, prefix: _StoredId) -> list[dict]:
+        """Return every row whose first lookup column matches, in stored order.
+
+        The table is sorted by its lookup columns, so the rows of one prefix are next to each
+        other. One search therefore returns them all.
+
+        Args:
+            prefix: The stored value of the first lookup column.
+
+        Returns:
+            The matching rows as dicts, in stored order, or empty if the prefix is absent.
+        """
+        groups = self.groups()
+        first = bisect.bisect_left(groups, prefix, key=lambda group: group.max_key)
+        rows: list[dict] = []
+        for position in range(first, len(groups)):
+            group = groups[position]
+            if not group.may_hold(prefix):
+                break  # group maxima are sorted, so the first that cannot hold the prefix ends the search
+            table, keys = self._group_rows(group)
+            lo = bisect.bisect_left(keys, prefix, key=lambda entry: entry[0])
+            hi = bisect.bisect_right(keys, prefix, key=lambda entry: entry[0])
+            if hi > lo:
+                rows.extend(table.slice(lo, hi - lo).to_pylist())
+        return rows
+
     def _file(self, rel: str) -> pq.ParquetFile:
         """Return the open Parquet handle for one part, opening it on first use.
 
@@ -303,6 +332,7 @@ class TimeFReader:
         self._annotations: _PrunedControlTable | None = None
         self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
         self._axis_cache: dict[tuple, TimeAxis] = {}
+        self._index_rows_cache: OrderedDict[str, dict[object, list[dict]]] = OrderedDict()
 
     # ---- lazy id inference ---------------------------------------------------------------------
 
@@ -341,6 +371,7 @@ class TimeFReader:
         state["_annotations"] = None
         state["_annotation_cache"] = OrderedDict()
         state["_axis_cache"] = {}
+        state["_index_rows_cache"] = OrderedDict()
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -694,6 +725,9 @@ class TimeFReader:
     def _index_rows(self, record_id: str, time_series_id: str) -> list[dict]:
         """Return one series' index rows, in ``chunk_idx`` order.
 
+        The index is sorted by record and then by series, so one search returns every series of a
+        record. This searches once per record and holds the result.
+
         Args:
             record_id: The owning record's id.
             time_series_id: The series id.
@@ -701,12 +735,19 @@ class TimeFReader:
         Returns:
             The series' index rows, empty if it has none.
         """
-        with self._as_format_error():
-            probe: tuple[_StoredId, ...] = (
-                cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, record_id)),
-                cast(_StoredId, self._codec.encode("time_series_id", time_series_id)),
-            )
-            return self._index_table().rows_for(probe)
+        by_series = self._index_rows_cache.get(record_id)
+        if by_series is None:
+            with self._as_format_error():
+                prefix = cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, record_id))
+                rows = self._index_table().rows_for_prefix(prefix)
+            by_series = {}
+            for row in rows:
+                by_series.setdefault(row["time_series_id"], []).append(row)
+            self._index_rows_cache[record_id] = by_series
+            if len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
+                self._index_rows_cache.popitem(last=False)
+        stored = cast(_StoredId, self._codec.encode("time_series_id", time_series_id))
+        return by_series.get(stored, [])
 
     # ---- record construction -------------------------------------------------------------------
 

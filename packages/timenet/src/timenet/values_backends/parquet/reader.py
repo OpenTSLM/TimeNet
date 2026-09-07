@@ -35,9 +35,7 @@ about 56 groups. A smaller cache drops groups the same record still needs.
 class _DecodedGroup:
     """One decoded shard row group, with its two list columns combined once.
 
-    A chunk read used to fetch ``table.column("values")`` again for every series, and each fetch
-    builds a fresh ``ChunkedArray``. Combining the column once here turns the per-series work into a
-    single list-scalar lookup on an already-built array.
+    Combining them here once makes each series' read a single list-scalar lookup.
     """
 
     values: pa.ListArray
@@ -223,9 +221,8 @@ class ParquetValuesReader(BaseValuesReader):
     def _offsets_all_null(shard: pq.ParquetFile, row_group: int) -> bool:
         """Return whether a row group's time offsets hold nothing but nulls.
 
-        A regular series stores no time offsets, so on a regular-axis dataset the column is null in
-        every row and decoding it is wasted work. The Parquet footer already counts the nulls, so
-        this reads no data to find out.
+        A regular series stores no time offsets, so on a regular-axis dataset the column is null
+        in every row. The Parquet footer counts the nulls, so this reads no data.
 
         Args:
             shard: The open shard.
@@ -238,8 +235,7 @@ class ParquetValuesReader(BaseValuesReader):
             position = shard.schema_arrow.names.index("time_offsets_us")
             column = shard.metadata.row_group(row_group).column(position)
         except (AttributeError, ValueError):
-            # A shard that reports no footer, or none written with this column. Read both columns,
-            # which is what the reader did before this check existed.
+            # A shard with no footer, or no such column, cannot say. Read both.
             return False
         statistics = column.statistics
         return statistics is not None and statistics.null_count == column.num_values

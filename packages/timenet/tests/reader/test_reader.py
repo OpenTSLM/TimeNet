@@ -514,6 +514,45 @@ def test_a_values_only_read_keeps_every_other_record_field(tmp_path):
             assert lean_series.to_numpy().tolist() == whole_series.to_numpy().tolist()
 
 
+def test_a_record_searches_the_index_once_for_all_of_its_series(tmp_path, monkeypatch):
+    # The index is sorted by record then series, so a record's rows are contiguous. Searching per
+    # series pays one bisect per series for rows that sit next to each other.
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        index = reader._index_table()
+        searches: list[object] = []
+        real = index.rows_for_prefix
+
+        def counting(prefix):
+            searches.append(prefix)
+            return real(prefix)
+
+        monkeypatch.setattr(index, "rows_for_prefix", counting)
+
+        record = next(iter(reader.iter_records(with_annotations=False)))
+        for series in record.time_series:
+            series.to_numpy()  # force the lazy loader, which is what asks the index
+
+        assert len(record.time_series) > 1, "the fixture needs a multi-series record to mean anything"
+        assert len(searches) == 1, f"one search per record, got {len(searches)} for one record"
+
+
+def test_the_index_memo_returns_the_same_rows_as_a_per_series_search(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = next(iter(reader.iter_records(with_annotations=False)))
+        for series in record.time_series:
+            memoized = reader._index_rows(record.record_id, series.time_series_id)
+            probe = tuple(
+                cast("str | bytes", reader._codec.encode(column, value))
+                for column, value in (
+                    ("record_id", record.record_id),
+                    ("time_series_id", series.time_series_id),
+                )
+            )
+            assert memoized == reader._index_table().rows_for(probe)
+
+
 def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
     # A small row-group target splits the annotations, so the id statistics have something to rule out.
     # Resolving one annotation id must decode only the group that can hold it, not the whole file.
