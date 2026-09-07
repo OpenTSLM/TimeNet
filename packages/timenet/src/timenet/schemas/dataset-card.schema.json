@@ -62,10 +62,17 @@
       "enum": [
         "health",
         "cardiology",
+        "respiratory",
         "sleep",
         "activity",
+        "motion",
         "economics",
         "finance",
+        "environment",
+        "energy",
+        "transport",
+        "observability",
+        "audio",
         "general"
       ]
     },

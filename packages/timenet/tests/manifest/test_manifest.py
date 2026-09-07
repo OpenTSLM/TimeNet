@@ -87,6 +87,32 @@ def test_default_format_version():
     assert _manifest().timef_format_version == 1
 
 
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "respiratory",
+        "motion",
+        "environment",
+        "energy",
+        "transport",
+        "observability",
+        "audio",
+    ],
+)
+def test_manifest_round_trips_benchmark_domain(domain):
+    payload = _manifest().to_dict()
+    payload["metadata"]["domains"] = [domain]
+    restored = Manifest.from_dict(payload)
+    assert restored.to_dict()["metadata"]["domains"] == [domain]
+
+
+def test_manifest_rejects_unknown_domain():
+    payload = _manifest().to_dict()
+    payload["metadata"]["domains"] = ["not-a-domain"]
+    with pytest.raises(TimeNetInvalidManifestError, match="invalid manifest 'metadata' block"):
+        Manifest.from_dict(payload)
+
+
 def test_nullable_schema_roundtrips_at_format_version_1():
     # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
