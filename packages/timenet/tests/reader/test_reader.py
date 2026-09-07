@@ -533,6 +533,27 @@ def test_a_values_only_read_keeps_every_other_record_field(tmp_path):
             assert lean_series.to_numpy().tolist() == whole_series.to_numpy().tolist()
 
 
+def test_record_columns_keep_series_aligned_in_a_sliced_batch(tmp_path, monkeypatch):
+    # Arrow batches can retain a nonzero list offset after slicing. Treating those offsets as
+    # zero-based indexes into flattened series silently attaches the wrong series to a record.
+    original = make_dataset()
+    version_dir = _write(tmp_path, original)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        batch = next(reader._iter_record_batches(None))
+        sliced = batch.slice(1, 2)
+        assert sliced.column("time_series").offsets[0].as_py() > 0
+        monkeypatch.setattr(reader, "_iter_record_batches", lambda *args, **kwargs: iter([sliced]))
+        records = list(reader.iter_records())
+        assert [r.record_id for r in records] == ["record-1", "record-2"]
+        for expected, actual in zip(original.records[1:], records, strict=True):
+            assert actual.subject_ids == expected.subject_ids
+            assert [a.id for a in actual.annotations] == [a.id for a in expected.annotations]
+            for left, right in zip(expected.time_series, actual.time_series, strict=True):
+                assert right.time_series_id == left.time_series_id
+                assert right.time_axis == left.time_axis
+                assert right.to_numpy().tolist() == left.to_numpy().tolist()
+
+
 def test_a_record_searches_the_index_once_for_all_of_its_series(tmp_path, monkeypatch):
     # The index is sorted by record then series, so a record's rows are contiguous. Searching per
     # series pays one bisect per series for rows that sit next to each other.

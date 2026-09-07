@@ -82,6 +82,55 @@ _CONTROL_TABLE_CACHE_MAX_BYTES = 64 * 2**20
 #: An id in its stored form: the id string, or the 16 raw bytes of a ``uuid16`` column.
 _StoredId = str | bytes
 
+_AXIS_COLUMNS = (
+    "axis_type",
+    "period_numerator_us",
+    "period_denominator",
+    "start_index",
+    "first_time_offset_us",
+    "last_time_offset_us",
+)
+
+
+@dataclass(frozen=True)
+class _RecordBatch:
+    """Bulk Python columns and flat series, with no intermediate per-record or per-series dicts."""
+
+    records: dict[str, list]
+    series: dict[str, list]
+    offsets: list[int]
+    axes: list[tuple]
+
+    @classmethod
+    def from_arrow(cls, batch: pa.RecordBatch, *, with_annotations: bool) -> _RecordBatch:
+        """Extract columns once and normalize offsets for sliced Arrow batches.
+
+        Returns:
+            Columns whose series offsets start at zero, including optional record fields.
+
+        Raises:
+            TimeFFormatError: If a record's series list or a series struct is null.
+        """
+        lists: pa.ListArray = batch.column("time_series")
+        flat: pa.StructArray = lists.flatten()
+        if lists.null_count or flat.null_count:
+            raise TimeFFormatError("record time_series lists and their entries must not be null")
+        records = {name: batch.column(name).to_pylist() for name in batch.schema.names if name != "time_series"}
+        for optional in ("time_span", "start_time_us"):
+            if optional not in records:
+                records[optional] = [None] * batch.num_rows
+        if not with_annotations:
+            records["annotation_ids"] = [()] * batch.num_rows
+        series = {field.name: flat.field(field.name).to_pylist() for field in flat.type}
+        offsets = lists.offsets.to_pylist()
+        origin = offsets[0]
+        return cls(
+            records=records,
+            series=series,
+            offsets=[offset - origin for offset in offsets],
+            axes=list(zip(*(series[name] for name in _AXIS_COLUMNS), strict=True)),
+        )
+
 
 @dataclass(frozen=True)
 class _RowGroupStats:
@@ -542,14 +591,18 @@ class TimeFReader:
             Each reconstructed :class:`Record`.
         """
         for batch in self._iter_record_batches(record_ids, with_annotations=with_annotations):
-            rows = batch.to_pylist()
-            annotations = (
-                self._prepare_annotations(aid for row in rows for aid in row["annotation_ids"])
-                if with_annotations
-                else None
-            )
-            for row in rows:
-                yield self._build_record(row, with_annotations=with_annotations, annotation_batch=annotations)
+            with self._as_format_error():
+                columns = _RecordBatch.from_arrow(batch, with_annotations=with_annotations)
+                codec = self._codec
+                annotations = (
+                    self._prepare_annotations(aid for ids in columns.records["annotation_ids"] for aid in ids)
+                    if with_annotations
+                    else None
+                )
+            for index in range(batch.num_rows):
+                with self._as_format_error():
+                    record = self._build_record(columns, index, codec, annotation_batch=annotations)
+                yield record  # noqa: RUF070 - keep consumer exceptions outside the format-error context
 
     # ---- loading -------------------------------------------------------------------------------
 
@@ -799,20 +852,21 @@ class TimeFReader:
 
     def _build_record(
         self,
-        row: dict,
+        batch: _RecordBatch,
+        index: int,
+        codec: IdCodec,
         *,
-        with_annotations: bool = True,
         annotation_batch: dict[str, dict | Annotation] | None = None,
     ) -> Record:
-        record_id = self._codec.decode("record_id", row["record_id"])
-        series = tuple(self._build_series(record_id, struct) for struct in row["time_series"])
-        annotations = (
-            tuple(
-                self._resolve_annotation(record_id, aid, annotation_batch)
-                for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
-            )
-            if with_annotations
-            else ()
+        columns = batch.records
+        record_id = codec.decode("record_id", columns["record_id"][index])
+        series = tuple(
+            self._build_series(record_id, batch, i, codec)
+            for i in range(batch.offsets[index], batch.offsets[index + 1])
+        )
+        annotations = tuple(
+            self._resolve_annotation(record_id, aid, annotation_batch)
+            for aid in codec.decode_list("annotation_id", columns["annotation_ids"][index])
         )
         # A stored span or time_span that no longer fits the record is a corrupt artifact, not a caller
         # mistake. As a result, the record's own invariants surface as a format error, not a ``ValueError``.
@@ -820,14 +874,14 @@ class TimeFReader:
         # ``Record.__post_init__`` reject a malformed time_span (bad bounds, or point-shaped) before the
         # code uses it to recheck the stored annotation spans.
         try:
-            time_span = cast("TimeInterval | None", self._codec.decode_span(row.get("time_span")))
+            time_span = cast("TimeInterval | None", codec.decode_span(columns["time_span"][index]))
             record = Record(
                 record_id=record_id,
                 time_series=series,
-                subject_ids=tuple(self._codec.decode_list("subject_id", row["subject_ids"])),
-                task_ids=tuple(self._codec.decode_list("task_id", row["task_ids"])),
+                subject_ids=tuple(codec.decode_list("subject_id", columns["subject_ids"][index])),
+                task_ids=tuple(codec.decode_list("task_id", columns["task_ids"][index])),
                 annotations=annotations,
-                start_time=row.get("start_time_us"),
+                start_time=columns["start_time_us"][index],
                 time_span=time_span,
             )
             for annotation in annotations:
@@ -841,13 +895,14 @@ class TimeFReader:
         except TimeFValidationError as exc:
             raise TimeFFormatError(str(exc)) from exc
 
-    def _build_series(self, record_id: str, struct: dict) -> TimeSeries:
-        spec_type = struct["spec_type"]
+    def _build_series(self, record_id: str, batch: _RecordBatch, index: int, codec: IdCodec) -> TimeSeries:
+        columns = batch.series
+        spec_type = columns["spec_type"][index]
         if spec_type not in self._spec_by_type:
             raise TimeFFormatError(f"record {record_id!r} references unknown spec_type {spec_type!r}")
-        time_series_id = self._codec.decode("time_series_id", struct["time_series_id"])
-        axis = self._axis(struct, record_id)
-        n_values = struct["n_values"]
+        time_series_id = codec.decode("time_series_id", columns["time_series_id"][index])
+        axis = self._axis(batch.axes[index], record_id)
+        n_values = columns["n_values"][index]
         time_offsets_loader = None
         if isinstance(axis, IrregularAxis):
             time_offsets_loader = _TimeOffsetsLoader(
@@ -856,11 +911,11 @@ class TimeFReader:
         try:
             return TimeSeries(
                 spec=self._spec_by_type[spec_type],
-                signal=struct["signal"],
+                signal=columns["signal"][index],
                 time_axis=axis,
                 loader=_SeriesLoader(self, record_id, time_series_id),
                 time_offsets_loader=time_offsets_loader,
-                source_id=self._codec.decode_opt("source_id", struct["source_id"]),
+                source_id=codec.decode_opt("source_id", columns["source_id"][index]),
                 time_series_id=time_series_id,
                 n_values=n_values,
             )
@@ -869,7 +924,7 @@ class TimeFReader:
             # format failure, not a caller mistake, even though TimeSeries raises the same type for both.
             raise TimeFFormatError(f"record {record_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
-    def _axis(self, struct: dict, record_id: str) -> TimeAxis:
+    def _axis(self, key: tuple, record_id: str) -> TimeAxis:
         """Return a time axis and reuse an existing axis when its stored columns match.
 
         Axis objects cannot change, so series can share them. Reuse avoids repeated ``Fraction``
@@ -877,23 +932,15 @@ class TimeFReader:
         After that limit, the reader builds other axes without keeping them.
 
         Args:
-            struct: The stored time-series struct.
+            key: The stored axis columns, in ``_AXIS_COLUMNS`` order.
             record_id: The owning record, for the error message.
 
         Returns:
             The axis.
         """
-        key = (
-            struct["axis_type"],
-            struct["period_numerator_us"],
-            struct["period_denominator"],
-            struct["start_index"],
-            struct["first_time_offset_us"],
-            struct["last_time_offset_us"],
-        )
         axis = self._axis_cache.get(key)
         if axis is None:
-            axis = self._build_axis(struct, record_id)
+            axis = self._build_axis(dict(zip(_AXIS_COLUMNS, key, strict=True)), record_id)
             if len(self._axis_cache) < _AXIS_CACHE_SIZE:
                 self._axis_cache[key] = axis
         return axis
