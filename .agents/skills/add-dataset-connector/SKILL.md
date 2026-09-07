@@ -440,8 +440,9 @@ on is the last one.
 pretraining corpus` says nothing to a reader who has not met the dataset. Name the release and say
 that this adds a connector.
 
-**`heads.py` never enters the stack.** It lives under `docs/notes/`, which is untracked and never
-`git add`ed.
+**One rule decides what enters the stack: a file that `download` or `convert` imports and calls.**
+Everything else you wrote to build the connector stays out — `heads.py`, the census script, the
+plan. Those live under `docs/notes/`, which is never `git add`ed.
 
 ## Rules that hold in every phase
 

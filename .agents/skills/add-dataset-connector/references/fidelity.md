@@ -261,10 +261,13 @@ attached after `add_record`.
 
 ## Tasks
 
-**A task is not an annotation, and there are usually far more of them.** Many sources run-length
-encode their labels: consecutive windows carrying the same label collapse into one entry with a long
-duration, and the file states that entry once. A task is one question, and a per-window task asks one
-question of each window. Count both numbers before you design.
+**A task is one question asked of a record, together with the answer the source states.** A
+per-window task asks that question of each window. An annotation is not a task. An annotation states
+a fact about the timeline, and a release usually holds far fewer of them.
+
+Many sources run-length encode their labels. Consecutive windows that carry the same label collapse
+into one entry with a long duration, and the file states that entry one time. Count the entries and
+the windows before you design.
 
 **Expand the runs before you count tasks.** One task per stored entry asks a different, coarser
 question than one task per window — each covering a stretch that may run from one window to hours.
@@ -323,8 +326,9 @@ records by orders of magnitude, they must stream — Sleep-EDF runs to about 245
 
 Two more hold for every task, streamed or not:
 
-- **`target` and `target_annotation_ids` are exclusive**, and `add_task` enforces it. `target`
-  carries the answer inline; `target_annotation_ids` says the answer *is* those stored annotations.
+- **A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task`
+  raises `TimeFValidationError` on a task that sets both, and on one that sets neither. `target`
+  carries the answer inline. `target_annotation_ids` says the answer *is* those stored annotations.
 - **`dataset.register_annotations` exists for annotations that tasks reference and no record
   carries.** Register the annotation before the stream that names it.
 - **A closed set is one annotation whose value is the list**, not one annotation per member. One per

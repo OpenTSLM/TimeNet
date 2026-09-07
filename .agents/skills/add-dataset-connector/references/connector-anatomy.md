@@ -10,9 +10,8 @@ this branch. Anchor files:
 - Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, `physionet/sleep_edfx`, and
   `timenet/hello_world` connectors
 
-This file is the API surface. Its siblings hold the rules: `fidelity.md` for what a connector may do
-to its source, `layout.md` for how its modules divide, `discovery.md` for how to read a release
-before designing against it.
+This file is the API surface. It states what a connector is made of. It does not state how to build
+one: the rules for that are the skill's own, and they live in its other references.
 
 ## Contents
 
@@ -25,7 +24,7 @@ before designing against it.
 - [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
 - [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
 - [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
-- [Fixture-based test pattern](#fixture-based-test-pattern)
+- [Where the tests live](#where-the-tests-live)
 
 ## The `BaseConnector` contract
 
@@ -44,8 +43,8 @@ before designing against it.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- There is **no `store` hook**, and nothing else to implement. What runs your connector takes the
-  dataset `convert` returns and stores it. How that happens is not a connector's concern.
+- Those four are the whole contract. What runs a connector takes the dataset `convert` returns and
+  stores it, and that is not a connector's concern.
 
 `list[TRaw]` does not mean one entry per record. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one record at a time.
@@ -82,20 +81,20 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   tests/           # one test module per module; no fixture files
 ```
 
-That is the smallest connector. A `head()` per raw file type is **not** part of it. A head is a
-discovery tool and lives at `docs/notes/connectors/<org>/<name>/heads.py`; see
-`discovery.md § Where a head lives`. A release that ships more than one kind of file divides further:
-`tables.py` and `metadata.py` give meaning, `specs.py` holds the signal map, `keys.py` holds the
-annotation keys. The half that **opens** a file is a base, not a connector module — `sleep_edfx`
-ships no reader of its own and imports `bases.edf.reader` and `bases.excel`. See `layout.md`.
-`physionet/sleep_edfx` is the worked example of the divided shape, `chengsenwang/tsqa` of the
-undivided one.
+That is the smallest connector. **One rule decides whether a file belongs in that folder: a file
+that `download` or `convert` imports and calls is part of the connector and is committed with it.
+Every other file used to build the connector stays out.** A `head()` is the common case of the
+second half, and the census script is another.
 
-`discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
-`discovery._module_name` maps the id to the module path, lowercasing and turning hyphens into
-underscores in **both** segments, so
-`chengsenwang/tsqa -> ...datasets.chengsenwang.tsqa` and `physionet/ecg-qa-cot -> ...datasets.physionet.ecg_qa_cot`.
-The org folder needs its own `__init__.py` (a namespace package that exposes no `CONNECTOR`).
+A connector that reads more than one kind of file divides further. `tables.py` and `metadata.py`
+give meaning, `specs.py` holds the signal map, and `keys.py` holds the annotation keys.
+`physionet/sleep_edfx` is shaped that way; `chengsenwang/tsqa` is one `connector.py`.
+
+The half that **opens** a file is a base, not a connector module. `sleep_edfx` ships no reader of
+its own and imports `bases.edf.reader` and `bases.excel`.
+
+`discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`. The org
+folder needs its own `__init__.py`, a namespace package that exposes no `CONNECTOR`.
 
 ## The dataset card (`dataset.yaml`)
 
@@ -165,9 +164,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
 - `dataset.add_task(record, <Task>(...))` registers one and returns it; `dataset.add_tasks(record, [...])`
   takes an iterable and registers the batch all-or-nothing. When a dataset holds far more tasks than
   records, neither fits: `dataset.set_task_stream(task_types, source)` streams them instead, and does
-  not validate them the way `add_task` does. `fidelity.md` says how the count decides which, and the
-  four rules a streamed task must obey. Set `scope` and `from_tasks` on the task
-  itself, not the call; a batch may derive from its own members in any order.
+  not validate them the way `add_task` does. Set `scope` and `from_tasks` on the task itself, not
+  the call; a batch may derive from its own members in any order.
 - Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
   `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
 
@@ -181,7 +179,7 @@ facility you did not know about is not a choice you made.
 | --- | --- | --- |
 | `dataset.add_task(record, task)` | the tasks are few and you want the cross-task validation | `chengsenwang/tsqa/connector.py:123` |
 | `dataset.add_tasks(record, tasks)` | one batch belongs to one record, all of it or none of it | `sleep_edfx/tasks.py` |
-| `dataset.set_task_stream(task_types, source)` | there are far more tasks than records, or more than fit in memory. `fidelity.md § Tasks` says this is the default | `physionet/ecg_qa_cot/connector.py:297` |
+| `dataset.set_task_stream(task_types, source)` | there are far more tasks than records, or more than fit in memory | `physionet/ecg_qa_cot/connector.py:297` |
 | `record.add_annotation` / `add_annotations` | the annotation belongs to one record and is read back through it | `sleep_edfx/connector.py` |
 | `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no record carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
 | `Task.target` | the answer is a short value that belongs to this one task | `chengsenwang/tsqa/connector.py:123` |
@@ -189,7 +187,8 @@ facility you did not know about is not a choice you made.
 | `Task.input_annotation_ids` | the task is asked *about* stored annotations rather than answered by them | `physionet/ecg_qa_cot/connector.py:306` |
 | `Task.from_tasks` | this task is derived from other tasks, and a reader has to be able to follow it back | — |
 
-**`target` and `target_annotation_ids` are exclusive**, and `add_task` enforces it
+**A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task`
+raises `TimeFValidationError` when a task sets both, and when it sets neither
 (`dataset/dataset.py:525-533`). Set `scope` and `from_tasks` on the task itself, not on the call.
 
 **Copying an answer into every task is the mistake this table exists to prevent.** A release with
@@ -224,11 +223,10 @@ the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
-**Read this one for the two hard questions it answers, not only for its size.** Its corpus states no
-record id and no sampling rate, so it builds the id from the row's position — `record_id=f"row-{index}"`
-at line 53 and `time_series_id=f"row-{index}-c{signal}"` at line 49 — and gives every series an
-`OrdinalAxis()` at line 48 rather than inventing a rate. Those are the two questions a row-shaped
-release raises first. `fidelity.md § The data` states the rules both lines follow.
+This is the smallest connector in the tree, and it answers the two questions a row-shaped release
+raises first. Its corpus states no record id and no sampling rate. So it builds the id from the
+row's position — `record_id=f"row-{index}"` at line 53, `time_series_id=f"row-{index}-c{signal}"` at
+line 49 — and gives every series an `OrdinalAxis()` at line 48 rather than inventing a rate.
 
 `connector.py`:
 
@@ -299,27 +297,11 @@ duplicated the recording in the dataset's own model rather than only in memory.
 
 Read `connector.py` for the current shape. Where this file and the code disagree, the code wins.
 
-## Fixture-based test pattern
+## Where the tests live
 
-Tests live beside their connector, in `<org>/<name>/tests/`, one module per module they cover.
+A connector's tests sit in `<org>/<name>/tests/`, one module per module they cover. A connector
+divided across several modules has several test modules: `sleep_edfx` has `test_connector.py`,
+`test_metadata.py`, `test_tables.py` and `test_tasks.py`.
 
-**The repo ships no dataset bytes, and no `fixtures/` directory exists.** A test builds what it
-needs, synthetically.
-
-For a single-module connector, mirror the `chengsenwang/tsqa` one at
-`packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
-hand-write rows shaped exactly like the source's, in the test module, with a comment saying they are
-not derived from the real dataset. Then call `convert()` on them directly and assert on records,
-tasks, annotations, and parsed values. No network, no env-var toggles.
-
-For a file-shaped source, mirror `sleep_edfx`, which writes a synthetic release into `tmp_path` from
-a fixture factory. That is also what lets it test the cases a real release would not hand you: a
-recording with no scoring beside it, one with two, one missing a scored signal.
-
-For a divided connector, mirror `physionet/sleep_edfx`, which has `test_connector.py`,
-`test_metadata.py`, `test_tables.py` and `test_tasks.py`. The split pays off here: `test_tables.py`
-passes literal tuples and needs no fixture at all, because `tables.py` does no I/O. Decide in the
-plan which modules get that treatment.
-
-A synthetic binary fixture must still be a valid file of its format — an EDF the reader accepts is a
-well-formed header plus its records, written by the test, not bytes copied from a real recording.
+The repo ships no dataset bytes, and no `fixtures/` directory exists anywhere in it. Every test
+builds what it needs at run time. `layout.md § Tests` holds the rules for writing one.

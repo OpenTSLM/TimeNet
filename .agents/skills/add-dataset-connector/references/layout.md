@@ -56,9 +56,10 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   tests/           # one test module per module above
 ```
 
-**`heads.py` is not in that list, and it does not go in it.** A head is a discovery tool, so it lives
-at `docs/notes/connectors/<org>/<name>/heads.py` with the plan and the census. See
-`discovery.md § Where a head lives`.
+**One rule decides whether a file belongs in that list: a file that `download` or `convert`
+imports and calls is part of the connector.** Every other file you wrote to build it stays out. A
+head is the common case, so `heads.py` lives at `docs/notes/connectors/<org>/<name>/heads.py` with
+the plan and the census. See `discovery.md § Where a head lives`.
 
 **The half that opens files is a base, not a connector module.** A container format is not specific
 to one dataset, so its reader is shared:
