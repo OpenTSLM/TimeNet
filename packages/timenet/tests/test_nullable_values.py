@@ -89,8 +89,8 @@ def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
 def test_float_accepts_nonfinite_observations(tmp_path, value):
-    # An IEEE NaN or infinity is a measured payload, not an absent measurement. Nullability governs
-    # Arrow nulls only, so a channel may carry a null and a NaN side by side and they stay distinct.
+    # NaN and infinity are present values, not missing measurements.
+    # The nullable flag controls Arrow nulls only.
     series = TimeSeries.from_values([None, value], spec=_spec(nullable=True), signal="x", time_axis=OrdinalAxis())
     validated = TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
@@ -100,7 +100,7 @@ def test_float_accepts_nonfinite_observations(tmp_path, value):
 
 
 def test_nonfinite_values_are_allowed_when_not_nullable(tmp_path):
-    # The finiteness rejection is gone entirely, not merely relaxed for nullable specs.
+    # Floating-point specs allow NaN and infinity, including non-nullable specs.
     series = TimeSeries.from_values([np.nan], spec=_spec(), signal="x", time_axis=OrdinalAxis())
     TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
@@ -196,8 +196,8 @@ def test_nullable_scalar_round_trips(tmp_path, values_backend, dtype, observatio
 
 
 def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
-    # Only Zarr carries N-D values. Nullability applies to the whole timestep, so one absent frame
-    # is one null row, not three null components.
+    # Only Zarr stores multidimensional values. A missing frame is one null row.
+    # Individual components cannot be null.
     frames = np.arange(12, dtype=np.float32).reshape(4, 3)
     storage = pa.FixedSizeListArray.from_arrays(
         pa.array(frames.ravel(), type=pa.float32()), 3, mask=pa.array([False, True, False, False])
@@ -220,7 +220,7 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
 
 
 def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
-    # A dataset that never opts in must stay byte-for-byte the layout it has today.
+    # Non-nullable datasets must not write validity arrays.
     series = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), signal="x", time_axis=OrdinalAxis())
     _write_read(tmp_path, series, values_backend="zarr")
 

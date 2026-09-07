@@ -33,7 +33,7 @@ _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
 #: Mirrors the group names in the writer module. See timenet.values_backends.zarr.writer.
 _IRREGULAR_GROUP = "_irregular"
 _TIME_OFFSETS_GROUP = "_time_offsets"
-#: Group holding the per-timestep validity of nullable series, mirroring the writer's layout.
+#: Group that marks present timesteps in nullable series. It matches the writer's layout.
 _VALIDITY_GROUP = "_validity"
 
 
@@ -63,10 +63,10 @@ def _time_offsets_path(values_rel_path: str) -> str:
 
 
 def _validity_path(values_rel_path: str) -> str:
-    """Return the validity array path that is parallel to a values array path.
+    """Return the path of the validity array for a values array.
 
-    The path keeps the values array's own group, so an irregular series' validity sits under
-    ``_validity/_irregular/`` and cannot collide with the regular one of the same modality.
+    The path keeps the values array's group. Irregular validity arrays use ``_validity/_irregular/``.
+    This keeps regular and irregular arrays separate for the same spec type.
 
     Args:
         values_rel_path: The values array's path relative to the version directory.
@@ -295,8 +295,8 @@ def _to_arrow(
             Arrow null.
 
     Returns:
-        A primitive array for scalar values or a fixed-shape tensor array for N-D values, carrying a
-        null at every timestep the validity mask marks absent.
+        A primitive array for scalar values or a fixed-shape tensor array for multidimensional values.
+        Each absent timestep contains a null.
     """
     absent = None if validity is None else ~validity
     if spec.dtype == "str":

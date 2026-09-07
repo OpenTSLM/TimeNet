@@ -126,7 +126,7 @@ class TimeSeriesSpec:
     dimension_names: tuple[str, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
     nullable: bool = False
-    """Whether the Arrow validity bitmap may mark a whole timestep as missing."""
+    """Whether a whole timestep can be missing. An Arrow bit marks whether each timestep is present."""
 
     def __post_init__(self) -> None:
         """Coerce the unit and validate the spec contract.

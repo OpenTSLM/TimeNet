@@ -53,7 +53,7 @@ values = series.to_numpy()   # a numpy array in the spec's dtype
 ```
 
 `to_numpy()` raises `TimeFValidationError` if the loaded array contains nulls.
-This replaces the previous conversion that could lose missingness.
+In some cases, the previous conversion lost the distinction between missing values and NaN.
 A nullable spec without actual nulls still supports this method. NaN and infinity remain valid values.
 
 For a nullable series, `to_arrow()` keeps nulls exactly. `to_numpy_and_mask()` returns the values and a
@@ -64,17 +64,17 @@ values, present = series.to_numpy_and_mask()
 values[present]      # only the observed timesteps
 ```
 
-The values array holds a zero-equivalent placeholder at each missing position.
+The values array holds zero, false, or an empty string at each missing position.
 That placeholder is not an observation. The mask carries that information.
 
-The torch view exposes the same pair. The item gives `"series"` for the dense tensors.
+The PyTorch dataset returns the same pair. The item gives `"series"` for the value tensors.
 It gives `"series_masks"` for one boolean tensor per series.
 A non-nullable series has an all-true mask.
 
 Uniform tensors with empty tasks and annotations support default PyTorch batching.
 Variable shapes and custom task or annotation objects need a suitable transform or `collate_fn`,
 a function that combines records into a batch.
-`batch_size=1` still invokes batching and does not remove these requirements.
+`batch_size=1` still combines records into a batch and needs the same handling.
 
 ## Sharing across records
 

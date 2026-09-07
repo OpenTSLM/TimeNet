@@ -94,8 +94,7 @@ def _leading_sample_source(buffered: list[pa.Array], budget_bytes: int) -> list[
     arrays: list[np.ndarray] = []
     used = 0
     for values in buffered:
-        # Drop nulls before sampling: they carry no bit pattern of their own, and leaving them in
-        # makes NumPy's distinct-value sort compare None against the real values and fail.
+        # Drop nulls before sampling. NumPy cannot sort None alongside the present values.
         sampled = values.drop_null() if values.null_count else values
         arrays.append(np.asarray(sampled.to_numpy(zero_copy_only=False)))
         used += values.nbytes

@@ -71,8 +71,8 @@ stream, so the two values cannot disagree. Use the `loader=` constructor above o
 
 `from_values()` and `from_irregular()` convert the values once and retain the resulting Arrow array.
 Repeated reads reuse that array without repeating the conversion.
-An arbitrary caller-supplied loader controls its own reads and caching.
-Numeric NumPy inputs retain the NumPy conversion path.
+If you supply a loader, that loader controls its own reads and stored results.
+The constructors still use NumPy to convert numeric NumPy inputs.
 Enum inputs use dictionary encoding, which stores each distinct label once.
 The constructors compare those distinct labels with the declared categories.
 

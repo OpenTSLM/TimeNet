@@ -39,10 +39,10 @@ def _validate_enum_values(
 def _array_from_values(
     spec: TimeSeriesSpec, values: np.ndarray | Sequence[bool | int | float | str | None]
 ) -> pa.Array:
-    """Build the declared scalar Arrow array without discarding Python nulls.
+    """Build a scalar Arrow array and preserve missing values supplied as ``None``.
 
     Returns:
-        Values cast to the spec's dtype with their validity bitmap preserved.
+        Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
 
     Raises:
         TimeFValidationError: If a non-nullable spec receives a null value.
@@ -52,21 +52,20 @@ def _array_from_values(
     else:
         source: np.ndarray | None = values if isinstance(values, np.ndarray) else None
         if source is not None and source.dtype.kind != "O":
-            # A NumPy cast keeps the previous behavior for lossy input from an array: it truncates,
-            # where pa.array would raise. An object array can hold a None, so it takes the other path.
+            # Keep NumPy conversion rules, including truncation that pa.array rejects.
+            # Object arrays use the other path because they can contain None.
             array = pa.array(np.asarray(source, dtype=np.dtype(spec.dtype)))
         elif spec.dtype == "bool":
-            # Match NumPy truth conversion for present values, while keeping None as an Arrow null.
+            # Convert present values to booleans as NumPy does. Preserve None as an Arrow null.
             array = pa.array([None if value is None else bool(value) for value in values], type=pa.bool_())
         else:
-            # pa.array turns a Python None into a null for every dtype, so one call covers the null
-            # and the non-null case. The check below reads the null count instead of scanning.
+            # pa.array preserves None as a null. The null count below avoids a separate scan.
             array = pa.array(values, type=pa.from_numpy_dtype(np.dtype(spec.dtype)))
     if array.null_count and not spec.nullable:
         raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
     if spec.dtype == "enum":
-        # Encode first, then check the dictionary. It holds each distinct label once, so this
-        # validates a handful of values instead of materializing every value as a Python object.
+        # Encode the labels first. The dictionary stores each distinct label once.
+        # Compare these labels with the allowed categories, without creating an object for every value.
         array = array.dictionary_encode()
         _validate_enum_values(spec, array.dictionary.to_pylist())
     return array
@@ -167,16 +166,16 @@ class TimeSeries:
     ) -> "TimeSeries":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
-        Use this path for connectors that hold an in-memory array. It caches ``values`` as an Arrow
-        array cast to the spec's dtype behind the loader and takes ``n_values`` from the array length.
-        Conversion happens once. Repeated reads return the retained Arrow array.
-        For lazy sources like files or remote shards, use the ``loader=`` constructor directly and
-        state the length, because nothing has read the values yet.
+        Use this constructor for values already in memory. It converts them once to an Arrow array
+        with the spec's dtype. Repeated reads return that same array. The array length sets
+        ``n_values``.
+
+        For files or remote sources, use the ``loader=`` constructor and supply the length.
+        That constructor does not read the values immediately.
 
         Args:
-            values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
-                spec, the strings). Python ``None`` marks a missing timestep when ``spec.nullable``
-                is true.
+            values: The signal values to convert to the spec's dtype. Text and enum specs take
+                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             spec: The series' measurement-modality spec.
             signal: The signal name.
             time_axis: Where the values sit in time.
@@ -216,9 +215,8 @@ class TimeSeries:
         Conversion happens once. Repeated reads return the retained Arrow arrays for values and offsets.
 
         Args:
-            values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
-                spec, the strings). Python ``None`` marks a missing timestep when ``spec.nullable``
-                is true.
+            values: The signal values to convert to the spec's dtype. Text and enum specs take
+                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             signal: The signal name.
@@ -300,9 +298,9 @@ class TimeSeries:
     def to_numpy_and_mask(self) -> tuple[np.ndarray, np.ndarray]:
         """Read values and an aligned boolean mask of observed timesteps.
 
-        Missing positions contain zero or empty strings in the dense values buffer. Use the mask
-        for missingness; these fill values are not observations. Numeric and boolean dtypes are
-        preserved, including when every timestep is missing.
+        Missing positions contain zero, false, or empty strings. Use the mask to identify missing
+        timesteps. These fill values are not observations. The method keeps numeric and boolean
+        dtypes, even when every timestep is missing.
 
         Returns:
             Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.

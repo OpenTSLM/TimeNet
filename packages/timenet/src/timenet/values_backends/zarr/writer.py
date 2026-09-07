@@ -62,10 +62,9 @@ _BYTES_PER_TIME_OFFSET = 8
 _IRREGULAR_GROUP = "_irregular"
 #: Group that holds those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
 _TIME_OFFSETS_GROUP = "_time_offsets"
-#: Group that holds the per-timestep validity of nullable series. One boolean array sits under it for
-#: each values array, so a validity array sits parallel to the values it describes. Zarr has no null
-#: concept of its own, so a nullable series stores its values densely and its missing timesteps here.
-#: A non-nullable spec writes nothing under it.
+#: Group that stores one boolean array for each nullable values array.
+#: Each boolean marks whether the corresponding timestep is present.
+#: Zarr does not represent nulls directly. A non-nullable spec writes nothing here.
 _VALIDITY_GROUP = "_validity"
 
 
@@ -112,10 +111,10 @@ def _time_offsets_array_path(spec_type: str) -> str:
 
 
 def _validity_array_path(values_path: str) -> str:
-    """Return the validity array path that sits parallel to a values array path.
+    """Return the path of the validity array for a values array.
 
-    The result keeps the values path's own group, so an irregular partition's validity lands under
-    ``_validity/_irregular/`` rather than colliding with the regular partition of the same modality.
+    The path keeps the values array's group. Irregular validity arrays use ``_validity/_irregular/``.
+    This keeps regular and irregular arrays separate for the same spec type.
 
     Args:
         values_path: The values array's path, as :func:`_value_array_path` returns it.
@@ -140,21 +139,19 @@ def _array_name(spec_type: str) -> str:
     return quote(spec_type, safe="")
 
 
-#: What to write into a null slot. Zarr is dense, so an absent timestep still occupies storage; this
-#: value is meaningless and only the parallel validity array says the timestep is missing. Each entry
-#: is the zero-equivalent its dtype accepts, since ``fill_null`` refuses a cross-type fill.
+#: Fill values for missing timesteps. The validity array distinguishes these from observations.
+#: Each fill value matches its dtype because fill_null rejects other types.
 _NULL_PLACEHOLDER: dict[str, object] = {"bool": False, "str": "", "enum": 0}
 
 
 def _dense_and_validity(
     arrow_values: pa.Array, spec: TimeSeriesSpec
 ) -> tuple[Shaped[np.ndarray, " time *value"], np.ndarray | None]:
-    """Return a series' values densely, plus its per-timestep validity when the spec is nullable.
+    """Return values and, for nullable specs, a mask that marks present timesteps.
 
-    Zarr stores dense arrays, so an absent timestep still occupies its slot. The value written there
-    is a zero-equivalent placeholder and means nothing by itself: the validity array is what says the
-    timestep is missing. A nullable series always yields a validity array, even with no nulls, so the
-    values and validity arrays stay the same length and one element offset addresses both.
+    Missing timesteps still occupy space in Zarr. Their fill values are not observations.
+    The validity array marks which timesteps are present. Nullable series always return this array,
+    even without nulls. Values and validity arrays have the same length, with matching positions.
 
     Args:
         arrow_values: The validated Arrow values.
@@ -165,8 +162,8 @@ def _dense_and_validity(
         non-nullable spec.
     """
     if spec.dtype == "enum":
-        # index_in maps each label to its codebook position in C. This replaces a to_pylist() plus
-        # a Python lookup for every value in the series.
+        # index_in finds each label's position in the categories using C code.
+        # This avoids a Python lookup for every value.
         categories = pa.array(spec.categories, type=arrow_values.type.value_type)
         codes = pc.index_in(arrow_values, value_set=categories)  # ty: ignore[unresolved-attribute]
         values = codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int32)
@@ -174,17 +171,16 @@ def _dense_and_validity(
         # The tensor's storage already holds a value at every slot, absent timesteps included.
         values = arrow_values.to_numpy_ndarray()
     else:
-        # A nullable primitive would otherwise convert to float64 with NaN at every null, which
-        # cannot be written to an integer or boolean array. Fill with the zero-equivalent for the
-        # dtype first, and let the mask carry the meaning.
+        # Converting nulls to NaN does not work for integer or boolean arrays.
+        # Fill missing positions with a value of the same dtype. The mask marks them as missing.
         filled = arrow_values
         if arrow_values.null_count:
             filled = arrow_values.fill_null(_NULL_PLACEHOLDER.get(spec.dtype, 0))
         values = filled.to_numpy(zero_copy_only=False)
     if not spec.nullable:
         return values, None
-    # Build the mask only when the spec wants one. A nullable series gets a full mask even with no
-    # nulls, so the values and validity arrays stay the same length.
+    # Nullable series always get a mask, even without nulls.
+    # Values and validity arrays must keep matching positions.
     present = (
         arrow_values.is_valid().to_numpy(zero_copy_only=False)
         if arrow_values.null_count
@@ -286,17 +282,16 @@ class ZarrValuesBackend(BaseValuesBackend):
         )
 
     def _validity_appender(self, group: Any, array_path: str, codec: Any) -> "_ArrayAppender":
-        """Create the validity array parallel to a partition's values, and wrap it in an appender.
+        """Create an array that marks present timesteps and return its appender.
 
-        Zarr stores dense arrays and has no null of its own, so a nullable series records its missing
-        timesteps here: one boolean per timestep, ``True`` where the timestep is present. The values
-        array still holds a zero-equivalent placeholder at an absent timestep, which is what lets one
-        element offset address both arrays. A non-nullable series writes nothing here at all.
+        Each boolean is ``True`` where the timestep is present. Missing positions still occupy
+        space in the values array, so the two arrays have matching positions.
+        Non-nullable series do not use this array.
 
         Args:
             group: The open Zarr group.
-            array_path: The values array's path. The validity path is derived from it, so an
-                irregular partition does not collide with the regular one of the same modality.
+            array_path: The values array's path. The derived validity path keeps regular and
+                irregular arrays separate for the same spec type.
             codec: The Blosc compressor.
 
         Returns:
@@ -414,11 +409,10 @@ class ZarrValuesBackend(BaseValuesBackend):
 
 @dataclass
 class _Partition:
-    """Hold one ``(spec_type, stores_time_offsets)`` partition: a values array and, when irregular, time offsets.
+    """Keep a partition's values, time offsets, and validity arrays together.
 
-    The dataclass holds them together to keep the arrays the same length. Every series writes to the
-    arrays its partition has, so one element offset addresses all of them. A caller cannot append to
-    one and forget the other.
+    A partition groups series with the same ``(spec_type, stores_time_offsets)``.
+    Each series writes to all arrays in its partition. This keeps their lengths and positions aligned.
     """
 
     values: "_ArrayAppender"
@@ -462,8 +456,7 @@ class _Partition:
         """Flush the partition's arrays.
 
         Returns:
-            How many Zarr arrays this partition finalized: one for the values, plus one each for the
-            time offsets and the validity mask where the partition has them.
+            The number of completed arrays. This includes values and any time-offset or validity arrays.
         """
         self.values.finish()
         if self.time_offsets is not None:

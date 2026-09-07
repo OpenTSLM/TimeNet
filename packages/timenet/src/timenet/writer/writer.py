@@ -375,9 +375,8 @@ class TimeFWriter:
         Returns:
             The validated values in the spec's canonical Arrow representation.
 
-            ``NaN``, ``+Infinity`` and ``-Infinity`` are valid float payloads, not missing values, so
-            this method accepts them whatever the spec's nullability is. Nullability governs Arrow
-            nulls only.
+            The method accepts ``NaN``, ``+Infinity``, and ``-Infinity`` as floating-point values.
+            They are distinct from missing values. The ``nullable`` flag controls Arrow nulls only.
 
         Raises:
             TimeFValidationError: If the array disagrees with the spec's dtype, shape, or
@@ -411,8 +410,8 @@ class TimeFWriter:
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.time_series_id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
-            # The dictionary holds each distinct label once, so this validates a handful of values
-            # instead of materializing every value in the series as a Python object.
+            # Compare each distinct label with the allowed categories.
+            # This avoids creating a Python object for every value in the series.
             _validate_enum_values(ts.spec, values.dictionary.to_pylist())
         if len(values) != ts.n_values:
             raise TimeFValidationError(
