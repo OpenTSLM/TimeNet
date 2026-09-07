@@ -202,15 +202,47 @@ class ParquetValuesReader(BaseValuesReader):
         if cached is not None:
             self._row_group_cache.move_to_end(key)
             return cached
-        table = self._shard(version, rel_path).read_row_group(row_group, columns=["values", "time_offsets_us"])
+        shard = self._shard(version, rel_path)
+        wanted = ["values"] if self._offsets_all_null(shard, row_group) else ["values", "time_offsets_us"]
+        table = shard.read_row_group(row_group, columns=wanted)
+        values = table.column("values").combine_chunks()
         group = _DecodedGroup(
-            values=table.column("values").combine_chunks(),
-            time_offsets=table.column("time_offsets_us").combine_chunks(),
+            values=values,
+            time_offsets=(
+                table.column("time_offsets_us").combine_chunks()
+                if "time_offsets_us" in wanted
+                else pa.nulls(len(values), type=table.schema.field("values").type)
+            ),
         )
         self._row_group_cache[key] = group
         while len(self._row_group_cache) > _ROW_GROUP_CACHE_SIZE:
             self._row_group_cache.popitem(last=False)
         return group
+
+    @staticmethod
+    def _offsets_all_null(shard: pq.ParquetFile, row_group: int) -> bool:
+        """Return whether a row group's time offsets hold nothing but nulls.
+
+        A regular series stores no time offsets, so on a regular-axis dataset the column is null in
+        every row and decoding it is wasted work. The Parquet footer already counts the nulls, so
+        this reads no data to find out.
+
+        Args:
+            shard: The open shard.
+            row_group: The row group to check.
+
+        Returns:
+            True when every row of the column is null, so the read can skip it.
+        """
+        try:
+            position = shard.schema_arrow.names.index("time_offsets_us")
+            column = shard.metadata.row_group(row_group).column(position)
+        except (AttributeError, ValueError):
+            # A shard that reports no footer, or none written with this column. Read both columns,
+            # which is what the reader did before this check existed.
+            return False
+        statistics = column.statistics
+        return statistics is not None and statistics.null_count == column.num_values
 
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
         path = version.path(rel_path)
