@@ -46,8 +46,8 @@ one: the rules for that are the skill's own, and they live in its other referenc
 - Those four are the whole contract. What runs a connector takes the dataset `convert` returns and
   stores it, and that is not a connector's concern.
 
-`list[TRaw]` does not mean one entry per record. A connector that would otherwise build millions of
-refs returns a **single handle** that `convert` walks, yielding one record at a time.
+`list[TRaw]` does not mean one entry per sample. A connector that would otherwise build millions of
+refs returns a **single handle** that `convert` walks, yielding one sample at a time.
 `SleepEdfxSource` is one such handle: it carries the study directories and the table paths, and no
 row of any table. `discovery.md` says how to choose between the two shapes.
 
@@ -87,7 +87,7 @@ Every other file used to build the connector stays out.** A `head()` is the comm
 second half, and the census script is another.
 
 A connector that reads more than one kind of file divides further. `tables.py` and `metadata.py`
-give meaning, `specs.py` holds the signal map, and `keys.py` holds the annotation keys.
+give meaning, `specs.py` holds the channel map, and `keys.py` holds the annotation keys.
 `physionet/sleep_edfx` is shaped that way; `chengsenwang/tsqa` is one `connector.py`.
 
 The half that **opens** a file is a base, not a connector module. `sleep_edfx` ships no reader of
@@ -104,7 +104,7 @@ yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa
 dataset_version: 1.0.0
 name: TSQA
-description: "Time-series question answering: a series plus a question/answer per record."
+description: "Time-series question answering: a series plus a question/answer per sample."
 license: Apache-2.0
 domains:
   - general
@@ -145,25 +145,25 @@ through boto3, so it names `boto3` too.
 
 Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
 
-- `TimeSeries.from_values(values, *, spec, signal, time_axis, source_id=None, time_series_id=None)`
+- `TimeSeries.from_values(values, *, spec, channel, time_axis, source_id=None, time_series_id=None)`
   is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
   takes `n_values` from the array's own length. When the source has one arbitrary time offset per point,
-  use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, signal, ...)` instead, which derives
+  use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, channel, ...)` instead, which derives
   the axis from the stream. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
   constructor only for genuinely lazy sources (files, remote shards). `time_series_id` is the dedupe key:
-  reuse the same id (and the same `TimeSeries`) to share one series across records.
+  reuse the same id (and the same `TimeSeries`) to share one series across samples.
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
-- `record = dataset.add_record(time_series=<tuple of TimeSeries>, record_id=...)`. A windowed record
+- `sample = dataset.add_sample(time_series=<tuple of TimeSeries>, sample_id=...)`. A windowed sample
   says so through its axis: `RegularAxis.at_index(...)` moves the origin into the recording.
-- `record.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it;
-  `record.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
-  its `span`. No span means whole-record; `span=TimePoint.seconds(...)` a time offset;
+- `sample.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it;
+  `sample.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
+  its `span`. No span means whole-sample; `span=TimePoint.seconds(...)` a time offset;
   `span=TimeInterval.seconds(...)` a region.
-- `dataset.add_task(record, <Task>(...))` registers one and returns it; `dataset.add_tasks(record, [...])`
+- `dataset.add_task(sample, <Task>(...))` registers one and returns it; `dataset.add_tasks(sample, [...])`
   takes an iterable and registers the batch all-or-nothing. When a dataset holds far more tasks than
-  records, neither fits: `dataset.set_task_stream(task_types, source)` streams them instead, and does
+  samples, neither fits: `dataset.set_task_stream(task_types, source)` streams them instead, and does
   not validate them the way `add_task` does. Set `scope` and `from_tasks` on the task itself, not
   the call; a batch may derive from its own members in any order.
 - Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
@@ -177,11 +177,11 @@ facility you did not know about is not a choice you made.
 
 | the choice | reach for it when | already done in |
 | --- | --- | --- |
-| `dataset.add_task(record, task)` | the tasks are few and you want the cross-task validation | `chengsenwang/tsqa/connector.py:123` |
-| `dataset.add_tasks(record, tasks)` | one batch belongs to one record, all of it or none of it | `sleep_edfx/tasks.py` |
-| `dataset.set_task_stream(task_types, source)` | there are far more tasks than records, or more than fit in memory | `physionet/ecg_qa_cot/connector.py:297` |
-| `record.add_annotation` / `add_annotations` | the annotation belongs to one record and is read back through it | `sleep_edfx/connector.py` |
-| `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no record carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
+| `dataset.add_task(sample, task)` | the tasks are few and you want the cross-task validation | `chengsenwang/tsqa/connector.py:123` |
+| `dataset.add_tasks(sample, tasks)` | one batch belongs to one sample, all of it or none of it | `sleep_edfx/tasks.py` |
+| `dataset.set_task_stream(task_types, source)` | there are far more tasks than samples, or more than fit in memory | `physionet/ecg_qa_cot/connector.py:297` |
+| `sample.add_annotation` / `add_annotations` | the annotation belongs to one sample and is read back through it | `sleep_edfx/connector.py` |
+| `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no sample carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
 | `Task.target` | the answer is a short value that belongs to this one task | `chengsenwang/tsqa/connector.py:123` |
 | `Task.target_annotation_ids` (`types/tasks.py:118`) | the answer **is** stored annotations: store the text one time and point many tasks at it, instead of copying it into every task row | nothing yet — the path is written and tested only for validation |
 | `Task.input_annotation_ids` | the task is asked *about* stored annotations rather than answered by them | `physionet/ecg_qa_cot/connector.py:306` |
@@ -192,14 +192,14 @@ raises `TimeFValidationError` when a task sets both, and when it sets neither
 (`dataset/dataset.py:525-533`). Set `scope` and `from_tasks` on the task itself, not on the call.
 
 **Copying an answer into every task is the mistake this table exists to prevent.** A release with
-four captions per record and 600 000 records writes 2.4 million copies of text it could have stored
+four captions per sample and 600 000 samples writes 2.4 million copies of text it could have stored
 one time. `register_annotations` plus `target_annotation_ids` is the pair that stores it once.
 
 ## Task types (`timenet.types.tasks`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
-Every task shares one frame on the `Task` base — `record_ids`, `prompt`, `scope` (a `Span` narrowing the
+Every task shares one frame on the `Task` base — `sample_ids`, `prompt`, `scope` (a `Span` narrowing the
 input), `input_annotation_ids`, `target` / `target_annotation_ids`, `rationale`, `from_tasks` — so the
 type only says what *kind* of answer it is.
 
@@ -209,23 +209,23 @@ type only says what *kind* of answer it is.
 | `AnswerTask` | `target: str` (free text; a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |
-| `ForecastingTask` | the produced series | `context_record_ids`, `target_record_id` |
-| `TSEditingTask` | the produced series | `source_record_id`, `target_record_id` |
-| `TSGenerationTask` | the produced series | `target_record_id` |
-| `TSCorrespondenceTask` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
+| `ForecastingTask` | the produced series | `context_sample_ids`, `target_sample_id` |
+| `TSEditingTask` | the produced series | `source_sample_id`, `target_sample_id` |
+| `TSGenerationTask` | the produced series | `target_sample_id` |
+| `TSCorrespondenceTask` | `target: tuple[str, ...]` (sample ids) | `candidate_sample_ids` |
 
-The three series-output tasks set `answer_is_record` and locate their answer by record id instead of
-filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the record the
-task is attached to, exclusive with `target_record_id`. Use it when the future to predict lies in the
-same record rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
+The three series-output tasks set `answer_is_sample` and locate their answer by sample id instead of
+filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the sample the
+task is attached to, exclusive with `target_sample_id`. Use it when the future to predict lies in the
+same sample rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
 points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
 the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
 This is the smallest connector in the tree, and it answers the two questions a row-shaped release
-raises first. Its corpus states no record id and no sampling rate. So it builds the id from the
-row's position — `record_id=f"row-{index}"` at line 53, `time_series_id=f"row-{index}-c{signal}"` at
+raises first. Its corpus states no sample id and no sampling rate. So it builds the id from the
+row's position — `sample_id=f"row-{index}"` at line 53, `time_series_id=f"row-{index}-c{channel}"` at
 line 49 — and gives every series an `OrdinalAxis()` at line 48 rather than inventing a rate.
 
 `connector.py`:
@@ -254,22 +254,22 @@ class TSQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         for index, row in enumerate(raw_refs):
             series = json.loads(row["Series"])
-            signals = series if series and isinstance(series[0], list) else [series]
+            channels = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
                 TimeSeries.from_values(
                     values,
                     spec=_SPEC,
-                    signal=f"c{signal}",
+                    channel=f"c{channel}",
                     time_axis=OrdinalAxis(),
-                    time_series_id=f"row-{index}-c{signal}",
+                    time_series_id=f"row-{index}-c{channel}",
                 )
-                for signal, values in enumerate(signals)
+                for channel, values in enumerate(channels)
             )
-            record = dataset.add_record(time_series=time_series, record_id=f"row-{index}")
-            record.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
+            sample = dataset.add_sample(time_series=time_series, sample_id=f"row-{index}")
+            sample.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
-                record.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(record, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+                sample.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
+            dataset.add_task(sample, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
         return dataset
 
 CONNECTOR = TSQAConnector
@@ -290,9 +290,9 @@ Subclasses `BasePhysioNetConnector[EcgQaCotSource]`, where `EcgQaCotSource` is a
 the release rather than one ref per row. `download` calls `ensure_archive` / `download_files` and
 returns that handle; `convert` walks it.
 
-**One record is one recording, not one QA row.** The 12-lead ECG becomes a record, and every
-question asked of that recording becomes a task on it. An earlier version made one record per QA row
-and cached the shared leads to avoid duplicating them; that was replaced, because a record per row
+**One sample is one recording, not one QA row.** The 12-lead ECG becomes a sample, and every
+question asked of that recording becomes a task on it. An earlier version made one sample per QA row
+and cached the shared leads to avoid duplicating them; that was replaced, because a sample per row
 duplicated the recording in the dataset's own model rather than only in memory.
 
 Read `connector.py` for the current shape. Where this file and the code disagree, the code wins.

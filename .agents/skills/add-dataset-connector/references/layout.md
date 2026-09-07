@@ -46,7 +46,7 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
   README.md        # the assumptions and the inconsistencies
-  specs.py         # TimeSeriesSpec values and the signal-name map
+  specs.py         # TimeSeriesSpec values and the channel-name map
   annotations.py   # source annotations -> Annotation
   tables.py        # rows -> facts; no I/O at all
   metadata.py      # facts -> Annotation
@@ -96,12 +96,12 @@ back a handle instead. `discovery.md § Choose the download shape` states the li
 Check that the base fits the size before you build on it.
 
 A small connector does not need all of these. `chengsenwang/tsqa` is one `connector.py`, because it
-reads one parquet row per record and there is nothing to divide. Add a module when the census shows
+reads one parquet row per sample and there is nothing to divide. Add a module when the census shows
 a second kind of file or a second kind of meaning, not before.
 
 **`chengsenwang/tsqa` is also the pattern for a row-shaped release that states no id and no time
 axis**, which is the harder thing it demonstrates. Its corpus has neither, so `connector.py:53`
-builds `record_id=f"row-{index}"` from the row's position and `:48` gives every series an
+builds `sample_id=f"row-{index}"` from the row's position and `:48` gives every series an
 `OrdinalAxis()` rather than inventing a rate. Read it when your release ships rows and no identity.
 `fidelity.md § The data` states the rule those two lines follow.
 
@@ -112,21 +112,21 @@ module and reads its `CONNECTOR`.
 
 - **The opening modules decode nothing.** `bases/edf/reader.py` opens containers and
   `bases/excel.py` opens workbooks; neither says what the bytes mean.
-  `reader.open_edf(path)` parses the header, and `reader.read_signal(file, index)` takes that open
+  `reader.open_edf(path)` parses the header, and `reader.read_channel(file, index)` takes that open
   file.
 - **`tables.py` turns rows into facts and does no I/O at all.** It imports the stdlib,
   `timenet.errors`, the pure decoders in `bases.excel`, and its own `keys` — nothing that opens a
   file. Its test passes literal tuples and creates no file.
 - **`metadata.py` turns facts into annotations.** It opens no file and takes no path.
-- **`specs.py` holds values only.** One `TimeSeriesSpec` per kind of signal, and one map from every
-  signal name of the release to those specs.
-- **`timeseries.py` builds series from a header it is handed.** It names no study, no signal and no
+- **`specs.py` holds values only.** One `TimeSeriesSpec` per kind of channel, and one map from every
+  channel name of the release to those specs.
+- **`timeseries.py` builds series from a header it is handed.** It names no study, no channel and no
   file of the release.
 
 ## Two rules that follow
 
 **Read a file one time.** Parse a header one time and pass it on. A function that takes a path while
-its caller already holds the open file re-reads what has been read. Seven signals cost one header
+its caller already holds the open file re-reads what has been read. Seven channels cost one header
 parse, not seven.
 
 **A function touches the disk or builds a value, never both.** The half that builds a value is then
@@ -137,12 +137,12 @@ provable with values alone, and needs no file on disk to test it.
 
 ## `convert` holds the loop
 
-The loop states what a record is. The modules below it state what the steps of that loop mean, and
+The loop states what a sample is. The modules below it state what the steps of that loop mean, and
 drive none of them.
 
 ```python
 file = reader.open_edf(recording.psg_path)
-series = timeseries.build(record_id, file, specs.SPECS, loader=reader.build_signal_loader)
+series = timeseries.build(sample_id, file, specs.SPECS, loader=reader.build_channel_loader)
 ```
 
 `build` is handed an open file and a loader factory. It opens nothing, and it holds nothing of this
@@ -150,10 +150,10 @@ dataset.
 
 ## The lazy loader is I/O too, and it runs after `convert` has returned
 
-Let the loader close over the open file. The signals of one recording then share one open file and
+Let the loader close over the open file. The channels of one recording then share one open file and
 one memory map, and the header is parsed one time.
-`reader.build_signal_loader(file, index)` holds the file that `convert` opened, so a seven-signal
-record opens its file once rather than once per series. Give a record's series the same `source_id`
+`reader.build_channel_loader(file, index)` holds the file that `convert` opened, so a seven-channel
+sample opens its file once rather than once per series. Give a sample's series the same `source_id`
 and they are read together, which is what makes one open enough.
 
 **The cost is that whatever a loader captures stays alive until it is called, and it is called after
@@ -165,10 +165,10 @@ parse again. Say which case you are in, in the plan.
 
 Three things, in this order:
 
-1. **One `TimeSeriesSpec` for each kind of signal**, at module level in `specs.py`. Specs are frozen,
-   so identical ones are equal and dedupe. Name a spec for the kind it measures, not for the signal
+1. **One `TimeSeriesSpec` for each kind of channel**, at module level in `specs.py`. Specs are frozen,
+   so identical ones are equal and dedupe. Name a spec for the kind it measures, not for the channel
    that carries it.
-2. **One map from every signal name of the release to those specs**, keyed by the exact string in
+2. **One map from every channel name of the release to those specs**, keyed by the exact string in
    the header.
 3. **One builder that takes the map and gives the series.** It reads every other attribute from the
    header it is handed.
@@ -182,25 +182,25 @@ SPECS = {
     # Keyed by the exact string the header writes. One entry for every name the
     # release uses, including two spellings of the same thing.
     "<name as the header spells it>": _KIND,
-    "<a second signal of the same kind>": _KIND,
+    "<a second channel of the same kind>": _KIND,
     "<the same kind, spelled differently elsewhere in the release>": _KIND,
     "<a different kind>": _OTHER_KIND,
 }
 ```
 
 - *Sleep-EDF:* one `_EEG` spec serves both `EEG Fpz-Cz` and `EEG Pz-Oz`, and one `_MARKER` spec
-  serves the marker signal under both the names the two parts of the release give it.
+  serves the marker channel under both the names the two parts of the release give it.
 
 Four rules hold here:
 
 - **The builder holds nothing of the dataset.** The caller passes the spec table and the loader
   factory.
-- **Each signal keeps its own time axis.** A `RegularAxis` whose period comes from
-  `samples_per_record / record_duration` for that signal.
-- **Read the rate and the block duration from the header, never from a constant.** One signal name
+- **Each channel keeps its own time axis.** A `RegularAxis` whose period comes from
+  `samples_per_record / record_duration` for that channel.
+- **Read the rate and the block duration from the header, never from a constant.** One channel name
   can run at different rates in two parts of a release, and one file can write a different block
   duration from all the others.
-- **An unknown signal name raises `TimeFFormatError`.**
+- **An unknown channel name raises `TimeFFormatError`.**
 
 Every attribute of a series comes from a named field of the header. Nothing is guessed, and nothing
 but the spec comes from the study:
@@ -208,30 +208,30 @@ but the spec comes from the study:
 ```mermaid
 flowchart LR
     hdr["the header of one file"]
-    nm["the signal's name<br/>as the header spells it"]
-    ct["values per block"]
-    du["block duration"]
-    nr["block count"]
+    nm["the channel's name<br/>as the header spells it"]
+    ct["values per record"]
+    du["record duration"]
+    nr["record count"]
     hdr --> nm
     hdr --> ct
     hdr --> du
     hdr --> nr
     nm --> sp["spec<br/>SPECS[name]<br/>kind + unit"]
-    nm --> ch["signal<br/>the source's own name"]
-    nm --> id["time_series_id<br/>&lt;prefix&gt;-&lt;record&gt;-&lt;signal&gt;"]
+    nm --> ch["channel<br/>the source's own name"]
+    nm --> id["time_series_id<br/>&lt;prefix&gt;-&lt;sample&gt;-&lt;channel&gt;"]
     ct --> ax["time_axis<br/>RegularAxis.from_rate_hz(values / duration)"]
     du --> ax
-    ct --> nv["n_values<br/>blocks x values per block"]
+    ct --> nv["n_values<br/>records x values per record"]
     nr --> nv
     sp --> ts["TimeSeries"]
     ch --> ts
     id --> ts
     ax --> ts
     nv --> ts
-    ld["loader<br/>built per signal, decodes on demand"] --> ts
+    ld["loader<br/>built per channel, decodes on demand"] --> ts
 ```
 
-**One spec table covers every shape the census found.** A shared signal name is still worth a second
+**One spec table covers every shape the census found.** A shared channel name is still worth a second
 look, because one name can cover two different measurements. Ask whether a spec — a kind and a unit
 — is still true of both, and let the header supply whatever separates them. Check every shared name
 before you write one table.
@@ -245,7 +245,7 @@ before you write one table.
 A census that finds two shapes does not mean two modules. Every difference it found is one of two
 things:
 
-- **A value the header states** — signals, rates, block duration, physical range. The builder reads
+- **A value the header states** — channels, rates, record duration, physical range. The builder reads
   them and knows nothing of either study.
 - **A value the description states as data** — the header rows to skip, the columns to take by
   position, the key of a row, the map of its sex column. These are the fields of one frozen
@@ -326,7 +326,7 @@ directory exists.** A test builds what it needs, synthetically, and says so in a
 - **The connector test calls `convert()` directly**, with no network.
 
 Writing the release rather than checking one in is what lets a test cover the odd cases the real
-release holds: a recording with no scoring beside it, one with two, one missing a scored signal.
+release holds: a recording with no scoring beside it, one with two, one missing a scored channel.
 You cannot check in a fixture for a case the release does not contain.
 
 No connector reads an environment variable, and the ones some older docs name do not exist — see
@@ -346,7 +346,7 @@ No connector reads an environment variable, and the ones some older docs name do
 | A parser reading one value out of a name | `_parse_<thing>(...)` | `_parse_subject_id` |
 | The connector's id prefix | `_ID_PREFIX`, one module-level constant | `sleep_edfx/connector.py` |
 
-Because `download_async` gives one handle and not a list per record, `convert` starts
+Because `download_async` gives one handle and not a list per sample, `convert` starts
 `source = raw_refs[0]`. The name `raw_refs` comes from `BaseConnector[TRaw]` and is not iterated.
 
 `__init__.py` re-exports with explicit self-aliases, so a re-exported name is unambiguously public
@@ -421,10 +421,10 @@ Named here so nobody resolves one by accident and calls it a convention.
 
 - **Where a census lives.** A test that fails when a release grows a third shape would be the
   strongest version of it, but it needs the full download.
-- **Whether the spec table is code or data.** The signal-to-spec map could sit in `dataset.yaml`
+- **Whether the spec table is code or data.** The channel-to-spec map could sit in `dataset.yaml`
   beside the card. Code keeps it type-checked; data keeps it readable to somebody who does not read
   Python.
-- **How a record states which part of a release it came from**, other than by an annotation.
+- **How a sample states which part of a release it came from**, other than by an annotation.
 - **How far the lazy loaders scale.** Every file a loader captures stays open until it is called. A
   couple of hundred is fine; a hundred thousand is not, and would want a loader that reopens by path
   and pays the header parse again. Nobody has fixed the number where that flips.

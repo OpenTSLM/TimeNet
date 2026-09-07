@@ -66,7 +66,7 @@ heads then check. Phase 1 fills in the last column.
 
 ### The inventory
 
-| path | kind | count | belongs to a record |
+| path | kind | count | belongs to a sample |
 | --- | --- | --- | --- |
 | `<glob>` | signals | | yes |
 | `<glob>` | labels | | yes |
@@ -74,7 +74,7 @@ heads then check. Phase 1 fills in the last column.
 | `<path>` | index / checksums | | no |
 | `<path>` | describes the release | | no |
 
-Every kind in this table is a node in the map below. Every file that belongs to no record is named
+Every kind in this table is a node in the map below. Every file that belongs to no sample is named
 here once, so nobody looks for it again.
 
 ### Heads
@@ -98,14 +98,14 @@ uv run python docs/notes/connectors/<org>/<name>/heads.py <path>
 
 | | shape A | shape B |
 | --- | --- | --- |
-| records | | |
-| signals | | |
+| samples | | |
+| channels | | |
 | rates | | |
 | dtypes | | |
 | labels | | |
 | table row | | |
 
-- **Total records**: `<count>`, counted by `<how>`.
+- **Total samples**: `<count>`, counted by `<how>`.
 - **Anomalies**: what differs in only a few files, with the count.
 - **Free text**: whether every value terminates, and whether the lengths have a cliff.
 - **Against the declaration**: every file checked against the declared schema, and every column the
@@ -119,7 +119,7 @@ flowchart LR
 
 A dashed arrow is a part that is not written yet.
 
-### The record model — where every fact comes from
+### The sample model — where every fact comes from
 
 Every object TimeF will hold, and the exact part of the source that states it. This is the diagram
 the user accepts or rejects, so name the part of a file rather than the file, and label every edge
@@ -132,7 +132,7 @@ flowchart LR
 Check it before you show it:
 
 - every TimeF node has an inbound edge — one without is invented
-- every source node has an outbound edge, or is in the inventory as belonging to no record
+- every source node has an outbound edge, or is in the inventory as belonging to no sample
 - the edge that scopes an annotation says whether it came from prose or a header
 - every task traces to an annotation or to the sentence stating the question
 
@@ -144,7 +144,7 @@ belief. A line with no evidence is an assumption, and belongs in section 5 inste
 
 Real values, not placeholders.
 
-- **record_id**: `<prefix>-<source id>`, from <where the source states it>. Where the source states
+- **sample_id**: `<prefix>-<source id>`, from <where the source states it>. Where the source states
   none, name the position it is built from and say that a re-release invalidates it.
 - **subject_ids**: `<value>`, qualified by `<what>`
 - **time_span**: <what fixes it>
@@ -173,7 +173,7 @@ prose, never from a header, so quote the sentence.
 - **evidence**: <what in the source says this is the question being asked>
 - **one question is**: <what a single task asks>
 - **expansion**: <run-length? exact? what the boundary rule is>
-- **count**: <tasks per record> and `<total>`, derived from the census rows `<which>`
+- **count**: <tasks per sample> and `<total>`, derived from the census rows `<which>`
 - **therefore**: `add_tasks` / `set_task_stream`, because <the count>
 
 ### How the answer is stored
@@ -185,7 +185,7 @@ know about is not a choice you made.
 | the choice | used here | why |
 | --- | --- | --- |
 | `add_task` / `add_tasks` / `set_task_stream` | | |
-| `record.add_annotation` / `dataset.register_annotations` | | |
+| `sample.add_annotation` / `dataset.register_annotations` | | |
 | `Task.target` / `Task.target_annotation_ids` | | |
 | `Task.input_annotation_ids`, `Task.from_tasks` | | |
 
@@ -193,7 +193,7 @@ know about is not a choice you made.
 
 ### Download shape
 
-A list per record, or one handle walked at convert time. Say which and why.
+A list per sample, or one handle walked at convert time. Say which and why.
 `BaseHuggingFaceConnector` gives the list shape only, so say whether this release fits in it.
 
 ### What already exists
@@ -235,8 +235,8 @@ here.** A prediction that contradicts a table two sections above it is a mistake
 
 | | expected | derived from | measured (phase 5) |
 | --- | --- | --- | --- |
-| records | | | |
-| series per record | | | |
+| samples | | | |
+| series per sample | | | |
 | annotations | | | |
 | tasks | | | |
 | warnings, by kind and reason | | | |
@@ -258,13 +258,13 @@ and record it here. The user can overturn any of these on reading them.
 ### Open questions
 
 A question belongs here only when all three hold: the source is silent, **and** no repo rule covers
-it, **and** two defensible answers lead to different records, tasks or counts. Anything else is a
+it, **and** two defensible answers lead to different samples, tasks or counts. Anything else is a
 decision, above.
 
 #### A1. <the question in one line>
 
 - **What the source states**: <evidence, with the file or the sentence it came from>
 - **What it does not state**: <the gap>
-- **The two answers**: <what each one changes about the records, the tasks or the counts>
+- **The two answers**: <what each one changes about the samples, the tasks or the counts>
 - **Proposed**: <what you would do>
 - **Ruling**: <filled in at the gate>

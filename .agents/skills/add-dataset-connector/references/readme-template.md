@@ -25,7 +25,7 @@ Rules:
   it from one copied off the dataset's page. A number nobody can re-measure is a claim, not evidence.
 - **Quote the description sentences the design relies on**, beside `source_url`, so the next reader
   can check them rather than trust them.
-- **Say where the record ids come from.** Where the source states no id and the connector built one
+- **Say where the sample ids come from.** Where the source states no id and the connector built one
   from a position, the README says so, and says that a re-release invalidates every id.
 - Use the `simple-english` skill on the prose. Do not run it over quoted evidence.
 
@@ -35,7 +35,7 @@ The README this template produces has these sections, in this order:
 
 1. The source of truth
 2. What the description states
-3. What one record holds
+3. What one sample holds
 4. The tasks this connector builds
 5. Inconsistencies and decisions
 6. Warnings this build emits
@@ -47,7 +47,7 @@ The README this template produces has these sections, in this order:
 | --- | --- | --- |
 | The source of truth | a table: fact, source of truth, the other reading — plus one line naming *why* that source wins | nothing in the release disagrees with itself |
 | What the description states | the quoted sentences, each with where it came from, each followed by one line saying what it decides | the design leans on no prose (rare — say so deliberately) |
-| What one record holds | signals with units and rates, annotations with what each is scoped to, and where each came from | never; a connector that builds no records builds nothing |
+| What one sample holds | channels with units and rates, annotations with what each is scoped to, and where each came from | never; a connector that builds no samples builds nothing |
 | The tasks this connector builds | a table: the question, its type, its count, its scope | the connector builds no tasks |
 | Inconsistencies and decisions | one `###` entry each, its state in the heading — `— **Handled**`, `**Not built**` or `**Open**` — then **Problem.**, **Decision.**, **Consequence.** in that order | the release ships none you found |
 | Warnings this build emits | a table: warning, count *(measured)*, why | a build emits none |
@@ -68,7 +68,7 @@ worked example.
 ```markdown
 # <Dataset name>
 
-<One paragraph: what the release holds and what one record is.>
+<One paragraph: what the release holds and what one sample is.>
 
 - **id**: `<org>/<name>`
 - **source**: <source_url>
@@ -91,12 +91,12 @@ The prose fixes things no file header states. These sentences decide the convers
 
 <What it decides, in one line.>
 
-## What one record holds
+## What one sample holds
 
 - **Series**: <count and kinds, with units and rates, and where each rate comes from>
 - **Annotations**: <kinds, and which series each is scoped to>
 - **Tasks**: <type, what one question asks, and how many there are>
-- **Record ids**: <where they come from. Say if they are positional, and that a re-release changes
+- **Sample ids**: <where they come from. Say if they are positional, and that a re-release changes
   them.>
 
 ## The tasks this connector builds

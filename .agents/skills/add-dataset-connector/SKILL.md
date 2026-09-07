@@ -37,15 +37,15 @@ in full.
 
 ## What this is for
 
-Converting a dataset is a modelling problem before it is a coding one. What counts as one record,
-which signals it holds, what an annotation is scoped to, what question a task asks — none of that is
+Converting a dataset is a modelling problem before it is a coding one. What counts as one sample,
+which channels it holds, what an annotation is scoped to, what question a task asks — none of that is
 in the files, and getting it wrong produces a dataset that loads fine and answers the wrong question.
 
 So the job is to **agree a model with a person**, on evidence, before writing anything:
 
 1. **Gather evidence with tools, not assumptions.** A `head()` per file type shows the shape; a
    census over every file shows what is odd. Both produce output a person can read.
-2. **Propose a model**: what one record is, its signals, its annotations, its tasks — each part
+2. **Propose a model**: what one sample is, its channels, its annotations, its tasks — each part
    beside the evidence that produced it.
 3. **Let the user argue with it.** Every decision must be contestable, which means the evidence that
    justifies it has to be next to it. A user should be able to point at one line and say "that is
@@ -60,7 +60,7 @@ being agreed, and the code follows from it.
 ## The two documents
 
 - **`docs/notes/connectors/<org>/<name>/plan.md`** is the working document. It holds the heads, the
-  census, the map, the record design and the open assumptions. It is scratch. It is untracked, and
+  census, the map, the sample design and the open assumptions. It is scratch. It is untracked, and
   you never `git add` it.
 - **`packages/.../datasets/<org>/<name>/README.md`** ships with the connector. It holds the
   assumptions the user ruled on, and every inconsistency the release contains. It is the document
@@ -97,7 +97,7 @@ have been given a report. Four rules, and they cost one message each:
 - **Announce a long step when it begins**, and say what it counts and what it will give back. The
   census walks the whole release and takes minutes, and the skill runs it in a subagent, which is
   what makes it invisible. Say it is running.
-- **Show the diagrams in the conversation**, not only in the plan. The record model is the thing a
+- **Show the diagrams in the conversation**, not only in the plan. The sample model is the thing a
   person can argue with. A diagram filed in a document nobody is watching was never shown.
 - **Re-post the checklist with its ticks at every phase boundary.**
 
@@ -129,7 +129,7 @@ the fetch. It needs one thing from them — a confirmation of the licence.
 
 1. **Ask how many datasets the link holds.** A release that bundles a corpus with its own benchmarks
    is common, and one `org/name` id cannot address both. Which one you are converting changes the
-   record model, the task type and the census. If the link holds more than one, produce **one plan
+   sample model, the task type and the census. If the link holds more than one, produce **one plan
    and one card per dataset**, and say which plan is which. Do not fold two datasets into one id.
 2. **Create the plan.** Copy `references/plan-template.md` to
    `docs/notes/connectors/<org>/<name>/plan.md`. That file is the template itself, so copying it is
@@ -165,7 +165,7 @@ the fetch. It needs one thing from them — a confirmation of the licence.
    `dataset_info.json`, a manifest, a data dictionary, a `state.json`. Write every claim they make
    into section 0. Those claims are what phase 1's heads then check, and a claim that turns out
    false is an inconsistency the README has to carry. One release declares a schema its own shards
-   do not ship, and the two missing columns are the two a record id would have come from.
+   do not ship, and the two missing columns are the two a sample id would have come from.
 
 The description states what no header states, so read it for all of these:
 
@@ -189,7 +189,7 @@ was fetched to and how big it is, and the sentences of the description the desig
 Read `references/discovery.md` before you start this phase.
 
 **Before you start, tell the user:** phase 1 opens the release and counts it. It produces the heads,
-the census table, two diagrams and the record design. The census walks every file and takes minutes,
+the census table, two diagrams and the sample design. The census walks every file and takes minutes,
 and it runs in a subagent, so say when it starts and what it is counting.
 
 Two reads, with different jobs.
@@ -213,15 +213,15 @@ conversation. Run the walk in a subagent and take back the table alone.
 
 Produce, into the plan:
 
-- the file inventory, including the files that belong to no record,
+- the file inventory, including the files that belong to no sample,
 - one head per file type, each with the command that produced it,
 - the census table, including every file checked against whatever the release declares about itself,
 - **two mermaid diagrams, both required**: the map, in four columns — what ships, what pairs it into
-  records, what opens the container, what each part means — and the record model, tracing every
+  samples, what opens the container, what each part means — and the sample model, tracing every
   object TimeF will hold back to the exact part of the source that states it,
-- what one record is, with real values from the heads, and each signal's source dtype beside the
+- what one sample is, with real values from the heads, and each channel's source dtype beside the
   dtype its spec will declare,
-- the task type, the count of tasks per record, and therefore whether tasks are added or streamed,
+- the task type, the count of tasks per sample, and therefore whether tasks are added or streamed,
 - **which facility stores each answer, annotation and task**, from
   `connector-anatomy.md § Where an answer, an annotation and a task can live`, and why,
 - **what already exists for each part of the connector**, and whether this one reuses it,
@@ -229,7 +229,7 @@ Produce, into the plan:
 - the numbers the build should produce, each derived from a census row,
 - the decisions taken and the questions genuinely left open.
 
-**Show both diagrams in the conversation.** The record model is the artifact the user accepts or
+**Show both diagrams in the conversation.** The sample model is the artifact the user accepts or
 rejects, which is the whole reason the skill requires it. A diagram written only into the plan was
 never shown.
 
@@ -244,21 +244,21 @@ record it as a decision**. Section 5 of the plan has two headings for exactly th
 taken with the rule that took each, and the questions genuinely left. Putting a question the repo
 already answers in front of the user is not caution; it buries the two questions that are real.
 
-**Derive every predicted number from the census, and show the derivation.** A predicted record count
+**Derive every predicted number from the census, and show the derivation.** A predicted sample count
 that contradicts a table two sections above it is a mistake nobody has to make. One run predicted
-55 187 records where summing the eleven per-folder counts in its own census gives 91 094.
+55 187 samples where summing the eleven per-folder counts in its own census gives 91 094.
 
 `references/plan-template.md` is the format. Use it as written, so every connector's plan reads the
 same. `references/fidelity.md` decides what the design may and may not do to the data;
 `references/layout.md` decides the module skeleton. Read both before you write the plan.
 
-**Tell the user:** what the release holds — the count of records, the shapes the census found, and
+**Tell the user:** what the release holds — the count of samples, the shapes the census found, and
 anything odd — the two diagrams, and that the plan is ready to read.
 
 **Phase 1 is done when** both diagrams are drawn and shown, every file in the inventory is either a
-node in the map or named as belonging to no record, every node of the record model has an inbound
+node in the map or named as belonging to no sample, every node of the sample model has an inbound
 edge, the census covers every file rather than a sample of them, and the plan states a number for
-records, tasks per record, and expected warnings, each derived from the census. A count you cannot
+samples, tasks per sample, and expected warnings, each derived from the census. A count you cannot
 state is phase 1 unfinished, and a count that does not follow from the evidence above it is worse
 than none.
 
@@ -276,10 +276,10 @@ time.
 same as approval. Walk the model with the user part by part, each part beside its evidence, so any
 one of them can be rejected on its own:
 
-- **The record model diagram**, node by node. It is the fastest way to disagree with a design: an
+- **The sample model diagram**, node by node. It is the fastest way to disagree with a design: an
   object with no arrow into it is invented, and a source with no arrow out is undecided.
-- **What one record is**, and the file inventory it comes from.
-- **The signals**, their units and their rates, and which header field each came from.
+- **What one sample is**, and the file inventory it comes from.
+- **The channels**, their units and their rates, and which header field each came from.
 - **The annotations**, and above all **what each is scoped to** — that comes from prose, not from a
   header, so show the sentence.
 - **The tasks**: what one question asks, how many there are, and why that is the question the source
@@ -289,7 +289,7 @@ one of them can be rejected on its own:
 - **Every open question**, one at a time.
 
 **A question is gate-worthy when all three hold**: the source is silent, **and** no repo rule covers
-it, **and** two defensible answers lead to different records, tasks or counts. A question that fails
+it, **and** two defensible answers lead to different samples, tasks or counts. A question that fails
 that test is a decision the author takes and the user can overturn on reading it. One run put 22
 questions through this test: 19 were decided against existing rules and 3 reached the user.
 
@@ -346,7 +346,7 @@ runs a build. Name the modules, and say how long the first build is likely to ta
 
 Read `references/connector-anatomy.md` for the contract, the base connectors and the task types.
 Follow the skeleton the plan states and the rules in `references/fidelity.md` and
-`references/layout.md`. Build in the order the format forces: series, then the record, then
+`references/layout.md`. Build in the order the format forces: series, then the sample, then
 annotations, then tasks.
 
 Write the tests the plan named as you go. The modules the plan marked pure need no fixture, which is
@@ -386,7 +386,7 @@ Run in this order and stop at the first failure:
 1. `make check`, `make test`, `make test-connectors`.
 2. `uv run timenet-build build <id> --no-isolation --keep-cache --out ./out`
 3. Load it back: `TimeNet(registry="./out").load("<id>").describe()`.
-4. Compare the result against the numbers the plan predicted: records, series per record, tasks, and
+4. Compare the result against the numbers the plan predicted: samples, series per sample, tasks, and
    the warning count with its reason. A number that does not match means the plan is wrong or the
    code is. Find out which and say so.
 
@@ -395,7 +395,7 @@ the outcome against was never a test. Where the two differ, say which was wrong 
 
 **A build can fail after `convert` returned cleanly**, and the first time it happens it is
 confusing. `convert` gives back a description; the values and the tasks are read afterwards. So a
-loader that raises when called, a task naming a record that does not exist, a span outside its
+loader that raises when called, a task naming a sample that does not exist, a span outside its
 window, and a stream that yields nothing on a second pass all surface *after* the step that looks
 responsible has finished. If a failure names none of your own modules, it is that stage: check what
 your loaders do when called, and what your task stream gives on a second call.
