@@ -23,8 +23,6 @@ one: the rules for that are the skill's own, and they live in its other referenc
 - [Where an answer, an annotation and a task can live](#where-an-answer-an-annotation-and-a-task-can-live)
 - [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
 - [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
-- [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
-- [Where the tests live](#where-the-tests-live)
 
 ## The `BaseConnector` contract
 
@@ -43,8 +41,12 @@ one: the rules for that are the skill's own, and they live in its other referenc
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- Those four are the whole contract. What runs a connector takes the dataset `convert` returns and
-  stores it, and that is not a connector's concern.
+- `store_dataset(dataset, root)` (concrete): derives the schema if missing and streams the dataset
+  through `TimeFWriter`. It is not a method on `BaseConnector`. It sits on the engine
+  (`engine/engine.py:116`), which calls it after `convert` returns, and its own docstring says why:
+  it "reads only `dataset`", so the connector contract stays at fetch-and-convert and no connector
+  depends on the writer. No connector calls it. A connector test imports it from `timenet.engine`
+  to prove the dataset it built survives a write and a read.
 
 `list[TRaw]` does not mean one entry per sample. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one sample at a time.
@@ -83,18 +85,18 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
 
 That is the smallest connector. **One rule decides whether a file belongs in that folder: a file
 that `download` or `convert` imports and calls is part of the connector and is committed with it.
-Every other file used to build the connector stays out.** A `head()` is the common case of the
-second half, and the census script is another.
+Every other file used to build the connector stays out.**
 
-A connector that reads more than one kind of file divides further. `tables.py` and `metadata.py`
-give meaning, `specs.py` holds the channel map, and `keys.py` holds the annotation keys.
-`physionet/sleep_edfx` is shaped that way; `chengsenwang/tsqa` is one `connector.py`.
+A larger connector divides into more modules, each naming one kind of meaning the release carries —
+a table decoder, a spec map, an annotation builder. `physionet/sleep_edfx` is one that does.
 
 The half that **opens** a file is a base, not a connector module. `sleep_edfx` ships no reader of
 its own and imports `bases.edf.reader` and `bases.excel`.
 
-`discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`. The org
-folder needs its own `__init__.py`, a namespace package that exposes no `CONNECTOR`.
+`discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
+`discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
+`chengsenwang/tsqa -> ...datasets.chengsenwang.tsqa` and `physionet/ecg-qa-cot -> ...datasets.physionet.ecg_qa_cot`.
+The org folder needs its own `__init__.py`, holding a docstring and no `CONNECTOR`.
 
 ## The dataset card (`dataset.yaml`)
 
@@ -162,10 +164,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries
   its `span`. No span means whole-sample; `span=TimePoint.seconds(...)` a time offset;
   `span=TimeInterval.seconds(...)` a region.
 - `dataset.add_task(sample, <Task>(...))` registers one and returns it; `dataset.add_tasks(sample, [...])`
-  takes an iterable and registers the batch all-or-nothing. When a dataset holds far more tasks than
-  samples, neither fits: `dataset.set_task_stream(task_types, source)` streams them instead, and does
-  not validate them the way `add_task` does. Set `scope` and `from_tasks` on the task itself, not
-  the call; a batch may derive from its own members in any order.
+  takes an iterable and registers the batch all-or-nothing. Set `scope` and `from_tasks` on the task
+  itself, not the call; a batch may derive from its own members in any order.
 - Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
   `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
 
@@ -195,6 +195,20 @@ raises `TimeFValidationError` when a task sets both, and when it sets neither
 four captions per sample and 600 000 samples writes 2.4 million copies of text it could have stored
 one time. `register_annotations` plus `target_annotation_ids` is the pair that stores it once.
 
+**The values side does the same thing one level down, and a spec opts into it.** A channel whose
+values are drawn from a closed set is declared `dtype="enum"` with its labels in
+`TimeSeriesSpec.categories`. The writer then stores it as a dictionary — one copy of each label,
+plus an `int32` index per timestep (`_ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())`,
+`values_backends/parquet/writer.py:86`) — rather than repeating the text at every timestep. An
+`"enum"` dtype takes that encoding unconditionally (`:222-225`).
+
+A channel left as `dtype="str"` still gets it when it earns it. The writer samples the leading
+values, counts distinct bit patterns, and calls `encoding_for_cardinality`
+(`writer/value_encoding.py:151`), which selects dictionary up to `DICT_MAX_CARDINALITY`, currently
+`1 << 16`. Declaring the enum is still better where the set really is closed: it states the codebook
+instead of leaving the writer to infer it from a sample, and `categories` is validated as non-empty,
+unique strings (`types/specs.py:57-68`).
+
 ## Task types (`timenet.types.tasks`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
@@ -222,11 +236,6 @@ points at stored annotations instead of copying them into the task row); `add_ta
 the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
-
-This is the smallest connector in the tree, and it answers the two questions a row-shaped release
-raises first. Its corpus states no sample id and no sampling rate. So it builds the id from the
-row's position — `sample_id=f"row-{index}"` at line 53, `time_series_id=f"row-{index}-c{channel}"` at
-line 49 — and gives every series an `OrdinalAxis()` at line 48 rather than inventing a rate.
 
 `connector.py`:
 
@@ -283,25 +292,3 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
     TSQAConnector as TSQAConnector,
 )
 ```
-
-## PhysioNet notes: `physionet/ecg_qa_cot`
-
-Subclasses `BasePhysioNetConnector[EcgQaCotSource]`, where `EcgQaCotSource` is a frozen handle over
-the release rather than one ref per row. `download` calls `ensure_archive` / `download_files` and
-returns that handle; `convert` walks it.
-
-**One sample is one recording, not one QA row.** The 12-lead ECG becomes a sample, and every
-question asked of that recording becomes a task on it. An earlier version made one sample per QA row
-and cached the shared leads to avoid duplicating them; that was replaced, because a sample per row
-duplicated the recording in the dataset's own model rather than only in memory.
-
-Read `connector.py` for the current shape. Where this file and the code disagree, the code wins.
-
-## Where the tests live
-
-A connector's tests sit in `<org>/<name>/tests/`, one module per module they cover. A connector
-divided across several modules has several test modules: `sleep_edfx` has `test_connector.py`,
-`test_metadata.py`, `test_tables.py` and `test_tasks.py`.
-
-The repo ships no dataset bytes, and no `fixtures/` directory exists anywhere in it. Every test
-builds what it needs at run time. `layout.md § Tests` holds the rules for writing one.
