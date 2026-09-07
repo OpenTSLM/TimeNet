@@ -403,23 +403,41 @@ your loaders do when called, and what your task stream gives on a second call.
 **Phase 5 is done when** every predicted number has a measured number beside it in the plan, each
 difference is explained, and the review reports no blocking finding.
 
-Then **invoke the `review-connector-stack` skill** on the working tree. It is the second half of this
-process: every one of its check groups reads an artifact one of these phases produced, and its own
-§3 maps the two. Fix what it finds, on the branch that owns each finding.
+Then **invoke the `review-connector-stack` skill**. It is the second half of this process: every one
+of its check groups reads an artifact one of these phases produced, and its own §3 maps the two. Fix
+what it finds, on the branch that owns each finding.
+
+**The review happens twice, and the two passes reach different checks.**
+
+1. **Before the stack exists**, against the working tree. This catches the connector's own faults
+   early and costs nothing. Two of the reviewer's twelve check groups — the stack itself, and the
+   pipeline — cannot be reached, because neither exists yet. Say so.
+2. **After `gh stack submit --auto`**, against the PRs. This is the pass that reaches every group,
+   and it is the one that closes the phase. Run it even when the first pass found nothing, because a
+   dozen fixes have landed since.
+
+**Say where the reviewer is, because the connector branch does not carry it.** The connector is built
+on the branch its API needs and the skills live on their own; `.claude/skills/` mirrors whatever is
+checked out, so `/review-connector-stack` is not there while the connector is. Switch to the branch
+that holds it, then invoke it. The reviewer reads the PRs through `gh pr diff`, so the working tree
+reverting to an older API changes nothing. Tell the user this step, or they meet a slash command that
+does not exist.
 
 A finding is not always against the code. Where the review shows a rule is wrong rather than the
 connector, the fix is a PR to `AGENTS.md` or to these references, and this skill is what has to
 change.
 
 **Tell the user:** which checks ran, which predicted numbers matched, what the review found, and
-what is left.
+what is left. Then name the next step yourself. This hand-off is the one place the process closes,
+and the user should not have to ask for it.
 
 **Next**, whichever fits:
 
 | state | what to run |
 | --- | --- |
 | the review found blocking items | fix them, then `/review-connector-stack` again |
-| the connector is clean and uncommitted | commit it as a stack, then `/review-connector-stack` on the PRs |
+| the connector is clean and uncommitted | commit it as a stack — see **How the connector ships** — then `gh stack submit --auto` and `/review-connector-stack` on the PRs |
+| the stack is submitted | `/review-connector-stack <lower PR> <upper PR>`, the pass that reaches every group |
 | entries in the README are still **Open** | nothing to run — they are decisions for the user |
 | everything is clean | say the connector is ready, and that merging is the user's call |
 

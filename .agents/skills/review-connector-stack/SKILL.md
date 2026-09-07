@@ -44,9 +44,25 @@ git log --oneline <base>..HEAD       # the commits under review
 git diff <base>...HEAD --stat        # what the whole stack touches
 ```
 
-A stack is reviewed **twice**: each PR against its own base, and the whole chain against `main`.
-The two find different faults. A per-PR read finds a commit that does not stand alone. A
-whole-chain read finds a convention the stack broke in the middle and never restored.
+A stack is reviewed **twice**: each PR against its own base, and the whole chain against the trunk
+the stack sits on. The two find different faults. A per-PR read finds a commit that does not stand
+alone. A whole-chain read finds a convention the stack broke in the middle and never restored.
+
+**Establish the trunk before you read a line, and say what it is.** A connector stack often sits on
+an unmerged branch rather than on `main`, because the connector needs an API that `main` has not got
+yet. `gh stack view --json` gives the trunk; the plan's section 0 gives the reason. Review against
+`main` when the trunk is not `main` and every line of the diff looks wrong.
+
+**The working tree is not the stack.** Groups 11 and 12 of `references/checks.md` judge the stack and
+the pipeline, and neither exists until the PRs are opened. A review of an uncommitted working tree
+has therefore skipped two of twelve groups, and it says so under **Not reviewed** rather than passing
+them. Run the review again after `gh stack submit --auto`, which is the first moment those groups can
+be reached.
+
+**The reviewer and the connector cannot be on the same branch.** `.claude/skills/` mirrors whatever
+branch is checked out, so the connector branch does not carry this skill. Switch to the branch that
+holds it before invoking the review. That is safe: this skill reads the PRs through `gh pr diff`, not
+through the working tree, so the tree reverting to an older API changes nothing about the review.
 
 ## 2. Read the source before the diff
 
@@ -75,9 +91,10 @@ itself the finding.
 | 1 — heads, census, record design, task count | §4 ids come from the source; §5 the task count decides `add_tasks` against `set_task_stream`; §7 the handle shape and the naming |
 | 2 — the gate | §3, every ruling the user gave is a README entry with a state |
 | 3 — the README | §3, one entry per inconsistency: evidence, decision, **Handled** / **Not built** / **Open**, numbers marked *(measured)* |
+| 1 — the reuse table beside the module skeleton | §10, whether the connector reused what already exists |
 | 4 — the build | §1 imports and dependencies · §2 the I/O split · §3 faithfulness · §4 ids · §5 annotations and tasks · §6 errors · §7 naming · §8 tests · §9 docs |
-| 5 — smoke test | §11 the checks that must have been run, and whether the build matched the numbers the plan predicted |
-| the stack it shipped as | §10, each PR standing on its own |
+| 5 — smoke test | §12 the checks that must have been run, and whether the build matched the numbers the plan predicted |
+| the stack it shipped as | §11, each PR standing on its own |
 
 **A connector built without the skill is still reviewable.** The map says where to look for evidence,
 not that the phases must have been run. Where there is no plan and no README, say so under **Not
@@ -85,9 +102,9 @@ reviewed** and check what the code alone can show.
 
 ## 4. Run the checks
 
-Work through `references/checks.md` in order. Eleven groups: imports and dependencies, the I/O
+Work through `references/checks.md` in order. Twelve groups: imports and dependencies, the I/O
 split, data faithfulness, ids, annotations and tasks, errors, naming and shape, tests, docs and
-prose, the stack itself, and the checks that must have been run.
+prose, reuse, the stack itself, and the checks that must have been run.
 
 For each check, write down one of three verdicts and nothing else:
 
@@ -108,8 +125,12 @@ does not survive is dropped, not softened.
   A rule the references mark as unsettled is not a finding — `layout.md § Not a rule: docstring
   voice` is the current example. Do not report a divergence the references already call unsettled.
 - Does the check actually run? `make check`, `make test`, and `make test-connectors` for a
-  connector change. State which of the three you ran, and the result.
+  connector change. State which of the three you ran, and the result. Then run
+  `gh pr checks <n>` for every PR: a green local run over a red pipeline is not a pass.
 - Would the fix be a gratuitous rename of an existing function or test? Then it is not a finding.
+- Can you check a `*(measured)*` number at all? You cannot re-measure one without the release, and
+  saying so is honest. What you can check is whether the plan's phase-5 table holds the same number
+  against a build. A README number with no row there was never measured.
 
 ## 6. Report
 
@@ -128,6 +149,7 @@ What you could not check, and why.
 
 ## Checks run
 `make check`, `make test`, `make test-connectors` — the result of each, or that it was not run.
+`gh pr checks <n>` — the pipeline result for every PR of the stack.
 ```
 
 Order findings by severity, not by file. A wrong mapping of the source outranks every style
@@ -143,6 +165,8 @@ End by naming the next step, so nobody has to guess:
 | findings only in a lower PR of a stack | fix there and `gh stack rebase --upstack`, rather than patching the higher PR |
 | a rule that looks wrong rather than the code | the finding is against the document: `add-dataset-connector`'s references or `AGENTS.md`, and the fix is a PR to it |
 | an assumption nobody has ruled on | it belongs in the connector's README as **Open**, and the user decides it |
+| a red or pending pipeline | say which PR and which job, and that the review does not clear it |
+| the review ran against a working tree, not a stack | say that groups 11 and 12 were unreachable, and run this skill again after `gh stack submit --auto` |
 | nothing blocking | say the stack is ready to merge, and that merging is the user's call |
 
 Never end a review with findings and no next step.

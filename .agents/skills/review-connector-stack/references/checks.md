@@ -22,22 +22,32 @@ you are reviewing must resemble the connector cited.
 - [7. Naming and shape](#7-naming-and-shape)
 - [8. Tests](#8-tests)
 - [9. Docs and prose](#9-docs-and-prose)
-- [10. The stack itself](#10-the-stack-itself)
-- [11. Checks that must have been run](#11-checks-that-must-have-been-run)
+- [10. Reuse](#10-reuse)
+- [11. The stack itself](#11-the-stack-itself)
+- [12. Checks that must have been run](#12-checks-that-must-have-been-run)
 
 ## 1. Imports and dependencies
 
 - **A base module that every connector imports imports its library lazily.** Inside the function,
   with `# noqa: PLC0415`, and an error whose message names the connector's `requirements.txt` and
   the `--no-isolation` escape hatch. `bases/huggingface.py:47`, `bases/physionet.py:84`,
-  `download/s3.py:40`. `discovery.resolve` imports a connector module to read `CONNECTOR`, so a
-  top-level import here breaks every connector that never touches the library.
+  `download/s3.py:40`. `discovery.available()` (`discovery.py:157-178`) imports **every** module
+  under `datasets/` to read its `CONNECTOR`, so a top-level import here breaks dataset listing for
+  every connector that never touches the library.
 - **The raised type is not uniform, and that is not a finding.** `huggingface.py` and
   `physionet.py` re-raise `ImportError`; `download/s3.py:45` raises `TimeNetBuildError`. Both name
   the fix in the message, which is the part that matters. Do not report either one.
 - **A base only the declaring connector imports may import at the top.** `bases/edf/reader.py`
   imports `edfio`; `bases/excel.py` imports `xlrd`. Both are fine. Do not "fix" them into lazy
   imports.
+- **A connector defers exactly the libraries its own `requirements.txt` declares.** The deciding
+  question is the same one the base answers: `discovery.available()` imports every connector
+  module, so a top-level import of a library the package does not depend on breaks listing for
+  everybody. A library the package already has — `pyarrow` is a core `timenet` dependency
+  (`packages/timenet/pyproject.toml:28`), and so are the stdlib, `timenet` and `timenet_connectors`
+  — goes at the top, and deferring it is the finding. A library named only in this connector's
+  `requirements.txt` goes inside the function, with `# noqa: PLC0415`, a reason, and an
+  `ImportError` naming that `requirements.txt` and `--no-isolation`.
 - **A new dependency is declared twice.** The connector's `requirements.txt`, and the `dev` group
   of the root `pyproject.toml`. One without the other leaves `ty` unresolved and the connector's
   tests unrunnable after `make sync`.
@@ -107,6 +117,12 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   diff that passes it is choosing an error over a warning, and should say why.
 - Every inconsistency has a `README.md` entry beside the connector: the evidence, the decision,
   and the state. A number the author measured is marked *(measured)*.
+- **Every *(measured)* number in the README has a counterpart in the plan's phase-5 table.** A
+  reviewer who has not downloaded the release cannot re-measure one, and that is honest; what the
+  reviewer *can* check is whether the number was measured against a build at all. The plan records
+  the predicted number, the measured number and which was wrong. A README number with no row there
+  was never measured, and it is a finding, not a "not reviewed". One release shipped a wrong unit on
+  2640 records because the dataset card was believed and nothing measured it.
 
 ## 4. Ids
 
@@ -149,11 +165,16 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
   `register_annotations`, not one annotation per member.
 - **`target_schema` equals the id of that annotation**, and one function builds both from one
   string.
-- **Streamed tasks**: `source` is a callable giving a fresh iterator on every call; each task
-  carries its own `record_ids`; the stream reads no file, only annotations the records carry. A
-  streamed task **is** validated per task — `dataset.py:267` calls `_validate_streamed_task` on
-  every one, so an unknown record or an out-of-window span still raises. What it skips is the
-  *cross-task* checks that need every task at once. Do not report a streamed task as unvalidated.
+- **Streamed tasks**: `source` is a callable giving a fresh iterator on every call, and each task
+  carries its own `record_ids` and states no id. A streamed task **is** validated per task —
+  `dataset.py:267` calls `_validate_streamed_task` on every one, so an unknown record or an
+  out-of-window span still raises. What it skips is the *cross-task* checks that need every task at
+  once. Do not report a streamed task as unvalidated.
+- **A stream may re-open a file, and that is not a finding.** `set_task_stream` needs a source it
+  can read again (`dataset/dataset.py:222-224`), which for a release larger than memory means
+  re-reading a file; `physionet/ecg_qa_cot/connector.py:297` streams straight out of its CoT CSVs.
+  What the stream must not do is hold the tasks alive between calls, or read something that can
+  answer differently the second time. Report a stream that keeps state, not one that opens a file.
 - **The dedupe of a repeated annotation goes through a holder object** (`MetadataAnnotation`)
   where the annotation and its consumer are in one pass. A value-derived id (`_qtype_id`) is the
   fallback only when a stream reads it back without holding it, and both ends route through one
@@ -239,12 +260,42 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - Docstring voice matches the connector being edited. `layout.md` marks this unsettled — do not
   report a divergence as a finding.
 
-## 10. The stack itself
+## 10. Reuse
+
+Reuse is judged against the whole tree, which is what an author writing one connector cannot see.
+That is why it is the reviewer's group and not only the author's.
+
+- **The connector imports every base that fits.** A release read through EDF, WFDB, Excel or the
+  Hub has a base for it under `bases/`. A connector that opens one of those formats itself, rather
+  than through the base, is a finding unless it says why the base does not fit.
+- **A base that does not fit is named, with the reason.** `BaseHuggingFaceConnector` returns a
+  list holding every row of the release (`bases/huggingface.py:30,71-72`), so a large Hub dataset
+  has to write its own `download`. That is a correct reason. "I did not look" is not one, and the
+  absence of any reason is the finding.
+- **The connector defines nothing a base already defines.** A second copy of `find_dir_containing`,
+  of an archive fetch, or of a header parse belongs in `bases/` or `download/`.
+- **A helper a second connector would want is in `bases/`, not here.** The test is
+  `layout.md § The folder`: could a second connector import it unchanged? Lift on the second copy,
+  not the third. A value whose meaning changes between two parts of one release stays put.
+- **An existing connector already answered the modelling question.** A row-shaped release with no
+  id and no stated rate is `chengsenwang/tsqa`; an answer stored once and referenced by many tasks
+  is `physionet/ecg_qa_cot:227`. A connector that invented one of those has a finding against it,
+  and the plan's reuse table is where it should have been caught.
+
+## 11. The stack itself
 
 - **Each PR stands alone.** No comment, docstring or README line that a later PR in the stack
   deletes. No forward-looking chatter ("the next PR adds…").
 - **Each PR is one subject.** A change and its opt-out belong together; two unrelated subjects do
-  not.
+  not. For a connector the subjects are, bottom to top: the card; the pure modules with their
+  tests; `connector.py` with its tests; the `README.md`. Each is reviewable without the ones above
+  it, so a PR holding two of them is a finding.
+- **Each PR is 100 to 500 changed lines.** A PR of 1290 lines is not reviewable, whatever else is
+  true of it. Where a connector will not fit, the seam above is where it divides.
+- **The commit subject and the PR title name the dataset and say what landed.** `feat(slip): read
+  the SLIP pretraining corpus` tells a reader who has never met SLIP nothing: not that this adds a
+  connector, not what SLIP is, not where it comes from. A scope nobody recognises needs the title
+  to carry the rest.
 - **A mid-stack change lives on the branch that owns it**, propagated with
   `gh stack rebase --upstack`, not folded into a higher branch.
 - **Commit messages** are Conventional Commits with the connector as the scope:
@@ -256,7 +307,15 @@ From `fidelity.md`. Each of these is a fail if the diff does the opposite withou
 - **No `--no-verify`.** A hook that failed is fixed, not skipped.
 - A PR whose commit no longer describes what the code does needs the amend called out.
 
-## 11. Checks that must have been run
+## 12. Checks that must have been run
 
 `make check`, `make test`, and — for any connector change — `make test-connectors`. `AGENTS.md`
 requires the final summary to say which ran and which could not.
+
+- **The pipeline is green on the PR.** Run `gh pr checks <n>` for every PR of the stack and record
+  the result. A red or pending pipeline is treated exactly like a local check that was never run:
+  the review does not clear it.
+- **A local pass on one interpreter is not a pass.** The workflow runs a matrix, and the dev
+  environment is one row of it. `typing.override` is 3.12 and later, so a connector using it
+  imported cleanly in development and failed on every connector's `test_cards.py` under 3.11
+  *(this happened, and two reviews missed it)*. The matrix is the check.
