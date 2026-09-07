@@ -1,3 +1,4 @@
+from importlib.util import find_spec
 import os
 from pathlib import Path
 import subprocess
@@ -6,6 +7,9 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
+from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet_connectors.builder import cli as cli_module
 from timenet_connectors.builder.cli import app
 
@@ -67,14 +71,19 @@ def test_build_runs_in_process_when_the_setting_is_off(monkeypatch, tmp_path):
 
 def test_build_without_a_values_backend_uses_the_connector_default(monkeypatch, tmp_path):
     captured = {}
+    instances = []
 
     class _Connector:
         values_backend = "zarr"
+
+        def __init__(self):
+            instances.append(self)
 
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Connector)
 
     def _fake_pipeline(connector, root, **kwargs):
+        assert connector is instances[0]
         captured["values_backend"] = kwargs["values_backend"]
         return Path(root) / "timenet/hello-world/1.0.0"
 
@@ -83,6 +92,7 @@ def test_build_without_a_values_backend_uses_the_connector_default(monkeypatch, 
 
     assert result.exit_code == 0
     assert captured["values_backend"] == "zarr"
+    assert len(instances) == 1
 
 
 def test_build_forwards_an_explicit_values_backend_in_process(monkeypatch, tmp_path):
@@ -189,7 +199,8 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
 
 
 @pytest.mark.slow
-def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
+@pytest.mark.parametrize("backend", [None, "zarr", "parquet"])
+def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backend):
     # run_isolated reads the child's last non-empty stdout line as the version directory, so the
     # real isolated CLI must keep stdout clean and end on that path. Drive it as a subprocess (not
     # CliRunner) so the child's inherited stderr is captured here too, where a double-narration
@@ -198,8 +209,9 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     env = {**os.environ, "TIMENET_HOME": str(tmp_path / "home")}
     env.pop("TIMENET_ISOLATION", None)  # default is "on"; make sure nothing forces it off
     run_cli = [sys.executable, "-c", "from timenet_connectors.builder.cli import main; main()"]
+    backend_args = ["--values-backend", backend] if backend else []
     result = subprocess.run(
-        [*run_cli, "build", "timenet/hello-world", "--out", str(registry)],
+        [*run_cli, "build", "timenet/hello-world", "--out", str(registry), *backend_args],
         env=env,
         cwd=tmp_path,  # away from the repo tree so the CLI does not read the repo .env
         capture_output=True,
@@ -212,6 +224,11 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert stdout_lines[-1] == str(version_dir)
     assert (version_dir / "manifest.json").is_file()
+    assert Manifest.from_json((version_dir / "manifest.json").read_text()).values_backend == (backend or "parquet")
+    if backend != "zarr" or find_spec("zarr") is not None:
+        with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+            dataset = reader.read()
+            assert len(dataset.records[0].time_series[0].to_numpy()) == 16
 
     # The isolated child is the sole narrator: each status line appears exactly once.
     assert result.stderr.count("🔧 Building 'timenet/hello-world'…") == 1

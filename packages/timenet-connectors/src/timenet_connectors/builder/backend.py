@@ -67,4 +67,4 @@ class ConnectorBuilder:
             connector = resolve(dataset_id)()
             resolved_backend = connector.values_backend if values_backend is None else values_backend
             return run_pipeline(connector, root, force=force, values_backend=resolved_backend)
-        return Path(run_isolated(dataset_id, root, force=force))
+        return Path(run_isolated(dataset_id, root, force=force, values_backend=values_backend))

@@ -151,13 +151,14 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     # Resolve the connector's declared backend here, so the in-process path and the isolated child
     # agree on what "no --values-backend" means. An isolated build cannot resolve it: importing the
     # connector needs the dependencies the child is about to install.
-    resolved_backend = values_backend if values_backend is not None else connector_cls().values_backend
+    connector = connector_cls()
+    resolved_backend = values_backend if values_backend is not None else connector.values_backend
     target = _resolve_target(out)
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         if isinstance(target, Path):
             version_dir = run_pipeline(
-                connector_cls(),
+                connector,
                 target,
                 values_backend=resolved_backend,
                 progress_cb=_report_progress,
@@ -168,7 +169,7 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
             typer.echo(str(version_dir))
         else:
             version = publish_pipeline(
-                connector_cls(),
+                connector,
                 target,
                 values_backend=resolved_backend,
                 progress_cb=_report_progress,

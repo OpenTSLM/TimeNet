@@ -26,7 +26,7 @@ so the Parquet core never needs it.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
 from jaxtyping import Shaped
@@ -237,14 +237,18 @@ class ZarrValuesBackend(BaseValuesBackend):
         """
         try:
             import zarr  # noqa: PLC0415
-            from zarr.codecs import BloscCname, BloscCodec, BloscShuffle  # noqa: PLC0415
+            from zarr.codecs import BloscCodec  # noqa: PLC0415
             from zarr.codecs.numcodecs import Delta  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             raise ImportError("the zarr values backend needs the zarr extra: pip install 'timenet[zarr]'") from exc
 
         store_path = self._staging_dir / _STORE_DIR
         group = zarr.open_group(store=store_path, mode="w")
-        codec = BloscCodec(cname=BloscCname(self._cname), clevel=self._clevel, shuffle=BloscShuffle.bitshuffle)
+        codec = BloscCodec(
+            cname=cast(Literal["zstd", "lz4", "lz4hc", "zlib", "blosclz"], self._cname),
+            clevel=self._clevel,
+            shuffle="bitshuffle",
+        )
 
         partitions: dict[tuple[str, bool], _Partition] = {}
         placements: dict[tuple[str, int], ChunkPlacement] = {}

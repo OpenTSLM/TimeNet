@@ -8,6 +8,7 @@ from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
+from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
@@ -149,6 +150,25 @@ def test_run_pipeline_force_rebuilds(tmp_path):
     version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
     assert connector.downloads == 2
     assert (version_dir / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+def test_invalid_backend_preserves_committed_version(tmp_path, use_default):
+    connector = _CountingConnector()
+    version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache")
+    before = {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()}
+    if use_default:
+        connector.values_backend = "invalid"
+    with pytest.raises(TimeFValidationError, match="backend"):
+        run_pipeline(
+            connector,
+            tmp_path,
+            cache_dir=tmp_path / "cache",
+            force=True,
+            values_backend=None if use_default else "invalid",
+        )
+    assert {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()} == before
+    assert connector.downloads == 1
 
 
 def test_clean_cache_keeps_caller_supplied_dir(tmp_path):

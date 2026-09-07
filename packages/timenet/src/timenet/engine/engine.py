@@ -7,8 +7,10 @@ import shutil
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
+from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.registry.writable import WritableRegistry
+from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -47,6 +49,7 @@ def run_pipeline(  # noqa: PLR0913
     Returns:
         The committed version directory.
     """
+    resolved_backend = _resolve_values_backend(connector, values_backend)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
     metadata = connector.metadata()
@@ -66,7 +69,6 @@ def run_pipeline(  # noqa: PLR0913
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
-    resolved_backend = connector.values_backend if values_backend is None else values_backend
     store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
@@ -104,6 +106,7 @@ def publish_pipeline(  # noqa: PLR0913
     Returns:
         The published version string.
     """
+    resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
     version = str(metadata.dataset_version)
@@ -115,11 +118,27 @@ def publish_pipeline(  # noqa: PLR0913
 
     dataset = connector.convert(connector.download(cache))
     dataset.derive_schema()
-    resolved_backend = connector.values_backend if values_backend is None else values_backend
     registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
+
+
+def _resolve_values_backend(connector: BaseConnector, override: str | None) -> str:
+    """Resolve and validate the backend before a build changes any files.
+
+    Returns:
+        The supported backend selected by the override or connector default.
+
+    Raises:
+        TimeFValidationError: If the selected backend is unknown.
+    """
+    backend = connector.values_backend if override is None else override
+    if backend not in SUPPORTED_VALUES_BACKENDS:
+        raise TimeFValidationError(
+            f"unknown values_backend {backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
+        )
+    return backend
 
 
 def store_dataset(
