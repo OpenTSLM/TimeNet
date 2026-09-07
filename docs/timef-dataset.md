@@ -69,6 +69,13 @@ If a series stores time offsets instead of computing them, use
 stream, so the two values cannot disagree. Use the `loader=` constructor above only for lazy sources
 (files, remote shards).
 
+`from_values()` and `from_irregular()` convert the values once and retain the resulting Arrow array.
+Repeated reads reuse that array without repeating the conversion.
+An arbitrary caller-supplied loader controls its own reads and caching.
+Numeric NumPy inputs retain the NumPy conversion path.
+Enum inputs use dictionary encoding, which stores each distinct label once.
+The constructors compare those distinct labels with the declared categories.
+
 An **ordinal** series has positions but no clock. It is an ordered sequence, for example `TSQA`, whose
 values carry an order but no calendar time. Build it with an `OrdinalAxis`. An ordinal series has no
 rate and no timeline. As a result, a task on this series uses steps instead of seconds for its scope

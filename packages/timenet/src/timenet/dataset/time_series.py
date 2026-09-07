@@ -55,6 +55,9 @@ def _array_from_values(
             # A NumPy cast keeps the previous behavior for lossy input from an array: it truncates,
             # where pa.array would raise. An object array can hold a None, so it takes the other path.
             array = pa.array(np.asarray(source, dtype=np.dtype(spec.dtype)))
+        elif spec.dtype == "bool":
+            # Match NumPy truth conversion for present values, while keeping None as an Arrow null.
+            array = pa.array([None if value is None else bool(value) for value in values], type=pa.bool_())
         else:
             # pa.array turns a Python None into a null for every dtype, so one call covers the null
             # and the non-null case. The check below reads the null count instead of scanning.
@@ -166,6 +169,7 @@ class TimeSeries:
 
         Use this path for connectors that hold an in-memory array. It caches ``values`` as an Arrow
         array cast to the spec's dtype behind the loader and takes ``n_values`` from the array length.
+        Conversion happens once. Repeated reads return the retained Arrow array.
         For lazy sources like files or remote shards, use the ``loader=`` constructor directly and
         state the length, because nothing has read the values yet.
 
@@ -209,6 +213,7 @@ class TimeSeries:
         The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
         first or last time offset that the time offsets do not have. To convert wall-clock moments, use
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
+        Conversion happens once. Repeated reads return the retained Arrow arrays for values and offsets.
 
         Args:
             values: The signal's values (cast to the spec's dtype; for a ``"str"`` or ``"enum"``
@@ -277,8 +282,17 @@ class TimeSeries:
 
         Returns:
             The series' values with shape ``(n_steps, *spec.value_shape)``.
+
+        Raises:
+            TimeFValidationError: If the loaded values contain nulls. Use :meth:`to_numpy_and_mask`
+                or :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
+                remains supported, as do NaN and infinity values.
         """
         values = self.to_arrow()
+        if values.null_count:
+            raise TimeFValidationError(
+                "series contains null values. Use to_numpy_and_mask() or to_arrow() to preserve missingness"
+            )
         if isinstance(values, pa.FixedShapeTensorArray):
             return values.to_numpy_ndarray()
         return values.to_numpy(zero_copy_only=False)

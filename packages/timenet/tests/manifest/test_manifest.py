@@ -88,8 +88,8 @@ def test_default_format_version():
 
 
 def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullability is additive, so a nullable schema ships at version 1 and every reader that
-    # predates it can still read the dataset. It just reads no nullable specs.
+    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
+    # that supports nullability, including the parallel validity arrays in Zarr.
     base = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=()))
     spec = replace(base.schema.time_series_specs[0], nullable=True)
     manifest = Manifest(

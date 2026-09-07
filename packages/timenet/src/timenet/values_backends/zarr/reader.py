@@ -139,6 +139,7 @@ class ZarrValuesReader(BaseValuesReader):
             return _to_arrow(empty, spec)
         runs = _coalesce_runs(rows)
         parts = []
+        validity_parts = []
         cursor = 0
         for rel, run_start, run_stop in runs:
             run_len = run_stop - run_start
@@ -146,9 +147,17 @@ class ZarrValuesReader(BaseValuesReader):
                 lo = max(start - cursor, 0)
                 hi = min(bounded_stop - cursor, run_len)
                 parts.append(self._read_range(version, rel, run_start + lo, run_start + hi))
+                if spec.nullable:
+                    validity_parts.append(
+                        self._read_range(version, _validity_path(rel), run_start + lo, run_start + hi)
+                    )
             cursor += run_len
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
-        return _to_arrow(combined, spec)
+        validity = None
+        if validity_parts:
+            validity = validity_parts[0] if len(validity_parts) == 1 else np.concatenate(validity_parts)
+            validity = validity.astype(bool, copy=False)
+        return _to_arrow(combined, spec, validity)
 
     def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
         """Read an irregular series' time offsets from the array parallel to its values.

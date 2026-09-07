@@ -157,7 +157,7 @@
         "dtype": { "type": "string", "enum": ["bool", "enum", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
         "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered codebook for dtype='enum'. Empty for every other dtype." },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
-        "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps may be missing, encoded by Arrow validity. Requires format version 2 when true." },
+        "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps can be missing. Arrow validity marks present timesteps. Zarr stores this validity in parallel arrays." },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
       }
     },

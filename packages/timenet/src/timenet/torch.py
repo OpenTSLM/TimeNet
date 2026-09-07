@@ -26,13 +26,14 @@ class TimeFTorchDataset(Dataset):
 
     ``__getitem__`` returns a dict. The dict has the record's ``series`` as tensors that keep the
     original dtype, with shape ``(n_steps, *value_shape)``. It also has ``series_masks``: one
-    boolean tensor per nullable series, ``True`` where the timestep is present, and ``None`` for a
-    series that cannot hold nulls. An absent timestep still occupies its slot in ``series`` with a
+    boolean tensor per series, ``True`` where the timestep is present. A series that cannot hold
+    nulls has an all-true mask. An absent timestep still occupies its slot in ``series`` with a
     zero-equivalent value, so a model must read the mask rather than treat that value as observed.
     The dict also has the record's ``record_id``, its resolved ``tasks``, and its ``annotations``.
     Use the ``transform`` argument to reshape items for a model. Series lengths and trailing shapes
-    can vary between records. Because of this, a ``DataLoader`` that batches records needs a custom
-    ``collate_fn``, or you must set ``batch_size=1``.
+    can vary between records. Variable shapes and custom task or annotation objects need a suitable
+    transform or ``collate_fn``. ``batch_size=1`` still invokes batching and does not remove these
+    requirements. Uniform tensors with empty tasks and annotations support default batching.
     """
 
     def __init__(self, dataset: TimeFDataset, *, transform: Callable[[dict[str, Any]], Any] | None = None) -> None:
@@ -95,20 +96,20 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
     return _series_tensor_and_mask(ts)[0]
 
 
-def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *value"], Tensor | None]:
+def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *value"], Tensor]:
     """Convert one series to a tensor plus its validity mask.
 
     Args:
         ts: The series to load.
 
     Returns:
-        The values with shape ``(n_steps, *spec.value_shape)`` and, for a nullable series, a boolean
-        tensor shaped ``(n_steps,)`` that is ``True`` where the timestep is present. A series that
-        cannot hold nulls returns ``None`` for the mask.
+        The values with shape ``(n_steps, *spec.value_shape)`` and a boolean tensor shaped
+        ``(n_steps,)`` that is ``True`` where the timestep is present. A series that cannot hold
+        nulls returns an all-true mask.
 
     Raises:
-        TimeFValidationError: If the series holds free-form string values, which have no tensor
-            representation.
+        TimeFValidationError: If the series holds free-form string values, unknown enum labels,
+            or null enum values with a non-nullable spec.
     """
     if ts.spec.dtype == "str":
         raise TimeFValidationError(
@@ -119,9 +120,13 @@ def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *valu
         # index_in maps each label to its codebook position in C. This replaces a to_pylist() plus
         # a Python lookup for every value in the series.
         arrow = ts.to_arrow()
+        if arrow.null_count and not ts.spec.nullable:
+            raise TimeFValidationError(f"series for {ts.spec.spec_type!r} has null values but nullable=False")
         categories = pa.array(ts.spec.categories, type=arrow.type.value_type)
         codes = pc.index_in(arrow, value_set=categories)  # ty: ignore[unresolved-attribute]
-        valid = codes.is_valid().to_numpy(zero_copy_only=False)
+        if pc.any(pc.and_(arrow.is_valid(), codes.is_null())).as_py():  # ty: ignore[unresolved-attribute]
+            raise TimeFValidationError(f"enum series for {ts.spec.spec_type!r} has values outside its categories")
+        valid = arrow.is_valid().to_numpy(zero_copy_only=False)
         values: Tensor = torch.from_numpy(codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64))
     else:
         # to_numpy_and_mask reads the series once and returns its mask, so use that mask rather
@@ -129,5 +134,5 @@ def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *valu
         # Arrow's zero-copy view is read-only, and torch.from_numpy warns about that.
         dense, valid = ts.to_numpy_and_mask()
         values = torch.from_numpy(dense.copy())
-    mask = torch.from_numpy(valid.copy()) if ts.spec.nullable else None
+    mask = torch.from_numpy(valid.copy())
     return values, mask

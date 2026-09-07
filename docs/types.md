@@ -130,17 +130,30 @@ values backend.
 
 ### Missing values
 
-A missing timestep is an Arrow null, not a sentinel value.
+Python callers use `None` to supply a missing timestep when `nullable=True`.
+Constructors reject `None` when `nullable=False`.
+Arrow stores missingness in a validity bitmap, a separate bit for each timestep.
+The typed numeric buffer does not contain Python objects.
 
-`NaN` is not a stand-in for a missing value. A measured `NaN` and a missing measurement are different facts. The dtypes `int16`, `bool`, `str`, and `enum` have no `NaN` at all.
+For example, `[1.0, None, NaN]` has validity `[True, False, True]`.
+The first position contains the measurement `1.0`. The second measurement is absent.
+The third contains a floating-point value that represents an undefined numerical result.
+TimeF preserves special floating-point values such as NaN and positive or negative infinity.
+If a source uses NaN or another marker for missing measurements, its connector must translate those
+markers into nulls.
 
-TimeF lets a float channel carry `NaN`, `+Infinity`, and `-Infinity` as real IEEE payloads. Nullability controls missing values only. One channel can hold a null at one step and a `NaN` at the next. The two read back as different things.
+Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
+The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
 
-A spec with `nullable=True` permits missing timesteps. Nullability applies to a whole timestep. A multidimensional value is all present or all missing. The writer rejects partial nulls.
+`TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
+the loaded array contains nulls. This replaces the previous conversion that could lose missingness.
+A nullable spec without actual nulls still supports `to_numpy()`. NaN and infinity remain valid values.
 
-Constructors accept `None` for a nullable spec. They reject `None` for a spec that is not nullable.
-
-`TimeSeries.to_arrow()` keeps nulls exactly. Dense arrays cannot hold them. `TimeSeries.to_numpy_and_mask()` returns the values and a boolean mask of the timesteps that are present. Missing positions hold a zero-equivalent placeholder. That placeholder is not an observation. The torch view exposes the same pair as `"series"` and `"series_masks"`.
+`TimeSeries.to_numpy_and_mask()` returns dense values and a validity mask, a boolean array that marks
+present timesteps. Together, the values and mask preserve the missingness that Arrow stores.
+Missing positions hold a zero-equivalent placeholder. That placeholder is not an observation.
+The torch view exposes the same pair as `"series"` and `"series_masks"`.
+Every series has a boolean mask, including an all-true mask for a non-nullable series.
 
 Connectors that reuse a modality can subclass with field defaults:
 
