@@ -69,8 +69,7 @@ class ParquetValuesReader(BaseValuesReader):
             self._row_group_values(version, row["chunk_file"], row["chunk_major_idx"])[row["chunk_minor_idx"]].values
             for row in rows
         ]
-        # A shard usually stores the type the spec asks for, and a cast that changes nothing costs
-        # a compute call.
+        # If the stored type matches the spec, skip conversion.
         target = _target_type(spec)
         return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
 

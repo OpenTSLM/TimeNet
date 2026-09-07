@@ -67,8 +67,8 @@ _RECORD_BATCH_ROWS = 4096
 _ANNOTATION_CACHE_SIZE = 4096
 
 _AXIS_CACHE_SIZE = 1024
-"""Distinct time axes kept. Nearly every series of a corpus shares one cadence, so few entries serve
-a whole read. Past the cap an axis is rebuilt."""
+"""Maximum number of stored time axes. Series with the same timing can reuse an axis.
+After this limit, the reader builds other axes without keeping them."""
 
 #: The byte budget for decoded control-table row groups. The budget counts total bytes, not the
 #: number of groups. This design stops a shuffled read from filling and clearing a small cache too
@@ -754,13 +754,11 @@ class TimeFReader:
             raise TimeFFormatError(f"record {record_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
     def _axis(self, struct: dict, record_id: str) -> TimeAxis:
-        """Return a series' time axis, reusing one already built for the same stored columns.
+        """Return a time axis and reuse an existing axis when its stored columns match.
 
-        Nearly every series of a corpus shares one cadence, and an axis is a frozen value, so one
-        instance serves them all. Without this, each series pays ``Fraction`` arithmetic and a
-        dataclass validation pass to build an axis equal to the one before it. The cache stops
-        growing at :data:`_AXIS_CACHE_SIZE`, so a corpus whose series each start elsewhere cannot
-        fill memory.
+        Axis objects cannot change, so series can share them. Reuse avoids repeated ``Fraction``
+        arithmetic and validation. The cache holds at most :data:`_AXIS_CACHE_SIZE` distinct axes.
+        After that limit, the reader builds other axes without keeping them.
 
         Args:
             struct: The stored time-series struct.

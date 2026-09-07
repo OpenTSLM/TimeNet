@@ -306,7 +306,7 @@ class TimeSeries:
             Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.
         """
         values = self.to_arrow()
-        # A series with no null has an all-true mask, which NumPy fills without an Arrow call.
+        # If no values are missing, NumPy creates the all-true mask without an Arrow call.
         if values.null_count:
             valid = values.is_valid().to_numpy(zero_copy_only=False)
         else:
