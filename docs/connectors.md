@@ -41,11 +41,11 @@ data looks the way it does.
 
 Two things about the method are worth knowing even if you never run the skill:
 
-- **A head is not a `cat`.** Most sources are binary — EDF, WFDB, parquet, `.xls`, HDF5 — so the
-  skill has you write one `head()` per raw file type into a `heads.py` beside the connector. Those
-  functions then become how anybody, human or agent, looks at the raw source, and running them
-  against a later release shows a changed shape at once. It is a new convention: no connector ships
-  one yet.
+- **A head is not a `cat`.** Most sources are binary — EDF, WFDB, parquet, `.xls` — so the skill has
+  you write one `head()` per raw file type. Those functions are how anybody, human or agent, looks at
+  the raw source, and running them against a later release shows a changed shape at once. **A head
+  does not ship with the connector.** It is a discovery tool, so it sits with the plan and the census
+  under `docs/notes/connectors/<org>/<name>/`, and the connector package never imports it.
 - **A head cannot find what is odd.** Odd is a fact about the set, not about any one file: one
   recording in a hundred with a different record length, a scaling factor that varies per file where
   you assumed a constant, a handful of table rows disagreeing with their headers. Only a census over
@@ -139,11 +139,20 @@ the same `timenet` and `timenet-connectors` that you run (see [Build & publish](
 A build installs nothing into your own environment. Two connectors that need incompatible libraries
 do not collide.
 
-Import those libraries lazily, inside the function that uses them, and raise a clear error when one
-is missing. That guard keeps `--no-isolation` usable while you write a connector; a top-level import
-breaks it. The one exception is a shared base that only its declaring connector imports, such as
-`bases/edf/reader.py` or `bases/excel.py`: nothing else reaches it, so there is nobody to protect,
-and it imports at the top of the module.
+**Import a library your `requirements.txt` declares inside the function that uses it**, and raise a
+clear error when it is missing. `discovery.available()` imports every connector module under
+`datasets/` to read its `CONNECTOR` — its docstring says so — so a module-level import of a library
+the package itself does not depend on makes dataset listing fail for **every** connector in an
+environment without it. The same import also breaks `--no-isolation` while you write the connector.
+
+A library the package already depends on, such as `pyarrow`, needs none of that and imports at the
+top like any other. The line is what promises the library: the package's own dependencies, or this
+one connector's `requirements.txt`.
+
+A **base that every connector reaches through**, such as `bases/huggingface.py` or
+`bases/physionet.py`, defers for the same reason. A base that only its declaring connector imports,
+such as `bases/edf/reader.py` or `bases/excel.py`, has nobody to protect and imports at the top of
+the module.
 
 **Declare a requirement twice.** Once in the connector's `requirements.txt`, which the build
 installs into the environment the build runs in, and once in the `dev` group of the root
