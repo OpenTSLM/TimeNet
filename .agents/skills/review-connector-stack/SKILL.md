@@ -24,6 +24,16 @@ copied so that an author and a reviewer cannot end up following two versions of 
 failure this pair exists to prevent. If the sibling is not installed, say so under **Not reviewed**
 and review against `AGENTS.md` and the code alone, rather than reconstructing the rules from memory.
 
+## Contents
+
+- [1. Fix the target](#1-fix-the-target)
+- [2. Read the source before the diff](#2-read-the-source-before-the-diff)
+- [3. What produced what you are reviewing](#3-what-produced-what-you-are-reviewing)
+- [4. Run the checks](#4-run-the-checks)
+- [5. Verify the claims you are least sure of](#5-verify-the-claims-you-are-least-sure-of)
+- [6. Report](#6-report)
+- [7. Say what to run next](#7-say-what-to-run-next)
+
 ## 1. Fix the target
 
 Ask what is under review if it is not obvious, then resolve it to a list of commits and a base:
