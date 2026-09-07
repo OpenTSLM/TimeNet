@@ -22,6 +22,7 @@ This phase answers those three questions, and each has its own tool:
 - [Name the set of files that one record needs](#name-the-set-of-files-that-one-record-needs)
 - [Choose the download shape](#choose-the-download-shape)
 - [Draw the map](#draw-the-map)
+- [Draw the record model](#draw-the-record-model)
 
 ## The budget
 
@@ -254,3 +255,55 @@ Four rules make the map a check and not a picture:
 
 Read the map right to left when you design: start from the record you want, and ask which file states
 each part of it. Read it left to right when you code.
+
+## Draw the record model
+
+The map above shows which module does what. It does not show where a fact in the data came from, and
+that is the thing a user has to accept. So draw a second diagram: **every object TimeF will hold, and
+the exact thing in the source that states it.**
+
+Name the *part* of a file, not the file. "the labels file" is not provenance; "one row of the labels
+file: onset, duration, label" is.
+
+```mermaid
+flowchart LR
+    subgraph src["what the source states"]
+        fname["the filename<br/>subject and session id"]
+        hdr["signals file, header<br/>name, rate, unit, scaling"]
+        blk["signals file, data blocks<br/>the values"]
+        lab["labels file, one row<br/>onset, duration, label"]
+        row["table, one row<br/>keyed by (subject, session)"]
+        prose["the description, one sentence<br/>what the labels were read from"]
+    end
+    subgraph tf["what TimeF holds"]
+        rec["Record"]
+        sig["Signal"]
+        ann["Annotation"]
+        task["Task"]
+    end
+    fname -->|"record_id, subject_ids"| rec
+    hdr -->|"spec, unit, time_axis"| sig
+    blk -->|"values, lazily"| sig
+    lab -->|"key, value, span"| ann
+    row -->|"one annotation per fact"| ann
+    prose -->|"time_series_ids: what it is scoped to"| ann
+    ann -->|"one question per window"| task
+    sig --> rec
+    ann --> rec
+    task -.-> rec
+```
+
+**Four rules make it an audit rather than a picture:**
+
+- **Every TimeF node needs an inbound edge.** An object with no arrow into it is not in the source,
+  which means the connector invents it. That is the single most useful thing this diagram catches.
+- **Every source node needs an outbound edge**, or it appears in the file inventory as belonging to
+  no record. A part of the release that reaches nothing is a part nobody has decided about.
+- **The edge into an annotation's scope comes from prose or a header, and is labelled with which.**
+  No header states what a label was read from, so an unlabelled scope edge is a guess, and it is the
+  guess that most often turns out wrong.
+- **A task traces back to an annotation, or to the sentence that states the question.** A task with
+  no inbound edge is a question nobody asked.
+
+Label the edges with what they carry, as above. An unlabelled edge says two things are related and
+does not say what crosses it, which is what a reader needs in order to disagree.

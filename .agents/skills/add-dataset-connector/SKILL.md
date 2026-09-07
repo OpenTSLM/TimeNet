@@ -144,8 +144,9 @@ Produce, into the plan:
 - the file inventory, including the files that belong to no record,
 - one head per file type,
 - the census table,
-- the map: a mermaid diagram in four columns — what ships, what pairs it into records, what reads
-  the container, what each part means,
+- **two mermaid diagrams, both required**: the map, in four columns — what ships, what pairs it into
+  records, what opens the container, what each part means — and the record model, tracing every
+  object TimeF will hold back to the exact part of the source that states it,
 - what one record is, with real values from the heads,
 - the task type, the count of tasks per record, and therefore whether tasks are added or streamed,
 - the module skeleton and the test plan,
@@ -159,8 +160,8 @@ same. `references/fidelity.md` decides what the design may and may not do to the
 **Tell the user:** what the release holds — the count of records, the shapes the census found, and
 anything odd — and that the plan is ready to read.
 
-**Phase 1 is done when** every file in the inventory is either a node in the map or named as
-belonging to no record, the census covers every file rather than a sample of them, and the plan
+**Phase 1 is done when** both diagrams are drawn, every file in the inventory is either a node in
+the map or named as belonging to no record, every node of the record model has an inbound edge, the census covers every file rather than a sample of them, and the plan
 states a number for records, tasks per record, and expected warnings. A count you cannot state is
 phase 1 unfinished.
 
@@ -174,6 +175,8 @@ phase 1 unfinished.
 same as approval. Walk the model with the user part by part, each part beside its evidence, so any
 one of them can be rejected on its own:
 
+- **The record model diagram**, node by node. It is the fastest way to disagree with a design: an
+  object with no arrow into it is invented, and a source with no arrow out is undecided.
 - **What one record is**, and the file inventory it comes from.
 - **The signals**, their units and their rates, and which header field each came from.
 - **The annotations**, and above all **what each is scoped to** — that comes from prose, not from a

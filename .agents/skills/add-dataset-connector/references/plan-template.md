@@ -89,13 +89,30 @@ One per kind. Paste the output of `heads.py`, unedited.
 - **Total records**: <count>, counted by <how>.
 - **Anomalies**: what differs in only a few files, with the count.
 
-### The map
+### The map — which module does what
 
 ```mermaid
 flowchart LR
 ```
 
 A dashed arrow is a part that is not written yet.
+
+### The record model — where every fact comes from
+
+Every object TimeF will hold, and the exact part of the source that states it. This is the diagram
+the user accepts or rejects, so name the part of a file rather than the file, and label every edge
+with what it carries.
+
+```mermaid
+flowchart LR
+```
+
+Check it before you show it:
+
+- every TimeF node has an inbound edge — one without is invented
+- every source node has an outbound edge, or is in the inventory as belonging to no record
+- the edge that scopes an annotation says whether it came from prose or a header
+- every task traces to an annotation or to the sentence stating the question
 
 ## 2. The model
 
