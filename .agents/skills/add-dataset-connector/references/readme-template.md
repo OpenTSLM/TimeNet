@@ -27,6 +27,18 @@ Rules:
   can check them rather than trust them.
 - Use the `simple-english` skill on the prose. Do not run it over quoted evidence.
 
+## Contents
+
+The README this template produces has these sections, in this order:
+
+1. The source of truth
+2. What the description states
+3. What one record holds
+4. The tasks this connector builds
+5. Inconsistencies and decisions
+6. Warnings this build emits
+7. What is not built
+
 ## What each section holds
 
 | section | shape | says `None.` when |

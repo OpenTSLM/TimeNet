@@ -9,6 +9,17 @@ The plan is scratch and untracked. Never `git add` it.
 
 ---
 
+## Contents
+
+The plan this template produces has these sections, in this order:
+
+1. 0. The source
+2. 1. What ships
+3. 2. The model
+4. 3. The connector
+5. 4. What the build should produce
+6. 5. Assumptions and open questions
+
 ```markdown
 # <org>/<name> — connector plan
 

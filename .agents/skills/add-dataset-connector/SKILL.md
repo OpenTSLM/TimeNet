@@ -13,6 +13,21 @@ things, `download` and `convert`. The build calls them and stores what `convert`
 This skill takes a link and gives back a built connector. It works in six phases with one gate. Do
 not skip a phase, and do not write connector code before the gate.
 
+## Contents
+
+- [What this is for](#what-this-is-for)
+- [The two documents](#the-two-documents)
+- [The checklist](#the-checklist)
+- [Where to start](#where-to-start)
+- [Phase 0 — the card and the source's own words](#phase-0--the-card-and-the-sources-own-words)
+- [Phase 1 — a head of each file type, then a census of all of them](#phase-1--a-head-of-each-file-type-then-a-census-of-all-of-them)
+- [Phase 2 — the gate](#phase-2--the-gate)
+- [Phase 3 — the assumptions become the README](#phase-3--the-assumptions-become-the-readme)
+- [Phase 4 — build](#phase-4--build)
+- [Phase 5 — prove the build](#phase-5--prove-the-build)
+- [Rules that hold in every phase](#rules-that-hold-in-every-phase)
+- [Further reading](#further-reading)
+
 ## What this is for
 
 Converting a dataset is a modelling problem before it is a coding one. What counts as one record,
