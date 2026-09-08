@@ -41,7 +41,8 @@ Everything else under `docs/`, including `docs/catalog/benchmarks.md`, is hand-w
   squeezing the code. Re-split a long string with implicit concatenation so the value is unchanged.
 
 Task-specific workflows live as agent skills under `.agents/skills/` (finding and loading datasets,
-adding a dataset connector). They load on demand, so they stay out of this file.
+adding a dataset connector, reviewing a connector stack). They load on demand, so they stay out of
+this file.
 
 ## Workspace Layout
 This is a `uv` workspace. Code lives in two packages under `packages/`:
