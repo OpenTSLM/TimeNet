@@ -31,7 +31,6 @@ in full.
 - [Phase 3 — the assumptions become the README](#phase-3--the-assumptions-become-the-readme)
 - [Phase 4 — build](#phase-4--build)
 - [Phase 5 — prove the build](#phase-5--prove-the-build)
-- [How the connector ships](#how-the-connector-ships)
 - [Rules that hold in every phase](#rules-that-hold-in-every-phase)
 - [Further reading](#further-reading)
 
@@ -405,44 +404,9 @@ each difference is explained. A prediction with no outcome written against it wa
 
 **Tell the user:** which checks ran, and which predicted numbers matched.
 
-## How the connector ships
-
-A connector is shipped as a stack of small pull requests, not as one commit.
-`AGENTS.md § Stacked PRs` holds the `gh stack` mechanics; this section holds only what is specific to
-a connector.
-
-**Target 100 to 500 changed lines per pull request.** One run shipped two connectors as PRs of 1290
-and 1420 lines, and neither could be reviewed. "As small as possible" is not actionable without a
-number and a seam.
-
-**The seam for a connector is this, bottom to top.** Each step is reviewable without the ones above
-it:
-
-1. **The card** — `dataset.yaml` and the org `__init__.py`. It is what a reviewer checks the model
-   against.
-2. **The pure modules with their tests** — `tables.py`, `specs.py`, `keys.py`. They take values and
-   give values, so their tests need no fixture and the review needs no dataset.
-3. **`connector.py` with its tests** — the loop, the download shape, and the synthetic release the
-   test writes.
-4. **The `README.md`** — the assumptions and the inconsistencies, last, because it describes what the
-   PRs below it built.
-
-Put a mid-stack change on the branch that owns it and run `gh stack rebase --upstack`. Do not fold it
-into a higher branch.
-
-**This skill's own phases create the forward-reference trap, so watch for it.** Each PR must stand
-alone: no comment, docstring or README line that a later PR deletes, and no forward-looking chatter
-such as "the next PR adds the tasks". The plan names a README that has not landed yet, and a module
-docstring easily names a `connector.py` two branches up. Write each file as though the branch it sits
-on is the last one.
-
-**Say what the dataset is, in the commit subject and the PR title.** `feat(slip): read the SLIP
-pretraining corpus` says nothing to a reader who has not met the dataset. Name the release and say
-that this adds a connector.
-
-**One rule decides what enters the stack: a file that `download` or `convert` imports and calls.**
-Everything else you wrote to build the connector stays out — `heads.py`, the survey script, the
-plan. Those live under `docs/notes/`, which is never `git add`ed.
+**Then ship it.** Read `references/shipping.md`. A connector goes up as a stack of small pull
+requests, and that file states the size to aim for, the seam to cut on, and what never enters the
+stack.
 
 ## Rules that hold in every phase
 
@@ -470,6 +434,7 @@ plan. Those live under `docs/notes/`, which is never `git add`ed.
 - `references/fidelity.md` — what a connector may and may not do to its source.
 - `references/layout.md` — how the modules of a connector divide.
 - `references/connector-anatomy.md` — the contract, the bases, the task types, a worked example.
+- `references/shipping.md` — how a connector ships, as a stack of small pull requests.
 - `references/plan-template.md`, `references/readme-template.md` — the two standard formats.
 
 Repo docs: `docs/connectors.md` and `docs/build.md` are a design proposal. Where they describe a

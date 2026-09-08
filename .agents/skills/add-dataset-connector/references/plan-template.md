@@ -20,6 +20,15 @@ The plan is scratch and untracked. Never `git add` it.
 
 States are `not started`, `in progress`, `done`, and for the gate `approved <date>`.
 
+## Contents
+
+- [0. The source](#0-the-source)
+- [1. What ships](#1-what-ships)
+- [2. The model](#2-the-model)
+- [3. The connector](#3-the-connector)
+- [4. What the build should produce](#4-what-the-build-should-produce)
+- [5. Decisions and open questions](#5-decisions-and-open-questions)
+
 ## 0. The source
 
 - **id**: `<org>/<name>`
