@@ -46,7 +46,7 @@ format.** Read the size before you promise a bound:
 | --- | --- | --- |
 | EDF | one data record | the header states the duration and the values per record |
 | WFDB | the header alone, or the first samples of one lead | a header is a few hundred bytes |
-| parquet | one row group | as large as the writer chose; row group 0 of one 4.3 GB release is 58 MB *(measured)* |
+| parquet | one row group | as large as the writer chose, and often far larger than a reader expects |
 | xls / xlsx | the whole sheet, then the first rows | the reader gives every row, so the head slices |
 
 A parquet row group is the case that surprises people. It is bounded, and it is not small. Say in
