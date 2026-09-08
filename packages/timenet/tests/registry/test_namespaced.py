@@ -31,14 +31,14 @@ def _namespaced_dataset() -> TimeFDataset:
     )
     series = TimeSeries(
         spec=spec,
-        channel="v",
+        signal="v",
         time_axis=RegularAxis.from_rate_hz(1),
         loader=sine_loader(n=8, sampling_rate_hz=1.0),
         time_series_id="ns-ts-0",
         n_values=8,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="ns-sample-0")
-    dataset.add_task(sample, ClassificationTask(target="x", id="ns-task-0"))
+    record = dataset.add_record(time_series=(series,), record_id="ns-record-0")
+    dataset.add_task(record, ClassificationTask(target="x", id="ns-task-0"))
     return dataset
 
 

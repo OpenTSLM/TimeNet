@@ -5,7 +5,7 @@ one entry, not one row for each epoch. This module turns each entry into one ann
 
 The caller reads the entries and passes them in. This module reads no file.
 ``connector.py`` measures the overrun and reports it. It needs that measure for the session
-span of the sample as well.
+span of the record as well.
 """
 
 from timenet.dataset import TimeSeries
@@ -16,36 +16,36 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
 
 # The scoring followed the 1968 Rechtschaffen and Kales manual, with Fpz-Cz and Pz-Oz in place
-# of its EEG derivations. R&K scores from EEG, EOG and EMG together, thus these four channels.
-_channel_names_for_annotations = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
+# of its EEG derivations. R&K scores from EEG, EOG and EMG together, thus these four signals.
+_signal_names_for_annotations = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
 
 
-def _channel_ids_of_annotation(
-    sample_id: str, series: tuple[TimeSeries, ...], channels: tuple[str, ...]
+def _signal_ids_of_annotation(
+    record_id: str, series: tuple[TimeSeries, ...], signals: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """Give the time series ids of named channels, in the order they were named.
+    """Give the time series ids of named signals, in the order they were named.
 
     Args:
-        sample_id: The sample these channels belong to, for the error message.
+        record_id: The record these signals belong to, for the error message.
         series: Its time series.
-        channels: The channel names to look up.
+        signals: The signal names to look up.
 
     Returns:
         One time series id for each name, in that order.
 
     Raises:
-        TimeFFormatError: If the recording does not hold one of the named channels.
+        TimeFFormatError: If the recording does not hold one of the named signals.
     """
-    by_channel = {one.channel: one.time_series_id for one in series}
-    missing = [channel for channel in channels if channel not in by_channel]
+    by_signal = {one.signal: one.time_series_id for one in series}
+    missing = [signal for signal in signals if signal not in by_signal]
     if missing:
-        raise TimeFFormatError(f"{sample_id}: does not hold the channels {missing}")
+        raise TimeFFormatError(f"{record_id}: does not hold the signals {missing}")
 
-    return tuple(by_channel[channel] for channel in channels)
+    return tuple(by_signal[signal] for signal in signals)
 
 
 def measure_overrun_microseconds(entries: tuple[reader.EdfAnnotation, ...], end_microseconds: int) -> int:
-    """Give how far a scoring reaches past the last recorded sample.
+    """Give how far a scoring reaches past the last recorded data point.
 
     A scoring and the signals it annotates are two files, so nothing makes them agree. This
     release pads a scoring to a full day whatever time the recording stopped, thus its last
@@ -67,28 +67,28 @@ def measure_overrun_microseconds(entries: tuple[reader.EdfAnnotation, ...], end_
 
 
 def build(
-    sample_id: str,
+    record_id: str,
     entries: tuple[reader.EdfAnnotation, ...],
     series: tuple[TimeSeries, ...],
 ) -> list[Annotation]:
     """Give one annotation for each entry of a scoring, in file order.
 
     Every entry becomes an annotation, whatever its label, with the onset and the duration the
-    file states. An entry that reaches past the last recorded sample warns and is kept.
+    file states. An entry that reaches past the last recorded data point warns and is kept.
 
     Args:
-        sample_id: The id of the sample this scoring belongs to, from ``connector.py``. It
+        record_id: The id of the record this scoring belongs to, from ``connector.py``. It
             names the recording in any message this build gives.
         entries: Its scoring, as :func:`reader.read_annotations` gives it.
-        series: Its time series, which name the channels a stage was scored from.
+        series: Its time series, which name the signals a stage was scored from.
 
     Returns:
         One annotation for each entry.
 
     Raises:
-        TimeFFormatError: If the recording does not hold all four scoring channels.
-    """  # noqa: DOC502 (raised by _channel_ids_of_annotation, not directly here)
-    channel_ids = _channel_ids_of_annotation(sample_id, series, _channel_names_for_annotations)
+        TimeFFormatError: If the recording does not hold all four scoring signals.
+    """  # noqa: DOC502 (raised by _signal_ids_of_annotation, not directly here)
+    signal_ids = _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
     return [
         Annotation(
             key=AnnotationKey.SLEEP_STAGE,
@@ -96,7 +96,7 @@ def build(
             span=TimeInterval.micros(
                 entry.onset_microseconds,
                 entry.onset_microseconds + entry.duration_microseconds,
-                time_series_ids=channel_ids,
+                time_series_ids=signal_ids,
             ),
         )
         for entry in entries

@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-07-25T20:59:15.283139</dc:date>
+    <dc:date>2026-09-05T18:42:22.459808</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -43,24 +43,24 @@ L 189.64919 101.304
 L 189.64919 65.016 
 L 29.902017 65.016 
 z
-" clip-path="url(#p70ceff0c50)" style="fill: #f8f9fa; stroke: #868e96; stroke-width: 1.2; stroke-linejoin: miter"/>
+" clip-path="url(#p06c23fffed)" style="fill: #f8f9fa; stroke: #868e96; stroke-width: 1.2; stroke-linejoin: miter"/>
    </g>
    <g id="matplotlib.axis_1"/>
    <g id="matplotlib.axis_2"/>
    <g id="line2d_1">
     <path d="M 45.116033 75.6 
 L 178.238678 75.6 
-" clip-path="url(#p70ceff0c50)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
+" clip-path="url(#p06c23fffed)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
    </g>
    <g id="line2d_2">
     <path d="M 45.116033 84.672 
 L 185.845686 84.672 
-" clip-path="url(#p70ceff0c50)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
+" clip-path="url(#p06c23fffed)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
    </g>
    <g id="line2d_3">
     <path d="M 45.116033 93.744 
 L 140.203636 93.744 
-" clip-path="url(#p70ceff0c50)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
+" clip-path="url(#p06c23fffed)" style="fill: none; stroke: #868e96; stroke-width: 2.4; stroke-linecap: round"/>
    </g>
   </g>
   <g id="axes_2">
@@ -166,7 +166,7 @@ L 473.387549 105.935549
 L 474.530887 105.33649 
 L 474.912 105.084672 
 L 474.912 105.084672 
-" clip-path="url(#p4ebd0b2558)" style="fill: none; stroke: #f76707; stroke-width: 1.7; stroke-linecap: square"/>
+" clip-path="url(#pdf75045226)" style="fill: none; stroke: #f76707; stroke-width: 1.7; stroke-linecap: square"/>
    </g>
    <g id="patch_5">
     <path d="M 284.736793 118.962026 
@@ -697,10 +697,10 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="p70ceff0c50">
+  <clipPath id="p06c23fffed">
    <rect x="14.688" y="45.36" width="190.175207" height="75.6"/>
   </clipPath>
-  <clipPath id="p4ebd0b2558">
+  <clipPath id="pdf75045226">
    <rect x="284.736793" y="45.36" width="190.175207" height="75.6"/>
   </clipPath>
  </defs>

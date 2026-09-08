@@ -1,9 +1,9 @@
 """The ECG-QA CoT connector: PTB-XL 12-lead ECGs with chain-of-thought question answering.
 
-Each sample is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
+Each record is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
 an :class:`~timenet.types.AnswerTask` on that recording, whose ``prompt`` is the question, ``target``
 is the short evaluation answer, and ``rationale`` is the reasoning target. So a recording carries many
-QA tasks; there is no sample per question. Per-question metadata (question type, template, answer
+QA tasks; there is no record per question. Per-question metadata (question type, template, answer
 options, clinical context) is stored once as value-deduped annotations the tasks reference, and each
 recording carries its dataset split. The ~230k tasks stream to disk, so they never all live in memory.
 
@@ -191,10 +191,10 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         return [EcgQaCotSource(records_root=ptbxl_root / "records500", answers_path=answers_path, cot_csvs=cot_csvs)]
 
     def convert(self, raw_refs: list[EcgQaCotSource]) -> TimeFDataset:
-        """Build one sample per recording and stream one :class:`AnswerTask` per CoT row.
+        """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
         A first pass over the CoT CSVs collects each recording's split and the distinct question
-        metadata. It then builds a sample per recording (its 12 leads with lazy loaders) and registers
+        metadata. It then builds a record per recording (its 12 leads with lazy loaders) and registers
         the deduped metadata annotations. The tasks themselves stream from :meth:`_iter_tasks`, so the
         ~230k questions never all live in memory.
 
@@ -202,7 +202,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             raw_refs: The single-element list from :meth:`download`.
 
         Returns:
-            The dataset: recording samples plus a task stream.
+            The dataset: recording records plus a task stream.
         """
         source = raw_refs[0]
         answers = _load_template_answers(source.answers_path)
@@ -221,8 +221,8 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
 
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
-            sample = dataset.add_sample(time_series=self._leads_for(ecg_id, record_base), sample_id=f"ptbxl-{ecg_id}")
-            sample.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
+            record = dataset.add_record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
 
         dataset.register_annotations(self._metadata_annotations(question_types, template_ids, contexts, answers))
         dataset.set_task_stream([AnswerTask], lambda: self._iter_tasks(source, answers))
@@ -243,7 +243,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         return tuple(
             TimeSeries(
                 spec=_ECG,
-                channel=name,
+                signal=name,
                 time_axis=axis,
                 loader=self._lead_loader(record_base, header, lead_idx),
                 source_id=f"ptbxl-{ecg_id}",
@@ -307,7 +307,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                     rationale=str(row["rationale"]),
                     input_annotation_ids=tuple(input_ids),
                     id=f"ecgqa-{split}-{index}",
-                    sample_ids=(f"ptbxl-{ecg_id}",),
+                    record_ids=(f"ptbxl-{ecg_id}",),
                 )
 
 

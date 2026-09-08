@@ -34,7 +34,7 @@ def test_part_path_rejects_a_negative_index():
 
 
 def test_check_relative_path_accepts_a_path_within_the_root():
-    check_relative_path("path", "samples/part-00000000.parquet")  # must not raise
+    check_relative_path("path", "records/part-00000000.parquet")  # must not raise
 
 
 @pytest.mark.parametrize(
@@ -42,7 +42,7 @@ def test_check_relative_path_accepts_a_path_within_the_root():
     [
         "/etc/passwd",  # absolute path
         "../../etc/passwd",  # traversal above root
-        "samples/../../etc/passwd",  # traversal mid-path
+        "records/../../etc/passwd",  # traversal mid-path
     ],
 )
 def test_check_relative_path_rejects_a_path_that_escapes_the_root(path):

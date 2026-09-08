@@ -53,8 +53,9 @@ def _write_psg(tmp_path: Path, name: str = "psg.edf") -> Path:
 
 
 def _write_tenth_second_psg(tmp_path: Path) -> Path:
-    # A record of 0.1 s holds 10 samples of a 100 Hz channel and none of a 1 Hz one, thus
-    # this file carries the fast channel alone.
+    # EDF states samples_per_record as a whole number, so a 0.1 s data record holds 10
+    # samples of a 100 Hz signal and none of a 1 Hz one, thus this file carries the fast
+    # signal alone.
     rng = np.random.default_rng(0)
     edf = edfio.Edf(
         [
@@ -98,7 +99,7 @@ def test_open_edf_reads_every_header_field(tmp_path):
     assert header.patient_id == "X F X Female_33yr"
     assert header.num_records == _NUM_RECORDS
     assert header.record_duration == Fraction(1)
-    assert header.channels == ("EEG Fpz-Cz", "Resp oro-nasal")
+    assert header.signals == ("EEG Fpz-Cz", "Resp oro-nasal")
     assert header.units == ("uV", "V")
     assert header.samples_per_record == (100, 1)
 
@@ -168,32 +169,32 @@ def test_open_edf_reads_a_continuous_edf_plus(tmp_path):
 def test_open_edf_reads_a_plain_edf_whose_subtype_field_is_empty(tmp_path):
     path = _write_psg(tmp_path)
     assert path.read_bytes()[_RESERVED_FIELD].strip() == b""
-    assert reader.open_edf(path).header.channels == ("EEG Fpz-Cz", "Resp oro-nasal")
+    assert reader.open_edf(path).header.signals == ("EEG Fpz-Cz", "Resp oro-nasal")
 
 
-def test_read_channel_gives_every_sample_of_one_channel(tmp_path):
+def test_read_signal_gives_every_sample_of_one_signal(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    assert len(reader.read_channel(file, 0)) == _FAST_RATE * _NUM_RECORDS
-    assert len(reader.read_channel(file, 1)) == _SLOW_RATE * _NUM_RECORDS
+    assert len(reader.read_signal(file, 0)) == _FAST_RATE * _NUM_RECORDS
+    assert len(reader.read_signal(file, 1)) == _SLOW_RATE * _NUM_RECORDS
 
 
-def test_read_channel_refuses_a_channel_the_file_does_not_hold(tmp_path):
+def test_read_signal_refuses_a_signal_the_file_does_not_hold(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    with pytest.raises(TimeFFormatError, match="channel 2 does not exist"):
-        reader.read_channel(file, 2)
+    with pytest.raises(TimeFFormatError, match="signal 2 does not exist"):
+        reader.read_signal(file, 2)
 
 
-def test_read_record_gives_one_array_for_each_channel(tmp_path):
+def test_read_record_gives_one_array_for_each_signal(tmp_path):
     record = reader.read_record(reader.open_edf(_write_psg(tmp_path)), 3)
     assert [len(one) for one in record] == [_FAST_RATE, _SLOW_RATE]
 
 
-def test_read_record_gives_the_same_values_as_the_whole_channel(tmp_path):
+def test_read_record_gives_the_same_values_as_the_whole_signal(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    # Read the records first. Reading the channel would hold it, and the records would then
+    # Read the records first. Reading the signal would hold it, and the records would then
     # come from what is held rather than from the file.
     records = [reader.read_record(file, index)[0] for index in (0, 4, _NUM_RECORDS - 1)]
-    whole = reader.read_channel(file, 0)
+    whole = reader.read_signal(file, 0)
     for index, record in zip((0, 4, _NUM_RECORDS - 1), records, strict=True):
         start = index * _FAST_RATE
         np.testing.assert_array_equal(record, whole[start : start + _FAST_RATE])
@@ -202,7 +203,7 @@ def test_read_record_gives_the_same_values_as_the_whole_channel(tmp_path):
 def test_read_record_holds_a_record_duration_that_is_not_a_whole_second(tmp_path):
     file = reader.open_edf(_write_tenth_second_psg(tmp_path))
     records = [reader.read_record(file, index)[0] for index in range(_NUM_RECORDS)]
-    whole = reader.read_channel(file, 0)
+    whole = reader.read_signal(file, 0)
     for index, record in enumerate(records):
         assert len(record) == 10
         np.testing.assert_array_equal(record, whole[index * 10 : index * 10 + 10])
@@ -214,9 +215,9 @@ def test_read_record_refuses_a_record_after_the_end(tmp_path):
         reader.read_record(file, _NUM_RECORDS)
 
 
-def test_read_record_reads_no_channel_whole(tmp_path, monkeypatch):
-    # ``signal.digital`` reads a whole channel and holds it. Reading one record must not do
-    # that, so watch what the conversion is handed: one record of values, not the channel.
+def test_read_record_reads_no_signal_whole(tmp_path, monkeypatch):
+    # ``signal.digital`` reads a whole signal and holds it. Reading one record must not do
+    # that, so watch what the conversion is handed: one record of values, not the signal.
     file = reader.open_edf(_write_psg(tmp_path))
     handed = []
     convert = reader._convert_signal
@@ -232,9 +233,9 @@ def test_read_record_reads_no_channel_whole(tmp_path, monkeypatch):
     assert all(signal._digital is None for signal in file.handle.signals)
 
 
-def test_build_channel_loader_reads_the_channel_when_it_is_called(tmp_path):
+def test_build_signal_loader_reads_the_signal_when_it_is_called(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    load = reader.build_channel_loader(file, 1)
+    load = reader.build_signal_loader(file, 1)
     assert len(load()) == _SLOW_RATE * _NUM_RECORDS
 
 
@@ -285,7 +286,7 @@ def test_compute_signal_end_microseconds_refuses_a_part_of_a_microsecond():
         patient_id="X",
         num_records=1,
         record_duration=Fraction(1, 3),
-        channels=("EEG",),
+        signals=("EEG",),
         units=("uV",),
         samples_per_record=(1,),
     )

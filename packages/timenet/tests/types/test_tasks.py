@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import ClassVar
+
 import pytest
 
 from timenet.errors import TimeFValidationError
@@ -32,14 +35,14 @@ def test_task_types():
     assert TSCorrespondenceTask.task_type is TaskType.TS_CORRESPONDENCE
 
 
-def test_series_output_tasks_answer_with_a_sample():
+def test_series_output_tasks_answer_with_a_record():
     for cls in (ForecastingTask, TSEditingTask, TSGenerationTask):
-        assert cls.answer_is_sample
+        assert cls.answer_is_record
     for cls in (ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask):
-        assert not cls.answer_is_sample
+        assert not cls.answer_is_record
 
 
-def test_classification_labels_the_whole_sample_or_a_scope():
+def test_classification_labels_the_whole_record_or_a_scope():
     whole = ClassificationTask(target="afib", target_schema="rhythm")
     assert whole.scope is None
     scoped = ClassificationTask(target="N2", scope=TimeInterval.seconds(30.0, 60.0))
@@ -97,23 +100,23 @@ def test_localization_rejects_a_step_framed_target():
 
 
 def test_series_output_payloads():
-    assert ForecastingTask(context_sample_ids=("c1",), target_sample_id="t1").target_sample_id == "t1"
-    edit = TSEditingTask(prompt="Denoise it.", source_sample_id="s1", target_sample_id="t1")
-    assert edit.source_sample_id == "s1"
-    assert TSGenerationTask(prompt="10 s of sinus rhythm.", target_sample_id="t1").target is None
+    assert ForecastingTask(context_record_ids=("c1",), target_record_id="t1").target_record_id == "t1"
+    edit = TSEditingTask(prompt="Denoise it.", source_record_id="s1", target_record_id="t1")
+    assert edit.source_record_id == "s1"
+    assert TSGenerationTask(prompt="10 s of sinus rhythm.", target_record_id="t1").target is None
 
 
 def test_correspondence_answer_must_come_from_the_candidate_pool():
     task = TSCorrespondenceTask(
-        prompt="Which trace is most similar?", candidate_sample_ids=("s1", "s2"), target=("s2",)
+        prompt="Which trace is most similar?", candidate_record_ids=("s1", "s2"), target=("s2",)
     )
     assert task.target == ("s2",)
     with pytest.raises(TimeFValidationError, match="must be one of the candidates"):
-        TSCorrespondenceTask(candidate_sample_ids=("s1",), target=("s9",))
+        TSCorrespondenceTask(candidate_record_ids=("s1",), target=("s9",))
 
 
 def test_correspondence_allows_an_unconstrained_pool():
-    assert TSCorrespondenceTask(target=("s9",)).candidate_sample_ids == ()
+    assert TSCorrespondenceTask(target=("s9",)).candidate_record_ids == ()
 
 
 def test_spans_collects_scope_and_span_valued_payload():
@@ -136,10 +139,10 @@ def test_from_task_ids_property():
 
 
 def test_task_is_mutable_for_post_construction_linking():
-    # add_task()/add_tasks() populate sample_ids after construction, so Task must be mutable.
+    # add_task()/add_tasks() populate record_ids after construction, so Task must be mutable.
     t = ClassificationTask(target="a")
-    t.sample_ids = ("sample-0",)
-    assert t.sample_ids == ("sample-0",)
+    t.record_ids = ("record-0",)
+    assert t.record_ids == ("record-0",)
 
 
 def test_base_task_has_no_task_type():
@@ -153,23 +156,36 @@ def test_registry_rejects_task_type_collision():
         _build_task_registry([ClassificationTask, ClassificationTask])
 
 
-def test_forecasting_target_span_names_a_region_of_the_attached_sample():
+def test_registry_rejects_an_undeclared_record_id_field():
+    # The registry finds record-id payload fields by their name suffix. If that suffix drifts from
+    # the names the task classes actually use, the check passes vacuously and a task can carry a
+    # record reference its refs never declare, so nothing validates or repairs it.
+    @dataclass(kw_only=True)
+    class _Undeclared(Task):
+        task_type: ClassVar[TaskType] = TaskType.ANSWER
+        target_record_id: str | None = None
+
+    with pytest.raises(TimeFValidationError, match="omits record-id fields"):
+        _build_task_registry([_Undeclared])
+
+
+def test_forecasting_target_span_names_a_region_of_the_attached_record():
     task = ForecastingTask(target_span=TimeInterval.seconds(132.0, 144.0), scope=TimeInterval.seconds(0.0, 132.0))
     assert task.target_span == TimeInterval.seconds(132.0, 144.0)
-    assert task.target_sample_id is None
-    assert task.context_sample_ids == ()
+    assert task.target_record_id is None
+    assert task.context_record_ids == ()
 
 
-def test_forecasting_still_accepts_a_whole_target_sample():
-    task = ForecastingTask(context_sample_ids=("c1",), target_sample_id="t1")
-    assert task.target_sample_id == "t1"
+def test_forecasting_still_accepts_a_whole_target_record():
+    task = ForecastingTask(context_record_ids=("c1",), target_record_id="t1")
+    assert task.target_record_id == "t1"
     assert task.target_span is None
 
 
 def test_forecasting_predicts_a_single_step_as_a_one_step_interval():
     # One-step-ahead is the most common forecasting protocol, and rejecting point spans must not stand
     # in its way. A point has no duration; the single step covering that point is the interval, the
-    # only form that stays unambiguous on a sample holding several rates.
+    # only form that stays unambiguous on a record holding several rates.
     task = ForecastingTask(
         scope=TimeInterval.seconds(0.0, 143.0),
         target_span=TimeInterval.seconds(143.0, 144.0),
@@ -177,9 +193,9 @@ def test_forecasting_predicts_a_single_step_as_a_one_step_interval():
     assert task.target_span == TimeInterval.seconds(143.0, 144.0)  # an interval, not a point
 
 
-def test_forecasting_target_span_is_exclusive_with_target_sample_id():
-    with pytest.raises(TimeFValidationError, match="cannot be combined with target_sample_id"):
-        ForecastingTask(target_sample_id="t1", target_span=TimeInterval.seconds(132.0, 144.0))
+def test_forecasting_target_span_is_exclusive_with_target_record_id():
+    with pytest.raises(TimeFValidationError, match="cannot be combined with target_record_id"):
+        ForecastingTask(target_record_id="t1", target_span=TimeInterval.seconds(132.0, 144.0))
 
 
 def test_forecasting_target_span_is_declared_as_a_span_field():
@@ -189,8 +205,8 @@ def test_forecasting_target_span_is_declared_as_a_span_field():
     assert task.spans() == (scope, TimeInterval.seconds(132.0, 144.0))
 
 
-def test_forecasting_requires_a_target_sample_id_or_a_target_span():
-    with pytest.raises(TimeFValidationError, match="requires either target_sample_id or target_span"):
+def test_forecasting_requires_a_target_record_id_or_a_target_span():
+    with pytest.raises(TimeFValidationError, match="requires either target_record_id or target_span"):
         ForecastingTask()
 
 
@@ -212,33 +228,33 @@ def test_forecasting_target_span_rejects_a_point():
         )
 
 
-def test_forecasting_rejects_a_target_sample_that_is_also_its_own_context():
+def test_forecasting_rejects_a_target_record_that_is_also_its_own_context():
     # The forecast would read its own answer as input.
     with pytest.raises(TimeFValidationError, match="read its own answer as input"):
-        ForecastingTask(context_sample_ids=("t1", "c2"), target_sample_id="t1")
+        ForecastingTask(context_record_ids=("t1", "c2"), target_record_id="t1")
 
 
-def test_forecasting_target_span_rejects_context_sample_ids():
-    # The target_span form draws context from scope, so a context sample (which would include the
+def test_forecasting_target_span_rejects_context_record_ids():
+    # The target_span form draws context from scope, so a context record (which would include the
     # target region) has no place here.
-    with pytest.raises(TimeFValidationError, match="context_sample_ids must be empty"):
+    with pytest.raises(TimeFValidationError, match="context_record_ids must be empty"):
         ForecastingTask(
             scope=TimeInterval.seconds(0.0, 132.0),
             target_span=TimeInterval.seconds(132.0, 144.0),
-            context_sample_ids=("c1",),
+            context_record_ids=("c1",),
         )
 
 
-def test_forecasting_rejects_an_empty_context_with_a_target_sample():
-    # The separate-target-sample form draws its input from context_sample_ids. An empty tuple there
+def test_forecasting_rejects_an_empty_context_with_a_target_record():
+    # The separate-target-record form draws its input from context_record_ids. An empty tuple there
     # is a forecast with no input. The target_span form takes its context from scope, so an empty
-    # context_sample_ids is correct in that form.
-    with pytest.raises(TimeFValidationError, match="empty context_sample_ids"):
-        ForecastingTask(target_sample_id="t1")
+    # context_record_ids is correct in that form.
+    with pytest.raises(TimeFValidationError, match="empty context_record_ids"):
+        ForecastingTask(target_record_id="t1")
 
 
 def test_forecasting_rejects_a_context_that_overlaps_the_target():
-    # scope [0, 140) covers the first 8 s of target [132, 144) on the shared whole-sample series.
+    # scope [0, 140) covers the first 8 s of target [132, 144) on the shared whole-record series.
     with pytest.raises(TimeFValidationError, match="end at or before the target"):
         ForecastingTask(
             scope=TimeInterval.seconds(0.0, 140.0),
@@ -313,7 +329,7 @@ def test_forecasting_scope_and_target_span_must_share_a_frame():
 
 
 def test_correspondence_answers_with_time_series_ids():
-    task = TSCorrespondenceTask(sample_ids=("rec-0",), target_time_series_ids=("rec-0-c2", "rec-0-c5"))
+    task = TSCorrespondenceTask(record_ids=("rec-0",), target_time_series_ids=("rec-0-c2", "rec-0-c5"))
     assert task.target_time_series_ids == ("rec-0-c2", "rec-0-c5")
 
 

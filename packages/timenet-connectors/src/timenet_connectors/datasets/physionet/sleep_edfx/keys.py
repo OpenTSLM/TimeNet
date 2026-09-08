@@ -26,7 +26,7 @@ class AnnotationKey(StrEnum):
 
 
 class Question(StrEnum):
-    """What a whole-sample task asks. A scalar task states it as its ``target_name``."""
+    """What a whole-record task asks. A scalar task states it as its ``target_name``."""
 
     AGE = "age"
     SEX = "sex"

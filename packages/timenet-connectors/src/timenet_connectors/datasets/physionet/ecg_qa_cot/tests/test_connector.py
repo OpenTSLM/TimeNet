@@ -18,7 +18,7 @@ from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotC
 
 
 _CSV_COLUMNS = ["ecg_id", "question", "answer", "rationale", "template_id", "question_type", "clinical_context"]
-_CHANNELS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 
 # Synthetic rows, hand-written for the tests and not derived from the real ECG-QA / PTB-XL data, so the
 # repo ships no dataset bytes. The distribution is what the assertions need: three questions over two
@@ -77,14 +77,14 @@ def records_dir(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("ecg_qa_cot_records")
     rng = np.random.default_rng(0)
     for ecg_id in (1, 2):
-        signal = rng.standard_normal((100, len(_CHANNELS)))
+        signal = rng.standard_normal((100, len(_LEADS)))
         wfdb.wrsamp(
             f"{ecg_id:05d}_hr",
             fs=500,
-            units=["mV"] * len(_CHANNELS),
-            sig_name=list(_CHANNELS),
+            units=["mV"] * len(_LEADS),
+            sig_name=list(_LEADS),
             p_signal=signal,
-            fmt=["16"] * len(_CHANNELS),
+            fmt=["16"] * len(_LEADS),
             write_dir=str(out),
         )
     return out
@@ -140,15 +140,15 @@ def test_metadata():
     assert str(EcgQaCotConnector().metadata().license) == "CC-BY-4.0"
 
 
-def test_one_sample_per_recording_not_per_question(tmp_path, records_dir):
+def test_one_record_per_ecg_not_per_question(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
     assert isinstance(dataset, TimeFDataset)
-    # 3 rows over 2 recordings -> 2 samples, not one per question
-    assert {sample.sample_id for sample in dataset.samples} == {"ptbxl-1", "ptbxl-2"}
+    # 3 rows over 2 recordings -> 2 records, not one per question
+    assert {record.record_id for record in dataset.records} == {"ptbxl-1", "ptbxl-2"}
 
 
-def test_twelve_leads_per_sample(tmp_path, records_dir):
-    assert all(len(sample.time_series) == 12 for sample in _convert(tmp_path, records_dir).samples)
+def test_twelve_leads_per_record(tmp_path, records_dir):
+    assert all(len(record.time_series) == 12 for record in _convert(tmp_path, records_dir).records)
 
 
 def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir):
@@ -159,13 +159,13 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     assert all(isinstance(task, AnswerTask) for task in tasks)
     assert {task.target for task in tasks} == {row["answer"] for row in rows}
     assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
-    assert {task.sample_ids[0] for task in tasks} == {"ptbxl-1", "ptbxl-2"}  # each task points at its recording
+    assert {task.record_ids[0] for task in tasks} == {"ptbxl-1", "ptbxl-2"}  # each task points at its recording
     assert all(task.target != task.rationale for task in tasks)  # answer is the short label, not the CoT
 
 
 def test_recording_carries_its_split(tmp_path, records_dir):
-    for sample in _convert(tmp_path, records_dir).samples:
-        assert [ann.value for ann in sample.annotations if ann.key == "split"] == ["train"]
+    for record in _convert(tmp_path, records_dir).records:
+        assert [ann.value for ann in record.annotations if ann.key == "split"] == ["train"]
 
 
 def test_question_metadata_is_deduped_registered_annotations(tmp_path, records_dir):
@@ -193,8 +193,8 @@ def test_answer_options_come_from_template(tmp_path, records_dir):
 def test_series_values_match_fixture_record(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
     signal, _ = wfdb.rdsamp(str(records_dir / "00001_hr"), channels=[0])
-    sample = next(s for s in dataset.samples if s.sample_id == "ptbxl-1")
-    got = sample.time_series[0].to_numpy()
+    record = next(r for r in dataset.records if r.record_id == "ptbxl-1")
+    got = record.time_series[0].to_numpy()
     assert len(got) == len(signal)
     assert float(got[0]) == pytest.approx(float(signal[0, 0]), rel=1e-5)
 
@@ -204,8 +204,8 @@ def test_convert_needs_no_wfdb_for_format16(tmp_path, records_dir, monkeypatch):
     # wfdb installed. wfdb is only a fallback for other signal formats.
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
     dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
-    assert dataset.samples
-    assert len(dataset.samples[0].time_series[0].to_numpy())  # runs the direct loader, no wfdb
+    assert dataset.records
+    assert len(dataset.records[0].time_series[0].to_numpy())  # runs the direct loader, no wfdb
 
 
 def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
@@ -214,7 +214,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert {sample.sample_id for sample in restored.samples} == {"ptbxl-1", "ptbxl-2"}
+    assert {record.record_id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
     assert len(restored.tasks) == 3  # streamed to disk and back
     assert {ann.key for ann in restored.registered_annotations} >= {
         "question_type",
@@ -232,7 +232,7 @@ def test_read_header_uses_the_direct_path_for_plain_single_dat_16(tmp_path):
 
 
 def test_read_header_falls_back_when_the_record_is_not_plain_16(tmp_path):
-    # 16x2 (two samples per frame) breaks the (-1, n_sig) reshape, so the record must route to wfdb; a
+    # 16x2 (two WFDB samples per frame) breaks the (-1, n_sig) reshape, so the record must route to wfdb; a
     # multi-word signal description is kept whole rather than truncated to its last token.
     (tmp_path / "framed.hea").write_text("framed 1 500 100\nframed.dat 16x2 1000(0)/mV 16 0 0 0 0 my lead II\n")
     header = BasePhysioNetConnector._read_header(tmp_path / "framed")

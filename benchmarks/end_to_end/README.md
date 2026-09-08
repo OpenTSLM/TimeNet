@@ -3,7 +3,7 @@
 This directory contains a deterministic offline corpus and two commit-to-commit gates:
 
 - `noop.py` fails if the logical TimeF dataset changes at all. It compares metadata, schema, tasks,
-  samples, annotations, series contracts, dtypes, shapes, and exact value bytes while deliberately
+  records, annotations, series contracts, dtypes, shapes, and exact value bytes while deliberately
   ignoring backend-specific physical layouts.
 - `benchmark.py` fails if the median conversion, write, read, total, or stored-size measurement gets
   worse. Its default permitted regression is zero; use `--max-regression-percent` when a noisy shared
@@ -24,8 +24,8 @@ chunks, plus a rich Zarr run with float64, int16, uint16, and N-D values. The ei
 cover vibration, 12-lead ECG, sleep physiology, accelerometry, finance/TSQA, workout telemetry, energy,
 and automotive degradation. Their layouts also mimic existing connectors:
 
-- ECG-QA: long 12-lead values reused across multiple reasoning samples;
-- TSQA: many independent short one-to-three-channel question-answer samples;
+- ECG-QA: long 12-lead values reused across multiple reasoning records;
+- TSQA: many independent short one-to-three-signal question-answer records;
 - test-mean: many tiny labeled series;
 - hello-world: deterministic closed-form values, annotations, task variety, and stable ids.
 

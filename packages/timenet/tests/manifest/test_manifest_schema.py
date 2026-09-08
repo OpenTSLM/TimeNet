@@ -55,7 +55,7 @@ def _manifest() -> Manifest:
         metadata=metadata,
         schema=schema,
         counts=ManifestCounts(
-            samples=2,
+            records=2,
             annotations=4,
             tasks={"classification": 2},
             time_series_chunks=3,
@@ -63,7 +63,7 @@ def _manifest() -> Manifest:
             time_series_specs={"ecg": 2},
         ),
         files=ManifestFiles(
-            samples=(FilePart("samples.parquet", "sha256:" + "a" * 64, 10),),
+            records=(FilePart("records.parquet", "sha256:" + "a" * 64, 10),),
             annotations=(FilePart("annotations.parquet", "sha256:" + "b" * 64, 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:" + "c" * 64, 30),),
             tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:" + "d" * 64, 40),),
@@ -87,7 +87,7 @@ def test_to_dict_validates_against_schema():
         lambda d: d.update(timef_format_version=99),  # not the pinned const
         lambda d: d["schema"].update(tasks=[{"task_type": "nope"}]),  # unknown task_type
         lambda d: d["schema"]["annotations"][0].update(annotation_type="sideways"),  # bad annotation_type
-        lambda d: d["files"].update(samples="single.parquet"),  # a bare string, not a list of parts
+        lambda d: d["files"].update(records="single.parquet"),  # a bare string, not a list of parts
         lambda d: d["metadata"].update(license="Nope"),  # unknown license
     ],
 )

@@ -1,6 +1,6 @@
-"""What each channel of the release measures.
+"""What each signal of the release measures.
 
-One table covers both studies. They share four of the eight channel names, and the rest are
+One table covers both studies. They share four of the eight signal names, and the rest are
 unique to one study.
 """
 

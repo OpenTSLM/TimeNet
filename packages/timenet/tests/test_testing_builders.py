@@ -29,7 +29,7 @@ def test_sine_loader_is_deterministic():
 def test_make_dataset_builds_a_valid_dataset():
     ds = make_dataset()
     assert isinstance(ds, TimeFDataset)
-    assert len(ds.samples) >= 1
+    assert len(ds.records) >= 1
 
 
 def test_assert_datasets_equal_reflexive():
@@ -39,6 +39,6 @@ def test_assert_datasets_equal_reflexive():
 def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
     other = make_dataset()
-    other.samples[0].add_annotation(Annotation(key="extra", value=1))
+    other.records[0].add_annotation(Annotation(key="extra", value=1))
     with pytest.raises(AssertionError):
         assert_datasets_equal(ds, other)

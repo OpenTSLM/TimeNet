@@ -20,13 +20,13 @@ Every dataset loads the same way. Then it hands off to your framework. There are
 
 Example status:
 
-- [x] pandas: load a sample's series into a `DataFrame`
+- [x] pandas: load a record's series into a `DataFrame`
 - [x] polars: `pl.from_arrow` over `to_arrow()`
 - [x] PyTorch: `load_torch` plus a `DataLoader`
 - [ ] Spark: planned
 
-Each series carries its own `channel` and `time_axis`. It reads its values lazily through
-`to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded sample.
+Each series carries its own `signal` and `time_axis`. It reads its values lazily through
+`to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded record.
 
 === "pandas"
 
@@ -37,12 +37,12 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
 
     # read in place through the registry (lazy per-series values)
     dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.samples[0].time_series[0]
+    series = dataset.records[0].time_series[0]
 
     values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
     # tsqa is an ordinal series: it has an order and no timeline, so there is no time
     # column to build. A regularly sampled series would use series.time_axis.time_offset_us(i).
-    frame = pd.DataFrame({series.channel: values})
+    frame = pd.DataFrame({series.signal: values})
     ```
 
 === "polars"
@@ -52,11 +52,11 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
     from timenet.client import TimeNet
 
     dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.samples[0].time_series[0]
+    series = dataset.records[0].time_series[0]
 
     # pl.from_arrow reads the Arrow array into a polars Series without a copy.
     column = pl.from_arrow(series.to_arrow())
-    frame = pl.DataFrame({series.channel: column})
+    frame = pl.DataFrame({series.signal: column})
     ```
 
 === "Spark"
@@ -78,7 +78,7 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
     item = ds[0]
     series, prompt = item["series"][0], item["tasks"][0].prompt
 
-    # Series lengths vary between samples, so batch with a collate_fn that picks
+    # Series lengths vary between records, so batch with a collate_fn that picks
     # out what the model needs.
     loader = DataLoader(
         ds,
@@ -92,7 +92,7 @@ Each series carries its own `channel` and `time_axis`. It reads its values lazil
 ## Example: train a classifier end-to-end
 
 One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
-demo is simple. Each sample is one noisy signal. The label is `above_zero` or `below_zero`, by the
+demo is simple. Each record is one noisy signal. The label is `above_zero` or `below_zero`, by the
 sign of the mean. So a classifier only must recover that sign.
 
 ```python
@@ -107,7 +107,7 @@ import timenet_connectors
 timenet_connectors.build("timenet/test-mean")
 dataset = TimeNet().load("timenet/test-mean")
 
-# Pair each sample's values with its target. Materialization is deferred by
+# Pair each record's values with its target. Materialization is deferred by
 # default (Arrow); ask for output="numpy" since scikit-learn needs it.
 x, y = dataset.to_features_and_targets(output="numpy")
 
@@ -121,7 +121,7 @@ print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 `to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
 `FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
 because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
-sequence per sample (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
+sequence per record (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
 `test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
 tasks, pass `task=...`.
 

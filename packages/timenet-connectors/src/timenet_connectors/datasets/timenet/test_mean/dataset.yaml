@@ -7,7 +7,7 @@ dataset_id: timenet/test-mean
 dataset_version: 1.0.0
 name: Test Mean
 description: >-
-  A synthetic binary-classification demo: each sample is one noisy signal labeled by whether its mean
+  A synthetic binary-classification demo: each record is one noisy signal labeled by whether its mean
   is above or below zero. Balanced and deterministic; backs the end-to-end training example.
 license: CC-BY-4.0
 domains:

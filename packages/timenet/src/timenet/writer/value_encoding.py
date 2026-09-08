@@ -24,9 +24,9 @@ The ``value_encoding`` override covers two known gaps instead of more machinery:
 - High-cardinality *quantized* data (say a 24-bit integer-scaled signal) suits neither branch. It
   has too many distinct values for a dictionary and too much low-bit noise for a byte split. The
   rule sends it to BYTE_STREAM_SPLIT.
-- The sample is one modality's first row group. The writer sorts series by ``(spec_type, channel,
-  time_series_id)``, so the sample comes from that modality's first channel or two. The rule judges
-  a modality by its first channels only, even when the modality's channels differ sharply in
+- The sample is one modality's first row group. The writer sorts series by ``(spec_type, signal,
+  time_series_id)``, so the sample comes from that modality's first signal or two. The rule judges
+  a modality by its first signals only, even when the modality's signals differ sharply in
   cardinality. Paying a second pass over the values to avoid this would cost more than the cases it
   fixes.
 

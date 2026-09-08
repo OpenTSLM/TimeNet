@@ -1,4 +1,4 @@
-"""The :class:`Sample` type: one logical unit of time-series data."""
+"""The :class:`Record` type: one logical unit of time-series data."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -18,7 +18,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
     label: str,
     span: Span,
     time_series: tuple[TimeSeries, ...],
-    sample_id: str,
+    record_id: str,
     time_span: TimeInterval | None = None,
     *,
     warn_when_outside: bool = True,
@@ -31,7 +31,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
     - **Scoped** to named ``time_series_ids``: it claims to apply to every one of them, so it must lie
       inside the *intersection* of their windows. Falling outside even one of those windows breaks
       that claim.
-    - **Unscoped** (``time_series_ids`` is ``None``) on a sample that declares a ``time_span``: checked
+    - **Unscoped** (``time_series_ids`` is ``None``) on a record that declares a ``time_span``: checked
       against that session span. This is how a recording that spans a sensor gap says so. It lets an
       event fall in the gap on purpose, for example a note taken while every sensor was briefly off.
     - **Unscoped** with no ``time_span``: checked against the *union* of the timed series' windows.
@@ -45,13 +45,13 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
         label: Human-readable label for the span, used in the error message.
         span: The span to check.
         time_series: The series the span is checked against.
-        sample_id: The owning sample's id, for the error message.
-        time_span: The sample's declared session span, if any, consulted only for an unscoped span.
+        record_id: The owning record's id, for the error message.
+        time_span: The record's declared session span, if any, consulted only for an unscoped span.
         warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
     Raises:
         TimeFValidationError: If a series id is unknown. If a scoped span names a timeless series
-            or ones whose windows do not overlap. If the sample has no timeline for an unscoped
+            or ones whose windows do not overlap. If the record has no timeline for an unscoped
             span. If the span falls outside the window the rule selects, when
             ``warn_when_outside`` is False. If a step span names a series with a timeline, or it runs
             past its steps.
@@ -60,17 +60,17 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
         ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
         if ts is None:
             raise TimeFValidationError(
-                f"{label} references unknown time_series_id {span.time_series_id!r} on sample {sample_id!r}"
+                f"{label} references unknown time_series_id {span.time_series_id!r} on record {record_id!r}"
             )
         if ts.span_us is not None:  # axis-fit: steps only on a series with no timeline
             raise TimeFValidationError(
-                f"{label} counts in steps, but series {ts.time_series_id!r} on sample {sample_id!r} has a "
+                f"{label} counts in steps, but series {ts.time_series_id!r} on record {record_id!r} has a "
                 f"timeline; name the region in seconds instead"
             )
         if span.exclusive_end > ts.n_values:
             raise TimeFValidationError(
-                f"{label} runs past the {ts.n_values} steps of series {ts.time_series_id!r} on sample "
-                f"{sample_id!r}: got {span!r}"
+                f"{label} runs past the {ts.n_values} steps of series {ts.time_series_id!r} on record "
+                f"{record_id!r}: got {span!r}"
             )
         return
     if not isinstance(span, TimeSpan):  # Span is abstract. Only time and step spans reach here
@@ -80,7 +80,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
     for series_id in scope or ():
         if series_id not in covered:
             raise TimeFValidationError(
-                f"{label} references unknown time_series_id {series_id!r} on sample {sample_id!r}"
+                f"{label} references unknown time_series_id {series_id!r} on record {record_id!r}"
             )
 
     if scope is not None:
@@ -95,29 +95,29 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
         end = min(window[1] for window in windows)
         if start >= end:
             raise TimeFValidationError(
-                f"{label} is scoped to series whose windows do not overlap on sample {sample_id!r}, so no "
+                f"{label} is scoped to series whose windows do not overlap on record {record_id!r}, so no "
                 f"region lies inside all of them"
             )
-        _reject_outside(label, span, start, end, sample_id, warn_when_outside=warn_when_outside)
+        _reject_outside(label, span, start, end, record_id, warn_when_outside=warn_when_outside)
         return
 
     if time_span is not None:
         _reject_outside(
-            label, span, time_span.start_us, time_span.end_us, sample_id, warn_when_outside=warn_when_outside
+            label, span, time_span.start_us, time_span.end_us, record_id, warn_when_outside=warn_when_outside
         )
         return
 
     windows = sorted(window for window in covered.values() if window is not None)
     if not windows:
         raise TimeFValidationError(
-            f"{label} is a time-valued region, but sample {sample_id!r} has no timeline to place it against: "
+            f"{label} is a time-valued region, but record {record_id!r} has no timeline to place it against: "
             f"no timed series and no time_span. Use a static annotation, or declare a time_span"
         )
-    _reject_outside_union(label, span, windows, sample_id, warn_when_outside=warn_when_outside)
+    _reject_outside_union(label, span, windows, record_id, warn_when_outside=warn_when_outside)
 
 
 def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
-    label: str, span: TimeSpan, start: int, end: int, sample_id: str, *, warn_when_outside: bool = True
+    label: str, span: TimeSpan, start: int, end: int, record_id: str, *, warn_when_outside: bool = True
 ) -> None:
     """Reject a time span that runs past the half-open window ``[start, end)``.
 
@@ -126,7 +126,7 @@ def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
         span: The span to check.
         start: The first microsecond of the window.
         end: One microsecond past the window.
-        sample_id: The owning sample's id, for the message.
+        record_id: The owning record's id, for the message.
         warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
     Raises:
@@ -135,7 +135,7 @@ def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
     """
     if span.start_us < start or span.exclusive_end > end:
         message = (
-            f"{label} falls outside sample {sample_id!r} span ({start}, {end}) us: got {span!r}; span "
+            f"{label} falls outside record {record_id!r} span ({start}, {end}) us: got {span!r}; span "
             f"times are in the source recording timeline"
         )
         if warn_when_outside:
@@ -149,7 +149,7 @@ def _reject_outside_union(
     label: str,
     span: TimeSpan,
     windows: list[tuple[int, int]],
-    sample_id: str,
+    record_id: str,
     *,
     warn_when_outside: bool = True,
 ) -> None:
@@ -163,7 +163,7 @@ def _reject_outside_union(
         label: Human-readable label for the span, used in the message.
         span: The span to check.
         windows: The windows of the timed series, sorted by start.
-        sample_id: The owning sample's id, for the message.
+        record_id: The owning record's id, for the message.
         warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
     Raises:
@@ -177,11 +177,11 @@ def _reject_outside_union(
         else:
             merged.append((start, end))
     if len(merged) == 1:
-        _reject_outside(label, span, merged[0][0], merged[0][1], sample_id, warn_when_outside=warn_when_outside)
+        _reject_outside(label, span, merged[0][0], merged[0][1], record_id, warn_when_outside=warn_when_outside)
         return
     if not any(start <= span.start_us and span.exclusive_end <= end for start, end in merged):
         message = (
-            f"{label} falls in a gap between the recorded windows of sample {sample_id!r} {merged}: got "
+            f"{label} falls in a gap between the recorded windows of record {record_id!r} {merged}: got "
             f"{span!r}. Declare a time_span if the session spans the gap"
         )
         if warn_when_outside:
@@ -192,31 +192,31 @@ def _reject_outside_union(
 
 
 @dataclass(kw_only=True)
-class Sample:
+class Record:
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
-    Created via :meth:`~timenet.dataset.TimeFDataset.add_sample`. Mutable so ``task_ids`` and
+    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``task_ids`` and
     ``annotations`` can be populated after construction.
 
-    A sample has no metadata field. Sample-level facts, such as a subject's age or the recording
+    A record has no metadata field. Record-level facts, such as a subject's age or the recording
     device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
-    also state a ``unit``, and it travels with every window drawn later from the sample.
+    also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
     time_series: tuple[TimeSeries, ...]
-    """The logical :class:`TimeSeries` streams the sample uses."""
-    sample_id: str = field(default_factory=new_id)
-    """Unique id for the sample (default: an auto-generated uuid7)."""
+    """The logical :class:`TimeSeries` streams the record uses."""
+    record_id: str = field(default_factory=new_id)
+    """Unique id for the record (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()
-    """Subjects this sample belongs to (empty for subject-less domains)."""
+    """Subjects this record belongs to (empty for subject-less domains)."""
     task_ids: tuple[str, ...] = ()
-    """Ids of the tasks attached to this sample."""
+    """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
-    """Annotations attached to the sample."""
+    """Annotations attached to the record."""
     start_time: datetime | int | None = None
-    """Wall-clock timestamp that this sample's relative time zero refers to. It applies to every series
-    and annotation on the sample. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
-    microseconds. Construction normalizes either one to microseconds, so a constructed sample holds an
+    """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
+    and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
+    microseconds. Construction normalizes either one to microseconds, so a constructed record holds an
     ``int``. ``None`` means no wall-clock reference exists. Never fabricate one.
 
     A bare float is refused, because seconds and microseconds are both plausible readings of it. If the
@@ -228,7 +228,7 @@ class Sample:
     """
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
-    covering the whole sample, or ``None``. Declare it when the series have gaps and an event may fall in
+    covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
@@ -238,51 +238,51 @@ class Sample:
 
         ``start_time`` delegates its contract: ``unix_us`` rejects a naive datetime or a bare float, and
         ``check_int64`` rejects an anchor past the int64 microsecond column. ``time_span``, when set,
-        must be a whole-sample :class:`~timenet.types.TimeInterval` that contains every series' window.
+        must be a whole-record :class:`~timenet.types.TimeInterval` that contains every series' window.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-sample ``TimeInterval`` or does not
+            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
                 contain some series' window.
         """
         if self.start_time is not None:
             anchor = unix_us(self.start_time)
-            check_int64("Sample.start_time", anchor)
+            check_int64("Record.start_time", anchor)
             self.start_time = anchor
         if self.time_span is not None:
             if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
-                    f"Sample.time_span must be a TimeInterval covering the whole sample, got {self.time_span!r}"
+                    f"Record.time_span must be a TimeInterval covering the whole record, got {self.time_span!r}"
                 )
             if self.time_span.time_series_ids is not None:
                 raise TimeFValidationError(
-                    "Sample.time_span covers the whole sample, so its time_series_ids must be None"
+                    "Record.time_span covers the whole record, so its time_series_ids must be None"
                 )
             for ts in self.time_series:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
                     raise TimeFValidationError(
-                        f"Sample.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
+                        f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
                         f"every series' window, but {ts.time_series_id!r} covers {window} us"
                     )
 
     @property
     def has_absolute_time(self) -> bool:
-        """Whether this sample's relative timeline has a Unix-time anchor."""
+        """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time is not None
 
     def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
-        """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this sample's timeline.
+        """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
-        Places ``at`` on the recording timeline against this sample's own ``start_time``, so the caller
+        Places ``at`` on the recording timeline against this record's own ``start_time``, so the caller
         never repeats the anchor. A span's bounds are offsets on that timeline, so this needs an
-        anchored sample. ``offset_us`` raises if the sample has no ``start_time``.
+        anchored record. ``offset_us`` raises if the record has no ``start_time``.
 
         Args:
             at: The wall-clock moment, timezone-aware.
             time_series_ids: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
-            The point, in microseconds from this sample's relative zero.
+            The point, in microseconds from this record's relative zero.
         """
         return TimePoint(start_us=offset_us(at, self.start_time), time_series_ids=time_series_ids)
 
@@ -291,8 +291,8 @@ class Sample:
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
-        Places ``start`` and ``end`` on the recording timeline against this sample's own ``start_time``.
-        ``offset_us`` raises if the sample has no ``start_time`` to measure against.
+        Places ``start`` and ``end`` on the recording timeline against this record's own ``start_time``.
+        ``offset_us`` raises if the record has no ``start_time`` to measure against.
 
         Args:
             start: Wall-clock start, timezone-aware.
@@ -300,7 +300,7 @@ class Sample:
             time_series_ids: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
-            The half-open interval, in microseconds from this sample's relative zero.
+            The half-open interval, in microseconds from this record's relative zero.
         """
         return TimeInterval(
             start_us=offset_us(start, self.start_time),
@@ -309,7 +309,7 @@ class Sample:
         )
 
     def add_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
-        """Attach an annotation to the sample and return it.
+        """Attach an annotation to the record and return it.
 
         Args:
             annotation: The annotation to attach.
@@ -319,9 +319,9 @@ class Sample:
             The attached annotation (the same instance).
 
         Raises:
-            TimeFValidationError: If the annotation's span references a series not on this sample. If a
+            TimeFValidationError: If the annotation's span references a series not on this record. If a
                 scoped span names a timeless series. If the span falls outside the window its scope
-                selects: the intersection of named series, the sample's ``time_span``, or the union of
+                selects: the intersection of named series, the record's ``time_span``, or the union of
                 the series' windows and ``warn_when_outside`` is False.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
@@ -331,10 +331,10 @@ class Sample:
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
     ) -> tuple[Annotation, ...]:
-        """Attach several annotations to the sample, all together or not at all.
+        """Attach several annotations to the record, all together or not at all.
 
         The whole batch is validated before any of it is attached: if one annotation fails a check, the
-        call raises and leaves the sample unchanged. To keep the annotations before a failure attached,
+        call raises and leaves the record unchanged. To keep the annotations before a failure attached,
         loop :meth:`add_annotation` instead.
 
         Args:
@@ -371,29 +371,29 @@ class Sample:
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.time_series,
-                self.sample_id,
+                self.record_id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )
 
     def to_arrow(self) -> pa.Array:
-        """Read the sole channel's values as an Arrow array, for the common single-channel sample.
+        """Read the sole signal's values as an Arrow array, for the common single-signal record.
 
         Returns:
             The single :class:`TimeSeries`' values as a 1-D Arrow array.
 
         Raises:
-            ValueError: If the sample has more than one channel, read ``time_series[i]`` explicitly then.
+            ValueError: If the record has more than one signal, read ``time_series[i]`` explicitly then.
         """
         if len(self.time_series) != 1:
             raise ValueError(
-                f"Sample.to_arrow() needs a single-channel sample, but this one has "
-                f"{len(self.time_series)} series; read sample.time_series[i].to_arrow() instead"
+                f"Record.to_arrow() needs a single-signal record, but this one has "
+                f"{len(self.time_series)} series; read record.time_series[i].to_arrow() instead"
             )
         return self.time_series[0].to_arrow()
 
     def to_numpy(self) -> np.ndarray:
-        """Read the sole channel's values as a NumPy array (materializes :meth:`to_arrow`).
+        """Read the sole signal's values as a NumPy array (materializes :meth:`to_arrow`).
 
         Returns:
             The single :class:`TimeSeries`' values as a 1-D ``np.ndarray``.

@@ -13,7 +13,7 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 # digits, a night, and two more characters. It names no recording of the release, because the
 # release numbers no cassette subject 90. Every age, clock time and header name in this file is
 # invented for these tests in the same way.
-_SAMPLE_ID = "sleep-edfx-SC4901E0"
+_RECORD_ID = "sleep-edfx-SC4901E0"
 
 
 def test_one_value_gives_one_instance():
@@ -69,7 +69,7 @@ def test_age_has_no_upper_bound():
 
 
 def test_the_header_clock_is_carried_as_text_with_no_zone():
-    annotation = metadata.build_recording_start_local(_SAMPLE_ID, datetime(1992, 3, 11, 21, 40, 0))
+    annotation = metadata.build_recording_start_local(_RECORD_ID, datetime(1992, 3, 11, 21, 40, 0))
     assert annotation.key == "recording_start_local"
     assert annotation.value == "1992-03-11T21:40:00"
     assert annotation.span is None
@@ -77,7 +77,7 @@ def test_the_header_clock_is_carried_as_text_with_no_zone():
 
 def test_a_start_moment_that_names_a_zone_raises():
     with pytest.raises(TimeFValidationError, match="zone"):
-        metadata.build_recording_start_local(_SAMPLE_ID, datetime(1992, 3, 11, 21, 40, 0, tzinfo=UTC))
+        metadata.build_recording_start_local(_RECORD_ID, datetime(1992, 3, 11, 21, 40, 0, tzinfo=UTC))
 
 
 def test_two_readings_that_agree_give_no_note():

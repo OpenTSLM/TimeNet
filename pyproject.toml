@@ -32,6 +32,8 @@ target-version = "py311"
 # Members live under packages/*/src; the glob makes isort treat each package as
 # first-party. Config is discovered from the repo root, not shared by uv.
 src = ["packages/*/src"]
+# Local git worktrees carry their own (possibly unrelated) configs.
+extend-exclude = [".worktrees"]
 
 [tool.ruff.format]
 # quote-style (double) and indent-style (space) are ruff's defaults; only the non-default is set here.
@@ -101,6 +103,10 @@ markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
 ]
+
+[tool.ty.src]
+# Local git worktrees carry their own (possibly unrelated) copies of the code.
+exclude = [".worktrees/**"]
 
 [tool.ty.environment]
 python-version = "3.13"

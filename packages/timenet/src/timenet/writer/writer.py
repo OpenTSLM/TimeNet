@@ -33,7 +33,7 @@ from timenet.format.constants import (
     DEFAULT_SHARD_TARGET_BYTES,
     INDEX_TEMPLATE,
     MANIFEST_FILE,
-    SAMPLES_TEMPLATE,
+    RECORDS_TEMPLATE,
     TASK_PART_TEMPLATE,
     part_path,
 )
@@ -45,7 +45,7 @@ from timenet.format.schemas import (
     IdTypes,
     annotations_schema,
     index_schema,
-    samples_schema,
+    records_schema,
     task_schema,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
@@ -90,7 +90,7 @@ class TimeFWriter:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
             dataset: The populated dataset. The writer derives the schema automatically if needed.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
-            control_shard_target_bytes: Split a control table (samples, annotations, index, tasks) into
+            control_shard_target_bytes: Split a control table (records, annotations, index, tasks) into
                 a new part once the in-memory Arrow size of the emitted rows exceeds this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
@@ -207,12 +207,12 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
-        unique_series, series_to_samples = self._dedupe_series()
+        unique_series, series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        self._write_samples()
+        self._write_records()
         self._write_annotations()
         self._write_tasks()
-        self._write_index(placements, series_to_samples)
+        self._write_index(placements, series_to_records)
         self._counts = self._build_counts(unique_series, placements)
         self._written = True
 
@@ -243,16 +243,16 @@ class TimeFWriter:
     def _resolve_id_types(self) -> None:
         """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
-        for sample in self._dataset.samples:
-            values["sample_id"].append(sample.sample_id)
-            values["subject_id"].extend(sample.subject_ids)
-            for ts in sample.time_series:
+        for record in self._dataset.records:
+            values["record_id"].append(record.record_id)
+            values["subject_id"].extend(record.subject_ids)
+            for ts in record.time_series:
                 values["time_series_id"].append(ts.time_series_id)
                 if ts.source_id is not None:
                     values["source_id"].append(ts.source_id)
-            for ann in sample.annotations:
+            for ann in record.annotations:
                 values["annotation_id"].append(ann.id)
-        for ann in self._dataset.registered_annotations:  # task-referenced, carried by no sample
+        for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
             values["annotation_id"].append(ann.id)
         if self._dataset.has_task_stream:
             # Streamed tasks are not materialized; one peeked id decides binary(16)-vs-string storage
@@ -278,26 +278,26 @@ class TimeFWriter:
     # ---- values --------------------------------------------------------------------------------
 
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
-        """Return unique series (sorted for stable output) and the series-id -> sample-ids map.
+        """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
-        Sharing one series across samples is the supported dedupe path. Two different series that
+        Sharing one series across records is the supported dedupe path. Two different series that
         claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
-        the other's samples read back the wrong data. Two series that share an id must describe the
-        same channel. The writer rejects a disagreement instead of keeping the first series.
+        the other's records read back the wrong data. Two series that share an id must describe the
+        same signal. The writer rejects a disagreement instead of keeping the first series.
 
         Returns:
-            The sorted unique series and a mapping from ``time_series_id`` to the ids of the samples
+            The sorted unique series and a mapping from ``time_series_id`` to the ids of the records
             that reference it (first-seen order).
 
         Raises:
             TimeFValidationError: If two series share a ``time_series_id`` but describe different
-                channels.
+                signals.
         """
         unique: dict[str, TimeSeries] = {}
-        series_to_samples: dict[str, list[str]] = {}
+        series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
-        for sample in self._dataset.samples:
-            for ts in sample.time_series:
+        for record in self._dataset.records:
+            for ts in record.time_series:
                 existing = unique.get(ts.time_series_id)
                 if existing is None:
                     unique[ts.time_series_id] = ts
@@ -305,20 +305,20 @@ class TimeFWriter:
                     raise TimeFValidationError(
                         f"time_series_id {ts.time_series_id!r} is claimed by two different series: "
                         f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
-                        f"per channel, or reuse the same series instance to share it across samples"
+                        f"per signal, or reuse the same series instance to share it across records"
                     )
-                pair = (ts.time_series_id, sample.sample_id)
+                pair = (ts.time_series_id, record.record_id)
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
-                    series_to_samples.setdefault(ts.time_series_id, []).append(sample.sample_id)
-        # Group a recording's series together (source_id) before splitting by channel, so all leads of
+                    series_to_records.setdefault(ts.time_series_id, []).append(record.record_id)
+        # Group a recording's series together (source_id) before splitting by signal, so all leads of
         # one record are contiguous: the writer reads the record's source once, and a reader pulls a
-        # sample's series from one place instead of scattered across channel-ordered shards. Falls back
-        # to channel order when source_id is unset (one series per sample), matching the prior layout.
+        # record's series from one place instead of scattered across signal-ordered shards. Falls back
+        # to signal order when source_id is unset (one series per record), matching the prior layout.
         ordered = sorted(
-            unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.channel, ts.time_series_id)
+            unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.signal, ts.time_series_id)
         )
-        return ordered, series_to_samples
+        return ordered, series_to_records
 
     def _write_values(self, unique_series: list[TimeSeries]) -> dict[tuple[str, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
@@ -513,36 +513,36 @@ class TimeFWriter:
             sink.add(row)
         return sink.finish(write_empty_part=True)
 
-    def _write_samples(self) -> None:
+    def _write_records(self) -> None:
         codec = self._codec
         rows: list[dict] = [
             {
-                "sample_id": codec.encode("sample_id", sample.sample_id),
-                "start_time_us": sample.start_time,
-                "time_span": codec.encode_span(sample.time_span),
-                "subject_ids": codec.encode_list("subject_id", sample.subject_ids),
-                "time_series": [_time_series_struct(ts, codec) for ts in sample.time_series],
-                "task_ids": codec.encode_list("task_id", sample.task_ids),
-                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in sample.annotations]),
+                "record_id": codec.encode("record_id", record.record_id),
+                "start_time_us": record.start_time,
+                "time_span": codec.encode_span(record.time_span),
+                "subject_ids": codec.encode_list("subject_id", record.subject_ids),
+                "time_series": [_time_series_struct(ts, codec) for ts in record.time_series],
+                "task_ids": codec.encode_list("task_id", record.task_ids),
+                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in record.annotations]),
             }
-            for sample in self._dataset.samples
+            for record in self._dataset.records
         ]
-        rows.sort(key=lambda r: r["sample_id"])
-        self._sample_parts = self._write_control_table(
+        rows.sort(key=lambda r: r["record_id"])
+        self._record_parts = self._write_control_table(
             iter(rows),
-            samples_schema(self._id_types),
-            lambda index: part_path(SAMPLES_TEMPLATE, index),
-            dictionary_columns=encodings.SAMPLES_DICTIONARY,
+            records_schema(self._id_types),
+            lambda index: part_path(RECORDS_TEMPLATE, index),
+            dictionary_columns=encodings.RECORDS_DICTIONARY,
         )
 
     def _annotation_row(self, ann: Annotation) -> dict:
-        """Build an annotation's stored row with an empty ``sample_ids`` for the caller to fill.
+        """Build an annotation's stored row with an empty ``record_ids`` for the caller to fill.
 
         Args:
             ann: The annotation to encode.
 
         Returns:
-            The row dict; a sample-carried annotation appends its sample ids, a registered one leaves
+            The row dict; a record-carried annotation appends its record ids, a registered one leaves
             the list empty.
         """
         codec = self._codec
@@ -552,19 +552,19 @@ class TimeFWriter:
             "value": None if ann.value is None else json.dumps(ann.value),
             "source": ann.source,
             "span": codec.encode_span(ann.span),
-            "sample_ids": [],
+            "record_ids": [],
         }
 
     def _write_annotations(self) -> None:
         codec = self._codec
         by_id: dict[str, dict] = {}
-        for sample in self._dataset.samples:
-            for ann in sample.annotations:
+        for record in self._dataset.records:
+            for ann in record.annotations:
                 row = by_id.setdefault(ann.id, self._annotation_row(ann))
-                row["sample_ids"].append(codec.encode("sample_id", sample.sample_id))
+                row["record_ids"].append(codec.encode("record_id", record.record_id))
         for ann in self._dataset.registered_annotations:
-            # A registered annotation that no sample carries writes with an empty sample_ids: tasks
-            # reference it by id, and the reader resolves it from the table, not through a sample.
+            # A registered annotation that no record carries writes with an empty record_ids: tasks
+            # reference it by id, and the reader resolves it from the table, not through a record.
             by_id.setdefault(ann.id, self._annotation_row(ann))
         rows = sorted(by_id.values(), key=lambda r: r["id"])
         self._annotation_parts = self._write_control_table(
@@ -609,37 +609,37 @@ class TimeFWriter:
             self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
 
     def _write_index(
-        self, placements: dict[tuple[str, int], ChunkPlacement], series_to_samples: dict[str, list[str]]
+        self, placements: dict[tuple[str, int], ChunkPlacement], series_to_records: dict[str, list[str]]
     ) -> None:
-        # Emit rows in encoded (sample_id, time_series_id, chunk_idx) order through nested iteration.
+        # Emit rows in encoded (record_id, time_series_id, chunk_idx) order through nested iteration.
         # This keeps the parts globally sorted and avoids materializing the whole index in memory.
         # The reader selects the parts where a probe lands, then bisects each part. This approach
         # requires global order across the split.
         codec = self._codec
-        sample_to_series: dict[str, list[str]] = {}
-        for time_series_id, sample_ids in series_to_samples.items():
-            for sample_id in sample_ids:
-                sample_to_series.setdefault(sample_id, []).append(time_series_id)
+        record_to_series: dict[str, list[str]] = {}
+        for time_series_id, record_ids in series_to_records.items():
+            for record_id in record_ids:
+                record_to_series.setdefault(record_id, []).append(time_series_id)
         chunks_by_series: dict[str, list[int]] = {}
         for time_series_id, chunk_idx in placements:  # noqa: PLE1141 - keys are (id, chunk) tuples
             chunks_by_series.setdefault(time_series_id, []).append(chunk_idx)
         for chunk_idxs in chunks_by_series.values():
             chunk_idxs.sort()
 
-        enc_sid: dict[str, Any] = {sid: codec.encode("sample_id", sid) for sid in sample_to_series}
+        enc_sid: dict[str, Any] = {sid: codec.encode("record_id", sid) for sid in record_to_series}
         enc_tid: dict[str, Any] = {tid: codec.encode("time_series_id", tid) for tid in chunks_by_series}
 
         def rows() -> Iterable[dict]:
-            for sample_id in sorted(sample_to_series, key=lambda s: enc_sid[s]):
-                series = sample_to_series[sample_id]
+            for record_id in sorted(record_to_series, key=lambda s: enc_sid[s]):
+                series = record_to_series[record_id]
                 for time_series_id in sorted(series, key=lambda t: enc_tid[t]):
                     for chunk_idx in chunks_by_series[time_series_id]:
                         placement = placements[time_series_id, chunk_idx]
                         yield {
-                            "sample_id": enc_sid[sample_id],
+                            "record_id": enc_sid[record_id],
                             "time_series_id": enc_tid[time_series_id],
                             "spec_type": placement.spec_type,
-                            "channel": placement.channel,
+                            "signal": placement.signal,
                             "chunk_idx": chunk_idx,
                             "chunk_file": placement.chunk_file,
                             "chunk_major_idx": placement.data_index.major_idx,
@@ -647,7 +647,7 @@ class TimeFWriter:
                             "n_values": placement.n_values,
                         }
 
-        self._index_rows = sum(len(chunks_by_series[t]) for series in sample_to_series.values() for t in series)
+        self._index_rows = sum(len(chunks_by_series[t]) for series in record_to_series.values() for t in series)
         self._index_parts = self._write_control_table(
             rows(),
             index_schema(self._id_types),
@@ -666,7 +666,7 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                samples=self._file_parts(self._sample_parts),
+                records=self._file_parts(self._record_parts),
                 annotations=self._file_parts(self._annotation_parts),
                 time_series_index=self._file_parts(self._index_parts),
                 tasks=self._file_parts(self._task_files),
@@ -681,27 +681,27 @@ class TimeFWriter:
     # ---- helpers -------------------------------------------------------------------------------
 
     def _validate_shared_annotations(self) -> None:
-        """Check annotations sharing an id across samples are field-equal, and registered ids are distinct.
+        """Check annotations sharing an id across records are field-equal, and registered ids are distinct.
 
         Raises:
             TimeFValidationError: If two annotations share an id but are not equal, or an id is both
-                registered and carried by a sample. The reader restores a registered annotation from its
-                empty ``sample_ids``, so an id that is also sample-carried writes non-empty and is lost on
+                registered and carried by a record. The reader restores a registered annotation from its
+                empty ``record_ids``, so an id that is also record-carried writes non-empty and is lost on
                 read; reject it here instead of silently dropping it.
         """
-        sample_ann_ids = {ann.id for sample in self._dataset.samples for ann in sample.annotations}
-        overlap = sorted(sample_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
+        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
+        overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
         if overlap:
             raise TimeFValidationError(
-                f"annotation id(s) {overlap} are both registered and carried by a sample; a registered "
-                f"annotation must be one no sample carries"
+                f"annotation id(s) {overlap} are both registered and carried by a record; a registered "
+                f"annotation must be one no record carries"
             )
         seen: dict[str, object] = {}
-        sample_annotations = (ann for sample in self._dataset.samples for ann in sample.annotations)
-        for ann in (*sample_annotations, *self._dataset.registered_annotations):
+        record_annotations = (ann for record in self._dataset.records for ann in record.annotations)
+        for ann in (*record_annotations, *self._dataset.registered_annotations):
             if ann.id in seen and seen[ann.id] != ann:
                 raise TimeFValidationError(
-                    f"annotation id {ann.id!r} is shared across samples but instances are not equal"
+                    f"annotation id {ann.id!r} is shared across records but instances are not equal"
                 )
             seen[ann.id] = ann
 
@@ -714,10 +714,10 @@ class TimeFWriter:
         specs_by_type: dict[str, int] = {}
         for ts in unique_series:
             specs_by_type[ts.spec.spec_type] = specs_by_type.get(ts.spec.spec_type, 0) + 1
-        annotation_ids = {ann.id for sample in self._dataset.samples for ann in sample.annotations}
+        annotation_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
         annotation_ids |= {ann.id for ann in self._dataset.registered_annotations}
         return ManifestCounts(
-            samples=len(self._dataset.samples),
+            records=len(self._dataset.records),
             annotations=len(annotation_ids),
             registered_annotations=len(self._dataset.registered_annotations),
             tasks=tasks_by_type,
@@ -755,7 +755,7 @@ class TimeFWriter:
 
 
 def _series_identity(ts: TimeSeries) -> tuple:
-    """Return the fields that must agree for two series to be the same channel.
+    """Return the fields that must agree for two series to be the same signal.
 
     This compares the descriptive fields that the writer persists, not the values. The ``loader`` is a
     callable, so two equal series built separately compare unequal. Reading every shared series
@@ -767,7 +767,7 @@ def _series_identity(ts: TimeSeries) -> tuple:
     Returns:
         The identifying fields, suitable for equality comparison and for error messages.
     """
-    return (ts.spec.spec_type, ts.channel, ts.time_axis, ts.source_id, ts.n_values)
+    return (ts.spec.spec_type, ts.signal, ts.time_axis, ts.source_id, ts.n_values)
 
 
 def _axis_columns(axis: TimeAxis) -> dict:
@@ -805,7 +805,7 @@ def _axis_columns(axis: TimeAxis) -> dict:
 def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
     return {
         "spec_type": ts.spec.spec_type,
-        "channel": ts.channel,
+        "signal": ts.signal,
         "source_id": codec.encode("source_id", ts.source_id),
         "time_series_id": codec.encode("time_series_id", ts.time_series_id),
         "axis_type": str(ts.time_axis.axis_type),
@@ -818,7 +818,7 @@ def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
     refs = type(task).refs
     row: dict = {
         "id": codec.encode("task_id", task.id),
-        "sample_ids": codec.encode_list("sample_id", task.sample_ids),
+        "record_ids": codec.encode_list("record_id", task.record_ids),
         "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
         "prompt": task.prompt,
         "scope": codec.encode_span(task.scope),

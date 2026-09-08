@@ -10,7 +10,7 @@ from typing import Any, cast
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import Sample, TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.types import (
     Annotation,
@@ -34,7 +34,7 @@ class Scenario:
     """One deterministic workload in the synthetic corpus."""
 
     name: str
-    channels: tuple[str, ...]
+    signals: tuple[str, ...]
     sampling_rate_hz: float
     steps: int
     unit: str
@@ -72,22 +72,22 @@ def _loader(values: np.ndarray) -> Callable[[], pa.Array]:
     return lambda: array
 
 
-def _values(scenario_index: int, channel_index: int, steps: int, scale: int) -> np.ndarray:
-    """Return deterministic, nontrivial float32 values for one channel."""
+def _values(scenario_index: int, signal_index: int, steps: int, scale: int) -> np.ndarray:
+    """Return deterministic, nontrivial float32 values for one signal."""
     count = steps * scale
     t = np.arange(count, dtype=np.float64)
-    slow = np.sin((scenario_index + 1) * t / 97.0 + channel_index / 3.0)
-    fast = np.cos((channel_index + 2) * t / 17.0)
+    slow = np.sin((scenario_index + 1) * t / 97.0 + signal_index / 3.0)
+    fast = np.cos((signal_index + 2) * t / 17.0)
     trend = ((t % 1_009) / 1_009.0) * (scenario_index + 1) / 10.0
-    impulses = ((t.astype(np.int64) + 31 * channel_index) % (211 + scenario_index * 17) == 0) * 0.5
+    impulses = ((t.astype(np.int64) + 31 * signal_index) % (211 + scenario_index * 17) == 0) * 0.5
     return (slow + 0.2 * fast + trend + impulses).astype(np.float32)
 
 
 def _scalar_series(
     scenario: Scenario,
     scenario_index: int,
-    channel: str,
-    channel_index: int,
+    signal: str,
+    signal_index: int,
     scale: int,
 ) -> TimeSeries:
     """Construct one portable scalar float32 series.
@@ -101,14 +101,14 @@ def _scalar_series(
         unit_value=ureg.Unit(scenario.unit),
         data_source=_SOURCE,
     )
-    values = pa.array(_values(scenario_index, channel_index, scenario.steps, scale), type=pa.float32())
+    values = pa.array(_values(scenario_index, signal_index, scenario.steps, scale), type=pa.float32())
     return TimeSeries(
         loader=lambda: values,
         spec=spec,
-        channel=channel,
+        signal=signal,
         time_axis=RegularAxis.from_rate_hz(Fraction(scenario.sampling_rate_hz)),
         source_id=f"{scenario.name}-recording",
-        time_series_id=f"{scenario.name}-{channel}",
+        time_series_id=f"{scenario.name}-{signal}",
         n_values=len(values),
     )
 
@@ -123,7 +123,7 @@ def _nonfloat_series(
     """Construct one portable scalar non-float series, shareable by both backends.
 
     Args:
-        name: The modality and channel tag.
+        name: The modality and signal tag.
         dtype: A scalar dtype both values backends can store (int/bool/float64/str/enum).
         values: Deterministic per-series values. A ``str`` or ``enum`` dtype takes a tuple of
             label strings; every other dtype takes a NumPy array already in the target dtype.
@@ -151,7 +151,7 @@ def _nonfloat_series(
     return TimeSeries(
         loader=lambda: array,
         spec=spec,
-        channel=name,
+        signal=name,
         time_axis=RegularAxis.from_rate_hz(Fraction(1)),
         source_id=f"{name}-recording",
         time_series_id=f"portable-{name}",
@@ -159,26 +159,26 @@ def _nonfloat_series(
     )
 
 
-_NONFLOAT_CHANNELS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
+_NONFLOAT_SIGNALS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
     ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16), ()),
     ("alarm", "bool", np.array([False, False, True, False, True, False, False, True]), ()),
     ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64), ()),
     ("rhythm", "str", ("normal", "afib", "vt", "normal"), ()),
     ("activity", "enum", ("walk", "run", "sit", "walk"), ("walk", "run", "sit", "stand")),
 )
-"""Portable scalar non-float channels, appended to a dedicated sample."""
+"""Portable scalar non-float signals, appended to a dedicated record."""
 
 
-def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
+def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     """Attach every currently supported task payload to representative scenarios."""
-    vibration = samples["vibration"]
-    ecg = samples["ecg"]
-    sleep = samples["sleep"]
-    accelerometer = samples["accelerometer"]
-    finance = samples["finance"]
-    workout = samples["workout"]
-    energy = samples["energy"]
-    automotive = samples["automotive"]
+    vibration = records["vibration"]
+    ecg = records["ecg"]
+    sleep = records["sleep"]
+    accelerometer = records["accelerometer"]
+    finance = records["finance"]
+    workout = records["workout"]
+    energy = records["energy"]
+    automotive = records["automotive"]
 
     dataset.add_task(
         vibration,
@@ -251,23 +251,23 @@ def _add_tasks(dataset: TimeFDataset, samples: dict[str, Sample]) -> None:
     )
 
 
-def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], scale: int) -> None:
+def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], scale: int) -> None:
     """Mirror the cardinality patterns that distinguish the real connectors.
 
     ECG-QA reuses one long 12-lead recording across several text tasks, TSQA contains many short
     independently stored series, and test-mean contains many tiny labeled series. These patterns have
     measurably different control-plane and random-access costs even when their total value bytes match.
     """
-    ecg = samples["ecg"]
+    ecg = records["ecg"]
     for index in range(1, 8 * scale):
-        sample = dataset.add_sample(
+        record = dataset.add_record(
             time_series=ecg.time_series,
-            sample_id=f"sample-ecg-question-{index:03d}",
+            record_id=f"record-ecg-question-{index:03d}",
             subject_ids=("subject-ecg",),
         )
-        sample.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
+        record.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
-            sample,
+            record,
             AnswerTask(
                 prompt=f"Is rhythm abnormal in view {index}?",
                 target="atrial-fibrillation",
@@ -276,26 +276,26 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             ),
         )
 
-    finance_spec = samples["finance"].time_series[0].spec
+    finance_spec = records["finance"].time_series[0].spec
     for index in range(64 * scale):
-        channel_count = 1 + index % 3
+        signal_count = 1 + index % 3
         length = 64 + (index % 8) * 32
         series = tuple(
             TimeSeries(
-                loader=_loader(_values(4, channel, length, 1)),
+                loader=_loader(_values(4, signal, length, 1)),
                 spec=finance_spec,
-                channel=f"c{channel}",
+                signal=f"c{signal}",
                 time_axis=OrdinalAxis(),
                 source_id=f"tsqa-row-{index:04d}",
-                time_series_id=f"tsqa-row-{index:04d}-c{channel}",
+                time_series_id=f"tsqa-row-{index:04d}-c{signal}",
                 n_values=length,
             )
-            for channel in range(channel_count)
+            for signal in range(signal_count)
         )
-        sample = dataset.add_sample(time_series=series, sample_id=f"sample-tsqa-{index:04d}")
-        sample.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
+        record = dataset.add_record(time_series=series, record_id=f"record-tsqa-{index:04d}")
+        record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
-            sample,
+            record,
             AnswerTask(
                 prompt=f"What pattern appears in series {index}?",
                 target="A deterministic trend with periodic variation.",
@@ -303,23 +303,23 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
             ),
         )
 
-    vibration_spec = samples["vibration"].time_series[0].spec
+    vibration_spec = records["vibration"].time_series[0].spec
     for index in range(64 * scale):
         offset = 0.75 if index % 2 == 0 else -0.75
         values = (_values(0, index, 64, 1) * 0.1 + offset).astype(np.float32)
         series = TimeSeries(
             loader=_loader(values),
             spec=vibration_spec,
-            channel="signal",
+            signal="signal",
             time_axis=RegularAxis.from_rate_hz(16),
             source_id=f"mean-recording-{index:04d}",
             time_series_id=f"mean-series-{index:04d}",
             n_values=len(values),
         )
-        sample = dataset.add_sample(time_series=(series,), sample_id=f"sample-mean-{index:04d}")
-        sample.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
+        record = dataset.add_record(time_series=(series,), record_id=f"record-mean-{index:04d}")
+        record.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
-            sample,
+            record,
             ClassificationTask(
                 target="above-zero" if offset > 0 else "below-zero",
                 target_schema="mean-sign",
@@ -331,14 +331,14 @@ def _add_connector_patterns(dataset: TimeFDataset, samples: dict[str, Sample], s
 def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
     """Add Zarr-only N-D and non-float32 workloads."""
 
-    def tensor(values: np.ndarray, spec: TimeSeriesSpec, channel: str) -> TimeSeries:
+    def tensor(values: np.ndarray, spec: TimeSeriesSpec, signal: str) -> TimeSeries:
         array = pa.FixedShapeTensorArray.from_numpy_ndarray(values, dim_names=dimensions_by_spec[spec.spec_type])
         return TimeSeries(
             spec=spec,
-            channel=channel,
+            signal=signal,
             time_axis=RegularAxis.from_rate_hz(50),
             loader=lambda: array,
-            time_series_id=f"rich-{channel}",
+            time_series_id=f"rich-{signal}",
             n_values=len(values),
         )
 
@@ -358,31 +358,31 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             value_shape=values.shape[1:],
             dimension_names=dimensions,
         )
-        sample = dataset.add_sample(
+        record = dataset.add_record(
             time_series=(tensor(values, spec, name),),
-            sample_id=f"sample-rich-{name}",
+            record_id=f"record-rich-{name}",
             subject_ids=(f"subject-rich-{name}",),
         )
-        sample.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
+        record.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
-def _add_nonfloat_sample(dataset: TimeFDataset, scale: int) -> None:
-    """Add a sample whose channels come in varied scalar dtypes (int16, bool, float64, str).
+def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
+    """Add a record whose signals come in varied scalar dtypes (int16, bool, float64, str).
 
     Args:
-        dataset: The dataset to add the sample to.
+        dataset: The dataset to add the record to.
         scale: Positive step multiplier.
     """
-    channels = _NONFLOAT_CHANNELS
+    signals = _NONFLOAT_SIGNALS
     series = tuple(
-        _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in channels
+        _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in signals
     )
-    sample = dataset.add_sample(
+    record = dataset.add_record(
         time_series=series,
-        sample_id="sample-nonfloat",
+        record_id="record-nonfloat",
         subject_ids=("subject-nonfloat",),
     )
-    sample.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
+    record.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
 
 
 def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
@@ -414,15 +414,15 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             tags=("benchmark", "synthetic", profile),
         )
     )
-    samples: dict[str, Sample] = {}
+    records: dict[str, Record] = {}
     for scenario_index, scenario in enumerate(SCENARIOS):
         series = tuple(
-            _scalar_series(scenario, scenario_index, channel, channel_index, scale)
-            for channel_index, channel in enumerate(scenario.channels)
+            _scalar_series(scenario, scenario_index, signal, signal_index, scale)
+            for signal_index, signal in enumerate(scenario.signals)
         )
-        sample = dataset.add_sample(
+        record = dataset.add_record(
             time_series=series,
-            sample_id=f"sample-{scenario.name}",
+            record_id=f"record-{scenario.name}",
             subject_ids=(f"subject-{scenario.name}",),
         )
         annotations = [
@@ -437,11 +437,11 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
                     id=f"annotation-{scenario.name}-window",
                 )
             )
-        sample.add_annotations(annotations)
-        samples[scenario.name] = sample
-    _add_tasks(dataset, samples)
-    _add_connector_patterns(dataset, samples, scale)
-    _add_nonfloat_sample(dataset, scale)
+        record.add_annotations(annotations)
+        records[scenario.name] = record
+    _add_tasks(dataset, records)
+    _add_connector_patterns(dataset, records, scale)
+    _add_nonfloat_record(dataset, scale)
     if profile == "rich":
         _add_rich_series(dataset, scale)
     dataset.derive_schema()

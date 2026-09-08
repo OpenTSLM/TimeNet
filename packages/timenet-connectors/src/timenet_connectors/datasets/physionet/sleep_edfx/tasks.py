@@ -3,7 +3,7 @@
 Nothing here opens a file. ``connector.py`` passes the annotations, and every function takes
 values and gives tasks.
 
-No task names its own id. Nothing resolves one by id: the writer fills ``Sample.task_ids`` from
+No task names its own id. Nothing resolves one by id: the writer fills ``Record.task_ids`` from
 the task itself, and no task here states a lineage. Every task takes the generated id.
 
 A ``target_schema`` is a different thing. It must equal the id of the registered annotation that
@@ -14,7 +14,7 @@ No task carries a prompt. The release states no question in words.
 
 from collections.abc import Iterator, Sequence
 
-from timenet.dataset import Sample
+from timenet.dataset import Record
 from timenet.errors import TimeFFormatError
 from timenet.types import (
     US_PER_S,
@@ -82,7 +82,7 @@ def name_vocabulary(id_prefix: str, key: AnnotationKey) -> str:
 def build_vocabularies(id_prefix: str) -> list[Annotation]:
     """Give one annotation for each closed set a task draws its target from.
 
-    These belong to no sample, so the caller registers them rather than attaching them.
+    These belong to no record, so the caller registers them rather than attaching them.
 
     A set is one annotation and not one for each member. One annotation for each member states
     that the values exist without stating that they are the whole set.
@@ -105,7 +105,7 @@ def build_vocabularies(id_prefix: str) -> list[Annotation]:
 
 
 def build_epoch_tasks(
-    sample_id: str, id_prefix: str, span_annotations: Sequence[Annotation]
+    record_id: str, id_prefix: str, span_annotations: Sequence[Annotation]
 ) -> Iterator[ClassificationTask]:
     """Give one classification task for each epoch a scoring labels.
 
@@ -115,10 +115,10 @@ def build_epoch_tasks(
     The scoring does not tile its recording. Some start after the signals do, and a few hold a
     hole in the middle. Unscored time gets no task, and nothing here fills it in.
 
-    A scope covers its epoch and names no series, so a model can read any channel.
+    A scope covers its epoch and names no series, so a model can read any signal.
 
     Args:
-        sample_id: The sample the scoring belongs to.
+        record_id: The record the scoring belongs to.
         id_prefix: The prefix every id of this connector carries.
         span_annotations: Its sleep-stage annotations, from ``annotations.build``.
 
@@ -133,11 +133,11 @@ def build_epoch_tasks(
     schema = name_vocabulary(id_prefix, AnnotationKey.SLEEP_STAGE)
     for stage in span_annotations:
         if stage.span is None:
-            raise TimeFFormatError(f"{sample_id}: the scored entry {stage.id!r} states no span, so it holds no epoch")
+            raise TimeFFormatError(f"{record_id}: the scored entry {stage.id!r} states no span, so it holds no epoch")
 
         if stage.value not in STAGE_LABELS:
             raise TimeFFormatError(
-                f"{sample_id}: the scored entry {stage.id!r} states {stage.value!r}, "
+                f"{record_id}: the scored entry {stage.id!r} states {stage.value!r}, "
                 f"which is not a label this release writes"
             )
 
@@ -147,13 +147,13 @@ def build_epoch_tasks(
         # the wrong number and sends a reader the wrong way.
         if start % EPOCH_MICROSECONDS:
             raise TimeFFormatError(
-                f"{sample_id}: a scored entry starts at {start} us, which is not a boundary of "
+                f"{record_id}: a scored entry starts at {start} us, which is not a boundary of "
                 f"the {EPOCH_MICROSECONDS} us epoch"
             )
 
         if length % EPOCH_MICROSECONDS:
             raise TimeFFormatError(
-                f"{sample_id}: a scored entry lasts {length} us, which is not a whole number of "
+                f"{record_id}: a scored entry lasts {length} us, which is not a whole number of "
                 f"{EPOCH_MICROSECONDS} us epochs"
             )
 
@@ -164,12 +164,12 @@ def build_epoch_tasks(
                 target=stage.value,
                 target_schema=schema,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
-                sample_ids=(sample_id,),
+                record_ids=(record_id,),
             )
 
 
-def build_sample_tasks(
-    sample_id: str,
+def build_record_tasks(
+    record_id: str,
     id_prefix: str,
     non_span_annotations: Sequence[Annotation],
     span_annotations: Sequence[Annotation],
@@ -184,13 +184,13 @@ def build_sample_tasks(
     model to recover a fact the dataset states beside it.
 
     Args:
-        sample_id: The sample these questions are about.
+        record_id: The record these questions are about.
         id_prefix: The prefix every id of this connector carries.
         non_span_annotations: Its recording-metadata annotations, from ``SubjectTables``.
         span_annotations: Its sleep-stage annotations, which bound the night.
 
     Yields:
-        The whole-sample tasks of that recording, in a stable order.
+        The whole-record tasks of that recording, in a stable order.
 
     Raises:
         TimeFFormatError: If a fact this asks about is missing, stated twice, or states a value
@@ -199,33 +199,33 @@ def build_sample_tasks(
     stated: dict[str, object] = {}
     for one in non_span_annotations:
         if one.key in stated:
-            raise TimeFFormatError(f"{sample_id}: states {one.key!r} twice, so it has no one answer for it")
+            raise TimeFFormatError(f"{record_id}: states {one.key!r} twice, so it has no one answer for it")
 
         stated[one.key] = one.value
 
     yield ScalarPredictionTask(
         # A float with a unit keeps the type a regression metric needs. As a string, a
         # one-year error reads as two unequal labels.
-        target=_whole_years(sample_id, stated),
+        target=_whole_years(record_id, stated),
         unit="year",
         target_name=Question.AGE,
-        sample_ids=(sample_id,),
+        record_ids=(record_id,),
     )
 
     yield ClassificationTask(
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
-        target=_one_of(sample_id, stated, AnnotationKey.SEX, SEX_LABELS),
+        target=_one_of(record_id, stated, AnnotationKey.SEX, SEX_LABELS),
         target_schema=name_vocabulary(id_prefix, AnnotationKey.SEX),
-        sample_ids=(sample_id,),
+        record_ids=(record_id,),
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
-            target=_one_of(sample_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),
+            target=_one_of(record_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),
             target_schema=name_vocabulary(id_prefix, AnnotationKey.CONDITION),
-            sample_ids=(sample_id,),
+            record_ids=(record_id,),
         )
 
     night = find_sleep_period(span_annotations)
@@ -235,7 +235,7 @@ def build_sample_tasks(
             # The interval does not tile the recording. A cassette recording is mostly wake on
             # either side of one night, and that time is unmarked rather than something else.
             mode=LocalizationMode.SPARSE,
-            sample_ids=(sample_id,),
+            record_ids=(record_id,),
         )
 
 
@@ -262,14 +262,14 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
     return TimeInterval.micros(start, end)
 
 
-def _whole_years(sample_id: str, stated: dict[str, object]) -> float:
+def _whole_years(record_id: str, stated: dict[str, object]) -> float:
     """Give the subject's age as a float, from the value the subject table stated.
 
     ``Annotation.value`` is untyped, and the sheet decoder two modules away is what makes an
     age a whole number. This states it again where the task is built.
 
     Args:
-        sample_id: The sample the age belongs to, for the error message.
+        record_id: The record the age belongs to, for the error message.
         stated: What its metadata annotations state.
 
     Returns:
@@ -279,20 +279,20 @@ def _whole_years(sample_id: str, stated: dict[str, object]) -> float:
         TimeFFormatError: If no age is stated, or the value is not a whole number.
     """
     if AnnotationKey.AGE not in stated:
-        raise TimeFFormatError(f"{sample_id}: states no age, so it cannot be asked for one")
+        raise TimeFFormatError(f"{record_id}: states no age, so it cannot be asked for one")
 
     age = stated[AnnotationKey.AGE]
     if not isinstance(age, int) or isinstance(age, bool):
-        raise TimeFFormatError(f"{sample_id}: states an age of {age!r}, which is not a whole number of years")
+        raise TimeFFormatError(f"{record_id}: states an age of {age!r}, which is not a whole number of years")
 
     return float(age)
 
 
-def _one_of(sample_id: str, stated: dict[str, object], key: AnnotationKey, permitted: Sequence[str]) -> str:
+def _one_of(record_id: str, stated: dict[str, object], key: AnnotationKey, permitted: Sequence[str]) -> str:
     """Give one stated value, after a check that the release writes it.
 
     Args:
-        sample_id: The sample it belongs to, for the error message.
+        record_id: The record it belongs to, for the error message.
         stated: What its metadata annotations state.
         key: The key to read.
         permitted: The values the release writes for that key.
@@ -304,51 +304,51 @@ def _one_of(sample_id: str, stated: dict[str, object], key: AnnotationKey, permi
         TimeFFormatError: If the key is absent, or its value is outside the set.
     """
     if key not in stated:
-        raise TimeFFormatError(f"{sample_id}: states no {key}, so it cannot be asked for one")
+        raise TimeFFormatError(f"{record_id}: states no {key}, so it cannot be asked for one")
 
     value = stated[key]
     if value not in permitted:
-        raise TimeFFormatError(f"{sample_id}: states a {key} of {value!r}, which the release does not write")
+        raise TimeFFormatError(f"{record_id}: states a {key} of {value!r}, which the release does not write")
 
     return str(value)
 
 
-def iter_tasks(samples: Sequence[Sample], id_prefix: str) -> Iterator[Task]:
+def iter_tasks(records: Sequence[Record], id_prefix: str) -> Iterator[Task]:
     """Give every task of a build, one recording at a time.
 
     This reads no file. ``convert`` already read each scoring, and a second read of a
-    hypnogram can disagree with the annotations the samples carry.
+    hypnogram can disagree with the annotations the records carry.
 
     The writer calls the source more than once, so the caller passes a callable that gives a
     fresh iterator each time.
 
     Args:
-        samples: The samples of the build, each carrying its annotations.
+        records: The records of the build, each carrying its annotations.
         id_prefix: The prefix every id of this connector carries.
 
     Yields:
-        The epoch tasks of each recording, then its whole-sample tasks.
+        The epoch tasks of each recording, then its whole-record tasks.
 
     Raises:
         TimeFFormatError: If a scoring cannot be expanded into whole epochs. The message names
             the recording, because a task is one of hundreds of thousands.
     """  # noqa: DOC502 (raised by build_epoch_tasks, not directly here)
-    for sample in samples:
+    for record in records:
         # The two lists partition the annotations, so a key that neither builder asks about is
         # in one of them rather than in neither. Each builder then takes the part it reads.
-        span_annotations = [one for one in sample.annotations if one.span is not None]
-        non_span_annotations = [one for one in sample.annotations if one.span is None]
+        span_annotations = [one for one in record.annotations if one.span is not None]
+        non_span_annotations = [one for one in record.annotations if one.span is None]
         stages = [one for one in span_annotations if one.key == AnnotationKey.SLEEP_STAGE]
 
-        yield from build_epoch_tasks(sample.sample_id, id_prefix, stages)
-        yield from build_sample_tasks(sample.sample_id, id_prefix, non_span_annotations, stages)
-        moment = build_lights_off_task(sample.sample_id, sample.time_span, span_annotations)
+        yield from build_epoch_tasks(record.record_id, id_prefix, stages)
+        yield from build_record_tasks(record.record_id, id_prefix, non_span_annotations, stages)
+        moment = build_lights_off_task(record.record_id, record.time_span, span_annotations)
         if moment is not None:
             yield moment
 
 
 def build_lights_off_task(
-    sample_id: str, session: TimeInterval | None, span_annotations: Sequence[Annotation]
+    record_id: str, session: TimeInterval | None, span_annotations: Sequence[Annotation]
 ) -> TemporalLocalizationTask | None:
     """Ask where the lights went out, on a recording that holds that moment.
 
@@ -361,7 +361,7 @@ def build_lights_off_task(
     recording is unmarked rather than something else.
 
     Args:
-        sample_id: The sample the question is about.
+        record_id: The record the question is about.
         session: Its declared session span.
         span_annotations: Its annotations that carry a span.
 
@@ -380,5 +380,5 @@ def build_lights_off_task(
     return TemporalLocalizationTask(
         target=(at,),
         mode=LocalizationMode.SPARSE,
-        sample_ids=(sample_id,),
+        record_ids=(record_id,),
     )

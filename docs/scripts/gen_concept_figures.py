@@ -12,7 +12,7 @@ deliberately not wired into ``make docs`` -- regenerate by hand when the concept
 The figures are deliberately schematic: a plain signal plus the minimum marks that explain one concept
 (a span, a point, an input-to-output arrow). They carry no domain detail; that lives in the page HTML
 around the image. Set ``FIG_PNG_DIR=/some/dir`` to also drop PNG copies there for eyeballing; the
-committed artifacts are SVG only. The structural diagrams (pipeline, sample, annotation/task) are
+committed artifacts are SVG only. The structural diagrams (pipeline, record, annotation/task) are
 mermaid, embedded inline in the pages; their sources are under ``docs/scripts/diagrams/``.
 """
 
@@ -193,7 +193,7 @@ def fig_annotation_interval():
 
 
 def fig_cross_sensor():
-    """One span shared across several channels."""
+    """One span shared across several signals."""
     t = np.linspace(0, 8, 500)
     fig, axes = plt.subplots(3, 1, figsize=(6.8, 3.0), sharex=True)
     fig.subplots_adjust(left=0.13, right=0.97, top=0.84, bottom=0.13, hspace=0.4)
@@ -202,10 +202,10 @@ def fig_cross_sensor():
         ax.axvspan(3.0, 5.2, color=SPAN_FACE, alpha=0.85, zorder=0)
         for x in (3.0, 5.2):
             ax.axvline(x, color=SPAN_EDGE, lw=1.0, ls="--", zorder=1)
-        ax.text(-0.03, 0.5, f"channel {i + 1}", transform=ax.transAxes, ha="right", va="center", fontsize=8, color=INK)
+        ax.text(-0.03, 0.5, f"signal {i + 1}", transform=ax.transAxes, ha="right", va="center", fontsize=8, color=INK)
         bottom = i == len(axes) - 1
         draw_axes(ax, x_axis=bottom, time_label=bottom)
-    caption(fig, "one span, several channels", y=0.94)
+    caption(fig, "one span, several signals", y=0.94)
     save(fig, "cross-sensor")
 
 
@@ -213,23 +213,23 @@ def fig_cross_sensor():
 
 
 def _io_fig(name, seeds, render_right, *, right_title, question=False, window=None, height=2.3):  # noqa: PLR0913
-    """Build a task exemplar: one axis per input channel, an arrow, and the output shape on the right.
+    """Build a task exemplar: one axis per input signal, an arrow, and the output shape on the right.
 
-    ``seeds`` gives one channel per entry (each its own stacked axis). ``question`` adds a ``+ ?`` panel
-    after the channels; ``window`` shades a span across every channel (for a scoped task).
+    ``seeds`` gives one signal per entry (each its own stacked axis). ``question`` adds a ``+ ?`` panel
+    after the signals; ``window`` shades a span across every signal (for a scoped task).
     """
     t = np.linspace(0, 8, 500)
     fig = plt.figure(figsize=(6.8, height))
     outer = fig.add_gridspec(1, 2, width_ratios=[2, 1.2], left=0.03, right=0.97, top=0.80, bottom=0.16, wspace=0.5)
     if question:
         left = outer[0].subgridspec(1, 2, width_ratios=[3, 1], wspace=0.08)
-        chan_host = left[0]
+        signal_host = left[0]
     else:
-        chan_host = outer[0]
-    chan_gs = chan_host.subgridspec(len(seeds), 1, hspace=0.4)
-    channels = []
+        signal_host = outer[0]
+    signal_gs = signal_host.subgridspec(len(seeds), 1, hspace=0.4)
+    signals = []
     for r, s in enumerate(seeds):
-        ax = fig.add_subplot(chan_gs[r], sharex=channels[0] if channels else None)
+        ax = fig.add_subplot(signal_gs[r], sharex=signals[0] if signals else None)
         ax.plot(t, wave(t, s), color=BLUE, lw=1.6)
         bare(ax)
         ax.margins(y=0.28)
@@ -238,8 +238,8 @@ def _io_fig(name, seeds, render_right, *, right_title, question=False, window=No
             ax.axvspan(*window, color=SPAN_FACE, alpha=0.85, zorder=0)
         bottom = r == len(seeds) - 1
         draw_axes(ax, x_axis=bottom, time_label=bottom)
-        channels.append(ax)
-    block_label(fig, channels[0], "time series")
+        signals.append(ax)
+    block_label(fig, signals[0], "time series")
     if question:
         q_ax = fig.add_subplot(left[1])
         unit_axis(q_ax)
@@ -473,7 +473,7 @@ def fig_task_correspondence():
 
 
 def fig_dataset():
-    """A dataset: a versioned, immutable set of samples."""
+    """A dataset: a versioned, immutable set of records."""
     fig = plt.figure(figsize=(6.8, 2.7))
     gs = fig.add_gridspec(2, 3, hspace=0.6, wspace=0.12, left=0.03, right=0.97, top=0.66, bottom=0.05)
     for i in range(6):
@@ -481,22 +481,22 @@ def fig_dataset():
         t = np.linspace(0, 6, 400)
         plot_series(ax, t, wave(t, seed=40 + i), lw=0.9)
         draw_axes(ax, time_label=False)
-        ax.set_title(f"sample {i + 1}", fontsize=7.5, color=MUTED, pad=1)
+        ax.set_title(f"record {i + 1}", fontsize=7.5, color=MUTED, pad=1)
     fig.text(0.5, 0.94, "org/name@1.0.0", ha="center", va="top", fontsize=12, color=INK, fontweight="bold")
-    caption(fig, "a versioned, immutable set of samples", y=0.80)
+    caption(fig, "a versioned, immutable set of records", y=0.80)
     save(fig, "dataset-example")
 
 
 def fig_time_series():
-    """A time series: one channel of typed values over time."""
+    """A time series: one signal of typed values over time."""
     t = np.linspace(0, 8, 500)
     fig, ax = plt.subplots(figsize=(6.8, 1.8))
     fig.subplots_adjust(left=0.13, right=0.97, top=0.78, bottom=0.2)
     plot_series(ax, t, wave(t, seed=50))
     ax.set_xlim(0, 8)
-    ax.text(-0.03, 0.5, "channel_1", transform=ax.transAxes, ha="right", va="center", fontsize=8, color=INK)
+    ax.text(-0.03, 0.5, "signal_1", transform=ax.transAxes, ha="right", va="center", fontsize=8, color=INK)
     draw_axes(ax)
-    caption(fig, "one channel, float32 over time")
+    caption(fig, "one signal, float32 over time")
     save(fig, "time-series-example")
 
 

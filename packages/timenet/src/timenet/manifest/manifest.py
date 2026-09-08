@@ -308,7 +308,7 @@ def _resolve_task(task_type: str) -> type[Task]:
 
 def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
     return {
-        "samples": counts.samples,
+        "records": counts.records,
         "annotations": counts.annotations,
         "registered_annotations": counts.registered_annotations,
         "tasks": dict(counts.tasks),
@@ -321,7 +321,7 @@ def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
 def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
     try:
         return ManifestCounts(
-            samples=data.get("samples", 0),
+            records=data.get("records", 0),
             annotations=data.get("annotations", 0),
             registered_annotations=data.get("registered_annotations", 0),
             tasks=dict(data.get("tasks", {})),
@@ -335,7 +335,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
-        "samples": [_part_to_dict(part) for part in files.samples],
+        "records": [_part_to_dict(part) for part in files.records],
         "annotations": [_part_to_dict(part) for part in files.annotations],
         "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
         "tasks": [_part_to_dict(part) for part in files.tasks],
@@ -350,7 +350,7 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            samples=_parts(data["samples"], "samples"),
+            records=_parts(data["records"], "records"),
             annotations=_parts(data["annotations"], "annotations"),
             time_series_index=_parts(data["time_series_index"], "time_series_index"),
             tasks=_parts(data.get("tasks", ()), "tasks"),

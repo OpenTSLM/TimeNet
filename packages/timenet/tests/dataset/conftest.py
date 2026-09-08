@@ -19,10 +19,10 @@ def spec():
 
 @pytest.fixture
 def make_series(spec):
-    def _make(channel="II", values=(1.0, 2.0, 3.0), **overrides):
+    def _make(signal="II", values=(1.0, 2.0, 3.0), **overrides):
         base = TimeSeries(
             spec=spec,
-            channel=channel,
+            signal=signal,
             time_axis=RegularAxis.from_rate_hz(500),
             n_values=len(values),
             loader=lambda v=tuple(values): pa.array(list(v), type=pa.float32()),

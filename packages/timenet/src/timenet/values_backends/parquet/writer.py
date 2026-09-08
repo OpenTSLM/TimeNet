@@ -295,7 +295,7 @@ class _Chunk:
 
     time_series_id: str
     spec_type: str
-    channel: str
+    signal: str
     chunk_idx: int
     n_values: int
     dtype: str
@@ -426,7 +426,7 @@ class _ShardStream:
                 chunk_file=shard_path,
                 data_index=ChunkDataIndex(major_idx=row_group, minor_idx=offset),
                 spec_type=chunk.spec_type,
-                channel=chunk.channel,
+                signal=chunk.signal,
                 n_values=chunk.n_values,
             )
         self._buffer = []
@@ -438,7 +438,7 @@ def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.
         {
             "time_series_id": codec.encode_list("time_series_id", [c.time_series_id for c in buffer]),
             "spec_type": [c.spec_type for c in buffer],
-            "channel": [c.channel for c in buffer],
+            "signal": [c.signal for c in buffer],
             "chunk_idx": [c.chunk_idx for c in buffer],
             "n_values": [c.n_values for c in buffer],
             "values": _values_column([c.values for c in buffer]),
@@ -476,7 +476,7 @@ def _plan_chunks(
             _Chunk(
                 time_series_id=ts.time_series_id,
                 spec_type=ts.spec.spec_type,
-                channel=ts.channel,
+                signal=ts.signal,
                 chunk_idx=chunk_idx,
                 n_values=len(sub),
                 dtype=ts.spec.dtype,

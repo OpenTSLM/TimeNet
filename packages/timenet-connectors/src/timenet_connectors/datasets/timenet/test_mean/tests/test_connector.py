@@ -12,12 +12,12 @@ def _convert() -> TimeFDataset:
     return TestMeanConnector().convert([])
 
 
-def _labels_by_sample(dataset: TimeFDataset) -> dict[str, str | None]:
+def _labels_by_record(dataset: TimeFDataset) -> dict[str, str | None]:
     return {
-        sample_id: task.target
+        record_id: task.target
         for task in dataset.tasks
         if isinstance(task, ClassificationTask)
-        for sample_id in task.sample_ids
+        for record_id in task.record_ids
     }
 
 
@@ -39,7 +39,7 @@ def test_convert_is_deterministic():
 
 
 def test_has_balanced_binary_labels():
-    labels = Counter(_labels_by_sample(_convert()).values())
+    labels = Counter(_labels_by_record(_convert()).values())
     assert labels == Counter({"above_zero": 500, "below_zero": 500})
 
 
@@ -47,18 +47,18 @@ def test_target_has_no_schema():
     assert all(task.target_schema is None for task in _convert().tasks_of(ClassificationTask))
 
 
-def test_every_sample_is_a_single_channel():
+def test_every_record_is_a_single_signal():
     dataset = _convert()
-    assert len(dataset.samples) == 1000
-    for sample in dataset.samples:
-        assert len(sample.time_series) == 1
+    assert len(dataset.records) == 1000
+    for record in dataset.records:
+        assert len(record.time_series) == 1
 
 
 def test_label_agrees_with_signal_mean():
     # The task is solvable from the data: a mean-based classifier would recover every label.
     dataset = _convert()
-    labels = _labels_by_sample(dataset)
-    for sample in dataset.samples:
-        mean = float(sample.time_series[0].to_numpy().mean())
+    labels = _labels_by_record(dataset)
+    for record in dataset.records:
+        mean = float(record.time_series[0].to_numpy().mean())
         expected = "above_zero" if mean > 0 else "below_zero"
-        assert labels[sample.sample_id] == expected
+        assert labels[record.record_id] == expected

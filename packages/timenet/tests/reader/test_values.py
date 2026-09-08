@@ -16,7 +16,7 @@ class _Shard:
 
     def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
         assert row_group == 0
-        # Projected, never the whole row group: a shard also carries ids, spec_type and channel, and
+        # Projected, never the whole row group: a shard also carries ids, spec_type and signal, and
         # decoding those on every value read is what the projection exists to avoid.
         assert columns == ["values", "time_offsets_us"]
         return pa.table(
@@ -31,7 +31,7 @@ def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
     rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
-    spec = make_dataset().samples[0].time_series[0].spec
+    spec = make_dataset().records[0].time_series[0].spec
 
     # The reader keys its row-group cache on the handle's root, so the same relative path under two
     # different roots must not collide; only version.root is touched here (_shard is stubbed).

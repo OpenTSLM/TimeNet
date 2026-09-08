@@ -188,7 +188,7 @@
     "counts": {
       "type": "object",
       "properties": {
-        "samples": { "type": "integer" },
+        "records": { "type": "integer" },
         "annotations": { "type": "integer" },
         "registered_annotations": { "type": "integer" },
         "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
@@ -200,9 +200,9 @@
     "files": {
       "type": "object",
       "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["samples", "annotations", "time_series_index"],
+      "required": ["records", "annotations", "time_series_index"],
       "properties": {
-        "samples": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },

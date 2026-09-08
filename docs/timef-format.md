@@ -26,7 +26,7 @@ version: the parsed manifest plus a filesystem-rooted view of its files.
 ```text
 <org>/<name>/<version>/
 ├── manifest.json       # the contract: metadata, schema, and the file list
-├── samples/            # one row per sample (the control plane)
+├── records/            # one row per record (the control plane)
 │   └── part-00000000.parquet
 ├── annotations/        # one row per annotation
 │   └── part-00000000.parquet
@@ -47,7 +47,7 @@ shard into more parts later without a format change.
 
 TimeF splits a dataset into a control plane and a values plane.
 
-The **control plane** is the sample, annotation, task, and index tables. These are always Parquet,
+The **control plane** is the record, annotation, task, and index tables. These are always Parquet,
 and they do not depend on how the values are stored.
 
 The **values plane** is the typed waveform of every series. This is the one part whose storage is
@@ -67,32 +67,31 @@ the versions it supports, and rebuilds the dataset types from the flat descripto
 | `schema` | Structural schema: the time-series specs, the annotation descriptors, and the task types. |
 | `counts` | Row and entity counts, for quick inspection. |
 | `files` | Each artifact's path, `sha256:` checksum, and size, grouped by kind. |
-| `id_encoding` | Which id columns are stored as raw bytes (see [Id storage](#id-storage)). |
 | `values_backend` | The values plane backend: `parquet` or `zarr`. |
 | `value_encoding` | The Parquet values encoding per `spec_type`, for provenance (see [below](#choosing-the-values-encoding)). |
-| `derived_from` | Copy-on-write lineage, or `null` for a freshly built version. |
+| `build_env` | The interpreter and package set that produced the version, for provenance. |
 
 ## The control-plane tables
 
-Every table is Parquet. The column layout is fixed. Only the id columns change type, and
-`id_encoding` records that choice.
+Every table is Parquet. The column layout is fixed. Only the id columns change type, and the
+records table's Parquet schema carries that choice.
 
-### samples/part-00000000.parquet
+### records/part-00000000.parquet
 
-One row per [sample](data-model/samples.md). A sample groups the series that were recorded
+One row per [record](data-model/records.md). A record groups the series that were recorded
 together, plus the tasks and annotations that point at them.
 
 | Column | Type | Meaning |
 | --- | --- | --- |
-| `sample_id` | id | The sample's id. |
+| `record_id` | id | The record's id. |
 | `start_time_us` | int64 | Wall-clock start, in microseconds since the Unix epoch. |
-| `subject_ids` | list of id | The subjects the sample belongs to. |
-| `time_series` | list of struct | The series in this sample, with their metadata and time axis. |
-| `task_ids` | list of id | The tasks that reference this sample. |
-| `annotation_ids` | list of id | The annotations that reference this sample. |
+| `subject_ids` | list of id | The subjects the record belongs to. |
+| `time_series` | list of struct | The series in this record, with their metadata and time axis. |
+| `task_ids` | list of id | The tasks that reference this record. |
+| `annotation_ids` | list of id | The annotations that reference this record. |
 
 The `time_series` struct carries each series' identity and its time axis. It holds `spec_type`,
-`channel`, `source_id`, `time_series_id`, an `axis_type`, and `n_values`. A regular axis fills
+`signal`, `source_id`, `time_series_id`, an `axis_type`, and `n_values`. A regular axis fills
 `period_numerator_us`, `period_denominator`, and `start_index`. An irregular axis fills
 `first_time_offset_us` and `last_time_offset_us` instead. The struct does not hold the values
 themselves.
@@ -107,7 +106,7 @@ One row per [annotation](data-model/annotations.md).
 | `key` | string | The annotation key. |
 | `value` | string | The value, JSON-encoded. Null for a pure marker. |
 | `span` | struct | The time span the annotation covers. Null for a static annotation. |
-| `sample_ids` | list of id | The samples the annotation applies to. |
+| `record_ids` | list of id | The records the annotation applies to. |
 
 A span struct holds `start_us`, `end_us`, and the `time_series_ids` it is scoped to. A null `end_us`
 means the span is a point at `start_us`.
@@ -119,9 +118,9 @@ split into chunks, and each chunk gets one row here.
 
 | Column | Type | Meaning |
 | --- | --- | --- |
-| `sample_id` | id | The sample the chunk belongs to. |
+| `record_id` | id | The record the chunk belongs to. |
 | `time_series_id` | id | The series the chunk belongs to. |
-| `spec_type`, `channel` | string | The series' modality and channel. |
+| `spec_type`, `signal` | string | The series' modality and signal. |
 | `chunk_idx` | int32 | The chunk's position within the series. |
 | `chunk_file` | string | The values file that holds the chunk. |
 | `chunk_major_idx` | int64 | Coarse locator inside `chunk_file`. |
@@ -135,14 +134,14 @@ group in the shard and `chunk_minor_idx` is the row within that row group. For t
 ### tasks/task=&lt;type&gt;/part-00000000.parquet
 
 Tasks are partitioned by type, one directory per [task type](data-model/tasks.md). Every partition
-shares a common set of columns: `id`, `sample_ids`, `from_task_ids`, `prompt`, `scope`,
+shares a common set of columns: `id`, `record_ids`, `from_task_ids`, `prompt`, `scope`,
 `input_annotation_ids`, `target_annotation_ids`, and `rationale`. Each type then adds its own payload
 columns. A classification task adds `target` and `target_schema`. A scalar prediction adds `target`,
 `unit`, and `target_name`. A temporal localization adds a list of span structs.
 
 ## The values plane
 
-The waveform values live outside the sample table, in the values plane. The default backend writes
+The waveform values live outside the record table, in the values plane. The default backend writes
 rotating Parquet shards.
 
 ### part-00000000.parquet
@@ -150,14 +149,14 @@ rotating Parquet shards.
 | Column | Type | Meaning |
 | --- | --- | --- |
 | `time_series_id` | id | The series the chunk belongs to. |
-| `spec_type`, `channel` | string | The series' modality and channel. |
+| `spec_type`, `signal` | string | The series' modality and signal. |
 | `chunk_idx` | int32 | The chunk's position within the series. |
 | `n_values` | int32 | How many values the chunk holds. |
 | `values` | list of the spec dtype | The chunk's values. A `"str"` or `"enum"` chunk stores text. |
 | `time_offsets_us` | list of int64 | Per-value time offsets, for an irregular axis. Null for a regular one. |
 
 The writer builds the shards in a fixed order. It dedupes series by `time_series_id`, sorts them by
-`(spec_type, channel, time_series_id)`, and streams them through the backend. It splits each series
+`(spec_type, signal, time_series_id)`, and streams them through the backend. It splits each series
 into chunks of at most `chunk_max_bytes`, buffers chunks until they reach `row_group_target_bytes`,
 and flushes them as one row group. A shard rotates once it reaches `shard_target_bytes`. A row group
 never spans two shards, so the index locators are exact.
@@ -167,20 +166,20 @@ compression at level 19 (Parquet) or 9 (Zarr).
 
 ## How the parts link together
 
-Ids tie the whole dataset together. Six logical ids cross-reference the entities: `sample_id`,
-`time_series_id`, `annotation_id`, `task_id`, `source_id`, and `subject_id`. A sample lists the ids
-of its series, tasks, annotations, and subjects. A task and an annotation each list the sample ids
+Ids tie the whole dataset together. Six logical ids cross-reference the entities: `record_id`,
+`time_series_id`, `annotation_id`, `task_id`, `source_id`, and `subject_id`. A record lists the ids
+of its series, tasks, annotations, and subjects. A task and an annotation each list the record ids
 they point at.
 
-To read one series, the reader joins the sample to its bytes through the index:
+To read one series, the reader joins the record to its bytes through the index:
 
-1. Read the sample row and take a `time_series_id` from its `time_series` list.
+1. Read the record row and take a `time_series_id` from its `time_series` list.
 2. Find that series' chunks in the `time_series_index` table.
 3. For each chunk, open `chunk_file` and go to `chunk_major_idx`, then `chunk_minor_idx`.
 4. Read the `values` list and rebuild the series on its time axis.
 
 The reader loads the manifest, tasks, annotations, and index eagerly. It keeps the values and the
-sample objects lazy, so a large dataset opens without reading every shard.
+record objects lazy, so a large dataset opens without reading every shard.
 
 ## Encodings
 
@@ -191,7 +190,7 @@ pyarrow. Pinned encodings keep a re-built version byte-stable.
 | --- | --- |
 | `values` (waveform floats) | Chosen from the data, per modality (see [below](#choosing-the-values-encoding)). |
 | `time_offsets_us`, `chunk_idx`, and the index locator ints | DELTA_BINARY_PACKED. |
-| Bounded categoricals (`spec_type`, `channel`, `axis_type`, `key`, task labels) | Dictionary plus RLE. |
+| Bounded categoricals (`spec_type`, `signal`, `axis_type`, `key`, task labels) | Dictionary plus RLE. |
 | Id columns | Plain, stored as raw bytes or a string (see [Id storage](#id-storage)). |
 
 Every file also carries column statistics, a page index, and per-page checksums. Every file uses
@@ -209,9 +208,10 @@ patterns for floats), and picks:
 - **plain** above that for strings and integers (byte-plane splitting has no
   meaning for these types).
 
-Bool channels always use plain. The writer takes one decision per `spec_type`, before that
-modality's first shard opens. The decision reads only buffered data, so re-building an unchanged
-source reaches the same encoding and writes the same bytes.
+Bool signals always use plain and enum signals always use dictionary, both without measuring
+anything. The writer takes one decision per `spec_type`, before that modality's first shard opens.
+The decision reads only buffered data, so re-building an unchanged source reaches the same encoding
+and writes the same bytes.
 
 The rule follows the measurements. On real data, at zstd level 3, the values column measures:
 
@@ -244,8 +244,8 @@ with TimeFWriter(root, dataset, value_encoding="dictionary") as writer:
 ### Id storage
 
 An entity id is a UUIDv7 string by default. When every value in an id's space is a canonical UUID,
-the writer stores that column as 16 raw bytes (`binary(16)`) instead of a 36-character string. It
-records the choice in the manifest's `id_encoding` map. A reader decodes the bytes back to the
+the writer stores that column as 16 raw bytes (`binary(16)`) instead of a 36-character string. A
+reader reads the choice off the records table's Parquet schema and decodes the bytes back to the
 canonical string, so a caller always sees a string id.
 
 ## Integrity
