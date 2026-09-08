@@ -100,14 +100,32 @@ order. The container is free to see. The role is a guess until a head has tested
 
 **The signature follows the container, and only the name follows the role.** A binary container
 takes a count of blocks and a tabular one takes a count of rows, and the grouping in step 1 settles
-that. The name waits for the head. These signatures show the shape to follow, and the names are one
-release's confirmed kinds and not a set to fit a release into:
+that. The name waits for the head.
+
+So a head is written twice, and only the name changes. Write it against the container, because that
+is all you know:
+
+```python
+def head_edf(path: Path, blocks: int = 1) -> str: ...
+def head_xls(path: Path, rows: int = 5) -> str: ...
+```
+
+Then run it, read what it prints, and rename each one to the kind it turned out to hold:
 
 ```python
 def head_signals(path: Path, blocks: int = 1) -> str: ...
 def head_annotations(path: Path, rows: int = 5) -> str: ...
 def head_subjects(path: Path, rows: int = 5) -> str: ...
 ```
+
+The signatures are the same on both sides. That is the whole point: the container fixed them before
+anything was read, and the head only supplied the name.
+
+**Two kinds can share one container, and that is the case the head exists for.** A grouping by
+container cannot separate them, so no amount of care in step 1 reaches the answer.
+
+- *Sleep-EDF:* the signals and the scorings are both EDF. Grouping by container gives two groups and
+  the release has three kinds. Opening one file is what says which EDF is which.
 
 Each gives a string, so a caller can print it, write it to a file, or put it in a test. Each reads
 only the part it prints.
