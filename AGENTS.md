@@ -11,6 +11,9 @@ Instructions for contributors and coding agents working in this repository.
 ## Documentation Contract
 - `README.md` is human-facing: installation, setup, and a tour of the make targets.
 - `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and repo conventions.
+- A connector's `README.md` is dataset-facing: what the release states, the assumptions the
+  conversion rests on, and every inconsistency it ships. It travels with the connector because it
+  answers questions about that dataset, not about TimeNet.
 - Keep agent operating instructions here. Don't move them into the README.
 
 ## Documentation
@@ -85,6 +88,11 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
 `submit`, `--json` to `view`); make mid-stack changes on the branch that logically owns them and run
 `gh stack rebase --upstack` to propagate, rather than mixing concerns into a higher branch.
 
+A PR description states the **Problem** first and the **Changelog** second, in simple English, with
+the ticket reference last. The problem is what the reviewer needs to judge the change; the list of
+files is not. Each PR of a stack must stand on its own: no comment, docstring, or line that a later
+PR in the same stack deletes, and no forward-looking chatter naming work that has not landed.
+
 ## Conventions
 - Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);
   underscores for Python import packages and modules (`timenet`, `timenet.cli`,
@@ -100,10 +108,26 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
   `BREAKING CHANGE:` footer.
 - Never use `git commit --no-verify`. If a hook fails, fix the underlying issue
   (run `make check` / `make lint-fix`) and commit again.
-- Raise TimeNet's own exceptions from `timenet.errors`, not raw `ValueError` / `Exception`:
-  `TimeFValidationError` for a violated TimeF invariant or bad caller input, `TimeFFormatError`
-  for a corrupt or unsupported on-disk artifact. `TimeFValidationError` subclasses `ValueError`,
-  so existing `except ValueError` handlers keep working.
+- Raise TimeNet's own exceptions from `timenet.errors`, not raw `ValueError` / `Exception`. They all
+  descend from `TimeNetError`. Pick the one that names what went wrong:
+
+  | error | raise it when |
+  | --- | --- |
+  | `TimeFValidationError` | a TimeF invariant is violated, or caller input is bad |
+  | `TimeFEditError` | an edit to a dataset is not allowed |
+  | `TimeFFormatError` | an on-disk artifact is corrupt or unsupported |
+  | `TimeNetInvalidManifestError` | a manifest is corrupt (a `TimeFFormatError`) |
+  | `TimeNetInvalidCardError` | a `dataset.yaml` fails to validate |
+  | `TimeNetDatasetNotFoundError` | a dataset id resolves to nothing |
+  | `TimeNetRegistryError` | a registry cannot be read or written |
+  | `TimeNetAccessError` | the caller may not reach the data |
+  | `TimeNetDownloadError` | a fetch fails |
+  | `TimeNetBuildError` | a build fails for a reason none of the above names |
+
+  Four of them subclass `ValueError`, so existing `except ValueError` handlers keep working:
+  `TimeFValidationError`, `TimeFEditError` (through it), `TimeNetInvalidCardError`, and
+  `TimeNetInvalidManifestError`. Warnings descend from `TimeNetWarning`;
+  `SpanOutsideWindowWarning` is the one a connector meets.
 
 ## Docstrings
 - Write Google-style docstrings; ruff enforces them via `D` (pydocstyle) and `DOC`
@@ -113,6 +137,85 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
   documented args/returns match the signature.
 - `__init__` and magic methods are exempt (`D107`, `D105`). Tests skip docstring
   rules entirely.
+
+## Python Habits
+
+Rules the linters do not state and the code follows anyway.
+
+- **`# noqa: CODE (reason)`** — parenthesised, lowercase, no trailing period. A suppression without
+  a reason is a suppression nobody can retire.
+  ```python
+  def download(self, cache_dir: Path) -> list[None]:  # noqa: ARG002 (synthetic: nothing to fetch)
+  ```
+- **A suppression of a complexity rule takes its reason in prose above the `def`**, not inside the
+  `noqa`, because the reason is a paragraph and the `noqa` is a line.
+- **`DOC502` is the sanctioned escape** when a documented `Raises:` is raised by a helper rather
+  than by the function itself. Rewording the docstring to name the helper works too and avoids the
+  suppression.
+- **`typing.Final` is used nowhere in either package.** Don't introduce it.
+- **Document dataclass fields in `timenet`, not in a connector.** The core types are public API and
+  carry a docstring under every field. A connector's handle and row dataclasses carry a class
+  docstring and annotate fields with a trailing `#` comment instead: they are plumbing between
+  `download` and `convert`.
+- **A constant used once lives at its use site.** A lookup table stays at module level whatever its
+  use count, so it is not rebuilt per call. A source URL stays at module level too, even used once,
+  so a mirror can replace it. A top-level constant that needs explaining takes a docstring below it,
+  not a `#` comment — except URLs, which take comments.
+- **Python is `line-length = 120`, and `E501` is off** because the formatter owns it. The formatter
+  will not split a long string or comment, so wrap those by hand. (Prose and fenced code in `docs/`
+  follow the narrower rule above.)
+
+### Errors
+
+Beyond picking the right type from the table above, two habits hold:
+
+- **Some non-TimeNet errors are deliberate, not oversights.** `ImportError` with a message naming
+  the fix, for an optional extra that is not installed; `LookupError` when a connector id resolves
+  to nothing; `FileNotFoundError` when a path does not resolve under a root a helper searched;
+  `typer.BadParameter` for bad CLI input; and the upstream library's own `DatasetNotFoundError`.
+  Don't "fix" these into TimeNet types.
+- **The distinction the code draws is *who is wrong*.** Bad configuration is the caller's fault:
+  `TimeFValidationError`. A file that is present but unreadable is the artifact's fault:
+  `TimeFFormatError`. A fetch that arrived without the parts it promised is the download's fault:
+  `TimeNetDownloadError`.
+- **The message shape is `<subject> <verb> <expectation>, got <value!r>`.** State the value that
+  failed, `!r`-quoted, and name the thing a reader has to go and open:
+  `"{workbook} row {row_number}: {field} holds {cell!r}"`. When one message covers two branches,
+  bind it to a local and raise it twice rather than repeating the literal.
+
+### Type checking
+
+`ty` is stricter than the tests' ergonomics, and the fix is always explicit narrowing, never a cast.
+
+- `Annotation.span`, `Task.scope`, `TimeSeries.time_axis` and `TimeSeries.span_us` are unions.
+  Reading `.start_us`, `.period_us` or `[1]` off one of them fails.
+- In tests, write small `assert isinstance(...)`-and-return helpers and call those. Tests already
+  ignore `S101`, so the assert is free.
+- `Task` has no `target_schema`; only `ClassificationTask` does. Narrow by `isinstance` before
+  touching a subclass field.
+- **`pyarrow.compute` does not type-check.** `ty` rejects every `pc.*` call — "Module
+  `pyarrow.compute` has no member `list_value_length`" — because those functions are generated at
+  import time. Use the real methods instead: `ListArray.value_lengths()` and `.flatten()`. Use
+  `numpy` for the rest, such as `np.isfinite` in place of `pc.is_finite`.
+
+### Things that surprise you once
+
+- **`ruff format` reflows and `ruff check` then complains.** After a large edit run `make lint-fix`
+  and `make check` until both are quiet; one pass is not enough.
+- **`RUF069` bans `==` between floats**, tests included. Use `pytest.approx`, or compare the integer
+  microseconds the format actually stores.
+- **`TimeSeriesSpec` is a frozen dataclass**, so two identically-built specs are equal and dedupe.
+- **`Sample.start_time` refuses a bare `float` and a naive `datetime`** — seconds and microseconds
+  are both plausible readings of a float. Pass a tz-aware `datetime`, or whole Unix microseconds as
+  an `int`; the field is `datetime | int | None`.
+- **`timenet/__init__.py` exports nothing.** Import from the submodule: `from timenet.client import
+  TimeNet`.
+- **`uv` is version-pinned** by `required-version` in the root `pyproject.toml`. A too-old `uv`
+  refuses everything, `uv sync` included; run `uv self update` first.
+- **No connector reads an environment variable today.** If you add one, name it
+  `TIMENET_<DATASET>_<THING>` and raise `TimeFValidationError` on a bad value. `TIMENET_TESTING` and
+  `TIMENET_ROW_LIMIT` are named in some older docs and were never implemented; don't write a test
+  that depends on them.
 
 ## Implementation Guidelines
 - Prefer small, reviewable changes.
