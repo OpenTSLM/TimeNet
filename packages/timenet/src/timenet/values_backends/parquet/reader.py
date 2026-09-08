@@ -203,7 +203,7 @@ class ParquetValuesReader(BaseValuesReader):
             time_offsets=(
                 table.column("time_offsets_us").combine_chunks()
                 if "time_offsets_us" in wanted
-                else pa.nulls(len(values), type=table.schema.field("values").type)
+                else pa.nulls(len(values), type=pa.list_(pa.int64()))
             ),
         )
         self._row_group_cache[key] = group
@@ -213,26 +213,34 @@ class ParquetValuesReader(BaseValuesReader):
 
     @staticmethod
     def _offsets_all_null(shard: pq.ParquetFile, row_group: int) -> bool:
-        """Return whether a row group's time offsets hold nothing but nulls.
+        """Return whether a row group stores no time offset at all.
 
         A regular series stores no time offsets, so on a regular-axis dataset the column is null
-        in every row. The Parquet footer counts the nulls, so this reads no data.
+        in every row. The Parquet footer already holds the count, so this reads no data.
+
+        The footer counts leaf values, so an empty list counts as absent too. TimeF allows neither
+        an empty list nor a null offset, and :meth:`load_time_offsets` rejects such a shard.
 
         Args:
             shard: The open shard.
             row_group: The row group to check.
 
         Returns:
-            True when every row of the column is null, so the read can skip it.
+            True when the column holds no leaf value, so the read can skip it.
         """
         try:
-            position = shard.schema_arrow.names.index("time_offsets_us")
-            column = shard.metadata.row_group(row_group).column(position)
-        except (AttributeError, ValueError):
-            # A shard with no footer, or no such column, cannot say. Read both.
+            group = shard.metadata.row_group(row_group)
+        except AttributeError:
+            # A shard with no footer cannot say. Read both columns.
             return False
-        statistics = column.statistics
-        return statistics is not None and statistics.null_count == column.num_values
+        # Column chunks are indexed by leaf, which is not the position of the Arrow field.
+        for index in range(group.num_columns):
+            column = group.column(index)
+            if column.path_in_schema.split(".", 1)[0] != "time_offsets_us":
+                continue
+            statistics = column.statistics
+            return statistics is not None and statistics.null_count == column.num_values
+        return False
 
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
         path = version.path(rel_path)

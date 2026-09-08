@@ -21,6 +21,21 @@ def _write(tmp_path, **kwargs):
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
+class _ProjectionSpy:
+    """Wraps a real shard handle and records the columns each row-group read asks for."""
+
+    def __init__(self, handle, projections):
+        self._handle = handle
+        self._projections = projections
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+    def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
+        self._projections.append(columns)
+        return self._handle.read_row_group(row_group, columns=columns)
+
+
 class _Shard:
     def __init__(self, value: float) -> None:
         self._value = value
@@ -72,3 +87,24 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
                 values = series.to_arrow()
                 assert values.offset == 0
                 assert values.get_total_buffer_size() == values.nbytes
+
+
+def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch):
+    # Every series in the fixture is regular, so time_offsets_us is null in every row of the shard.
+    # The footer says so, so the read can leave that column alone.
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = next(iter(reader.iter_records(with_annotations=False)))
+        series = record.time_series[0]
+        rows = reader._index_rows(record.record_id, series.time_series_id)
+
+    projections: list[list[str]] = []
+    values_reader = ParquetValuesReader()
+    opener = values_reader._shard
+    monkeypatch.setattr(
+        values_reader, "_shard", lambda version, rel_path: _ProjectionSpy(opener(version, rel_path), projections)
+    )
+    values_reader.load(DatasetVersion.open_local(version_dir), rows, series.spec)
+    values_reader.close()
+
+    assert projections == [["values"]]
