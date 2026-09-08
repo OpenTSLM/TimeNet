@@ -43,12 +43,8 @@ one: the rules for that are the skill's own, and they live in its other referenc
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- `store_dataset(dataset, root)` (concrete): derives the schema if missing and streams the dataset
-  through `TimeFWriter`. It is not a method on `BaseConnector`. It sits on the engine
-  (`engine/engine.py:116`), which calls it after `convert` returns, and its own docstring says why:
-  it "reads only `dataset`", so the connector contract stays at fetch-and-convert and no connector
-  depends on the writer. No connector calls it. A connector test imports it from `timenet.engine`
-  to prove the dataset it built survives a write and a read.
+- `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
+  Most connectors never override it.
 
 `list[TRaw]` does not mean one entry per sample. A connector that would otherwise build millions of
 refs returns a **single handle** that `convert` walks, yielding one sample at a time.
