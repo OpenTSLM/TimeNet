@@ -103,6 +103,25 @@ def test_registered_annotation_round_trips(tmp_path):
     assert restored.tasks[0].input_annotation_ids == ("opts-yesno",)  # the ref survived, resolves in the table
 
 
+def test_registered_annotation_scan_filters_owned_rows_before_decoding(tmp_path):
+    dataset = _registered_annotation_dataset()
+    dataset.records[0].add_annotation(Annotation(key="note", value="owned", id="owned-note"))
+    version_dir = _write(tmp_path, dataset)
+    ann_path = version_dir / "annotations/part-00000000.parquet"
+    table = pq.read_table(ann_path)
+    rows = table.to_pylist()
+    # Older artifacts may use a null list for an unowned annotation. An owned annotation must
+    # not be decoded by this scan, even if its JSON is invalid; normal record reading rejects it.
+    next(row for row in rows if row["id"] == "opts-yesno")["record_ids"] = None
+    next(row for row in rows if row["id"] == "owned-note")["value"] = "{invalid JSON"
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), ann_path, row_group_size=1)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        registered = reader._read_registered_annotations()
+        assert [(a.id, a.value) for a in registered] == [("opts-yesno", ["yes", "no"])]
+        with pytest.raises(TimeFFormatError, match="corrupt"):
+            next(reader.iter_records())
+
+
 def test_write_rejects_an_annotation_both_registered_and_record_carried(tmp_path):
     # A registered annotation writes with empty record_ids and the reader restores it from that; an id
     # also carried by a record would write non-empty and be lost on read, so the writer rejects it.
