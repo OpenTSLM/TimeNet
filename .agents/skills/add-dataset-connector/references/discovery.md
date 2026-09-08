@@ -54,20 +54,41 @@ the plan which unit the head read, so a reader knows what the bound was.
 
 ## Give every raw file type a `head()`
 
-A connector reads more than one kind of file, and the kinds are not alike. Typically there is one
-kind holding signals, one holding labels, and a table of per-subject facts beside them. Each kind
-has its own shape, and few of them open in an editor.
-
-- *Sleep-EDF:* three kinds — a container of signals, a container of annotations, and a spreadsheet
-  of subjects. *ECG-QA:* WFDB records and three CSV files.
+A connector reads more than one kind of file, and the kinds are not alike. Each kind has its own
+shape, and few of them open in an editor.
 
 A `head()` opens one file, reads a small part of it, and gives that part back as text a person can
 read. It writes nothing and it changes nothing.
 
-**Write one function per kind of file, named for the kind and not for the file extension.** The kinds
-are the ones your release ships. Do not force a release into a standard set of names: a columnar
-release has no signals file and no label file, and its kinds are `head_shard`, `head_declared_schema`
-and `head_windows`. These signatures show the shape to follow, and the names are one release's kinds:
+**A head is what establishes what a file holds, so do not start from a name for it.** Work in this
+order. The container is free to see. The role is a guess until a head has tested it.
+
+1. **Group the files by container first.** The extension, the path and the magic bytes give the
+   grouping, and none of them costs a read of the data. A container says how to open a file. It says
+   nothing about what the file means.
+2. **Take the role of each group from phase 0, as a hypothesis.** Phase 0 read the description, the
+   manifest and the data dictionary, and wrote every claim they make into section 0 of the plan.
+   Those claims are the guess. Write each guess down with the sentence it came from, so a reader
+   sees what it rests on.
+3. **Head the file to test the guess.** A head confirms the hypothesis or refutes it. One release
+   declares nine columns and ships seven *(measured)*, so a release can be wrong about its own
+   schema, and a release that is wrong about a schema can be wrong about what a file holds. Where
+   the head disagrees with phase 0, the head wins, and the disagreement goes in the plan.
+4. **Write one function per kind of file once the head has confirmed the kind, and name it for the
+   kind and not for the file extension.** The kinds are the ones your release ships. Do not force a
+   release into a standard set of names: a columnar release has no signals file and no label file,
+   and its kinds are `head_shard`, `head_declared_schema` and `head_windows`.
+   - *Sleep-EDF:* three kinds — a container of signals, a container of annotations, and a
+     spreadsheet of subjects. *ECG-QA:* WFDB records and three CSV files.
+5. **Head a file that nothing names by its container alone, and let the output name it.** An
+   undocumented sidecar or an unfamiliar extension carries no hypothesis, and it is the file a head
+   is most useful for. Open it the way its container allows, print what comes out, and take the name
+   from what it printed. Call it by its container until then.
+
+**The signature follows the container, and only the name follows the role.** A binary container
+takes a count of blocks and a tabular one takes a count of rows, and the grouping in step 1 settles
+that. The name waits for the head. These signatures show the shape to follow, and the names are one
+release's confirmed kinds and not a set to fit a release into:
 
 ```python
 def head_signals(path: Path, blocks: int = 1) -> str: ...
