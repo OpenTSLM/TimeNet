@@ -7,25 +7,64 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
-- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
+- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, `physionet/sleep_edfx`, and
+  `timenet/hello_world` connectors
+
+This file is the API surface. It states what a connector is made of. It does not state how to build
+one: the rules for that are the skill's own, and they live in its other references.
+
+## Contents
+
+- [The `BaseConnector` contract](#the-baseconnector-contract)
+- [Discovery and the folder layout](#discovery-and-the-folder-layout)
+- [The dataset card (`dataset.yaml`)](#the-dataset-card-datasetyaml)
+- [Base connectors to reuse](#base-connectors-to-reuse)
+- [Building the dataset in `convert`](#building-the-dataset-in-convert)
+- [Where an answer, an annotation and a task can live](#where-an-answer-an-annotation-and-a-task-can-live)
+- [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
+- [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
+- [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
+- [Fixture-based test pattern](#fixture-based-test-pattern)
 
 ## The `BaseConnector` contract
 
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
-`convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
+`convert` (a dict per Hub row, a dataclass ref per PhysioNet record, and more).
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
+- `download(self, cache_dir: Path) -> list[TRaw]`: fetch/discover raw source files, return
+  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`. **Not abstract** — its
+  default drives `download_async` to completion, because a connector is called synchronously.
+  Override it only for a genuinely synchronous connector.
+- `download_async(self, cache_dir: Path) -> list[TRaw]`: the async form of the same step. When the
+  fetch is I/O-bound and can overlap, implement this one. `physionet/sleep_edfx` does. Implement one
+  of the two, not both.
 - `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
   CPU only, no network.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
-  `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
-  set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
+  `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module.
+  Set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract. It is not.)
 - `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
   Most connectors never override it.
 
+`list[TRaw]` does not mean one entry per record. A connector that must otherwise build millions of
+refs returns a **single handle**. `convert` walks that handle and yields one record at a time.
+`SleepEdfxSource` is one such handle: it carries the study directories and the table paths, and no
+row of any table. `discovery.md` says how to choose between the two shapes.
+
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.
+
+### Where the contract ends
+
+You implement `download` and `convert`. Nothing below them is yours to know, with one exception, and
+it is the exception three rules elsewhere depend on:
+
+> **`convert` returns a description, not data. The values and the task stream are read afterwards, by
+> something you do not call.**
+
+That single fact is the whole of the contract's laziness, and everything else follows from it. A
+loader must still work when it is called later. Whatever it captured stays alive until then. A task
+stream can be read more than once. You never need to know what does the reading.
 
 ## Discovery and the folder layout
 
@@ -36,9 +75,22 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   __init__.py      # re-exports CONNECTOR (and the class) from connector.py
   connector.py     # the BaseConnector subclass; ends with CONNECTOR = <YourClass>
   dataset.yaml     # the dataset card, read by metadata()
+  README.md        # the assumptions, the inconsistencies, the warnings
   requirements.txt # the libraries this connector needs, installed into the
                    # environment its build runs in (optional)
+  tests/           # one test module per module; no fixture files
 ```
+
+That is the smallest connector. **One rule decides whether a file belongs in that folder. A file
+that `download` or `convert` imports and calls is part of the connector, and is committed with it.
+Every other file used to build the connector stays out.**
+
+A larger connector divides into more modules. Each module names one kind of meaning the release
+carries — a table decoder, a spec map, an annotation builder. `physionet/sleep_edfx` is one that
+does.
+
+The half that **opens** a file is a base, not a connector module. `sleep_edfx` ships no reader of
+its own and imports `bases.edf.reader` and `bases.excel`.
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
 `discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
@@ -63,9 +115,9 @@ tags:
   - huggingface
 ```
 
-`dataset_id` must equal the id the connector is built under. `license` must be a valid `License`;
-`domains` valid `Domain` values. The card is validated on load (needs the `build` extra, which
-`timenet[build]` pulls in); errors raise `TimeNetInvalidCardError`.
+`dataset_id` must equal the id the connector is built under. `license` must be a valid `License`.
+`domains` must be valid `Domain` values. The card is validated on load (needs the `build` extra,
+which `timenet[build]` pulls in). Errors raise `TimeNetInvalidCardError`.
 
 ## Base connectors to reuse
 
@@ -75,7 +127,8 @@ and implement `convert`. `download` is inherited: it reads the Hub's auto-conver
 `refs/convert/parquet` and returns one dict per row, so any source format is handled uniformly.
 The connector imports `huggingface_hub` lazily and declares it in its `requirements.txt`. The lazy
 import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
-environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
+environment, so gated datasets work. Fully private repos have no auto-parquet ref and are not
+supported.
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
@@ -95,34 +148,79 @@ through boto3, so it names `boto3` too.
 Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
 
 - `TimeSeries.from_values(values, *, spec, signal, time_axis, source_id=None, time_series_id=None)`
-  is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
-  takes `n_values` from the array's own length. When the source has one arbitrary time offset per point,
-  use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, signal, ...)` instead, which derives
-  the axis from the stream. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
-  constructor only for genuinely lazy sources (files, remote shards). `time_series_id` is the dedupe key:
-  reuse the same id (and the same `TimeSeries`) to share one series across records.
+  is the shortcut when you already hold the values in memory. It wraps them in a **float32** loader
+  and takes `n_values` from the array's own length. When the source has one arbitrary time offset
+  per point, use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, signal, ...)`
+  instead, which derives the axis from the stream. Use the raw
+  `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)` constructor only for genuinely lazy
+  sources (files, remote shards). `time_series_id` is the dedupe key: reuse the same id (and the
+  same `TimeSeries`) to share one series across records.
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - `record = dataset.add_record(time_series=<tuple of TimeSeries>, record_id=...)`. A windowed record
   says so through its axis: `RegularAxis.at_index(...)` moves the origin into the recording.
-- `record.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it;
-  `record.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
-  its `span`. No span means whole-record; `span=TimePoint.seconds(...)` a time offset;
-  `span=TimeInterval.seconds(...)` a region.
-- `dataset.add_task(record, <Task>(...))` registers one and returns it; `dataset.add_tasks(record, [...])`
-  takes an iterable and registers the batch all-or-nothing. Set `scope` and `from_tasks` on the task
-  itself, not the call; a batch may derive from its own members in any order.
-- Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
-  `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
+- `record.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it.
+  `record.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes
+  from its `span`. No span means whole-record. `span=TimePoint.seconds(...)` means a time offset.
+  `span=TimeInterval.seconds(...)` means a region.
+- `dataset.add_task(record, <Task>(...))` registers one and returns it.
+  `dataset.add_tasks(record, [...])` takes an iterable and registers the batch all-or-nothing. Set
+  `scope` and `from_tasks` on the task itself, not the call. A batch can derive from its own members
+  in any order.
+- Name every annotation or task you reference later and read its `id` off it. Never repeat an id
+  literal in `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
+
+## Where an answer, an annotation and a task can live
+
+Each row that follows is a choice, not a rule. Each one changes what the built dataset costs and
+what a reader can do with it. Pick one per connector and **say in the plan which you picked and
+why**. A facility you did not know about is not a choice you made.
+
+| the choice | reach for it when | already done in |
+| --- | --- | --- |
+| `dataset.add_task(record, task)` | the tasks are few and you want the cross-task validation | `chengsenwang/tsqa/connector.py:123` |
+| `dataset.add_tasks(record, tasks)` | one batch belongs to one record, all of it or none of it | `sleep_edfx/tasks.py` |
+| `dataset.set_task_stream(task_types, source)` | there are far more tasks than records, or more than fit in memory | `physionet/ecg_qa_cot/connector.py:297` |
+| `record.add_annotation` / `add_annotations` | the annotation belongs to one record and is read back through it | `sleep_edfx/connector.py` |
+| `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no record carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
+
+The fields a task carries its answer in are the `Task` frame, which follows.
+
+**Copying an answer into every task is the mistake this table exists to prevent.** A release with
+four captions per record and 600 000 records writes 2.4 million copies of text it can store one
+time. `register_annotations` plus `target_annotation_ids` is the pair that stores it once.
+
+**The values side does the same thing one level down, and a spec opts into it.** A signal whose
+values are drawn from a closed set is declared `dtype="enum"` with its labels in
+`TimeSeriesSpec.categories`. The writer then stores it as a dictionary — one copy of each label,
+plus an `int32` index per timestep (`_ENUM_LEAF = pa.dictionary(pa.int32(), pa.string())`,
+`values_backends/parquet/writer.py:86`). The dictionary does not repeat the text at every timestep.
+An `"enum"` dtype takes that encoding unconditionally (`:222-225`).
+
+A signal left as `dtype="str"` still gets it when it earns it. The writer records the leading
+values, counts distinct bit patterns, and calls `encoding_for_cardinality`
+(`writer/value_encoding.py:151`), which selects dictionary up to `DICT_MAX_CARDINALITY`, currently
+`1 << 16`. Where the set really is closed, the enum declaration is still better. It states the
+codebook, so the writer does not infer it from a sample. Also, `categories` is validated as
+non-empty, unique strings (`types/specs.py:57-68`).
 
 ## Task types (`timenet.types.tasks`)
 
-The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
+The task **class** is the type tag (used by `search(task=...)`). The instance carries the payload.
 
-Every task shares one frame on the `Task` base — `record_ids`, `prompt`, `scope` (a `Span` narrowing the
-input), `input_annotation_ids`, `target` / `target_annotation_ids`, `rationale`, `from_tasks` — so the
-type only says what *kind* of answer it is.
+Every task shares one frame on the `Task` base, so the type only says what *kind* of answer it is:
+
+| field | what it holds | seen in |
+| --- | --- | --- |
+| `record_ids` | the records the task is about. `add_task` sets them; a streamed task sets its own | — |
+| `prompt` | what the model is asked. `None` for an unprompted task | `chengsenwang/tsqa/connector.py:57` |
+| `scope` | the region of the input the task is about. `None` means the whole record | `sleep_edfx/tasks.py` |
+| `input_annotation_ids` | annotations given as context, not ones the model must produce | `physionet/ecg_qa_cot/connector.py:308` |
+| `target` | the answer inline, typed by the subclass. Reach for it when the answer is a short value belonging to this one task | `chengsenwang/tsqa/connector.py:57` |
+| `target_annotation_ids` | the answer **is** these stored annotations. Reach for it to store the text one time and point many tasks at it, instead of copying it into every task row | nothing yet — the path is written and tested only for validation |
+| `rationale` | chain of thought to train on. Any task can carry one | `physionet/ecg_qa_cot/connector.py:307` |
+| `from_tasks` | the source tasks this one was derived from, so a reader can follow it back | — |
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
@@ -136,7 +234,9 @@ type only says what *kind* of answer it is.
 | `TSCorrespondenceTask` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
 
 The three series-output tasks set `answer_is_record` and locate their answer by record id instead of
-filling `target`. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
+filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the record the
+task is attached to, exclusive with `target_record_id`. Use it when the future to predict lies in the
+same record rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
 points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
 the bounds of every `Span` the task carries.
 
