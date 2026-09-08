@@ -218,10 +218,6 @@ Every task shares one frame on the `Task` base, so the type only says what *kind
 | `rationale` | chain of thought to train on. Any task can carry one | `physionet/ecg_qa_cot/connector.py:307` |
 | `from_tasks` | the source tasks this one was derived from, so a reader can follow it back | — |
 
-**A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task` raises
-`TimeFValidationError` on a task that sets both, and on one that sets neither
-(`dataset/dataset.py:525-533`).
-
 | Task | Answer | Extra payload |
 | --- | --- | --- |
 | `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
@@ -236,8 +232,9 @@ Every task shares one frame on the `Task` base, so the type only says what *kind
 The three series-output tasks set `answer_is_sample` and locate their answer by sample id instead of
 filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the sample the
 task is attached to, exclusive with `target_sample_id`. Use it when the future to predict lies in the
-same sample rather than in another one. `add_task` also checks the bounds of every `Span` a task
-carries.
+same sample rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
+points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
+the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 

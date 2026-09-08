@@ -326,9 +326,11 @@ samples by orders of magnitude, they must stream — Sleep-EDF runs to about 245
 
 Two more hold for every task, streamed or not:
 
-- **A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task`
-  raises `TimeFValidationError` on a task that sets both, and on one that sets neither. `target`
-  carries the answer inline. `target_annotation_ids` says the answer *is* those stored annotations.
+- **A task needs exactly one of `target` and `target_annotation_ids`.** `target` carries the answer
+  inline. `target_annotation_ids` says the answer *is* those stored annotations. `add_task` raises
+  `TimeFValidationError` on a task that sets both, and on one that sets neither. The exception is a
+  task whose answer is a produced series: it sets `answer_is_sample` and names its answer by sample
+  id, so it sets neither and the check skips it (`dataset/dataset.py:530`).
 - **`dataset.register_annotations` exists for annotations that tasks reference and no sample
   carries.** Register the annotation before the stream that names it.
 - **A closed set is one annotation whose value is the list**, not one annotation per member. One per
