@@ -66,13 +66,17 @@ heads then check. Phase 1 fills in the last column.
 
 ### The inventory
 
-| path | kind | count | belongs to a sample |
-| --- | --- | --- | --- |
-| `<glob>` | signals | | yes |
-| `<glob>` | labels | | yes |
-| `<path>` | table | | joined, not owned |
-| `<path>` | index / checksums | | no |
-| `<path>` | describes the release | | no |
+| path | container | kind | count | belongs to a sample |
+| --- | --- | --- | --- | --- |
+| `<glob>` | `<the extension or the format>` | `<what the head showed it holds>` | | yes |
+| `<glob>` | | | | yes |
+| `<path>` | | | | joined, not owned |
+| `<path>` | | | | no |
+
+The **container** is what the grouping in `discovery.md` gives you for free. The **kind** is the role,
+and it is filled in only after a head has confirmed it — see
+`discovery.md § Give every raw file type a head()`. A file whose kind no head has settled is named by
+its container and left that way.
 
 Every kind in this table is a node in the map below. Every file that belongs to no sample is named
 here once, so nobody looks for it again.

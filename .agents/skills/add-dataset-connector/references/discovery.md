@@ -182,7 +182,9 @@ name means you write the opener as well as the head, and the plan says so.
 
 ## Survey the release
 
-A survey is a count, and its purpose is to find where two samples differ.
+A survey is a count, and its purpose is to find where two samples differ. **It is evidence, not
+truth**: it answers the question you asked and nothing else, so state every count with how it was
+counted, and let the build in phase 5 settle it.
 
 **You cannot find the odd values by reading.** An anomaly worth knowing is almost always a fact
 about the *set*: one file in a hundred that differs, a value that varies per file where you assumed a
@@ -242,16 +244,14 @@ release it is too loose, and you have not yet found the property that separates 
 about itself — an index file, a manifest, a row count — over one you derive, and say which you used.
 If you cannot count the samples before you convert, you do not yet know what a sample is.
 
+**A count settles how many. It does not settle what is in them.** The rules below ask the second
+question, and a release passes every count above while still shipping content nobody can use.
+
 **Survey a free-text column for its shape, not only for its presence.** A count of nulls, empty
 strings and duplicates says the text is there. It does not say the text is finished. Ask whether
 every value terminates, and whether the length distribution has a cliff at one value. One release
 ships 123 098 captions that stop mid-sentence — 5.0% of the corpus, some of them mid-word
 *(measured)*, and no count of nulls or duplicates would have found one of them.
-
-**A survey result is evidence, not truth.** It answers the question you asked and nothing else, and a
-question you did not think to ask leaves a hole the table does not show. Two of one release's own
-survey numbers were wrong and were caught only by measuring them a second time. So state every count
-with how it was counted, and treat the build in phase 5 as what settles it.
 
 ## Name the set of files that one sample needs
 
