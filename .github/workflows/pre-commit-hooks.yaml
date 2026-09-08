@@ -9,7 +9,7 @@ permissions:
 
 # Cancel a superseded run so two runs can't race to rewrite the sticky comment.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
