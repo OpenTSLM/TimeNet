@@ -22,7 +22,12 @@ if TYPE_CHECKING:
     from timenet.types import TimeSeriesSpec
 
 
-_ROW_GROUP_CACHE_SIZE = 16  # decoded row groups kept, so one shared by many series decodes once
+_ROW_GROUP_CACHE_SIZE = 64
+"""Decoded row groups kept, so one shared by many series decodes once.
+
+A shard writes a signal's chunks across several row groups, so a record with seven signals reaches
+about 56 groups. A smaller cache drops groups the same record still needs.
+"""
 
 
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
