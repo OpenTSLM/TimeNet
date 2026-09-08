@@ -18,6 +18,50 @@ knowledge of the registry, the engine, or other connectors. The consumer SDK nev
 
 ---
 
+## Adding a new dataset
+
+Do not start from a blank `connector.py`. The repository ships an agent skill,
+`add-dataset-connector`, under `.agents/skills/`. It takes a link to a source and gives back a built
+connector, and it encodes decisions that earlier connectors had to find the hard way. Invoke it by
+name, or with `/add-dataset-connector`.
+
+It runs six phases with one gate, and its `SKILL.md` is the authority on what each does. What matters
+before you start is that **two of those steps are yours, not the agent's**:
+
+- **You confirm the dataset card**, before any design begins. `license` is a legal claim about
+  somebody else's data, not a field to infer from a web page.
+- **You rule at the gate.** The skill stops before writing any connector code and puts each open
+  assumption to you one at a time. An assumption is a question the source does not answer, and the
+  answer belongs to a person.
+
+Everything the two of you decide ends up in a `README.md` beside the connector, one entry per
+assumption and per inconsistency the release ships, each with its evidence, the decision, and a state
+of **Handled**, **Not built**, or **Open**. That file is what tells somebody a year later why the
+data looks the way it does.
+
+Two things about the method are worth knowing even if you never run the skill:
+
+- **A head is not a `cat`.** Most sources are binary — EDF, WFDB, parquet, `.xls` — so the skill has
+  you write one `head()` per raw file type. Those functions are how anybody, human or agent, looks at
+  the raw source, and running them against a later release shows a changed shape at once. **A head
+  does not ship with the connector.** It is a discovery tool, so it sits with the plan and the census
+  under `docs/notes/connectors/<org>/<name>/`, and the connector package never imports it.
+- **A head cannot find what is odd.** Odd is a fact about the set, not about any one file: one
+  recording in a hundred with a different record length, a scaling factor that varies per file where
+  you assumed a constant, a handful of table rows disagreeing with their headers. Only a census over
+  every file finds those, and the design has to answer for each one.
+
+The skill's references carry the rules it applies, and they are worth reading on their own:
+`fidelity.md` (what a connector may and may not do to its source), `layout.md` (how the modules
+divide), `discovery.md` (heads, censuses, the map), and `connector-anatomy.md` (the contract, the
+bases, the task types).
+
+A finished connector is reviewed with the second skill, `review-connector-stack`, which checks it
+against these same rules before it merges — and reports what it could not check rather than passing
+it in silence.
+
+---
+
 ## `BaseConnector`
 
 ```python
@@ -45,26 +89,26 @@ these two forms. The engine always calls the synchronous `download()`. Its defau
 runs `download_async` to completion. As a result, an async connector needs no event loop code of its
 own.
 
-`metadata()` and `store()` are concrete methods. A connector inherits them. They are not stages that
-you implement.
+`metadata()` is the one concrete method. A connector inherits it, and does not implement it.
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
   card. `metadata().dataset_id` must match the connector's built id.
-- `store()` writes the dataset through a [`TimeFWriter`](timef-writer.md). If the schema is absent, it
-  derives the schema first. It returns the committed version directory. Most connectors never
-  override it.
+Storing is not a connector's job at all. The engine takes the dataset `convert` returns, derives its
+schema if it has none, and writes it into a registry. There is no `store` hook to override, and a
+connector never reaches for one.
 
-A connector takes no constructor arguments. Configuration comes from environment variables that
-`__init__` reads. `TRaw` is the reference type that the connector defines, for example a path, a small
-dataclass, or an S3 key. The connector is generic through PEP 695:
+A connector takes no constructor arguments. Where a connector needs configuration, it reads it from
+the environment rather than from a parameter; `__init__` itself only checks that the subclass
+implements `download` or `download_async`. `TRaw` is the reference type that the connector defines,
+for example a path, a small dataclass, or an S3 key. The connector is generic through PEP 695:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
 ---
 
 ## Sharing data
 
-To share time-series data across samples, attach the same `TimeSeries` instance to each sample. You
+To share time-series data across records, attach the same `TimeSeries` instance to each record. You
 can also attach two instances that have the same explicit `time_series_id`. The writer removes
 duplicates by `time_series_id`, so it stores the bytes only once. The writer also removes duplicate
 annotations, by `id`.
@@ -95,8 +139,28 @@ the same `timenet` and `timenet-connectors` that you run (see [Build & publish](
 A build installs nothing into your own environment. Two connectors that need incompatible libraries
 do not collide.
 
-Import those libraries lazily inside the connector anyway. If one is missing, raise a clear error.
-That guard keeps `--no-isolation` usable while you write a connector.
+**Import a library your `requirements.txt` declares inside the function that uses it**, and raise a
+clear error when it is missing. `discovery.available()` imports every connector module under
+`datasets/` to read its `CONNECTOR` — its docstring says so — so a module-level import of a library
+the package itself does not depend on makes dataset listing fail for **every** connector in an
+environment without it. The same import also breaks `--no-isolation` while you write the connector.
+
+A library the package already depends on, such as `pyarrow`, needs none of that and imports at the
+top like any other. The line is what promises the library: the package's own dependencies, or this
+one connector's `requirements.txt`.
+
+A **base that every connector reaches through**, such as `bases/huggingface.py` or
+`bases/physionet.py`, defers for the same reason. A base that only its declaring connector imports,
+such as `bases/edf/reader.py` or `bases/excel.py`, has nobody to protect and imports at the top of
+the module.
+
+**Declare a requirement twice.** Once in the connector's `requirements.txt`, which the build
+installs into the environment the build runs in, and once in the `dev` group of the root
+`pyproject.toml`, which is what puts it in your own environment. `make sync` is
+`uv sync --all-groups --all-extras`, and a `requirements.txt` is neither a group nor an extra, so
+syncing alone will not install it.
+Without the second declaration, `ty` reports the lazy import as unresolved and the connector's own
+tests cannot run.
 
 List every dependency the connector needs, even one that another connector already names. There are
 no shared requirement fragments. If several connectors share one file, an edit to that file can break
@@ -164,14 +228,23 @@ pull their database archive.
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
   a fully deterministic dataset, so it also serves as the round-trip fixture. It covers two modalities
-  over one shared data source, a series shared across samples, and a windowed sample. It also covers a
+  over one shared data source, a series shared across records, and a windowed record. It also covers a
   series sized to force a chunk split, and all three annotation shapes, with one shared. Beyond these,
   it covers a `ClassificationTask -> AnswerTask` chain, a scalar prediction, a temporal localization,
   and a scoped classification. Its dataset card, `dataset.yaml`, sits beside it in
   `datasets/timenet/hello_world/`.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `TimeSeries`, and each
   row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
-  `requirements.txt` names `huggingface_hub`.
+  `requirements.txt` names `huggingface_hub`. It is the worked example of a connector that fits in
+  one module.
+- `physionet/ecg-qa-cot` pairs PTB-XL 12-lead ECGs with chain-of-thought question answering. One
+  record is one recording, and its many questions stream as `AnswerTask`s rather than being held in
+  memory.
+- `physionet/sleep-edfx` is whole-night polysomnography with expert sleep scoring. It is the worked
+  example of the divided shape: `connector.py` orchestrates, and `tables.py`, `metadata.py`,
+  `annotations.py`, `tasks.py`, `specs.py` and `keys.py` each hold one job. Its `README.md` beside
+  the connector is the worked example of a connector README, with an entry for each of the six
+  inconsistencies the release ships.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic
@@ -185,13 +258,22 @@ To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.b
 while you write a connector for a large source, because each rebuild downloads the source again.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
-references and does not touch the network. As a result, a test can hand it a checked-in fixture and
-skip `download` entirely. See each connector's `tests/fixtures/` directory (for example
-`datasets/chengsenwang/tsqa/tests/fixtures/`) and the `_convert()` helpers next to them.
+references and does not touch the network, so a test can hand it a fixture and skip `download`
+entirely.
+
+**A test writes its own fixture. The repository ships no dataset bytes.** There is no `fixtures/`
+directory under `datasets/`. `chengsenwang/tsqa` holds hand-written rows shaped like Hub rows;
+`physionet/sleep_edfx` writes a synthetic two-recording release into `tmp_path`. A comment above
+each fixture says it is invented and how a reader can tell.
+
+Split the connector so that most of its tests need no fixture at all. A module that turns rows into
+facts, or facts into annotations, takes values and gives values, so its test passes literals and
+imports neither the source library nor a temporary file. Only the module that opens the file needs
+one.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
-spec, and a sample preview.
+spec, and a record preview.
 
 ---
 
