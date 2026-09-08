@@ -171,25 +171,11 @@ bounded call in the third column: several of the obvious calls read a whole file
 
 | format | library or module | the bounded call | what to print |
 | --- | --- | --- | --- |
-| EDF | `bases/edf/reader.py`, over `edfio` | `reader.open_edf(path)` for the header, then `reader.read_record(file, 0)` for one data record | the channel names, rates, units, and the first values of each |
+| EDF | `bases/edf/reader.py`, over `edfio` | `reader.open_edf(path)` for the header, then `reader.read_record(file, 0)` for one data record. Not `reader.read_channel(file, index)`, which reads the whole channel | the channel names, rates, units, and the first values of each |
 | WFDB | `bases/physionet.py`, over `wfdb` | `BasePhysioNetConnector._read_header(record_base)`, a `@staticmethod`, so a head outside the class can call it | `fs`, `sig_len`, `sig_name`; no signal decode |
 | xls / xlsx | `bases/excel.py`, over `xlrd` | `excel.read_table_rows(path)`, then slice `[:6]` | the header row and the first data rows |
-| parquet | `pyarrow.parquet` | `pq.ParquetFile(path).schema_arrow` for the schema, `.metadata` for the row counts, `.read_row_group(0)` for values | the column names with their dtypes, the row-group sizes, and the first values of each column |
+| parquet | `pyarrow.parquet` | `pq.ParquetFile(path).schema_arrow` for the schema, `.metadata` for the row counts, `.read_row_group(0)` for values. `ListArray.value_lengths()` measures a list column without decoding its values | the column names with their dtypes, the row-group sizes, and the first values of each column |
 | CSV | the stdlib `csv` module | `itertools.islice(csv.reader(handle), 6)` | the header row and the first data rows |
-
-**`reader.read_channel(file, index)` reads the whole channel.** It is the right call for a loader and
-the wrong one for a head. `reader.read_record(file, 0)` reads one data record and stops.
-
-**`bases/huggingface.py`'s `download` is not a head.** It walks every parquet file of a Hub repo and
-does `rows.extend(batch.to_pylist())`, so it materialises every row of the release as Python objects.
-It is the only parquet code in the tree, and copying it into a head loads the whole release into
-memory.
-
-**`pyarrow.compute` does not type-check.** `ty` rejects every `pc.*` call — "Module
-`pyarrow.compute` has no member `list_value_length`" — because those functions are generated at
-import time. Use the real methods instead: `ListArray.value_lengths()` gives the length of every
-list cell without decoding its values, and `.flatten()` gives the values. Use `numpy` for the rest,
-such as `np.isfinite` in place of `pc.is_finite`.
 
 **No format outside that table has a reader in this repo.** A release in a format the table does not
 name means you write the opener as well as the head, and the plan says so.
@@ -208,6 +194,19 @@ The signature of a shape is:
 - the series names, with their units and their rates,
 - the labels the annotations use,
 - the shape of the table row the sample joins to.
+
+**Those three, and not others, because each one feeds a part of the record model.** A survey is
+worth running for what it decides later, so count them knowing where each goes:
+
+| the signature item | what it feeds |
+| --- | --- |
+| a series name | the key of the spec map, and the series name the source keeps |
+| its unit | the spec, which says what kind of thing the series measures |
+| its rate | the time axis, read per file rather than fixed |
+| the labels | the annotation keys and values, and whether the set of labels is closed |
+| the table row | the per-subject facts that become annotations, and the key that joins them |
+
+Count them here. Design the model in section 2 of the plan, not in the survey.
 
 Run the signature over every set of files and count the groups. Write the result as one column per
 group, one row per property that differs:
