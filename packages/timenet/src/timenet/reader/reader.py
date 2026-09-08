@@ -66,6 +66,10 @@ _RECORD_BATCH_ROWS = 4096
 #: annotation shared across records decode only once.
 _ANNOTATION_CACHE_SIZE = 4096
 
+_AXIS_CACHE_SIZE = 1024
+"""Maximum number of stored time axes. Series with the same timing can reuse an axis.
+After this limit, the reader builds other axes without keeping them."""
+
 #: The byte budget for decoded control-table row groups. The budget counts total bytes, not the
 #: number of groups. This design stops a shuffled read from filling and clearing a small cache too
 #: often.
@@ -298,6 +302,7 @@ class TimeFReader:
         self._index: _PrunedControlTable | None = None
         self._annotations: _PrunedControlTable | None = None
         self._annotation_cache: OrderedDict[str, Annotation] = OrderedDict()
+        self._axis_cache: dict[tuple, TimeAxis] = {}
 
     # ---- lazy id inference ---------------------------------------------------------------------
 
@@ -335,6 +340,7 @@ class TimeFReader:
         state["_index"] = None
         state["_annotations"] = None
         state["_annotation_cache"] = OrderedDict()
+        state["_axis_cache"] = {}
         return state
 
     # ---- context manager -----------------------------------------------------------------------
@@ -747,8 +753,37 @@ class TimeFReader:
             # format failure, not a caller mistake, even though TimeSeries raises the same type for both.
             raise TimeFFormatError(f"record {record_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
+    def _axis(self, struct: dict, record_id: str) -> TimeAxis:
+        """Return a time axis and reuse an existing axis when its stored columns match.
+
+        Axis objects cannot change, so series can share them. Reuse avoids repeated ``Fraction``
+        arithmetic and validation. The cache holds at most :data:`_AXIS_CACHE_SIZE` distinct axes.
+        After that limit, the reader builds other axes without keeping them.
+
+        Args:
+            struct: The stored time-series struct.
+            record_id: The owning record, for the error message.
+
+        Returns:
+            The axis.
+        """
+        key = (
+            struct["axis_type"],
+            struct["period_numerator_us"],
+            struct["period_denominator"],
+            struct["start_index"],
+            struct["first_time_offset_us"],
+            struct["last_time_offset_us"],
+        )
+        axis = self._axis_cache.get(key)
+        if axis is None:
+            axis = self._build_axis(struct, record_id)
+            if len(self._axis_cache) < _AXIS_CACHE_SIZE:
+                self._axis_cache[key] = axis
+        return axis
+
     @staticmethod
-    def _axis(struct: dict, record_id: str) -> TimeAxis:
+    def _build_axis(struct: dict, record_id: str) -> TimeAxis:
         """Rebuild a series' time axis from the stored discriminator.
 
         This method reads the tag before any shape-specific column. As a result, a corrupt row

@@ -306,7 +306,11 @@ class TimeSeries:
             Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.
         """
         values = self.to_arrow()
-        valid = values.is_valid().to_numpy(zero_copy_only=False)
+        # If no values are missing, NumPy creates the all-true mask without an Arrow call.
+        if values.null_count:
+            valid = values.is_valid().to_numpy(zero_copy_only=False)
+        else:
+            valid = np.ones(len(values), dtype=bool)
         if isinstance(values, pa.FixedShapeTensorArray):
             if values.null_count:
                 scalar_fill = False if pa.types.is_boolean(values.type.value_type) else 0
