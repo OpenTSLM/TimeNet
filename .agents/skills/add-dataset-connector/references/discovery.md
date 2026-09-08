@@ -110,22 +110,35 @@ def head_edf(path: Path, blocks: int = 1) -> str: ...
 def head_xls(path: Path, rows: int = 5) -> str: ...
 ```
 
-Then run it, read what it prints, and rename each one to the kind it turned out to hold:
+Then run it, read what it prints, and rename each one for the anatomy the print revealed — how the
+file is built, not what TimeF will make of it:
 
 ```python
-def head_signals(path: Path, blocks: int = 1) -> str: ...
-def head_annotations(path: Path, rows: int = 5) -> str: ...
-def head_subjects(path: Path, rows: int = 5) -> str: ...
+def head_sampled_channels(path: Path, blocks: int = 1) -> str: ...
+def head_labeled_intervals(path: Path, rows: int = 5) -> str: ...
+def head_keyed_table(path: Path, rows: int = 5) -> str: ...
 ```
 
 The signatures are the same on both sides. That is the whole point: the container fixed them before
 anything was read, and the head only supplied the name.
 
-**Two kinds can share one container, and that is the case the head exists for.** A grouping by
+**Name a file for its anatomy, never for the TimeF object it feeds.** A file has one anatomy and it
+can feed several objects, so a name like `head_annotations` states a mapping the head cannot see and
+the release often contradicts. `head_labeled_intervals` says what the file holds and commits to
+nothing about where those intervals end up.
+
+- *Sleep-EDF:* the hypnogram is one file of labeled intervals, and it feeds both. `annotations.py`
+  turns each entry into an `Annotation`, and `tasks.py:107` walks the same entries in steps of 30 s
+  to build one `ClassificationTask` per epoch.
+- *ECG-QA:* the chain-of-thought CSVs are read twice, at `connector.py:216` for the annotations that
+  `register_annotations` stores, and again at `:297` for the task stream.
+
+**Two anatomies can share one container, and that is the case the head exists for.** A grouping by
 container cannot separate them, so no amount of care in step 1 reaches the answer.
 
-- *Sleep-EDF:* the signals and the scorings are both EDF. Grouping by container gives two groups and
-  the release has three kinds. Opening one file is what says which EDF is which.
+- *Sleep-EDF:* the sampled channels and the scored intervals are both EDF. Grouping by container
+  gives two groups where the release has three anatomies. Opening one file is what says which EDF is
+  which.
 
 Each gives a string, so a caller can print it, write it to a file, or put it in a test. Each reads
 only the part it prints.
@@ -145,7 +158,7 @@ and a command they run beats output somebody else pasted:
 if __name__ == "__main__":
     import sys
 
-    print(head_signals(Path(sys.argv[1])))
+    print(head_sampled_channels(Path(sys.argv[1])))
 ```
 
 ```bash
@@ -157,10 +170,11 @@ user can run again.
 
 ### What each kind should print
 
-- **signals** — the header fields, then one data record: the channel names, their rates, their
-  units, and the first values of each.
-- **annotations** — the first rows as `onset, duration, label`, with the count of rows.
-- **tables** — the header row and the first data rows of the sheet.
+- **sampled channels** — the header fields, then one data record: the channel names, their rates,
+  their units, and the first values of each.
+- **labeled intervals** — the first rows as `onset, duration, label`, with the count of rows.
+- **a keyed table** — the header row and the first data rows of the sheet, and the column that keys
+  it.
 - **a cell that holds an array** — the dtype, the shape, and the first few values. Never the array.
   One parquet cell can hold 4000 floats, so five rows printed as text are 20 000 numbers.
 - **a sidecar that describes the release** — a `dataset_info.json`, a manifest, a data dictionary.
