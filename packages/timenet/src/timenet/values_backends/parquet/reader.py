@@ -44,6 +44,28 @@ class _DecodedGroup:
     """The group's ``time_offsets_us`` column, null for a chunk of a regular series."""
 
 
+def _offsets_leaf_position(shard: pq.ParquetFile) -> int | None:
+    """Return the Parquet leaf index of a shard's ``time_offsets_us`` column.
+
+    Column chunks are indexed by leaf, and a list column keeps its leaf under a nested path, so a
+    leaf index is not the position of the Arrow field.
+
+    Args:
+        shard: The open shard.
+
+    Returns:
+        The leaf index, or ``None`` when the shard has no footer or no such column.
+    """
+    try:
+        schema = shard.metadata.schema
+    except AttributeError:
+        return None
+    for index in range(len(schema)):
+        if schema.column(index).path.split(".", 1)[0] == "time_offsets_us":
+            return index
+    return None
+
+
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     """Return the Arrow type a spec's values should come back as.
 
@@ -70,9 +92,10 @@ class ParquetValuesReader(BaseValuesReader):
     """Reads values from Parquet shards, decoding each shared row group at most once."""
 
     def __init__(self) -> None:
-        """Start with empty (per-process) shard, row-group, and target-type caches."""
+        """Start with empty (per-process) shard, row-group, offsets-leaf, and target-type caches."""
         self._shard_cache: dict[str, pq.ParquetFile] = {}
         self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
+        self._offsets_leaf: dict[tuple[str, str], int | None] = {}
         self._target_types: dict[str, pa.DataType] = {}
 
     def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
@@ -170,6 +193,7 @@ class ParquetValuesReader(BaseValuesReader):
             handle.close()
         self._shard_cache.clear()
         self._row_group_cache.clear()
+        self._offsets_leaf.clear()
 
     def _row_group(self, version: DatasetVersion, rel_path: str, row_group: int) -> _DecodedGroup:
         """Return a shard row group's values and time offsets together, decoding it at most once.
@@ -195,7 +219,8 @@ class ParquetValuesReader(BaseValuesReader):
             self._row_group_cache.move_to_end(key)
             return cached
         shard = self._shard(version, rel_path)
-        wanted = ["values"] if self._offsets_all_null(shard, row_group) else ["values", "time_offsets_us"]
+        absent = self._offsets_absent(shard, (version.root, rel_path), row_group)
+        wanted = ["values"] if absent else ["values", "time_offsets_us"]
         table = shard.read_row_group(row_group, columns=wanted)
         values = table.column("values").combine_chunks()
         group = _DecodedGroup(
@@ -211,36 +236,30 @@ class ParquetValuesReader(BaseValuesReader):
             self._row_group_cache.popitem(last=False)
         return group
 
-    @staticmethod
-    def _offsets_all_null(shard: pq.ParquetFile, row_group: int) -> bool:
+    def _offsets_absent(self, shard: pq.ParquetFile, shard_key: tuple[str, str], row_group: int) -> bool:
         """Return whether a row group stores no time offset at all.
 
-        A regular series stores no time offsets, so on a regular-axis dataset the column is null
-        in every row. The Parquet footer already holds the count, so this reads no data.
-
-        The footer counts leaf values, so an empty list counts as absent too. TimeF allows neither
-        an empty list nor a null offset, and :meth:`load_time_offsets` rejects such a shard.
+        A regular series stores no time offsets, so on a regular-axis dataset the column is null in
+        every row. The footer already holds the count, so this reads no data. The count is per leaf
+        value, so an empty list counts as absent too, and :meth:`load_time_offsets` rejects such a
+        shard as malformed.
 
         Args:
             shard: The open shard.
+            shard_key: The shard's identity, which the leaf index is held against.
             row_group: The row group to check.
 
         Returns:
             True when the column holds no leaf value, so the read can skip it.
         """
-        try:
-            group = shard.metadata.row_group(row_group)
-        except AttributeError:
-            # A shard with no footer cannot say. Read both columns.
+        if shard_key not in self._offsets_leaf:
+            self._offsets_leaf[shard_key] = _offsets_leaf_position(shard)
+        leaf = self._offsets_leaf[shard_key]
+        if leaf is None:
             return False
-        # Column chunks are indexed by leaf, which is not the position of the Arrow field.
-        for index in range(group.num_columns):
-            column = group.column(index)
-            if column.path_in_schema.split(".", 1)[0] != "time_offsets_us":
-                continue
-            statistics = column.statistics
-            return statistics is not None and statistics.null_count == column.num_values
-        return False
+        column = shard.metadata.row_group(row_group).column(leaf)
+        statistics = column.statistics
+        return statistics is not None and statistics.null_count == column.num_values
 
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
         path = version.path(rel_path)
