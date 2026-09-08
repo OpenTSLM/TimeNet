@@ -63,6 +63,9 @@ if TYPE_CHECKING:
 #: The number of rows in each batch when the reader streams ``records.parquet``.
 _RECORD_BATCH_ROWS = 4096
 
+#: Task objects remain eager, but their intermediate column lists are bounded to one batch.
+_TASK_BATCH_ROWS = 64 * 1024
+
 #: The maximum number of decoded annotations that the cache keeps for reuse. This lets an
 #: annotation shared across records decode only once.
 _ANNOTATION_CACHE_SIZE = 4096
@@ -681,23 +684,36 @@ class TimeFReader:
             task_type = TaskType(Path(rel).parent.name.split("=", 1)[1])
             cls = TASKS[task_type]
             payload_cols = [name for name in task_schema(task_type).names if name not in TASK_COMMON_NAMES]
-            for row in pq.read_table(self._version.path(rel), filesystem=self._fs).to_pylist():
-                payload = {
-                    name: self._codec.decode_payload(cls.refs, name, _as_tuple_if_list(row.get(name)))
-                    for name in payload_cols
-                }
-                task = cls(
-                    id=self._codec.decode("task_id", row["id"]),
-                    record_ids=tuple(self._codec.decode_list("record_id", row["record_ids"])),
-                    prompt=row["prompt"],
-                    scope=self._codec.decode_span(row["scope"]),
-                    input_annotation_ids=tuple(self._codec.decode_list("annotation_id", row["input_annotation_ids"])),
-                    target_annotation_ids=tuple(self._codec.decode_list("annotation_id", row["target_annotation_ids"])),
-                    rationale=row["rationale"],
-                    **payload,  # ty: ignore[invalid-argument-type]
-                )
-                by_id[task.id] = task
-                pending[task.id] = tuple(self._codec.decode_list("task_id", row["from_task_ids"]))
+            codec = self._codec
+            with pq.ParquetFile(self._version.path(rel), filesystem=self._fs) as parquet:
+                for batch in parquet.iter_batches(batch_size=_TASK_BATCH_ROWS, use_threads=False):
+                    columns = batch.to_pydict()
+                    # Task schemas can gain optional payload fields after a partition was written.
+                    # Fill absent columns once per batch, preserving the former row.get behavior.
+                    for name in payload_cols:
+                        if name not in columns:
+                            columns[name] = [None] * batch.num_rows
+                    for index in range(batch.num_rows):
+                        payload = {
+                            name: codec.decode_payload(cls.refs, name, _as_tuple_if_list(columns[name][index]))
+                            for name in payload_cols
+                        }
+                        task = cls(
+                            id=codec.decode("task_id", columns["id"][index]),
+                            record_ids=tuple(codec.decode_list("record_id", columns["record_ids"][index])),
+                            prompt=columns["prompt"][index],
+                            scope=codec.decode_span(columns["scope"][index]),
+                            input_annotation_ids=tuple(
+                                codec.decode_list("annotation_id", columns["input_annotation_ids"][index])
+                            ),
+                            target_annotation_ids=tuple(
+                                codec.decode_list("annotation_id", columns["target_annotation_ids"][index])
+                            ),
+                            rationale=columns["rationale"][index],
+                            **payload,  # ty: ignore[invalid-argument-type]
+                        )
+                        by_id[task.id] = task
+                        pending[task.id] = tuple(codec.decode_list("task_id", columns["from_task_ids"][index]))
         for task_id, from_ids in pending.items():
             resolved = []
             for from_id in from_ids:

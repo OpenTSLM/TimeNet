@@ -218,6 +218,23 @@ def test_streaming_tasks_round_trip(tmp_path):
     assert {t.id for t in restored.tasks_for(rec0)} == expected
 
 
+def test_task_dependencies_resolve_across_column_batches(tmp_path, monkeypatch):
+    dataset = _tasks_dataset(streaming=False)
+    parent = AnswerTask(id="z-parent", target="parent answer")
+    child = AnswerTask(id="a-child", target="child answer", from_tasks=(parent,))
+    dataset.add_tasks(dataset.records[0], [parent, child])
+    version_dir = _write(tmp_path, dataset)
+    monkeypatch.setattr("timenet.reader.reader._TASK_BATCH_ROWS", 2)
+    restored = _read(version_dir)
+    tasks = {task.id: task for task in restored.tasks}
+    assert tasks["a-child"].from_tasks == (tasks["z-parent"],)
+    assert tasks["a-child"].from_tasks[0] is tasks["z-parent"]
+    assert tasks["a-child"].target == "child answer"
+    assert tasks["qa-3"].rationale == "reason 3"
+    assert tasks["qa-3"].input_annotation_ids == ("opts-yesno",)
+    assert set(restored.records[0].task_ids) == set(tasks)
+
+
 def test_streaming_tasks_match_batched(tmp_path):
     # The same tasks, added batched vs streamed, read back to the same tasks.
     batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
@@ -385,18 +402,12 @@ def test_read_back_dataset_is_picklable(tmp_path, backend):
 
 def test_tasks_are_decoded_on_first_access_and_cached(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
-    reads: list[str] = []
-    original_read_table = pq.read_table
-
-    def counting_read_table(source, *args, **kwargs):
-        reads.append(str(source))
-        return original_read_table(source, *args, **kwargs)
-
-    monkeypatch.setattr(pq, "read_table", counting_read_table)
+    reads = _count_control_plane_reads(monkeypatch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert reader._tasks is None
         assert not [p for p in reads if "/tasks/" in p]  # construction decoded no task partition
         first = reader.tasks
+        assert {task.id for task in first} == {task.id for task in make_dataset().tasks}
         opened = [p for p in reads if "/tasks/" in p]
         assert opened  # first access decodes the task partitions
         assert reader.tasks is first  # second access reuses the cached tuple
