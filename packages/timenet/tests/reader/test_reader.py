@@ -538,19 +538,70 @@ def test_a_record_searches_the_index_once_for_all_of_its_series(tmp_path, monkey
 
 
 def test_the_index_memo_returns_the_same_rows_as_a_per_series_search(tmp_path):
-    version_dir = _write(tmp_path)
+    # Small targets split the index across parts and row groups and split one series into many
+    # chunks. On a single-group index that holds one chunk per series, a memo that ignored chunk
+    # order, or the group bounds, or the record it was keyed on, would still pass.
+    version_dir = _write(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64, control_shard_target_bytes=256)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        record = next(iter(reader.iter_records(with_annotations=False)))
-        for series in record.time_series:
-            memoized = reader._index_rows(record.record_id, series.time_series_id)
-            probe = tuple(
-                cast("str | bytes", reader._codec.encode(column, value))
-                for column, value in (
-                    ("record_id", record.record_id),
-                    ("time_series_id", series.time_series_id),
+        assert len(reader._index_table().groups()) > 1, "the fixture needs a multi-row-group index"
+        widest = 0
+        for record in reader.iter_records(with_annotations=False):
+            for series in record.time_series:
+                memoized = reader._index_rows(record.record_id, series.time_series_id)
+                probe = tuple(
+                    cast("str | bytes", reader._codec.encode(column, value))
+                    for column, value in (
+                        ("record_id", record.record_id),
+                        ("time_series_id", series.time_series_id),
+                    )
                 )
-            )
-            assert memoized == reader._index_table().rows_for(probe)
+                assert memoized == reader._index_table().rows_for(probe)
+                assert [row["chunk_idx"] for row in memoized] == sorted(row["chunk_idx"] for row in memoized)
+                widest = max(widest, len(memoized))
+        assert widest > 1, "the fixture needs a series split across several chunks"
+
+
+def test_closing_the_reader_drops_the_index_memo(tmp_path):
+    version_dir = _write(tmp_path)
+    reader = TimeFReader(DatasetVersion.open_local(version_dir))
+    record = next(iter(reader.iter_records(with_annotations=False)))
+    reader._index_rows(record.record_id, record.time_series[0].time_series_id)
+    assert reader._index_rows_cache
+
+    reader.close()
+    assert not reader._index_rows_cache
+
+
+def test_an_index_lookup_failure_reaches_the_caller_as_a_format_error(tmp_path):
+    # Canonical UUID ids make the index store its ids as binary(16), so encoding a non-UUID series
+    # id fails. The reader's contract is that an index failure reaches the caller as a format error.
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/uuid-ids",
+            dataset_version=Version(1, 0, 0),
+            name="Uuid ids",
+            description="Both id columns are stored as uuid16.",
+            license=License.MIT,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    series = TimeSeries(
+        spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
+        signal="I",
+        time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+        loader=lambda: pa.array([0.0, 1.0], type=pa.float32()),
+        time_series_id="11111111-1111-1111-1111-111111111111",
+        n_values=2,
+    )
+    record_id = "22222222-2222-2222-2222-222222222222"
+    dataset.add_record(time_series=(series,), record_id=record_id)
+    dataset.derive_schema()
+    version_dir = _write(tmp_path, dataset=dataset)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader._index_rows(record_id, series.time_series_id), "the good lookup must find its row"
+        with pytest.raises(TimeFFormatError):
+            reader._index_rows(record_id, "not-a-uuid")
 
 
 def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):

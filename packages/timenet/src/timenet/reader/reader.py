@@ -401,6 +401,7 @@ class TimeFReader:
             self._annotations.close()
             self._annotations = None
         self._annotation_cache.clear()
+        self._index_rows_cache.clear()
 
     # ---- public API ----------------------------------------------------------------------------
 
@@ -735,19 +736,19 @@ class TimeFReader:
         Returns:
             The series' index rows, empty if it has none.
         """
-        by_series = self._index_rows_cache.get(record_id)
-        if by_series is None:
-            with self._as_format_error():
+        with self._as_format_error():
+            by_series = self._index_rows_cache.get(record_id)
+            if by_series is None:
                 prefix = cast(_StoredId, self._codec.encode(INDEX_SORT_KEY, record_id))
                 rows = self._index_table().rows_for_prefix(prefix)
-            by_series = {}
-            for row in rows:
-                by_series.setdefault(row["time_series_id"], []).append(row)
-            self._index_rows_cache[record_id] = by_series
-            if len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
-                self._index_rows_cache.popitem(last=False)
-        stored = cast(_StoredId, self._codec.encode("time_series_id", time_series_id))
-        return by_series.get(stored, [])
+                by_series = {}
+                for row in rows:
+                    by_series.setdefault(row["time_series_id"], []).append(row)
+                self._index_rows_cache[record_id] = by_series
+                if len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
+                    self._index_rows_cache.popitem(last=False)
+            stored = cast(_StoredId, self._codec.encode("time_series_id", time_series_id))
+            return by_series.get(stored, [])
 
     # ---- record construction -------------------------------------------------------------------
 
