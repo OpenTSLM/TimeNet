@@ -77,7 +77,10 @@ class Manifest:
             TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
                 not match ``metadata.dataset_id``.
         """
-        if self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS:
+        if (
+            type(self.timef_format_version) is not int
+            or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
+        ):
             raise TimeNetInvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
@@ -137,6 +140,8 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
+        if type(data["timef_format_version"]) is not int:
+            raise TimeNetInvalidManifestError("manifest timef_format_version must be an integer")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
@@ -233,6 +238,7 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
+                "nullable": spec.nullable,
             }
             for spec in schema.time_series_specs
         ],
@@ -262,6 +268,7 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),
                 dimension_names=tuple(entry.get("dimension_names", ())),
+                nullable=entry.get("nullable", False),
             )
             for entry in data.get("time_series_specs", ())
         )

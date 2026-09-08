@@ -94,7 +94,9 @@ def _leading_sample_source(buffered: list[pa.Array], budget_bytes: int) -> list[
     arrays: list[np.ndarray] = []
     used = 0
     for values in buffered:
-        arrays.append(np.asarray(values.to_numpy(zero_copy_only=False)))
+        # Drop nulls before sampling. NumPy cannot sort None alongside the present values.
+        sampled = values.drop_null() if values.null_count else values
+        arrays.append(np.asarray(sampled.to_numpy(zero_copy_only=False)))
         used += values.nbytes
         if used >= budget_bytes:
             break

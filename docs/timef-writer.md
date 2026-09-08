@@ -44,6 +44,7 @@ parts and does not assume fixed names.
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
   time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
   time_series.zarr/_time_offsets/<spec_type>/...    # their int64 time offsets, one per value
+  time_series.zarr/_validity/<spec_type>/...   # one entry per timestep, for nullable specs only
 ```
 
 ## Constructor options
@@ -71,8 +72,28 @@ annotations, tasks, and the time-series index are always Parquet. The manifest r
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
-| `parquet` (default) | Rotating `time_series/part-*.parquet` files of `list<{dtype}>` rows. Each file also has a `list<int64>` `time_offsets_us` column, null unless the series stores per-value time offsets. One shard carries one modality, so its `values` element type is the spec's dtype. `str` stores text and `enum` stores its category codebook, both with the dictionary encoding. The backend supports scalar values only. | `(shard path, row group, row offset)` |
-| `zarr` | One array per `(spec_type, stores_time_offsets)` under `time_series.zarr/`. Each array has the shape `(total_steps, *value_shape)` and the spec dtype. Irregular values sit under `_irregular/`. Their int64 time offsets sit in a parallel array under `_time_offsets/`. A series is **one index row** that spans its time axis. The backend stores every scalar dtype except `str`. An `enum` stores int32 codebook indices; the reader reconstructs the dictionary array from the spec's categories. | `(array path, step start, –)` |
+| `parquet` (default) | Files under `time_series/part-*.parquet`. Details below. | `(shard path, row group, row offset)` |
+| `zarr` | Arrays under `time_series.zarr/`. Details below. | `(array path, step start, –)` |
+
+Parquet stores `list<{dtype}>` rows and starts new files as they fill.
+Each file also has a `list<int64>` column named `time_offsets_us`.
+This column is null unless the series stores an offset for each value.
+Each shard stores one modality, so its value type matches the spec's dtype.
+Text and enum values use dictionary encoding, which stores each distinct label once.
+
+This backend supports scalar values only. Arrow uses a bit to mark whether each value is present, so nulls
+need no extra column.
+
+Zarr stores one array for each `(spec_type, stores_time_offsets)` pair.
+Each array has shape `(total_steps, *value_shape)` and uses the spec's dtype.
+Irregular values use `_irregular/`, with matching int64 time offsets under `_time_offsets/`.
+One index row describes a series across its time axis.
+Zarr stores every scalar dtype except `str`.
+An enum stores int32 positions in the declared categories, which the reader uses to restore labels.
+
+Zarr does not represent nulls directly. Nullable specs write a boolean array under `_validity/`.
+Each boolean marks whether the corresponding timestep is present.
+Non-nullable specs do not write this array.
 
 Each backend chunks the data in its own way. Parquet needs the logical `chunk_max_bytes` split to
 pack series into row groups. Zarr chunks the storage itself. As a result, its index carries one

@@ -61,6 +61,18 @@ The values locator is backend-neutral. One schema covers both scalar and multidi
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
+A spec records its `nullable` flag in the same way. When an older manifest omits the flag, the current
+SDK reads it as `False`. The current SDK can therefore read artifacts written before nullability
+support without changing their missing-value behavior.
+
+Nullable artifacts also use `timef_format_version=1`. This does not guarantee that older SDKs can
+read newer nullable artifacts correctly. SDKs from before nullability support can ignore the Zarr
+validity arrays, which mark present timesteps. Those SDKs can treat missing-value placeholders as
+observations.
+
+For nullable artifacts, use an SDK that supports nullability. Format version 1 alone does not show
+whether a reader supports the `nullable` flag and its storage representation.
+
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `TimeNetInvalidManifestError`.
 

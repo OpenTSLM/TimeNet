@@ -117,6 +117,7 @@ vibration = TimeSeriesSpec(
 | `dtype` | `str` | no | Canonical NumPy scalar dtype, `"str"` for text, or `"enum"` for a categorical value. Defaults to `"float32"`. |
 | `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
+| `nullable` | `bool` | no | Whether a timestep can be missing. The default `False` rejects all nulls. |
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
@@ -126,6 +127,34 @@ read back as text. An `"enum"` dtype stores values as a PyArrow
 dictionary array; the torch bridge maps them to integer codes.
 Multidimensional values require the Zarr
 values backend.
+
+### Missing values
+
+Python callers use `None` to supply a missing timestep when `nullable=True`.
+Constructors reject `None` when `nullable=False`.
+Arrow stores missingness in a validity bitmap, a separate bit for each timestep.
+The numeric array does not contain Python objects.
+
+For example, `[1.0, None, NaN]` has validity `[True, False, True]`.
+The first position contains the measurement `1.0`. The second measurement is absent.
+The third contains a floating-point value that represents an undefined numerical result.
+TimeF preserves special floating-point values such as NaN and positive or negative infinity.
+If a source uses NaN or another marker for missing measurements, its connector must translate those
+markers into nulls.
+
+Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
+The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
+
+`TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
+the loaded array contains nulls. In some cases, the previous conversion lost the distinction between
+missing values and NaN.
+A nullable spec without actual nulls still supports `to_numpy()`. NaN and infinity remain valid values.
+
+`TimeSeries.to_numpy_and_mask()` returns values and a validity mask, a boolean array that marks
+present timesteps. Together, the values and mask preserve the missingness that Arrow stores.
+Missing positions hold zero, false, or an empty string. These fill values are not observations.
+The PyTorch dataset returns the same pair as `"series"` and `"series_masks"`.
+Every series has a boolean mask, including an all-true mask for a non-nullable series.
 
 Connectors that reuse a modality can subclass with field defaults:
 
