@@ -47,7 +47,7 @@ So the job is to **agree a model with a person**, on evidence, before writing an
 2. **Propose a model**: what one sample is, its channels, its annotations, its tasks — each part
    beside the evidence that produced it.
 3. **Let the user argue with it.** Every decision must be contestable, which means the evidence that
-   justifies it has to be next to it. A user should be able to point at one line and say "that is
+   justifies it has to be next to it. A user can point at one line and say "that is
    wrong, the head shows something else". A plan they can only accept or reject is not agreement.
 4. **Write the agreement down** where it ships with the connector, so a reader a year later sees
    what was decided and why.
@@ -225,7 +225,7 @@ Produce, into the plan:
   `connector-anatomy.md § Where an answer, an annotation and a task can live`, and why,
 - **what already exists for each part of the connector**, and whether this one reuses it,
 - the module skeleton and the test plan,
-- the numbers the build should produce, each derived from a survey row,
+- the numbers the build will produce, each derived from a survey row,
 - the decisions taken and the questions genuinely left open.
 
 **Show both diagrams in the conversation.** The sample model is the artifact the user accepts or
@@ -329,7 +329,7 @@ those are evidence, and rewording them destroys them.
 Then delete the assumptions from the plan. The README owns them now.
 
 **Tell the user:** the README path, and how many entries are **Open** — an open entry is a decision
-still owed, and it should not be a surprise at review time.
+still owed, and it is not a surprise at review time.
 
 **Phase 3 is done when** every assumption and every inconsistency has a README entry with a state,
 and the plan's assumptions section is empty because the README owns them now.

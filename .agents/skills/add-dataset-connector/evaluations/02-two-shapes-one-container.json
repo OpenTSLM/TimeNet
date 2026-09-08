@@ -1,0 +1,13 @@
+{
+  "skills": ["add-dataset-connector"],
+  "query": "Add a TimeNet connector for the PhysioNet Sleep-EDF Expanded dataset at https://physionet.org/content/sleep-edfx/1.0.0/",
+  "expected_behavior": [
+    "Surveys every file rather than a sample, and reports two groups with different channel counts and different block durations.",
+    "Reports that one channel name runs at two different rates across the two groups, and resolves it by reading the rate from each file's header rather than fixing a constant.",
+    "Reports that the two parts of the release encode the same subject field in opposite directions, and carries that as an inconsistency in the connector README rather than silently picking one.",
+    "Reads the release description and scopes the sleep stage annotation to the channels the study actually scored, quoting the sentence it relied on, rather than to the channels the cited scoring manual prescribes.",
+    "Recognises that the signal file and the scoring file share one container format, and does not assume the container identifies the role.",
+    "Notes that the scoring file feeds both annotations and per-window tasks, rather than treating it as one or the other.",
+    "Stops at the phase 2 gate with the open questions separated from the decisions already taken by an existing repo rule."
+  ]
+}

@@ -318,7 +318,7 @@ split above decides what each needs:
 directory exists.** A test builds what it needs, synthetically, and says so in a comment:
 
 - **A pure module needs no fixture at all.** `test_tables.py` passes literal tuples. This is the
-  payoff of keeping `tables.py` free of I/O, and the plan should say which modules get it.
+  payoff of keeping `tables.py` free of I/O, and the plan names which modules get it.
 - **A row-shaped source is a literal in the test module.** `tsqa` hand-writes rows shaped exactly
   like the Hub's, with a comment saying they are not derived from the real dataset.
 - **A file-shaped source is written at run time into `tmp_path`.** `sleep_edfx` writes a synthetic

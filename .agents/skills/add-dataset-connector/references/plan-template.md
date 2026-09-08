@@ -26,7 +26,7 @@ States are `not started`, `in progress`, `done`, and for the gate `approved <dat
 - [1. What ships](#1-what-ships)
 - [2. The model](#2-the-model)
 - [3. The connector](#3-the-connector)
-- [4. What the build should produce](#4-what-the-build-should-produce)
+- [4. What the build will produce](#4-what-the-build-will-produce)
 - [5. Decisions and open questions](#5-decisions-and-open-questions)
 
 ## 0. The source
@@ -238,7 +238,7 @@ of the connector: it stays in this folder, beside this plan.
 | library | why | declared in |
 | --- | --- | --- |
 
-## 4. What the build should produce
+## 4. What the build will produce
 
 The smoke test in phase 5 checks these. A number that does not match means the plan is wrong or the
 code is.

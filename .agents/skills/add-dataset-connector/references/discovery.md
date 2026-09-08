@@ -168,7 +168,7 @@ uv run python docs/notes/connectors/<org>/<name>/heads.py <path to one file>
 Record that command in the plan beside the output it produced, so every block of evidence is one the
 user can run again.
 
-### What each kind should print
+### What each kind prints
 
 - **sampled channels** — the header fields, then one data record: the channel names, their rates,
   their units, and the first values of each.

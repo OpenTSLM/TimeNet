@@ -1,0 +1,13 @@
+{
+  "skills": ["add-dataset-connector"],
+  "query": "Add a TimeNet connector for the HuggingFace dataset ChengsenWang/TSQA.",
+  "expected_behavior": [
+    "Creates docs/notes/connectors/chengsenwang/tsqa/plan.md from the plan template before writing any connector code, and never git adds it.",
+    "Writes a head per file type and names each one for the file's anatomy rather than for the TimeF object it feeds.",
+    "Reports that the corpus states no per-row identifier, and proposes a positional record id built from the row's position in the shard, saying in the plan that a re-release invalidates it.",
+    "Reports that the corpus states no sampling rate, and proposes an ordinal time axis rather than inventing a rate or copying one from the dataset page.",
+    "Stops at the phase 2 gate and asks the user to rule before any connector module is written.",
+    "States a predicted record count and a predicted task count in the plan, each derived from a survey row rather than asserted.",
+    "Chooses add_task rather than set_task_stream, and says the reason is that the tasks are few enough for the cross-task validation to be worth it."
+  ]
+}

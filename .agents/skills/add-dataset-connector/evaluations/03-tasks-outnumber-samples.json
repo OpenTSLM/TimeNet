@@ -1,0 +1,13 @@
+{
+  "skills": ["add-dataset-connector"],
+  "query": "Add a TimeNet connector for the ECG-QA chain-of-thought release built on PTB-XL.",
+  "expected_behavior": [
+    "Counts the questions and the recordings separately, and reports that questions outnumber recordings by orders of magnitude.",
+    "Proposes one record per recording rather than one record per question row, and gives the reason that a record per row duplicates the recording in the dataset's own model.",
+    "Chooses set_task_stream on the strength of the counted ratio, and states the four rules a streamed task obeys, including that the source must give a fresh iterator on every call.",
+    "Proposes register_annotations plus target or input annotation ids so a repeated value is stored once rather than copied into every task row.",
+    "Recognises that the question files feed both the stored annotations and the task stream, and does not name them for a single role.",
+    "Stops at the phase 2 gate before writing connector code.",
+    "Predicts a task count and a record count in the plan, each derived from a survey row, and compares both against the measured build in phase 5."
+  ]
+}
