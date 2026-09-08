@@ -248,7 +248,9 @@ class _PrunedControlTable:
         """
         handle = self._files.get(rel)
         if handle is None:
-            handle = pq.ParquetFile(f"{self._root}/{rel}", filesystem=self._fs)
+            # pre_buffer coalesces a row group's column chunks into one read. A control table has
+            # many narrow columns, so this replaces one request per column with one per row group.
+            handle = pq.ParquetFile(f"{self._root}/{rel}", filesystem=self._fs, pre_buffer=True)
             self._files[rel] = handle
         return handle
 
