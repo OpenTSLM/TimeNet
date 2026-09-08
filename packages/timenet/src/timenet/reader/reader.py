@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 
@@ -235,6 +236,39 @@ class _PrunedControlTable:
             hi = bisect.bisect_right(keys, prefix, key=lambda entry: entry[0])
             if hi > lo:
                 rows.extend(table.slice(lo, hi - lo).to_pylist())
+        return rows
+
+    def rows_for_keys(self, requested: Iterable[_StoredId]) -> dict[_StoredId, dict]:
+        """Fetch a batch of single-column keys, converting matches together per row group.
+
+        Returns:
+            Matching rows keyed by their stored id. Missing keys are absent so the caller can
+            report them with the owning record's context when that record is consumed.
+
+        Raises:
+            TimeFValidationError: If this table uses a composite lookup key.
+        """
+        if len(self._lookup_columns) != 1:
+            raise TimeFValidationError("batched key lookup requires a single-column control table")
+        keys = sorted(set(requested))
+        rows: dict[_StoredId, dict] = {}
+        if not keys:
+            return rows
+        groups = self.groups()
+        first = bisect.bisect_left(groups, keys[0], key=lambda group: group.max_key)
+        for group in groups[first:]:
+            lo = bisect.bisect_left(keys, group.min_key)
+            if lo == len(keys):
+                break
+            hi = bisect.bisect_right(keys, group.max_key)
+            if hi == lo:
+                continue
+            table, _ = self._group_rows(group)
+            column = table.column(self._key_column)
+            wanted = pa.array(keys[lo:hi], type=column.type)
+            matches = table.filter(pc.is_in(column, value_set=wanted))  # ty: ignore[unresolved-attribute]
+            for row in matches.to_pylist():
+                rows.setdefault(row[self._key_column], row)
         return rows
 
     def _file(self, rel: str) -> pq.ParquetFile:
@@ -507,8 +541,15 @@ class TimeFReader:
         Yields:
             Each reconstructed :class:`Record`.
         """
-        for row in self._iter_record_rows(record_ids, with_annotations=with_annotations):
-            yield self._build_record(row, with_annotations=with_annotations)
+        for batch in self._iter_record_batches(record_ids, with_annotations=with_annotations):
+            rows = batch.to_pylist()
+            annotations = (
+                self._prepare_annotations(aid for row in rows for aid in row["annotation_ids"])
+                if with_annotations
+                else None
+            )
+            for row in rows:
+                yield self._build_record(row, with_annotations=with_annotations, annotation_batch=annotations)
 
     # ---- loading -------------------------------------------------------------------------------
 
@@ -535,12 +576,12 @@ class TimeFReader:
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
-    def _iter_record_rows(
+    def _iter_record_batches(
         self,
         record_ids: Iterable[str] | None,
         *,
         with_annotations: bool = True,
-    ) -> Iterator[dict]:
+    ) -> Iterator[pa.RecordBatch]:
         """Stream ``records.parquet`` in batches, optionally restricted to a set of ids.
 
         A read that resolves no annotations does not ask for the ``annotation_ids`` column.
@@ -551,7 +592,7 @@ class TimeFReader:
                 ``annotation_ids`` column from the scan.
 
         Yields:
-            Each record row as a dict.
+            Each Arrow record batch.
 
         Raises:
             TimeFValidationError: If ``record_ids`` names an id that the dataset does not contain,
@@ -564,17 +605,16 @@ class TimeFReader:
         data = self._records_data
         columns = None if with_annotations else [n for n in data.schema.names if n != "annotation_ids"]
         if record_ids is None:
-            for batch in data.to_batches(columns=columns, batch_size=_RECORD_BATCH_ROWS, use_threads=False):
-                yield from batch.to_pylist()
+            yield from data.to_batches(columns=columns, batch_size=_RECORD_BATCH_ROWS, use_threads=False)
             return
         stored = {self._codec.encode("record_id", sid): sid for sid in dict.fromkeys(record_ids)}
         stored_type = data.schema.field("record_id").type
         expression = pads.field("record_id").isin(pa.array(list(stored), type=stored_type))
         batches = data.to_batches(columns=columns, filter=expression, batch_size=_RECORD_BATCH_ROWS, use_threads=False)
         for batch in batches:
-            for row in batch.to_pylist():
-                stored.pop(row["record_id"], None)
-                yield row
+            for record_id in batch.column("record_id").to_pylist():
+                stored.pop(record_id, None)
+            yield batch
         if stored:
             raise TimeFValidationError(
                 f"no such record(s) in {self._manifest.dataset_id}: {', '.join(stored.values())}"
@@ -751,12 +791,18 @@ class TimeFReader:
 
     # ---- record construction -------------------------------------------------------------------
 
-    def _build_record(self, row: dict, *, with_annotations: bool = True) -> Record:
+    def _build_record(
+        self,
+        row: dict,
+        *,
+        with_annotations: bool = True,
+        annotation_batch: dict[str, dict | Annotation] | None = None,
+    ) -> Record:
         record_id = self._codec.decode("record_id", row["record_id"])
         series = tuple(self._build_series(record_id, struct) for struct in row["time_series"])
         annotations = (
             tuple(
-                self._resolve_annotation(record_id, aid)
+                self._resolve_annotation(record_id, aid, annotation_batch)
                 for aid in self._codec.decode_list("annotation_id", row["annotation_ids"])
             )
             if with_annotations
@@ -940,7 +986,34 @@ class TimeFReader:
                 f"failed to read time offsets for series {time_series_id!r} for record {record_id!r}: {exc}"
             ) from exc
 
-    def _resolve_annotation(self, record_id: str, annotation_id: str) -> Annotation:
+    def _prepare_annotations(self, stored_ids: Iterable[_StoredId]) -> dict[str, dict | Annotation]:
+        """Prefetch raw annotation rows, retaining cache hits for this record batch.
+
+        JSON and descriptor validation stay lazy until the owning record is built. This also
+        keeps a missing annotation in a later record from blocking an earlier valid record.
+
+        Returns:
+            A batch-local lookup containing raw rows or decoded annotations, keyed by logical id.
+        """
+        codec = self._codec
+        prepared: dict[str, dict | Annotation] = {}
+        missing: dict[_StoredId, str] = {}
+        for stored_id in dict.fromkeys(stored_ids):
+            annotation_id = codec.decode("annotation_id", stored_id)
+            cached = self._annotation_cache.get(annotation_id)
+            if cached is None:
+                missing[stored_id] = annotation_id
+            else:
+                prepared[annotation_id] = cached
+        if missing:
+            with self._as_format_error():
+                rows = self._annotations_table().rows_for_keys(missing)
+            prepared.update((missing[stored_id], row) for stored_id, row in rows.items())
+        return prepared
+
+    def _resolve_annotation(
+        self, record_id: str, annotation_id: str, batch: dict[str, dict | Annotation] | None = None
+    ) -> Annotation:
         """Return one annotation, decoding it on first use and caching it in a bounded LRU.
 
         This method looks up the id through the pruned annotations table. As a result, it decodes
@@ -950,6 +1023,7 @@ class TimeFReader:
         Args:
             record_id: The referencing record, for the error message.
             annotation_id: The annotation to resolve.
+            batch: Prefetched rows and retained decoded annotations for the current record batch.
 
         Returns:
             The decoded annotation.
@@ -962,11 +1036,17 @@ class TimeFReader:
             self._annotation_cache.move_to_end(annotation_id)
             return cached
         with self._as_format_error():
-            probe = cast(_StoredId, self._codec.encode("annotation_id", annotation_id))
-            rows = self._annotations_table().rows_for((probe,))
-            if not rows:
+            if batch is None:
+                probe = cast(_StoredId, self._codec.encode("annotation_id", annotation_id))
+                rows = self._annotations_table().rows_for((probe,))
+                entry = rows[0] if rows else None
+            else:
+                entry = batch.get(annotation_id)
+            if entry is None:
                 raise TimeFFormatError(f"record {record_id!r} references unknown annotation {annotation_id!r}")
-            annotation = self._decode_annotation(rows[0])
+            annotation = entry if isinstance(entry, Annotation) else self._decode_annotation(entry)
+        if batch is not None:
+            batch[annotation_id] = annotation
         self._annotation_cache[annotation_id] = annotation
         if len(self._annotation_cache) > _ANNOTATION_CACHE_SIZE:
             self._annotation_cache.popitem(last=False)
