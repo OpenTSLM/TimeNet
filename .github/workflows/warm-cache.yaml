@@ -1,0 +1,53 @@
+name: Warm caches
+
+# The pull request gate reads ~/.cache/pre-commit but never writes it, so this is the only job that
+# fills it. GitHub lets a run restore caches from its own branch, its base branch and the default
+# branch, so one entry written here on main is readable from every pull request in every stack.
+on:
+  push:
+    branches: [main]
+  # A read refreshes the 7-day idle timer, so this keeps the entry alive over a quiet week.
+  schedule:
+  - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: false
+    - name: Look for an entry for the current config
+      id: restore
+      # No restore-keys here, unlike the reader. A prefix hit would bring back the environments of
+      # every superseded config and this job would save the union of them, growing without bound.
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+        lookup-only: true
+    - name: Install dependencies
+      if: steps.restore.outputs.cache-hit != 'true'
+      run: make sync
+    - name: Build the hook environments
+      # install-hooks builds each hook's environment without running the hook, which is all the
+      # cache has to hold.
+      if: steps.restore.outputs.cache-hit != 'true'
+      run: uv run pre-commit install-hooks
+    - name: Save the cache
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
