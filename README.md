@@ -96,11 +96,12 @@ Run these before opening a PR, and make them pass:
 Every commit runs the same ruff, ty, `uv lock`, and file-hygiene checks through pre-commit. Don't
 bypass hooks with `--no-verify`; if one fails, run `make check` / `make lint-fix` and commit again.
 
-CI runs the checks as four jobs. The `quick` job answers in about 40 seconds with the hooks, the
-type checks, and the tests in `make test-unit`. The `tests` and `tests_min` jobs wait for `quick`,
-then run the full suite on Python 3.13 and on Python 3.11. A branch that fails `quick` therefore
-costs one runner minute, not seven. The `check` job collects the three results, and it is the one
-required status check.
+CI runs the checks as four jobs. The `quick` job answers in about 45 seconds with the hooks, the
+type checks, and the tests in `make test-unit`. It runs on every push. The `tests` and `tests_min`
+jobs run the full suite on Python 3.13 and on Python 3.11. They skip a draft pull request.
+Otherwise they wait for `quick`. A branch that fails lint or a unit test then costs one runner
+minute, not seven. The `check` job collects the three results, and it is the one required status
+check. When you mark a draft ready for review, the full set runs.
 
 ### Docs
 

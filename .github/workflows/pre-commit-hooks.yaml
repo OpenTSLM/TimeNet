@@ -2,6 +2,9 @@ name: Pre-commit hooks
 
 on:
   pull_request:
+    # ready_for_review is load-bearing. The suites below do not run on a draft, so this is the
+    # event that runs them before the pull request can merge.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -54,10 +57,11 @@ jobs:
       if: steps.checks.outcome == 'failure' || steps.unit.outcome == 'failure'
       run: exit 1
 
-  # Waits on quick, for two reasons. A Free plan allows 20 concurrent jobs, and the 12-deep stacks
-  # this repo pushes would otherwise ask for 36 at once and queue quick behind a full suite. And a
-  # branch that fails lint or a unit test costs one runner minute instead of seven.
+  # Does not run on a draft: a stack in progress only pays for quick. Waits on quick otherwise, so
+  # a branch that fails lint or a unit test costs one runner minute instead of seven, and so a
+  # 12-deep stack cannot queue a quick job behind a full suite (a Free plan allows 20 at a time).
   tests:
+    if: ${{ !github.event.pull_request.draft }}
     needs: [quick]
     runs-on: ubuntu-latest
     steps:
@@ -93,6 +97,7 @@ jobs:
   # Guards the minimum supported Python. Its own job, so it builds a 3.11 environment once instead
   # of tearing down the 3.13 one mid-run.
   tests_min:
+    if: ${{ !github.event.pull_request.draft }}
     needs: [quick]
     runs-on: ubuntu-latest
     env:
@@ -115,9 +120,13 @@ jobs:
   # either one renames the context, after which nothing can satisfy the gate.
   check:
     needs: [quick, tests, tests_min]
-    # always(), not !cancelled(): a job skipped by an `if` reports `skipped`, and a skipped required
-    # check counts as a pass. This job has to run and decide for itself.
-    if: always()
+    # Nothing here runs on a draft. The check run then reports `skipped`, which a required check
+    # counts as a pass, and that is fine: GitHub will not merge a draft, and ready_for_review runs
+    # the suites before it can. No job runs purely to report a failure.
+    #
+    # Otherwise always(), not !cancelled(): a tier skipped by an `if` reports `skipped`, and a
+    # skipped required check counts as a pass, so this job has to run and decide for itself.
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
