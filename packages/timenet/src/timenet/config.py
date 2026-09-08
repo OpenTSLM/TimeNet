@@ -30,6 +30,8 @@ class TimeNetSettings(BaseSettings):
     ``"off"`` runs it in the current interpreter. The isolated child sets this to ``"off"`` in its own
     environment, which is what stops it re-execing forever.
     """
+    download_mode: Literal["full", "on_demand"] = "on_demand"
+    """How a remote ``load`` fetches bytes: ``"on_demand"`` (lazy range reads) or ``"full"``."""
 
     @property
     def home_dir(self) -> Path:

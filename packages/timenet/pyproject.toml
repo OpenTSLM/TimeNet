@@ -21,6 +21,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "fsspec[http]>=2024.6.0",
     "httpx>=0.28",
     "jaxtyping>=0.3",
     "numpy>=2.1",
