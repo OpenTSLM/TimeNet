@@ -482,6 +482,38 @@ def test_annotations_are_decoded_only_when_a_record_resolves_them(tmp_path, monk
         assert [p for p in read if "/annotations/" in p]
 
 
+def test_a_values_only_read_resolves_no_annotation(tmp_path, monkeypatch):
+    # A caller that reads values pays a lookup and a JSON parse per annotation for data it never
+    # touches. with_annotations=False must leave the annotations table unread.
+    version_dir = _write(tmp_path)
+    read = _count_control_plane_reads(monkeypatch)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = next(iter(reader.iter_records(with_annotations=False)))
+        assert record.annotations == ()
+        assert not [p for p in read if "/annotations/" in p]
+        # The values are still there, so the record is usable for what the caller asked for.
+        assert record.time_series
+        assert len(record.time_series[0].to_numpy())
+
+
+def test_a_values_only_read_keeps_every_other_record_field(tmp_path):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        full = {r.record_id: r for r in reader.iter_records()}
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        lean = {r.record_id: r for r in reader.iter_records(with_annotations=False)}
+    assert set(full) == set(lean)
+    for record_id, whole in full.items():
+        thin = lean[record_id]
+        assert thin.subject_ids == whole.subject_ids
+        assert thin.task_ids == whole.task_ids
+        assert thin.start_time == whole.start_time
+        assert thin.time_span == whole.time_span
+        assert [ts.time_series_id for ts in thin.time_series] == [ts.time_series_id for ts in whole.time_series]
+        for lean_series, whole_series in zip(thin.time_series, whole.time_series, strict=True):
+            assert lean_series.to_numpy().tolist() == whole_series.to_numpy().tolist()
+
+
 def test_annotation_lookup_decodes_only_the_row_groups_that_can_match(tmp_path):
     # A small row-group target splits the annotations, so the id statistics have something to rule out.
     # Resolving one annotation id must decode only the group that can hold it, not the whole file.
