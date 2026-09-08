@@ -29,11 +29,11 @@ jobs:
         # every dependency resolves to a pre-built wheel and that is exactly what --ci drops. Kept
         # unpruned it is ~870 MB, and restoring that costs more than the cold sync it saves.
         enable-cache: false
-    - name: Restore the pre-commit cache
-      # Restore-only on purpose. warm-cache.yaml is the single writer, on main, so every pull
-      # request reads one shared entry instead of each writing its own and evicting the others. The
-      # prefix key turns a hook bump into a partial hit rather than a full rebuild.
-      uses: actions/cache/restore@v5
+    - name: Cache the pre-commit hook environments
+      # Read-write: a branch that misses seeds its own entry, and the prefix key lets the next
+      # branch restore it. Without the gitleaks Go toolchain this holds 103 MB, not 417 MB, so one
+      # entry per branch is cheap. A total miss costs about 13 seconds of hook installs.
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pre-commit
         key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
