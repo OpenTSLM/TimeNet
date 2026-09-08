@@ -60,20 +60,32 @@ shape, and few of them open in an editor.
 A `head()` opens one file, reads a small part of it, and gives that part back as text a person can
 read. It writes nothing and it changes nothing.
 
+**Open what phase 0 wrote before you open a file.** Phase 0 put what the release says about itself
+into section 0 of `docs/notes/connectors/<org>/<name>/plan.md`. Have these three open, where they
+exist:
+
+- **`source_url`** — the dataset's own page, as the card states it.
+- **What the description states** — the sentences phase 0 quoted, each with the URL it came from.
+- **What the metadata files claim** — the table of what a `dataset_info.json`, a manifest, a data
+  dictionary or a `state.json` declares. Phase 1 fills in its last column, `what the files show`.
+
+A source page can be absent or say very little, and phase 1 still runs. The thinner it is, the more
+of the role rests on the head, and the plan says so.
+
 **A head is what establishes what a file holds, so do not start from a name for it.** Work in this
 order. The container is free to see. The role is a guess until a head has tested it.
 
 1. **Group the files by container first.** The extension, the path and the magic bytes give the
    grouping, and none of them costs a read of the data. A container says how to open a file. It says
    nothing about what the file means.
-2. **Take the role of each group from phase 0, as a hypothesis.** Phase 0 read the description, the
-   manifest and the data dictionary, and wrote every claim they make into section 0 of the plan.
-   Those claims are the guess. Write each guess down with the sentence it came from, so a reader
-   sees what it rests on.
+2. **Take the role of each group from phase 0, as a hypothesis.** The three sources above are where
+   the guess comes from. Write each guess down with the sentence it came from, so a reader sees what
+   it rests on.
 3. **Head the file to test the guess.** A head confirms the hypothesis or refutes it. One release
    declares nine columns and ships seven *(measured)*, so a release can be wrong about its own
    schema, and a release that is wrong about a schema can be wrong about what a file holds. Where
    the head disagrees with phase 0, the head wins, and the disagreement goes in the plan.
+   A refuted guess sends you back to the source page and the description, not into more bytes.
 4. **Write one function per kind of file once the head has confirmed the kind, and name it for the
    kind and not for the file extension.** The kinds are the ones your release ships. Do not force a
    release into a standard set of names: a columnar release has no signals file and no label file,
@@ -83,7 +95,8 @@ order. The container is free to see. The role is a guess until a head has tested
 5. **Head a file that nothing names by its container alone, and let the output name it.** An
    undocumented sidecar or an unfamiliar extension carries no hypothesis, and it is the file a head
    is most useful for. Open it the way its container allows, print what comes out, and take the name
-   from what it printed. Call it by its container until then.
+   from what it printed. Where the print still names nothing, read the source page again rather than
+   reading further into the file. Call it by its container until then.
 
 **The signature follows the container, and only the name follows the role.** A binary container
 takes a count of blocks and a tabular one takes a count of rows, and the grouping in step 1 settles
