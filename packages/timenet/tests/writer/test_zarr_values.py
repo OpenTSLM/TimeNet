@@ -72,10 +72,10 @@ def test_index_locator_resolves_to_values(tmp_path):
 
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
-    # each (sample, series) pair gets exactly one placement spanning the series' full length.
+    # each (record, series) pair gets exactly one placement spanning the series' full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
     index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    keys = [(row["sample_id"], row["time_series_id"]) for row in index]
+    keys = [(row["record_id"], row["time_series_id"]) for row in index]
     assert len(keys) == len(set(keys))
     long_series = next(row for row in index if row["time_series_id"] == "ts-long-1")
     assert long_series["n_values"] == 512  # the fixture's long series, unsplit
@@ -95,12 +95,12 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
-    out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_sample_ids=("sample-1",))
+    out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
     manifest = Manifest.from_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
-        sample = next(iter(reader.iter_samples()))
-        assert len(sample.time_series[0].to_arrow()) > 0
+        record = next(iter(reader.iter_records()))
+        assert len(record.time_series[0].to_arrow()) > 0
 
 
 def test_unknown_backend_rejected(tmp_path):
@@ -159,18 +159,18 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(
+    dataset.add_record(
         time_series=(
             TimeSeries(
                 spec=spec,
-                channel="rgb",
+                signal="rgb",
                 time_axis=RegularAxis.from_rate_hz(30),
                 n_values=len(frames),
                 loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
                 time_series_id="camera-1",
             ),
         ),
-        sample_id="sample-camera",
+        record_id="record-camera",
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
@@ -179,7 +179,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.timef_format_version == 1
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = next(iter(reader.iter_samples())).time_series[0]
+        restored = next(iter(reader.iter_records())).time_series[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
         np.testing.assert_array_equal(restored.to_numpy(), frames)
         np.testing.assert_array_equal(restored.read_steps(2, 5).to_numpy_ndarray(), frames[2:5])
@@ -213,11 +213,11 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(
+    dataset.add_record(
         time_series=(
             TimeSeries(
                 spec=nd_spec,
-                channel="rgb",
+                signal="rgb",
                 time_axis=RegularAxis.from_rate_hz(10),
                 time_series_id="cam-1",
                 n_values=len(frames),
@@ -225,20 +225,20 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
             ),
             TimeSeries(
                 spec=scalar_spec,
-                channel="i",
+                signal="i",
                 time_axis=RegularAxis.from_rate_hz(10),
                 time_series_id="sig-1",
                 n_values=6,
                 loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
             ),
         ),
-        sample_id="sample-0",
+        record_id="record-0",
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
     with TimeFReader(DatasetVersion.open_local(tmp_path / "bench/empty/1.0.0")) as reader:
-        series = {ts.spec.spec_type: ts for ts in next(iter(reader.iter_samples())).time_series}
+        series = {ts.spec.spec_type: ts for ts in next(iter(reader.iter_records())).time_series}
 
     nd_empty = series["camera"].read_steps(2, 2)  # valid but empty half-open range
     assert isinstance(nd_empty, pa.FixedShapeTensorArray)
@@ -268,18 +268,16 @@ def test_str_round_trip(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(
-        time_series=(
-            TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1)),
-        ),
-        sample_id="sample-0",
+    dataset.add_record(
+        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
+        record_id="record-0",
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
     version_dir = tmp_path / "t/str/1.0.0"
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = next(iter(reader.iter_samples())).time_series[0]
+        restored = next(iter(reader.iter_records())).time_series[0]
         assert restored.to_arrow().type == pa.string()
         assert restored.to_arrow().to_pylist() == labels
 
@@ -302,18 +300,16 @@ def test_str_empty_range_read(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_sample(
-        time_series=(
-            TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1)),
-        ),
-        sample_id="sample-0",
+    dataset.add_record(
+        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
+        record_id="record-0",
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
     version_dir = tmp_path / "t/str-empty/1.0.0"
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        ts = next(iter(reader.iter_samples())).time_series[0]
+        ts = next(iter(reader.iter_records())).time_series[0]
         empty = ts.read_steps(3, 3)
         assert len(empty) == 0
         assert empty.type == pa.string()

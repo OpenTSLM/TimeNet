@@ -60,7 +60,7 @@ def test_rejects_a_non_positive_interval():
         TimeInterval.seconds(5.0, 5.0)
 
 
-def test_rejects_an_explicitly_empty_channel_scope():
+def test_rejects_an_explicitly_empty_signal_scope():
     # () would silently mean "no series at all"; None is how you say "every series".
     with pytest.raises(TimeFValidationError, match="non-empty"):
         TimeInterval.seconds(0.0, 1.0, time_series_ids=())

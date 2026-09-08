@@ -6,7 +6,7 @@ Build the dataset first, then run this script::
     uv run python examples/load_tsqa.py
 
 ``TimeNet().load(...)`` returns a ``TimeFDataset``; ``describe()`` prints its identity, counts, per-spec
-columns, and a sample preview. Series values load lazily as Arrow arrays only when you ask for them. Pass
+columns, and a record preview. Series values load lazily as Arrow arrays only when you ask for them. Pass
 a dataset id as the first argument to inspect another dataset.
 """
 
@@ -21,9 +21,9 @@ def main() -> None:
     dataset = TimeNet().load(dataset_id)
     dataset.describe()
 
-    if dataset.samples:
-        values = dataset.samples[0].time_series[0].to_numpy()
-        print(f"\nsample[0] first channel, first 5 values: {values[:5]}")
+    if dataset.records:
+        values = dataset.records[0].time_series[0].to_numpy()
+        print(f"\nrecord[0] first signal, first 5 values: {values[:5]}")
 
 
 if __name__ == "__main__":

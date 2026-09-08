@@ -13,7 +13,7 @@ TASK_PART_TEMPLATE = "tasks/task={task_type}/part-{:08d}.parquet"
 
 # Control-plane tables, each sharded into numbered parts under their own directory. part_path() caps
 # the part number at PART_INDEX_DIGITS so the zero-padded names stay lexically sortable.
-SAMPLES_TEMPLATE = "samples/part-{:08d}.parquet"
+RECORDS_TEMPLATE = "records/part-{:08d}.parquet"
 ANNOTATIONS_TEMPLATE = "annotations/part-{:08d}.parquet"
 INDEX_TEMPLATE = "time_series_index/part-{:08d}.parquet"
 
@@ -26,7 +26,7 @@ MAX_PART_INDEX = 10**PART_INDEX_DIGITS - 1
 # The writer sorts each prunable control table by this column at write time, and the reader prunes
 # and bisects on it at read time. Naming the contract keeps the writer's sort and the reader's
 # lookup from drifting.
-INDEX_SORT_KEY = "sample_id"
+INDEX_SORT_KEY = "record_id"
 ANNOTATIONS_SORT_KEY = "id"
 
 DEFAULT_SHARD_TARGET_BYTES = 128 * 2**20

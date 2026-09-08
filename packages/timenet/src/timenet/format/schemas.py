@@ -4,7 +4,7 @@ The column layout is fixed. Only the id columns vary. Every id column holds one 
 in :data:`LOGICAL_IDS`. Each is stored as ``pa.string()``, or as ``pa.binary(16)`` when every value is a
 canonical UUID. ``pa.binary(16)`` uses 16 raw bytes instead of a 36-character string. The writer picks
 the type per logical id and writes it into the Parquet schemas. The reader infers the types from the
-samples file schema. ``binary(16)`` decodes back to the canonical string, so callers always see
+records file schema. ``binary(16)`` decodes back to the canonical string, so callers always see
 string ids.
 """
 
@@ -32,7 +32,7 @@ from timenet.types.ids import id_from_bytes, id_to_bytes
 
 #: The logical ids that cross-reference TimeF entities. Every id column holds exactly one of these.
 LOGICAL_IDS: tuple[str, ...] = (
-    "sample_id",
+    "record_id",
     "time_series_id",
     "annotation_id",
     "task_id",
@@ -55,9 +55,9 @@ def default_id_types() -> IdTypes:
     return {name: pa.string() for name in LOGICAL_IDS}
 
 
-#: Where each logical id lives in the samples Parquet schema.
-_SAMPLES_ID_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sample_id", ("sample_id",)),
+#: Where each logical id lives in the records Parquet schema.
+_RECORDS_ID_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("record_id", ("record_id",)),
     ("subject_id", ("subject_ids",)),
     ("time_series_id", ("time_series", "time_series_id")),
     ("source_id", ("time_series", "source_id")),
@@ -66,17 +66,17 @@ _SAMPLES_ID_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def id_types_from_samples_schema(schema: pa.Schema) -> IdTypes:
-    """Infer every logical id's Arrow type from the samples Parquet schema.
+def id_types_from_records_schema(schema: pa.Schema) -> IdTypes:
+    """Infer every logical id's Arrow type from the records Parquet schema.
 
     Args:
-        schema: The Arrow schema of any samples part file.
+        schema: The Arrow schema of any records part file.
 
     Returns:
         A mapping from every logical id to its Arrow type.
     """
     types: IdTypes = {}
-    for logical, path in _SAMPLES_ID_PATHS:
+    for logical, path in _RECORDS_ID_PATHS:
         arrow_type: pa.DataType = schema.field(path[0]).type
         for step in path[1:]:
             arrow_type = arrow_type.value_type  # unwrap list
@@ -88,18 +88,18 @@ def id_types_from_samples_schema(schema: pa.Schema) -> IdTypes:
 
 
 def time_series_struct(id_types: IdTypes) -> pa.DataType:
-    """Return the per-sample nested time-series struct type.
+    """Return the per-record nested time-series struct type.
 
     Args:
         id_types: The resolved id storage types.
 
     Returns:
-        The struct type used inside ``samples.time_series``.
+        The struct type used inside ``records.time_series``.
     """
     return pa.struct(
         [
             ("spec_type", pa.string()),
-            ("channel", pa.string()),
+            ("signal", pa.string()),
             ("source_id", id_types["source_id"]),
             ("time_series_id", id_types["time_series_id"]),
             ("axis_type", pa.string()),  # dispatched on before any shape-specific column is read
@@ -113,8 +113,8 @@ def time_series_struct(id_types: IdTypes) -> pa.DataType:
     )
 
 
-def samples_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the samples table schema.
+def records_schema(id_types: IdTypes) -> pa.Schema:
+    """Return the records table schema.
 
     Args:
         id_types: The resolved id storage types.
@@ -124,9 +124,9 @@ def samples_schema(id_types: IdTypes) -> pa.Schema:
     """
     return pa.schema(
         [
-            ("sample_id", id_types["sample_id"]),
+            ("record_id", id_types["record_id"]),
             ("start_time_us", pa.int64()),
-            ("time_span", span_struct(id_types)),  # null unless the sample declares an explicit session span
+            ("time_span", span_struct(id_types)),  # null unless the record declares an explicit session span
             ("subject_ids", pa.list_(id_types["subject_id"])),
             ("time_series", pa.list_(time_series_struct(id_types))),
             ("task_ids", pa.list_(id_types["task_id"])),
@@ -151,7 +151,7 @@ def annotations_schema(id_types: IdTypes) -> pa.Schema:
             ("value", pa.string()),  # JSON-encoded scalar/list/map, null for a pure marker
             ("source", pa.string()),  # optional per-instance provenance, null when unset
             ("span", span_struct(id_types)),  # null for a static annotation
-            ("sample_ids", pa.list_(id_types["sample_id"])),
+            ("record_ids", pa.list_(id_types["record_id"])),
         ]
     )
 
@@ -175,7 +175,7 @@ def shard_schema(id_types: IdTypes, value_type: pa.DataType = _DEFAULT_VALUES_TY
         [
             ("time_series_id", id_types["time_series_id"]),
             ("spec_type", pa.string()),
-            ("channel", pa.string()),
+            ("signal", pa.string()),
             ("chunk_idx", pa.int32()),
             ("n_values", pa.int32()),
             ("values", pa.list_(value_type)),
@@ -195,10 +195,10 @@ def index_schema(id_types: IdTypes) -> pa.Schema:
     """
     return pa.schema(
         [
-            ("sample_id", id_types["sample_id"]),
+            ("record_id", id_types["record_id"]),
             ("time_series_id", id_types["time_series_id"]),
             ("spec_type", pa.string()),
-            ("channel", pa.string()),
+            ("signal", pa.string()),
             ("chunk_idx", pa.int32()),
             # Backend-neutral chunk locator (a ChunkDataIndex flattened). For Parquet, these are the
             # shard path, row group, and row offset. Other backends assign their own coordinate meanings.
@@ -232,7 +232,7 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
 def _task_common(id_types: IdTypes) -> list[tuple[str, pa.DataType]]:
     return [
         ("id", id_types["task_id"]),
-        ("sample_ids", pa.list_(id_types["sample_id"])),
+        ("record_ids", pa.list_(id_types["record_id"])),
         ("from_task_ids", pa.list_(id_types["task_id"])),
         ("prompt", pa.string()),
         ("scope", span_struct(id_types)),
@@ -246,7 +246,7 @@ def _task_common(id_types: IdTypes) -> list[tuple[str, pa.DataType]]:
 # and the reader's payload split both read this one source, so the two copies stay in lockstep.
 TASK_COMMON_NAMES: tuple[str, ...] = (
     "id",
-    "sample_ids",
+    "record_ids",
     "from_task_ids",
     "prompt",
     "scope",
@@ -270,18 +270,18 @@ def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataTy
             ("mode", pa.string()),
         ],
         TaskType.FORECASTING: [
-            ("context_sample_ids", pa.list_(id_types["sample_id"])),
-            ("target_sample_id", id_types["sample_id"]),
+            ("context_record_ids", pa.list_(id_types["record_id"])),
+            ("target_record_id", id_types["record_id"]),
             ("target_span", span_struct(id_types)),
         ],
         TaskType.TS_EDITING: [
-            ("source_sample_id", id_types["sample_id"]),
-            ("target_sample_id", id_types["sample_id"]),
+            ("source_record_id", id_types["record_id"]),
+            ("target_record_id", id_types["record_id"]),
         ],
-        TaskType.TS_GENERATION: [("target_sample_id", id_types["sample_id"])],
+        TaskType.TS_GENERATION: [("target_record_id", id_types["record_id"])],
         TaskType.TS_CORRESPONDENCE: [
-            ("candidate_sample_ids", pa.list_(id_types["sample_id"])),
-            ("target", pa.list_(id_types["sample_id"])),
+            ("candidate_record_ids", pa.list_(id_types["record_id"])),
+            ("target", pa.list_(id_types["record_id"])),
             ("target_time_series_ids", pa.list_(id_types["time_series_id"])),
         ],
     }
@@ -306,7 +306,7 @@ def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Sche
     cls = TASKS[task_type]
     non_payload = {*TASK_COMMON_NAMES, "from_tasks"}
     expected = {field.name for field in fields(cls)} - non_payload
-    if cls.answer_is_sample:
+    if cls.answer_is_record:
         expected.discard("target")
     actual = set(schema.names) - set(TASK_COMMON_NAMES)
     if expected != actual:
@@ -355,12 +355,12 @@ class IdCodec:
     def encode(self, logical: str, value: object) -> object:
         """Encode one id to 16 raw bytes for a ``uuid16`` column, else pass it through unchanged.
 
-        A reference id outside the entity id space (for example, a ``ForecastingTask.target_sample_id``
-        that names no sample) raises a contextual :class:`TimeFValidationError` naming the column and
+        A reference id outside the entity id space (for example, a ``ForecastingTask.target_record_id``
+        that names no record) raises a contextual :class:`TimeFValidationError` naming the column and
         value. This makes the writer fail legibly even if referential validation is bypassed.
 
         Args:
-            logical: The logical id the column holds (for example, ``"sample_id"``).
+            logical: The logical id the column holds (for example, ``"record_id"``).
             value: The id string, or ``None``.
 
         Returns:
@@ -395,7 +395,7 @@ class IdCodec:
         """Encode a span to its struct row, encoding the series ids it is scoped to.
 
         Args:
-            span: The span, or ``None`` for a whole-sample scope.
+            span: The span, or ``None`` for a whole-record scope.
 
         Returns:
             The struct row, or ``None``.
@@ -440,8 +440,8 @@ class IdCodec:
                 return self.encode_span(value)
             return [self.encode_span(span) for span in cast("list[Span]", value)]
         logical = None
-        if name in refs.sample_id_fields:
-            logical = "sample_id"
+        if name in refs.record_id_fields:
+            logical = "record_id"
         elif name in refs.time_series_id_fields:
             logical = "time_series_id"
         if logical is None or logical not in self.uuid16:
@@ -539,8 +539,8 @@ class IdCodec:
                 return tuple(self.decode_span(row) for row in value)
             return self.decode_span(value)
         logical = None
-        if name in refs.sample_id_fields:
-            logical = "sample_id"
+        if name in refs.record_id_fields:
+            logical = "record_id"
         elif name in refs.time_series_id_fields:
             logical = "time_series_id"
         if logical is None or logical not in self.uuid16:

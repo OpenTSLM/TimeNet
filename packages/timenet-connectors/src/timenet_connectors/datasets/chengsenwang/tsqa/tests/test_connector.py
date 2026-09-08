@@ -61,10 +61,10 @@ def test_metadata():
     assert str(TSQAConnector().metadata().license) == "Apache-2.0"
 
 
-def test_convert_builds_one_sample_per_row():
+def test_convert_builds_one_record_per_row():
     dataset = _convert()
     assert isinstance(dataset, TimeFDataset)
-    assert len(dataset.samples) == len(_fixture_rows())
+    assert len(dataset.records) == len(_fixture_rows())
 
 
 def test_qa_tasks_match_fixture():
@@ -79,13 +79,13 @@ def test_qa_tasks_match_fixture():
 def test_series_values_parsed_from_fixture():
     dataset = _convert()
     expected = json.loads(_fixture_rows()[0]["Series"])
-    got = dataset.samples[0].time_series[0].to_numpy()
+    got = dataset.records[0].time_series[0].to_numpy()
     assert len(got) == len(expected)
     assert float(got[0]) == pytest.approx(expected[0], rel=1e-5)
 
 
 def test_task_annotation_present():
-    keys = {ann.key for sample in _convert().samples for ann in sample.annotations}
+    keys = {ann.key for record in _convert().records for ann in record.annotations}
     assert "task" in keys
 
 

@@ -25,13 +25,13 @@ class ManifestFiles:
     """Descriptors for every artifact of a dataset version, grouped by kind. Readers use this data, not a glob.
 
     Each artifact is a list of parts. This lets any artifact shard later without a change to the
-    manifest format. Today the writer creates one part for ``samples``, ``annotations``, and
+    manifest format. Today the writer creates one part for ``records``, ``annotations``, and
     ``time_series_index``. ``tasks`` and ``time_series`` already have several parts. Each part is a
     :class:`FilePart` object, with its own path, checksum, and size.
     """
 
-    samples: tuple[FilePart, ...]
-    """Parts of the samples table."""
+    records: tuple[FilePart, ...]
+    """Parts of the records table."""
     annotations: tuple[FilePart, ...]
     """Parts of the annotations table."""
     time_series_index: tuple[FilePart, ...]
@@ -45,10 +45,10 @@ class ManifestFiles:
         """Return every file descriptor across all artifacts, in a stable order.
 
         Returns:
-            The parts of ``samples``, ``annotations``, ``time_series_index``, ``tasks``, and
+            The parts of ``records``, ``annotations``, ``time_series_index``, ``tasks``, and
             ``time_series``, joined into one tuple.
         """
-        return (*self.samples, *self.annotations, *self.time_series_index, *self.tasks, *self.time_series)
+        return (*self.records, *self.annotations, *self.time_series_index, *self.tasks, *self.time_series)
 
     def all_parts(self) -> tuple[str, ...]:
         """Return the version-relative path of every file, in the same order as :meth:`all_files`.

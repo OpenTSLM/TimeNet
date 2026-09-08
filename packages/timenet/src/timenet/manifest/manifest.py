@@ -77,7 +77,10 @@ class Manifest:
             TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
                 not match ``metadata.dataset_id``.
         """
-        if self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS:
+        if (
+            type(self.timef_format_version) is not int
+            or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
+        ):
             raise TimeNetInvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
@@ -137,6 +140,8 @@ class Manifest:
         for required in ("timef_format_version", "dataset_id", "metadata", "files"):
             if required not in data:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
+        if type(data["timef_format_version"]) is not int:
+            raise TimeNetInvalidManifestError("manifest timef_format_version must be an integer")
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
@@ -233,6 +238,7 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
+                "nullable": spec.nullable,
             }
             for spec in schema.time_series_specs
         ],
@@ -262,6 +268,7 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),
                 dimension_names=tuple(entry.get("dimension_names", ())),
+                nullable=entry.get("nullable", False),
             )
             for entry in data.get("time_series_specs", ())
         )
@@ -308,7 +315,7 @@ def _resolve_task(task_type: str) -> type[Task]:
 
 def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
     return {
-        "samples": counts.samples,
+        "records": counts.records,
         "annotations": counts.annotations,
         "registered_annotations": counts.registered_annotations,
         "tasks": dict(counts.tasks),
@@ -321,7 +328,7 @@ def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
 def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
     try:
         return ManifestCounts(
-            samples=data.get("samples", 0),
+            records=data.get("records", 0),
             annotations=data.get("annotations", 0),
             registered_annotations=data.get("registered_annotations", 0),
             tasks=dict(data.get("tasks", {})),
@@ -335,7 +342,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
-        "samples": [_part_to_dict(part) for part in files.samples],
+        "records": [_part_to_dict(part) for part in files.records],
         "annotations": [_part_to_dict(part) for part in files.annotations],
         "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
         "tasks": [_part_to_dict(part) for part in files.tasks],
@@ -350,7 +357,7 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            samples=_parts(data["samples"], "samples"),
+            records=_parts(data["records"], "records"),
             annotations=_parts(data["annotations"], "annotations"),
             time_series_index=_parts(data["time_series_index"], "time_series_index"),
             tasks=_parts(data.get("tasks", ()), "tasks"),

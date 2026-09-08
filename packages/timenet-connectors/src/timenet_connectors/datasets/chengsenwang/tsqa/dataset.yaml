@@ -6,7 +6,7 @@ yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa
 dataset_version: 1.0.0
 name: TSQA
-description: "Time-series question answering: a series plus a question/answer per sample."
+description: "Time-series question answering: a series plus a question/answer per record."
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/ChengsenWang/TSQA
 domains:

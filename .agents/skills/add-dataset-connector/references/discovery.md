@@ -20,10 +20,10 @@ This phase answers those three questions, and each has its own tool:
 - [Give every raw file type a `head()`](#give-every-raw-file-type-a-head)
 - [How to open each kind of file](#how-to-open-each-kind-of-file)
 - [Survey the release](#survey-the-release)
-- [Name the set of files that one sample needs](#name-the-set-of-files-that-one-sample-needs)
+- [Name the set of files that one record needs](#name-the-set-of-files-that-one-record-needs)
 - [Choose the download shape](#choose-the-download-shape)
 - [Draw the map](#draw-the-map)
-- [Draw the sample model](#draw-the-sample-model)
+- [Draw the record model](#draw-the-record-model)
 
 ## The budget
 
@@ -45,7 +45,7 @@ format.** Read the size before you promise a bound:
 | format | one block | how large |
 | --- | --- | --- |
 | EDF | one data record | the header states the duration and the values per record |
-| WFDB | the header alone, or the first samples of one lead | a header is a few hundred bytes |
+| WFDB | the header alone, or the first records of one lead | a header is a few hundred bytes |
 | parquet | one row group | as large as the writer chose, and often far larger than a reader expects |
 | xls / xlsx | the whole sheet, then the first rows | the reader gives every row, so the head slices |
 
@@ -113,7 +113,7 @@ Then run it and read what it prints. Rename each one for the anatomy the print r
 is how the file is built, not what TimeF will make of it:
 
 ```python
-def head_sampled_channels(path: Path, blocks: int = 1) -> str: ...
+def head_sampled_signals(path: Path, blocks: int = 1) -> str: ...
 def head_labeled_intervals(path: Path, rows: int = 5) -> str: ...
 def head_keyed_table(path: Path, rows: int = 5) -> str: ...
 ```
@@ -135,7 +135,7 @@ nothing about where those intervals end up.
 **Two anatomies can share one container, and that is the case the head exists for.** A grouping by
 container cannot separate them, so no amount of care in step 1 reaches the answer.
 
-- *Sleep-EDF:* the sampled channels and the scored intervals are both EDF. A grouping by container
+- *Sleep-EDF:* the sampled signals and the scored intervals are both EDF. A grouping by container
   gives two groups where the release has three anatomies. You must open one file to see which EDF is
   which.
 
@@ -157,7 +157,7 @@ and a command they run beats output somebody else pasted:
 if __name__ == "__main__":
     import sys
 
-    print(head_sampled_channels(Path(sys.argv[1])))
+    print(head_sampled_signals(Path(sys.argv[1])))
 ```
 
 ```bash
@@ -169,7 +169,7 @@ the user can run again.
 
 ### What each kind prints
 
-- **sampled channels** — the header fields, then one data record: the channel names, their rates,
+- **sampled signals** — the header fields, then one data record: the signal names, their rates,
   their units, and the first values of each.
 - **labeled intervals** — the first rows as `onset, duration, label`, with the count of rows.
 - **a keyed table** — the header row and the first data rows of the sheet, and the column that keys
@@ -191,7 +191,7 @@ away. Write the head so it reports what it did not find.
 
 **Where the release states its own schema, print the declaration and the file, and compare them.**
 A declaration can be wrong. One release declares nine columns and ships seven, and the two it does
-not ship are the two a sample id can come from *(measured)*. If you believe the declaration, you
+not ship are the two a record id can come from *(measured)*. If you believe the declaration, you
 design an identity the data cannot supply. The survey then checks every file against the
 declaration, not only the first one.
 
@@ -203,7 +203,7 @@ Read the bounded call in the third column, because several of the obvious calls 
 
 | format | library or module | the bounded call | what to print |
 | --- | --- | --- | --- |
-| EDF | `bases/edf/reader.py`, over `edfio` | `reader.open_edf(path)` for the header, then `reader.read_record(file, 0)` for one data record. Not `reader.read_channel(file, index)`, which reads the whole channel | the channel names, rates, units, and the first values of each |
+| EDF | `bases/edf/reader.py`, over `edfio` | `reader.open_edf(path)` for the header, then `reader.read_record(file, 0)` for one data record. Not `reader.read_signal(file, index)`, which reads the whole signal | the signal names, rates, units, and the first values of each |
 | WFDB | `bases/physionet.py`, over `wfdb` | `BasePhysioNetConnector._read_header(record_base)`, a `@staticmethod`, so a head outside the class can call it | `fs`, `sig_len`, `sig_name`; no signal decode |
 | xls / xlsx | `bases/excel.py`, over `xlrd` | `excel.read_table_rows(path)`, then slice `[:6]` | the header row and the first data rows |
 | parquet | `pyarrow.parquet` | `pq.ParquetFile(path).schema_arrow` for the schema, `.metadata` for the row counts, `.read_row_group(0)` for values. `ListArray.value_lengths()` measures a list column without decoding its values | the column names with their dtypes, the row-group sizes, and the first values of each column |
@@ -214,7 +214,7 @@ a release, you write the opener as well as the head, and the plan says so.
 
 ## Survey the release
 
-A survey is a count, and its purpose is to find where two samples differ. **It is evidence, not
+A survey is a count, and its purpose is to find where two records differ. **It is evidence, not
 truth**: it answers the question you asked and nothing else. So state every count with how you
 counted it. Let the build in phase 5 settle it.
 
@@ -227,9 +227,9 @@ The signature of a shape is:
 
 - the series names, with their units and their rates,
 - the labels the annotations use,
-- the shape of the table row the sample joins to.
+- the shape of the table row the record joins to.
 
-**Those three, and not others, because each one feeds a part of the sample model.** You run a survey
+**Those three, and not others, because each one feeds a part of the record model.** You run a survey
 for what it decides later. So count them, and know where each one goes:
 
 | the signature item | what it feeds |
@@ -247,8 +247,8 @@ group, one row per property that differs:
 
 | | shape A | shape B |
 | --- | --- | --- |
-| samples | | |
-| series per sample | | |
+| records | | |
+| series per record | | |
 | the rate of each | | |
 | names that differ for the same kind of thing | | |
 | the table row it joins to | | |
@@ -256,10 +256,10 @@ group, one row per property that differs:
 
 Then, beside it, the properties that vary *within* a group and are thus not shape at all.
 
-- *Sleep-EDF:* the survey gives two groups, `sleep-cassette` (153 recordings, 7 channels, 30 s
-  records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 channels, 10 s records)
-  *(measured)*. The same channel name `EMG submental` runs at 1 Hz in one and 100 Hz in the other.
-  Each group names the marker channel differently. The two sheets even encode sex in opposite
+- *Sleep-EDF:* the survey gives two groups, `sleep-cassette` (153 recordings, 7 signals, 30 s
+  records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 signals, 10 s records)
+  *(measured)*. The same signal name `EMG submental` runs at 1 Hz in one and 100 Hz in the other.
+  Each group names the marker signal differently. The two sheets even encode sex in opposite
   directions, `F=1, M=2` against `M=1, F=2`. One group states 117 distinct physical ranges across
   its 153 files, the other one range for all 44.
 
@@ -272,9 +272,9 @@ Neither is a branch on which part of the release you are in.
 survey gives one group per file, the signature is too strict. If it gives one group for the whole
 release, the signature is too loose, and you must still find the property that separates them.
 
-**Then count the samples**, whether or not the count is a `len()`. Prefer a count the release states
+**Then count the records**, whether or not the count is a `len()`. Prefer a count the release states
 about itself — an index file, a manifest, a row count — over one you derive. Say which you used.
-If you cannot count the samples before you convert, you do not yet know what a sample is.
+If you cannot count the records before you convert, you do not yet know what a record is.
 
 **A count settles how many. It does not settle what is in them.** The rules that follow ask the
 second question. A release can pass every one of those counts and still ship content nobody can use.
@@ -285,9 +285,9 @@ every value terminates, and whether the length distribution has a cliff at one v
 ships 123 098 captions that stop mid-sentence — 5.0% of the corpus, some of them mid-word
 *(measured)*. No count of nulls or duplicates finds one of them.
 
-## Name the set of files that one sample needs
+## Name the set of files that one record needs
 
-A sample is not a file. It is a set of files, and usually a row of a table beside them. Name each
+A record is not a file. It is a set of files, and usually a row of a table beside them. Name each
 role the set needs: the values, the labels on those values, and the key into any table beside them.
 Name them before you decide what to hand between the two halves of the connector.
 
@@ -301,12 +301,12 @@ Four rules hold while you name them:
   the identity. You then cannot write a connector keyed on file contents at all.
   - *Sleep-EDF:* the patient id field reads `X F X Female_33yr` in every file. Only the filename
     states which subject and which night.
-- **Do not guess a name you can match.** Two files of one sample can differ by something you cannot
+- **Do not guess a name you can match.** Two files of one record can differ by something you cannot
   derive: an annotator's initial, a version suffix, a timestamp. Where they do, match on the prefix
   they share. When the count of matches is not exactly one, raise. A guess gives a connector that
-  silently skips samples.
-- **Name the files that no sample needs.** Index files, checksums and per-release manifests belong
-  to no sample. Say so once, so the next reader does not look for them again.
+  silently skips records.
+- **Name the files that no record needs.** Index files, checksums and per-release manifests belong
+  to no record. Say so once, so the next reader does not look for them again.
 - **Resolve, and open nothing.** `download` fetches, extracts and checks that each file is there. It
   parses no header and reads no row.
 
@@ -314,15 +314,15 @@ Four rules hold while you name them:
 
 Two shapes are possible, and the plan must pick one:
 
-- **A list, one entry for each sample.** `download` gives a frozen dataclass of resolved paths per
-  sample, and `convert` pairs nothing. It reads well, and the length of the list is the count of
-  samples.
+- **A list, one entry for each record.** `download` gives a frozen dataclass of resolved paths per
+  record, and `convert` pairs nothing. It reads well, and the length of the list is the count of
+  records.
 - **One handle, walked at convert time.** `download` gives a single value that names the directories
   and the tables. `convert` walks it and yields one recording at a time. Nothing holds every
   recording at once.
 
 **The list shape does not scale and the handle shape does.** A list of 197 entries costs nothing.
-But a release of millions builds millions of dataclasses before it writes the first sample. The
+But a release of millions builds millions of dataclasses before it writes the first record. The
 handle shape is the same code at both sizes. Pick per dataset, and never assume.
 
 **`BaseHuggingFaceConnector` implements the list shape only, so a large Hub release cannot use it.**
@@ -337,15 +337,15 @@ payload, write `download` yourself and give back a handle.**
 
 How the release encodes its files decides what the handle carries:
 
-- **One file per role, one set per sample** — name each role.
-- **One file holding many samples** — a path and a key: the row range, the row group, the record
-  name. A path alone does not name a sample.
+- **One file per role, one set per record** — name each role.
+- **One file holding many records** — a path and a key: the row range, the row group, the record
+  name. A path alone does not name a record.
 - **A table beside the files** — carry the key and the table's path, never a parsed row. A parsed row
   means `download` read the table, and the read is `convert`'s half.
 
 ## Draw the map
 
-Four columns, always the same: what the release ships, what pairs it into samples, what opens each
+Four columns, always the same: what the release ships, what pairs it into records, what opens each
 container, and what each of its parts means. Then TimeF on the right. Node names are yours. The
 columns are not.
 
@@ -353,14 +353,14 @@ columns are not.
 flowchart LR
     subgraph src["what ships"]
         arch[("the archive")]
-        val[("the values<br/>one file per sample")]
+        val[("the values<br/>one file per record")]
         lab[("the labels<br/>onset, duration, label")]
         tbl[("the table<br/>one row per subject")]
     end
     subgraph pair["what pairs it: download"]
         ens["ensure_archive"]
         hnd["&lt;Dataset&gt;Source<br/>one handle"]
-        ref["&lt;Dataset&gt;Recording<br/>one sample's paths"]
+        ref["&lt;Dataset&gt;Recording<br/>one record's paths"]
     end
     subgraph read["what opens it: bases/"]
         opn["open the container<br/>header only"]
@@ -379,7 +379,7 @@ flowchart LR
         ts["TimeSeries"]
         ann["Annotation"]
         tsk["Task"]
-        smp["Sample"]
+        smp["Record"]
     end
     arch --> ens --> hnd --> ref
     val --> ref
@@ -409,18 +409,18 @@ thinner picture and the same four columns.
 Four rules make the map a check and not a picture:
 
 - **Every file type from the inventory is a node.** A file with no arrow that reaches TimeF is a
-  file you still must place. That is how the files no sample needs get named instead of forgotten.
+  file you still must place. That is how the files no record needs get named instead of forgotten.
 - **A dashed arrow is a part that is not written.** Keep it in the picture: a missing edge is easier
   to see than missing code. Tasks usually start dashed, because series must exist before an
   annotation can name them.
 - **One arrow, one function.** An arrow that needs two sentences is two arrows.
-- **Nothing in the map changes per study.** One spec table holds every channel name of the release,
+- **Nothing in the map changes per study.** One spec table holds every signal name of the release,
   and every rate comes from a header. So the same arrows draw both shapes the survey found.
 
-When you design, read the map right to left. Start from the sample you want, and ask which file
+When you design, read the map right to left. Start from the record you want, and ask which file
 states each part of it. When you code, read it left to right.
 
-## Draw the sample model
+## Draw the record model
 
 The map above shows which module does what. It does not show where a fact in the data came from, and
 that is the thing a user must accept. So draw a second diagram: **every object TimeF will hold, and
@@ -440,12 +440,12 @@ flowchart LR
         prose["the description, one sentence<br/>what the labels were read from"]
     end
     subgraph tf["what TimeF holds"]
-        rec["Sample"]
-        sig["Channel"]
+        rec["Record"]
+        sig["Signal"]
         ann["Annotation"]
         task["Task"]
     end
-    fname -->|"sample_id, subject_ids"| rec
+    fname -->|"record_id, subject_ids"| rec
     hdr -->|"spec, unit, time_axis"| sig
     blk -->|"values, lazily"| sig
     lab -->|"key, value, span"| ann
@@ -462,7 +462,7 @@ flowchart LR
 - **Every TimeF node needs an inbound edge.** An object with no arrow into it is not in the source,
   which means the connector invents it. That is the single most useful thing this diagram catches.
 - **Every source node needs an outbound edge**, or it appears in the file inventory as a part that
-  belongs to no sample. A part of the release that reaches nothing is a part nobody decided about.
+  belongs to no record. A part of the release that reaches nothing is a part nobody decided about.
 - **The edge into an annotation's scope comes from prose or a header, and is labeled with which.**
   No header states what a label was read from. So an unlabeled scope edge is a guess, and it is the
   guess that most often turns out wrong.

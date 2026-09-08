@@ -76,9 +76,9 @@ from timenet.client import TimeNet
 dataset = TimeNet().load("timenet/hello-world")
 dataset.describe()  # identity, counts, a quick preview
 
-# Each channel converts to Arrow or NumPy, so it drops straight into pandas:
-series = dataset.samples[0].time_series[0]
-df = pd.DataFrame({series.channel: series.to_numpy()})
+# Each signal converts to Arrow or NumPy, so it drops straight into pandas:
+series = dataset.records[0].time_series[0]
+df = pd.DataFrame({series.signal: series.to_numpy()})
 print(df.head())
 ```
 

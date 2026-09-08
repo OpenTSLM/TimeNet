@@ -140,7 +140,7 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
     table.add_row("specs", ", ".join(spec.spec_type for spec in manifest.schema.time_series_specs) or "-")
     table.add_row("tasks", ", ".join(str(task.task_type) for task in manifest.schema.tasks) or "-")
     table.add_section()
-    table.add_row("samples", str(counts.samples))
+    table.add_row("records", str(counts.records))
     table.add_row("annotations", str(counts.annotations))
     table.add_row("chunks", str(counts.time_series_chunks))
     console.print(table)

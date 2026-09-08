@@ -1,6 +1,6 @@
 ---
 icon: lucide/target
-description: "Tasks: the labeled training targets built from a sample, one class per output kind."
+description: "Tasks: the labeled training targets built from a record, one class per output kind."
 tags:
   - guide
   - concepts
@@ -8,7 +8,7 @@ tags:
 
 # Tasks
 
-A task is a labeled training target. It references one or more [samples](samples.md). The task **class
+A task is a labeled training target. It references one or more [records](records.md). The task **class
 is the type tag**. You can use it as a search filter, for example `search(task=ClassificationTask)`. The
 **instance carries the payload**.
 
@@ -17,9 +17,9 @@ Every task, whatever its type, can carry these fields:
 
 | Field | What it is |
 | --- | --- |
-| `sample_ids` | The samples the task is about, populated by `add_task`. |
+| `record_ids` | The records the task is about, populated by `add_task`. |
 | `prompt` | What the model is asked. `None` for an unprompted task. |
-| `scope` | A [`Span`](#the-span-primitive) narrowing the input to a region. `None` means the whole sample. |
+| `scope` | A [`Span`](#the-span-primitive) narrowing the input to a region. `None` means the whole record. |
 | `input_annotation_ids` | Annotations handed to the model as context. |
 | `target` | The answer, typed by the subclass. |
 | `target_annotation_ids` | The answer *by reference*: stored annotations rather than an inline copy. |
@@ -40,21 +40,21 @@ numbers mean, so the frame is the type. The four concrete leaves are `TimePoint`
 
 A **time span** reads its bounds as whole microseconds on the **source recording timeline**. This is
 the same frame a series' axis places its values in. So a time span stays meaningful on a windowed
-sample that starts partway into the recording. It covers the whole sample when `time_series_ids` is
+record that starts partway into the recording. It covers the whole record when `time_series_ids` is
 `None`, or a subset of series when it names them (a tuple of ids).
 
 ```python
 from timenet.types import TimeInterval, TimePoint
 
-# an interval on one channel
+# an interval on one signal
 TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",))
 
-# a point, every channel
+# a point, every signal
 TimePoint.seconds(1.2)
 ```
 
 Besides `seconds`, both build from `micros` (whole microseconds). For a wall-clock moment, use
-`sample.time_point(at)` / `sample.time_interval(start, end)`, which read the sample's own `start_time`.
+`record.time_point(at)` / `record.time_interval(start, end)`, which read the record's own `start_time`.
 
 A **step span** reads its bounds as ordinal indices into one series' own array. A step index means
 nothing without a series to count on. So a step span names exactly one series via `time_series_id`
@@ -77,7 +77,7 @@ Spans cover both directions of time localization. A `scope` is a region **given*
 
 ## ClassificationTask
 
-One categorical label. With no `scope`, the task labels the whole sample. With a `scope`, it labels that
+One categorical label. With no `scope`, the task labels the whole record. With a `scope`, it labels that
 region. These are the same question asked of different amounts of input. So they are one type.
 `target_schema` names the vocabulary of the label.
 
@@ -215,16 +215,16 @@ TemporalLocalizationTask(
 
 ## ForecastingTask
 
-Continue the context into the future. The future is either a whole separate sample
-(`target_sample_id`) or a region of the sample the task is attached to (`target_span`). The task sets
-exactly one, never both and never neither. The sample-id form references ids rather than raw arrays, so
+Continue the context into the future. The future is either a whole separate record
+(`target_record_id`) or a region of the record the task is attached to (`target_span`). The task sets
+exactly one, never both and never neither. The record-id form references ids rather than raw arrays, so
 context and horizon stay traceable to their dataset versions.
 
 ```python
 from timenet.types import ForecastingTask
 
 ForecastingTask(
-    context_sample_ids=("2024-01-01",), target_sample_id="2024-01-02"
+    context_record_ids=("2024-01-01",), target_record_id="2024-01-02"
 )
 ```
 
@@ -232,7 +232,7 @@ ForecastingTask(
 rather than a context/target pair. It is the region to predict: a `TimeInterval` on the recording
 timeline, or a `StepInterval` on an ordinal series. It must be an interval, never a point. A point has
 no duration, so it names no values. It needs an explicit `scope` for the context. The default
-`scope=None` means the whole sample, which includes the region to predict.
+`scope=None` means the whole record, which includes the region to predict.
 
 ```python
 from timenet.types import ForecastingTask, TimeInterval
@@ -262,16 +262,16 @@ ForecastingTask(
 
 ## TSEditingTask
 
-A series out: transform the source sample into the target sample, as the `prompt` instructs. This task
-covers denoising, filtering, and deliberate corruption. Both sides of the edit are stored samples.
+A series out: transform the source record into the target record, as the `prompt` instructs. This task
+covers denoising, filtering, and deliberate corruption. Both sides of the edit are stored records.
 
 ```python
 from timenet.types import TSEditingTask
 
 TSEditingTask(
     prompt="Remove the baseline wander.",
-    source_sample_id="ecg-raw",
-    target_sample_id="ecg-clean",
+    source_record_id="ecg-raw",
+    target_record_id="ecg-clean",
 )
 ```
 
@@ -288,7 +288,7 @@ from timenet.types import TSGenerationTask
 
 TSGenerationTask(
     prompt="Generate a 150 bpm sinus-tachycardia ECG, 10 s at 500 Hz.",
-    target_sample_id="ecg-synth-0001",
+    target_record_id="ecg-synth-0001",
 )
 ```
 
@@ -298,7 +298,7 @@ TSGenerationTask(
 
 ## TSCorrespondenceTask
 
-Relate one series to others. The task's `sample_ids` are the query. `candidate_sample_ids` is the pool
+Relate one series to others. The task's `record_ids` are the query. `candidate_record_ids` is the pool
 that the answer comes from. `target` names the correct one(s). If you leave the pool empty, the task is
 open-ended.
 
@@ -307,7 +307,7 @@ from timenet.types import TSCorrespondenceTask
 
 TSCorrespondenceTask(
     prompt="Which recording is most similar to this one?",
-    candidate_sample_ids=("rec-a", "rec-b", "rec-c"),
+    candidate_record_ids=("rec-a", "rec-b", "rec-c"),
     target=("rec-b",),
 )
 ```
@@ -329,7 +329,7 @@ task that gives both. A pointer to stored annotations avoids a copy of, for exam
 sleep-stage intervals in a task row.
 
 Tasks can also build on each other. With `from_tasks`, one task feeds into another. So a simple label can
-seed a harder task about the same sample. A few basic labels turn into many richer training examples.
+seed a harder task about the same record. A few basic labels turn into many richer training examples.
 
 ```mermaid
 flowchart LR

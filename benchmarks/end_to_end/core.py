@@ -116,20 +116,20 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
         )
         series_count = 0
         value_bytes = 0
-        for sample in reader.iter_samples():
+        for record in reader.iter_records():
             digest.update(
                 json.dumps(
                     {
-                        "sample_id": sample.sample_id,
-                        "subject_ids": sample.subject_ids,
-                        "task_ids": sample.task_ids,
-                        "annotations": _canonical(sample.annotations),
+                        "record_id": record.record_id,
+                        "subject_ids": record.subject_ids,
+                        "task_ids": record.task_ids,
+                        "annotations": _canonical(record.annotations),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode()
             )
-            for series in sample.time_series:
+            for series in record.time_series:
                 is_text_kind = series.spec.dtype in {"str", "enum"}
                 if is_text_kind:
                     labels = series.to_arrow().cast(pa.string()).to_pylist()
@@ -138,7 +138,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                     json.dumps(
                         {
                             "spec": _canonical(series.spec),
-                            "channel": series.channel,
+                            "signal": series.signal,
                             "source_id": series.source_id,
                             "time_series_id": series.time_series_id,
                             "time_axis": repr(series.time_axis),

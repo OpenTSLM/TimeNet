@@ -21,7 +21,7 @@ def _spec():
 def _series(**overrides):
     base = TimeSeries(
         spec=_spec(),
-        channel="II",
+        signal="II",
         time_axis=RegularAxis.from_rate_hz(500),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
@@ -67,7 +67,7 @@ def test_identity_equality():
 def test_frozen():
     ts = _series()
     with pytest.raises(AttributeError):
-        ts.channel = "V1"
+        ts.signal = "V1"
 
 
 def test_default_id_unique_explicit_id_kept():
@@ -78,7 +78,7 @@ def test_default_id_unique_explicit_id_kept():
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"channel": ""},
+        {"signal": ""},
         # The window used to be stated and could contradict the values; now it is derived from a
         # count, so the count is what has to be sound.
         {"n_values": 0},
@@ -98,7 +98,7 @@ def test_the_window_is_derived_from_the_axis_and_the_count():
 
 
 def test_from_values_casts_to_float32_and_derives_the_window():
-    ts = TimeSeries.from_values([1.0, 2.0, 3.0, 4.0], spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(2))
+    ts = TimeSeries.from_values([1.0, 2.0, 3.0, 4.0], spec=_spec(), signal="II", time_axis=RegularAxis.from_rate_hz(2))
     values = ts.to_numpy()
     assert values.dtype == np.float32
     assert values.tolist() == [1.0, 2.0, 3.0, 4.0]
@@ -108,25 +108,25 @@ def test_from_values_casts_to_float32_and_derives_the_window():
 def test_from_values_counts_the_array_it_was_given():
     # The window is derived, so a caller cannot hand it one that disagrees with the values.
     ts = TimeSeries.from_values(
-        np.array([1.0, 2.0]), spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(4).at_index(4)
+        np.array([1.0, 2.0]), spec=_spec(), signal="II", time_axis=RegularAxis.from_rate_hz(4).at_index(4)
     )
     assert ts.n_values == 2
     assert ts.span_us == (1_000_000, 1_500_000)  # starts 4 values into a 4 Hz axis
 
 
 def test_from_values_generates_unique_id_unless_given():
-    a = TimeSeries.from_values([1.0], spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(1))
-    b = TimeSeries.from_values([1.0], spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(1))
+    a = TimeSeries.from_values([1.0], spec=_spec(), signal="II", time_axis=RegularAxis.from_rate_hz(1))
+    b = TimeSeries.from_values([1.0], spec=_spec(), signal="II", time_axis=RegularAxis.from_rate_hz(1))
     assert a.time_series_id != b.time_series_id
     fixed = TimeSeries.from_values(
-        [1.0], spec=_spec(), channel="II", time_axis=RegularAxis.from_rate_hz(1), time_series_id="x"
+        [1.0], spec=_spec(), signal="II", time_axis=RegularAxis.from_rate_hz(1), time_series_id="x"
     )
     assert fixed.time_series_id == "x"
 
 
 def test_from_values_casts_to_the_specified_numpy_dtype():
     spec = replace(_spec(), dtype="int16")
-    arr = TimeSeries.from_values([1, 2, 3], spec=spec, channel="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
+    arr = TimeSeries.from_values([1, 2, 3], spec=spec, signal="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.int16()
     assert arr.to_pylist() == [1, 2, 3]
 
@@ -134,7 +134,7 @@ def test_from_values_casts_to_the_specified_numpy_dtype():
 def test_from_values_str_spec_keeps_string_labels():
     spec = replace(_spec(), dtype="str")
     arr = TimeSeries.from_values(
-        ["normal", "afib"], spec=spec, channel="II", time_axis=RegularAxis.from_rate_hz(2)
+        ["normal", "afib"], spec=spec, signal="II", time_axis=RegularAxis.from_rate_hz(2)
     ).to_arrow()
     assert arr.type == pa.string()
     assert arr.to_pylist() == ["normal", "afib"]
@@ -162,7 +162,7 @@ def test_step_range_of_a_seconds_span_on_a_regular_axis():
 
 def test_step_range_of_a_seconds_span_on_an_irregular_axis():
     ts = TimeSeries.from_irregular(
-        [0.0, 1.0, 2.0, 3.0], time_offsets_us=[0, 1_000_000, 2_000_000, 5_000_000], spec=_spec(), channel="c"
+        [0.0, 1.0, 2.0, 3.0], time_offsets_us=[0, 1_000_000, 2_000_000, 5_000_000], spec=_spec(), signal="c"
     )
     # [1 s, 5 s) picks the values at 1 s and 2 s, not the one at 5 s (exclusive end).
     assert ts.step_range(TimeInterval.seconds(1.0, 5.0)) == (1, 3)
@@ -191,6 +191,6 @@ def test_step_range_rejects_a_steps_span_past_the_series():
 
 
 def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():
-    ts = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), channel="c", time_axis=OrdinalAxis())
+    ts = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), signal="c", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="no timeline"):
         ts.step_range(TimeInterval.seconds(0.0, 1.0))

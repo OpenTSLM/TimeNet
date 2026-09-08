@@ -7,6 +7,7 @@ in the same row group.
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,7 +23,47 @@ if TYPE_CHECKING:
     from timenet.types import TimeSeriesSpec
 
 
-_ROW_GROUP_CACHE_SIZE = 16  # decoded row groups kept, so one shared by many series decodes once
+_ROW_GROUP_CACHE_SIZE = 64
+"""Decoded row groups kept, so one shared by many series decodes once.
+
+A shard writes a signal's chunks across several row groups, so a record with seven signals reaches
+about 56 groups. A smaller cache drops groups the same record still needs.
+"""
+
+
+@dataclass(frozen=True)
+class _DecodedGroup:
+    """One decoded shard row group, with its two list columns combined once.
+
+    Combining them here once makes each series' read a single list-scalar lookup.
+    """
+
+    values: pa.ListArray
+    """The group's ``values`` column, one list per stored chunk."""
+    time_offsets: pa.ListArray
+    """The group's ``time_offsets_us`` column, null for a chunk of a regular series."""
+
+
+def _offsets_leaf_position(shard: pq.ParquetFile) -> int | None:
+    """Return the Parquet leaf index of a shard's ``time_offsets_us`` column.
+
+    Column chunks are indexed by leaf, and a list column keeps its leaf under a nested path, so a
+    leaf index is not the position of the Arrow field.
+
+    Args:
+        shard: The open shard.
+
+    Returns:
+        The leaf index, or ``None`` when the shard has no footer or no such column.
+    """
+    try:
+        schema = shard.metadata.schema
+    except AttributeError:
+        return None
+    for index in range(len(schema)):
+        if schema.column(index).path.split(".", 1)[0] == "time_offsets_us":
+            return index
+    return None
 
 
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
@@ -51,25 +92,48 @@ class ParquetValuesReader(BaseValuesReader):
     """Reads values from Parquet shards, decoding each shared row group at most once."""
 
     def __init__(self) -> None:
-        """Start with empty (per-process) shard and row-group caches."""
+        """Start with empty (per-process) shard, row-group, offsets-leaf, and target-type caches."""
         self._shard_cache: dict[str, pq.ParquetFile] = {}
-        self._row_group_cache: OrderedDict[tuple[str, str, int], pa.Table] = OrderedDict()
+        self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
+        self._offsets_leaf: dict[tuple[str, str], int | None] = {}
+        self._target_types: dict[str, pa.DataType] = {}
 
     def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
 
+        This method copies each chunk into a new array. A caller that keeps the values therefore
+        does not keep the whole decoded row group alive.
+
         Args:
             version: The opened version handle.
             rows: The series' index rows, sorted by ``chunk_idx``.
+            spec: The series' spec, which names the Arrow type to return.
 
         Returns:
             The series' 1-D values in the spec's canonical Arrow type.
         """
+        # If the stored type matches the spec, skip conversion.
+        target = self._target(spec)
         chunks = [
-            self._row_group_values(version, row["chunk_file"], row["chunk_major_idx"])[row["chunk_minor_idx"]].values
+            self._row_group(version, row["chunk_file"], row["chunk_major_idx"]).values[row["chunk_minor_idx"]].values
             for row in rows
         ]
-        return pa.concat_arrays([chunk.cast(_target_type(spec)) for chunk in chunks])
+        return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
+
+    def _target(self, spec: TimeSeriesSpec) -> pa.DataType:
+        """Return the spec's canonical Arrow type, resolved once per dtype.
+
+        Args:
+            spec: The series' spec.
+
+        Returns:
+            The canonical Arrow type for the spec's dtype.
+        """
+        target = self._target_types.get(spec.dtype)
+        if target is None:
+            target = _target_type(spec)
+            self._target_types[spec.dtype] = target
+        return target
 
     def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
         """Read an irregular series' time offsets, which share their values' chunk locators.
@@ -87,9 +151,8 @@ class ParquetValuesReader(BaseValuesReader):
         """
         chunks = []
         for row in rows:
-            cell = self._row_group_time_offsets(version, row["chunk_file"], row["chunk_major_idx"])[
-                row["chunk_minor_idx"]
-            ]
+            group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
+            cell = group.time_offsets[row["chunk_minor_idx"]]
             if not cell.is_valid:
                 raise TimeFFormatError(
                     f"chunk {row['chunk_idx']} of an irregular series stores no time offsets in "
@@ -106,7 +169,7 @@ class ParquetValuesReader(BaseValuesReader):
         Returns:
             The requested scalar values in the spec's canonical Arrow type.
         """
-        target = _target_type(spec)
+        target = self._target(spec)
         total = sum(row["n_values"] for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
@@ -116,9 +179,8 @@ class ParquetValuesReader(BaseValuesReader):
         for row in rows:
             row_stop = cursor + row["n_values"]
             if row_stop > start and cursor < bounded_stop:
-                values = self._row_group_values(version, row["chunk_file"], row["chunk_major_idx"])[
-                    row["chunk_minor_idx"]
-                ].values
+                group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
+                values = group.values[row["chunk_minor_idx"]].values
                 lo = max(start - cursor, 0)
                 hi = min(bounded_stop - cursor, row["n_values"])
                 parts.append(values.slice(lo, hi - lo).cast(target))
@@ -131,9 +193,14 @@ class ParquetValuesReader(BaseValuesReader):
             handle.close()
         self._shard_cache.clear()
         self._row_group_cache.clear()
+        self._offsets_leaf.clear()
 
-    def _row_group_values(self, version: DatasetVersion, rel_path: str, row_group: int) -> pa.ChunkedArray:
-        """Return a shard row group's ``values`` column, decoding each row group at most once.
+    def _row_group(self, version: DatasetVersion, rel_path: str, row_group: int) -> _DecodedGroup:
+        """Return a shard row group's values and time offsets together, decoding it at most once.
+
+        Both columns come back in one read because pyarrow decodes a row group's columns in a single
+        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more when a
+        caller wants both, which is nearly always the case for an irregular series.
 
         Chunks of different series can share a row group. Without this cache, every per-series read
         will re-decode the whole column. That makes value materialization quadratic in chunks per group.
@@ -144,51 +211,60 @@ class ParquetValuesReader(BaseValuesReader):
             row_group: The row-group index within the shard.
 
         Returns:
-            The decoded ``values`` column of the row group.
-        """
-        return self._row_group(version, rel_path, row_group).column("values")
-
-    def _row_group_time_offsets(self, version: DatasetVersion, rel_path: str, row_group: int) -> pa.ChunkedArray:
-        """Return a shard row group's ``time_offsets_us`` column, from the same cached decode.
-
-        Args:
-            version: The opened version handle.
-            rel_path: The shard's path relative to the version root.
-            row_group: The row-group index within the shard.
-
-        Returns:
-            The decoded ``time_offsets_us`` column of the row group.
-        """
-        return self._row_group(version, rel_path, row_group).column("time_offsets_us")
-
-    def _row_group(self, version: DatasetVersion, rel_path: str, row_group: int) -> pa.Table:
-        """Return a shard row group's values and time offsets together, decoding it at most once.
-
-        Both columns come back in one read because pyarrow decodes a row group's columns in a single
-        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more when a
-        caller wants both, which is nearly always the case for an irregular series.
-
-        Args:
-            version: The opened version handle.
-            rel_path: The shard's path relative to the version root.
-            row_group: The row-group index within the shard.
-
-        Returns:
-            The decoded row group.
+            The decoded row group, with both list columns combined once.
         """
         key = (version.root, rel_path, row_group)
         cached = self._row_group_cache.get(key)
         if cached is not None:
             self._row_group_cache.move_to_end(key)
             return cached
-        table = self._shard(version, rel_path).read_row_group(row_group, columns=["values", "time_offsets_us"])
-        self._row_group_cache[key] = table
+        shard = self._shard(version, rel_path)
+        absent = self._offsets_absent(shard, (version.root, rel_path), row_group)
+        wanted = ["values"] if absent else ["values", "time_offsets_us"]
+        table = shard.read_row_group(row_group, columns=wanted)
+        values = table.column("values").combine_chunks()
+        group = _DecodedGroup(
+            values=values,
+            time_offsets=(
+                table.column("time_offsets_us").combine_chunks()
+                if "time_offsets_us" in wanted
+                else pa.nulls(len(values), type=pa.list_(pa.int64()))
+            ),
+        )
+        self._row_group_cache[key] = group
         while len(self._row_group_cache) > _ROW_GROUP_CACHE_SIZE:
             self._row_group_cache.popitem(last=False)
-        return table
+        return group
+
+    def _offsets_absent(self, shard: pq.ParquetFile, shard_key: tuple[str, str], row_group: int) -> bool:
+        """Return whether a row group stores no time offset at all.
+
+        A regular series stores no time offsets, so on a regular-axis dataset the column is null in
+        every row. The footer already holds the count, so this reads no data. The count is per leaf
+        value, so an empty list counts as absent too, and :meth:`load_time_offsets` rejects such a
+        shard as malformed.
+
+        Args:
+            shard: The open shard.
+            shard_key: The shard's identity, which the leaf index is held against.
+            row_group: The row group to check.
+
+        Returns:
+            True when the column holds no leaf value, so the read can skip it.
+        """
+        if shard_key not in self._offsets_leaf:
+            self._offsets_leaf[shard_key] = _offsets_leaf_position(shard)
+        leaf = self._offsets_leaf[shard_key]
+        if leaf is None:
+            return False
+        column = shard.metadata.row_group(row_group).column(leaf)
+        statistics = column.statistics
+        return statistics is not None and statistics.null_count == column.num_values
 
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
         path = version.path(rel_path)
         if path not in self._shard_cache:
-            self._shard_cache[path] = pq.ParquetFile(path, filesystem=version.filesystem)
+            # pre_buffer coalesces a row group's column chunks into one read, which is one request
+            # instead of one per column on a remote filesystem.
+            self._shard_cache[path] = pq.ParquetFile(path, filesystem=version.filesystem, pre_buffer=True)
         return self._shard_cache[path]

@@ -1,6 +1,6 @@
 """End-to-end tests for the ``enum`` scalar value dtype.
 
-An enum channel stores its values as a PyArrow dictionary array. Parquet writes the dictionary
+An enum signal stores its values as a PyArrow dictionary array. Parquet writes the dictionary
 natively in each shard, so the codebook is self-contained. Reading back returns a dictionary array
 whose ``.dictionary`` holds the labels and ``.indices`` holds the integer codes.
 """
@@ -37,7 +37,7 @@ def _spec(categories: tuple[str, ...] = ("awake", "light", "deep", "rem")) -> Ti
 def _dataset(
     values: list[str],
     *,
-    n_samples: int = 1,
+    n_records: int = 1,
 ) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -50,18 +50,18 @@ def _dataset(
         )
     )
     spec = _spec()
-    per_sample = len(values) // n_samples
-    for i in range(n_samples):
-        start = i * per_sample
-        end = start + per_sample if i < n_samples - 1 else len(values)
-        sample_values = values[start:end]
+    per_record = len(values) // n_records
+    for i in range(n_records):
+        start = i * per_record
+        end = start + per_record if i < n_records - 1 else len(values)
+        record_values = values[start:end]
         ts = TimeSeries.from_values(
-            sample_values,
+            record_values,
             spec=spec,
-            channel="stage",
+            signal="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
-        dataset.add_sample(time_series=(ts,), sample_id=f"sample-{i}")
+        dataset.add_record(time_series=(ts,), record_id=f"record-{i}")
     dataset.derive_schema()
     return dataset
 
@@ -116,7 +116,7 @@ def test_enum_rejects_values_outside_codebook():
         TimeSeries.from_values(
             ["awake", "unknown"],
             spec=spec,
-            channel="stage",
+            signal="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
 
@@ -125,7 +125,7 @@ def test_enum_round_trips_labels(tmp_path):
     labels = ["awake", "deep", "awake", "rem"]
     version_dir = _write(tmp_path, _dataset(labels))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().samples[0].time_series[0]
+        series = reader.read().records[0].time_series[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
     assert result.cast(pa.string()).to_pylist() == labels
@@ -152,7 +152,7 @@ def test_enum_read_range_returns_labels(tmp_path):
     labels = ["awake", "light", "deep", "rem", "awake"]
     version_dir = _write(tmp_path, _dataset(labels))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().samples[0].time_series[0]
+        series = reader.read().records[0].time_series[0]
     result = series.read_steps(1, 4)
     assert result.cast(pa.string()).to_pylist() == ["light", "deep", "rem"]
 
@@ -162,7 +162,7 @@ def test_enum_zarr_round_trip(tmp_path):
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().samples[0].time_series[0]
+        series = reader.read().records[0].time_series[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
     assert result.cast(pa.string()).to_pylist() == labels
@@ -173,7 +173,7 @@ def test_enum_zarr_empty_range(tmp_path):
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        ts = reader.read().samples[0].time_series[0]
+        ts = reader.read().records[0].time_series[0]
     empty = ts.read_steps(2, 2)
     assert len(empty) == 0
     assert pa.types.is_dictionary(empty.type)
@@ -184,7 +184,7 @@ def test_enum_multi_shard_different_value_subsets(tmp_path):
     labels, so the per-shard dictionaries differ. Reading back must still produce correct labels.
     """
     labels = ["awake"] * 20 + ["deep"] * 20 + ["rem"] * 20 + ["light"] * 20
-    dataset = _dataset(labels, n_samples=4)  # default categories cover all four labels
+    dataset = _dataset(labels, n_records=4)  # default categories cover all four labels
     version_dir = _write(
         tmp_path,
         dataset,
@@ -197,8 +197,8 @@ def test_enum_multi_shard_different_value_subsets(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
-    for i, sample in enumerate(loaded.samples):
-        ts = sample.time_series[0]
+    for i, record in enumerate(loaded.records):
+        ts = record.time_series[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
         result_labels = result.cast(pa.string()).to_pylist()
@@ -212,7 +212,7 @@ def test_enum_multi_row_group_dictionary_consistency(tmp_path):
     only ["rem", "light"]. After reading, all labels must decode correctly.
     """
     labels = ["awake", "deep"] * 10 + ["rem", "light"] * 10
-    dataset = _dataset(labels, n_samples=2)
+    dataset = _dataset(labels, n_records=2)
     version_dir = _write(
         tmp_path,
         dataset,
@@ -224,8 +224,8 @@ def test_enum_multi_row_group_dictionary_consistency(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
     all_labels = []
-    for sample in loaded.samples:
-        ts = sample.time_series[0]
+    for record in loaded.records:
+        ts = record.time_series[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
         all_labels.extend(result.cast(pa.string()).to_pylist())
@@ -233,10 +233,10 @@ def test_enum_multi_row_group_dictionary_consistency(tmp_path):
 
 
 def test_enum_streaming_write_read(tmp_path):
-    """Write many samples with overlapping but non-identical label sets. Verify that streaming
+    """Write many records with overlapping but non-identical label sets. Verify that streaming
     write (small chunks forcing buffer flushes) and streaming read produce correct results.
     """
-    samples_labels = [
+    records_labels = [
         ["awake", "light", "deep"],
         ["rem", "n1", "n2"],
         ["n3", "awake", "rem"],
@@ -254,9 +254,9 @@ def test_enum_streaming_write_read(tmp_path):
         )
     )
     spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
-    for i, labels in enumerate(samples_labels):
-        ts = TimeSeries.from_values(labels, spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
-        dataset.add_sample(time_series=(ts,), sample_id=f"s-{i}")
+    for i, labels in enumerate(records_labels):
+        ts = TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+        dataset.add_record(time_series=(ts,), record_id=f"s-{i}")
     dataset.derive_schema()
 
     version_dir = _write(
@@ -269,11 +269,11 @@ def test_enum_streaming_write_read(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
-    for i, sample in enumerate(loaded.samples):
-        ts = sample.time_series[0]
+    for i, record in enumerate(loaded.records):
+        ts = record.time_series[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
-        assert result.cast(pa.string()).to_pylist() == samples_labels[i]
+        assert result.cast(pa.string()).to_pylist() == records_labels[i]
 
 
 def test_torch_maps_enum_to_integer_codes():
@@ -306,18 +306,18 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_sample(time_series=(ts1,), sample_id="s-0")
-    dataset.add_sample(time_series=(ts2,), sample_id="s-1")
+    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    dataset.add_record(time_series=(ts1,), record_id="s-0")
+    dataset.add_record(time_series=(ts2,), record_id="s-1")
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, shard_target_bytes=64, chunk_max_bytes=32)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
 
-    s0 = loaded.samples[0].time_series[0]
-    s1 = loaded.samples[1].time_series[0]
+    s0 = loaded.records[0].time_series[0]
+    s1 = loaded.records[1].time_series[0]
 
     arr0 = s0.to_arrow()
     arr1 = s1.to_arrow()
@@ -329,7 +329,7 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
 
     idx_c_in_s0 = codes0[2].item()
     idx_c_in_s1 = codes1[0].item()
-    assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in sample 0 but {idx_c_in_s1} in sample 1"
+    assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in record 0 but {idx_c_in_s1} in record 1"
 
 
 def test_enum_zarr_indices_consistent_across_shards(tmp_path):
@@ -348,18 +348,18 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, channel="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_sample(time_series=(ts1,), sample_id="s-0")
-    dataset.add_sample(time_series=(ts2,), sample_id="s-1")
+    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    dataset.add_record(time_series=(ts1,), record_id="s-0")
+    dataset.add_record(time_series=(ts2,), record_id="s-1")
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=32)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
 
-    s0 = loaded.samples[0].time_series[0]
-    s1 = loaded.samples[1].time_series[0]
+    s0 = loaded.records[0].time_series[0]
+    s1 = loaded.records[1].time_series[0]
 
     assert s0.to_arrow().cast(pa.string()).to_pylist() == ["a", "b", "c"]
     assert s1.to_arrow().cast(pa.string()).to_pylist() == ["c", "d", "e"]
@@ -368,4 +368,4 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
     codes1 = _series_tensor(s1)
     idx_c_in_s0 = codes0[2].item()
     idx_c_in_s1 = codes1[0].item()
-    assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in sample 0 but {idx_c_in_s1} in sample 1"
+    assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in record 0 but {idx_c_in_s1} in record 1"

@@ -1,7 +1,7 @@
-"""Contextual metadata attached to a sample.
+"""Contextual metadata attached to a record.
 
 One :class:`Annotation` class covers every case. Its optional ``span`` says how the annotation sits
-in time. An absent span marks sample-scoped context with no place in time, such as demographics or a
+in time. An absent span marks record-scoped context with no place in time, such as demographics or a
 ticker symbol. A :class:`~timenet.types.spans.TimePoint` marks one time offset. A
 :class:`~timenet.types.spans.TimeInterval` marks a bounded region of the original recording timeline.
 :class:`Annotation` is a flat frozen dataclass. It carries ``key``, ``unit``, and ``description`` as
@@ -34,10 +34,10 @@ class AnnotationType(StrEnum):
 
 @dataclass(frozen=True, kw_only=True)
 class Annotation:
-    """Contextual metadata attached to a sample, optionally anchored to a region of its timeline.
+    """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
     An annotation carries a ``value``, a ``span``, or both. With a span, it says where on the
-    recording timeline it applies and which series it targets. Without a span, it is sample-scoped
+    recording timeline it applies and which series it targets. Without a span, it is record-scoped
     context that has no place in time, like a subject's age. The span's own shape says whether the
     annotation marks a time offset or covers a stretch. One class covers every shape::
 
@@ -53,7 +53,7 @@ class Annotation:
     mark something."""
     span: TimePoint | TimeInterval | None = None
     """Where on the recording timeline this annotation applies, and which series it targets.
-    ``None`` means it is sample-scoped context with no place in time."""
+    ``None`` means it is record-scoped context with no place in time."""
     unit: str | pint.Unit | None = None
     """Optional physical unit of ``value``. Give a unit string (for example ``"years"``) or a
     :class:`pint.Unit`. Construction validates the unit against the shared registry. An unrecognized

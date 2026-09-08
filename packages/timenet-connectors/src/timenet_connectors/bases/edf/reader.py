@@ -34,16 +34,16 @@ _SHORT_FILE_WARNINGS = ("but file contains", "Data was truncated")
 
 
 class EdfHeader(NamedTuple):
-    """The header of one EDF file. Each tuple below holds one entry for each channel."""
+    """The header of one EDF file. Each tuple below holds one entry for each signal."""
 
-    # A local wall clock with no timezone, so it is not the Unix anchor Sample.start_time wants.
+    # A local wall clock with no timezone, so it is not the Unix anchor Record.start_time wants.
     start_time: datetime
     # EDF calls this the "local patient identification". A release can anonymize it, and a
     # connector then takes the subject id from elsewhere, such as the filename.
     patient_id: str
     num_records: int
     record_duration: Fraction
-    channels: tuple[str, ...]
+    signals: tuple[str, ...]
     units: tuple[str, ...]
     samples_per_record: tuple[int, ...]
 
@@ -68,7 +68,7 @@ def open_edf(path: Path) -> EdfFile:
     """Open an EDF file, read its header, and map its records.
 
     Reading is lazy: a caller that wants the header alone reads no signal bytes. Open a file
-    one time and pass the result to :func:`read_channel`, so its header is parsed once.
+    one time and pass the result to :func:`read_signal`, so its header is parsed once.
 
     Args:
         path: The ``.edf`` file.
@@ -148,7 +148,7 @@ def _extract_header(edf: Any, path: Path) -> EdfHeader:
         patient_id=edf.local_patient_identification,
         num_records=int(edf.num_data_records),
         record_duration=Fraction(str(edf.data_record_duration)),
-        channels=tuple(signal.label for signal in signals),
+        signals=tuple(signal.label for signal in signals),
         units=tuple(signal.physical_dimension for signal in signals),
         samples_per_record=samples_per_record,
     )
@@ -208,45 +208,45 @@ def _convert_signal(signal: Any, digital: np.ndarray) -> np.ndarray:
     )
 
 
-def build_channel_loader(file: EdfFile, index: int) -> Callable[[], pa.Array]:
-    """Build the lazy loader of one channel.
+def build_signal_loader(file: EdfFile, index: int) -> Callable[[], pa.Array]:
+    """Build the lazy loader of one signal.
 
-    The loader holds the open file, thus the channels of one recording share one open file and
+    The loader holds the open file, thus the signals of one recording share one open file and
     one memory map. A build keeps every file it opened open until the writer has called the
     loaders.
 
     Args:
         file: The open file, from :func:`open_edf`.
-        index: The channel, in the order of the header.
+        index: The signal, in the order of the header.
 
     Returns:
-        A loader that takes no argument and gives the channel in physical units.
+        A loader that takes no argument and gives the signal in physical units.
     """
 
     def load() -> pa.Array:
-        return pa.array(read_channel(file, index))
+        return pa.array(read_signal(file, index))
 
     return load
 
 
-def read_channel(file: EdfFile, index: int) -> np.ndarray:
-    """Read one whole channel, from its first sample to its last.
+def read_signal(file: EdfFile, index: int) -> np.ndarray:
+    """Read one whole signal, from its first sample to its last.
 
-    Reading one channel does not read the others.
+    Reading one signal does not read the others.
 
     Args:
         file: The open file, from :func:`open_edf`.
-        index: The channel, counted from zero, in the order of the header.
+        index: The signal, counted from zero, in the order of the header.
 
     Returns:
-        Every sample of that channel, in physical units.
+        Every sample of that signal, in physical units.
 
     Raises:
-        TimeFFormatError: If the file holds no channel with this index.
+        TimeFFormatError: If the file holds no signal with this index.
     """
-    if not 0 <= index < len(file.header.channels):
+    if not 0 <= index < len(file.header.signals):
         raise TimeFFormatError(
-            f"{file.path}: holds {len(file.header.channels)} channels, thus channel {index} does not exist"
+            f"{file.path}: holds {len(file.header.signals)} signals, thus signal {index} does not exist"
         )
 
     signal = file.handle.signals[index]
@@ -258,7 +258,7 @@ def read_record(file: EdfFile, index: int) -> tuple[np.ndarray, ...]:
 
     The arrays have different lengths when the signals have different rates.
 
-    Reading one record reads one record. It does not read the channels it slices, thus a
+    Reading one record reads one record. It does not read the signals it slices, thus a
     caller that walks a recording record by record never holds the whole recording.
 
     Args:
@@ -277,7 +277,7 @@ def read_record(file: EdfFile, index: int) -> tuple[np.ndarray, ...]:
         )
 
     # A record is named by the stretch of seconds it covers. ``signal.digital`` would read the
-    # whole channel and hold it, so ask for those seconds and let the map give the rest back.
+    # whole signal and hold it, so ask for those seconds and let the map give the rest back.
     start_second = float(index * file.header.record_duration)
     stop_second = float((index + 1) * file.header.record_duration)
     return tuple(

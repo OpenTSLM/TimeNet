@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docs.timenet.ai/schemas/manifest-v1.schema.json",
+  "$id": "https://docs.timenet.ai/schemas/manifest.schema.json",
   "title": "TimeNet Dataset Manifest",
   "description": "The compiled manifest.json: the single source a consumer reads to interpret a dataset version. Describes the serialized shape produced by Manifest.to_dict().",
   "type": "object",
@@ -72,10 +72,17 @@
       "enum": [
         "health",
         "cardiology",
+        "respiratory",
         "sleep",
         "activity",
+        "motion",
         "economics",
         "finance",
+        "environment",
+        "energy",
+        "transport",
+        "observability",
+        "audio",
         "general"
       ]
     },
@@ -157,6 +164,7 @@
         "dtype": { "type": "string", "enum": ["bool", "enum", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
         "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered codebook for dtype='enum'. Empty for every other dtype." },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
+        "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps can be missing. Arrow validity marks present timesteps. Zarr stores this validity in parallel arrays." },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
       }
     },
@@ -188,7 +196,7 @@
     "counts": {
       "type": "object",
       "properties": {
-        "samples": { "type": "integer" },
+        "records": { "type": "integer" },
         "annotations": { "type": "integer" },
         "registered_annotations": { "type": "integer" },
         "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
@@ -200,9 +208,9 @@
     "files": {
       "type": "object",
       "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["samples", "annotations", "time_series_index"],
+      "required": ["records", "annotations", "time_series_index"],
       "properties": {
-        "samples": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },

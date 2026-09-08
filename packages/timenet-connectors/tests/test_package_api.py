@@ -29,7 +29,7 @@ def test_build_then_load_round_trip(monkeypatch, tmp_path):
     assert (version_dir / "manifest.json").exists()
 
     dataset = timenet_connectors.load("timenet/test-mean")
-    assert len(dataset.samples) == 1000
+    assert len(dataset.records) == 1000
 
     x, y = dataset.to_features_and_targets(task=ClassificationTask)
     assert len(x) == 1000

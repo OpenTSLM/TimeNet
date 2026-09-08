@@ -40,7 +40,7 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 # than 89, and the release numbers no subject that high. The age, the sex, the clock times and
 # the header names are invented in the same way.
 _STUDY = "sleep-cassette"
-_CHANNELS = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
+_SIGNALS = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
 _RECORD_SECONDS = 30
 _RECORDS = 120  # a session of 3600 s, which is short enough to write in a test
 _SESSION_SECONDS = _RECORD_SECONDS * _RECORDS
@@ -81,15 +81,15 @@ _TELEMETRY_ROWS = [
 
 
 def _write_recording(
-    study_dir: Path, recording_id: str, channels: tuple[str, ...] = _CHANNELS, patient_name: str | None = None
+    study_dir: Path, recording_id: str, signals: tuple[str, ...] = _SIGNALS, patient_name: str | None = None
 ) -> None:
     rng = np.random.default_rng(0)
-    signals = [
-        edfio.EdfSignal(rng.standard_normal(_SESSION_SECONDS * 10), 10.0, label=channel, physical_dimension="uV")
-        for channel in channels
+    edf_signals = [
+        edfio.EdfSignal(rng.standard_normal(_SESSION_SECONDS * 10), 10.0, label=signal, physical_dimension="uV")
+        for signal in signals
     ]
     psg = edfio.Edf(
-        signals,
+        edf_signals,
         patient=edfio.Patient(code="X", sex="F", name=patient_name or _HEADER_NAMES[recording_id]),
         starttime=_START,
         data_record_duration=float(_RECORD_SECONDS),
@@ -138,15 +138,15 @@ def _streamed(dataset: TimeFDataset) -> list:
     return list(source())
 
 
-def _annotations(dataset: TimeFDataset, sample_id: str, key: str) -> list:
-    sample = next(one for one in dataset.samples if one.sample_id == sample_id)
-    return [annotation for annotation in sample.annotations if annotation.key == key]
+def _annotations(dataset: TimeFDataset, record_id: str, key: str) -> list:
+    record = next(one for one in dataset.records if one.record_id == record_id)
+    return [annotation for annotation in record.annotations if annotation.key == key]
 
 
 def _asked(task) -> tuple[str, ...]:
     # A task id is generated, so two builds never share one. What a task asks is what a
     # consumer reads, and this is that. Every part is text, so a list of these sorts.
-    return (type(task).__name__, str(task.target), str(task.scope), str(task.sample_ids), str(task.prompt))
+    return (type(task).__name__, str(task.target), str(task.scope), str(task.record_ids), str(task.prompt))
 
 
 def test_a_recording_name_states_a_subject_number_and_a_night():
@@ -192,14 +192,14 @@ def test_a_recording_with_two_scorings_raises(tmp_path: Path):
         _find_hypnogram(psg)
 
 
-def test_one_sample_for_each_recording(release, monkeypatch):
+def test_one_record_for_each_recording(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    assert {sample.sample_id for sample in dataset.samples} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
+    assert {record.record_id for record in dataset.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
 
 
-def test_every_sample_carries_the_same_study_annotation(release, monkeypatch):
+def test_every_record_carries_the_same_study_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    study = [_annotations(dataset, sample.sample_id, "study")[0] for sample in dataset.samples]
+    study = [_annotations(dataset, record.record_id, "study")[0] for record in dataset.records]
     assert study[0] is study[1]
     assert study[0].value == _STUDY
 
@@ -210,7 +210,7 @@ def test_the_night_comes_from_the_filename(release, monkeypatch):
     assert _annotations(dataset, "sleep-edfx-SC4902E0", "night")[0].value == 2
 
 
-def test_the_sex_of_two_samples_is_one_annotation(release, monkeypatch):
+def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     first = _annotations(dataset, "sleep-edfx-SC4901E0", "sex")[0]
     second = _annotations(dataset, "sleep-edfx-SC4902E0", "sex")[0]
@@ -225,9 +225,9 @@ def test_the_age_comes_from_the_table(release, monkeypatch):
 
 def test_the_header_clock_is_carried_and_no_start_time_is_set(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    sample = next(one for one in dataset.samples if one.sample_id == "sleep-edfx-SC4901E0")
-    assert sample.start_time is None
-    clock = _annotations(dataset, sample.sample_id, "recording_start_local")
+    record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
+    assert record.start_time is None
+    clock = _annotations(dataset, record.record_id, "recording_start_local")
     assert [one.value for one in clock] == ["1992-03-11T22:00:00"]
 
 
@@ -251,18 +251,18 @@ def test_lights_off_is_placed_on_the_timeline_and_names_no_series(release, monke
     assert annotation.span.time_series_ids is None
 
 
-def test_a_cassette_sample_carries_no_condition(release, monkeypatch):
+def test_a_cassette_record_carries_no_condition(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     assert _annotations(dataset, "sleep-edfx-SC4901E0", "condition") == []
 
 
-def test_a_second_build_names_the_same_samples_and_asks_the_same_questions(release, monkeypatch):
+def test_a_second_build_names_the_same_records_and_asks_the_same_questions(release, monkeypatch):
     # An annotation and a task each take the generated id, which is a fresh uuid on every
-    # build. A sample id is named, and it must survive a rebuild. So must every question the
+    # build. A record id is named, and it must survive a rebuild. So must every question the
     # build asks, even though no two runs name one the same.
     first = _convert(release, monkeypatch)
     second = _convert(release, monkeypatch)
-    assert {one.sample_id for one in first.samples} == {one.sample_id for one in second.samples}
+    assert {one.record_id for one in first.records} == {one.record_id for one in second.records}
     assert [_asked(one) for one in _streamed(first)] == [_asked(one) for one in _streamed(second)]
 
 
@@ -278,14 +278,14 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert {sample.sample_id for sample in restored.samples} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
-    sample = next(one for one in restored.samples if one.sample_id == "sleep-edfx-SC4901E0")
-    assert len(sample.time_series) == len(_CHANNELS)
-    lights_off = next(one for one in sample.annotations if one.key == "lights_off")
+    assert {record.record_id for record in restored.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
+    record = next(one for one in restored.records if one.record_id == "sleep-edfx-SC4901E0")
+    assert len(record.time_series) == len(_SIGNALS)
+    lights_off = next(one for one in record.annotations if one.key == "lights_off")
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
-    assert len([one for one in sample.annotations if one.key == "sleep_stage"]) == len(_SCORING)
+    assert len([one for one in record.annotations if one.key == "sleep_stage"]) == len(_SCORING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
     # fresh pass generates new ones, so compare what each task asks rather than its id.
@@ -296,9 +296,9 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
 
 def test_the_tasks_stream_and_are_not_materialized(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    # A streamed task never reaches Sample.task_ids. This difference separates a streamed task
+    # A streamed task never reaches Record.task_ids. This difference separates a streamed task
     # from a materialized one.
-    assert all(not sample.task_ids for sample in dataset.samples)
+    assert all(not record.task_ids for record in dataset.records)
     assert dataset._task_stream is not None
 
 
@@ -319,15 +319,15 @@ def test_the_schema_names_every_task_type(release, monkeypatch):
     }
 
 
-def test_every_streamed_task_carries_its_own_sample_ids(release, monkeypatch):
+def test_every_streamed_task_carries_its_own_record_ids(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    known = {sample.sample_id for sample in dataset.samples}
+    known = {record.record_id for record in dataset.records}
     for task in _streamed(dataset):
-        assert task.sample_ids
-        assert set(task.sample_ids) <= known
+        assert task.record_ids
+        assert set(task.record_ids) <= known
 
 
-def test_the_vocabularies_are_registered_and_belong_to_no_sample(release, monkeypatch):
+def test_the_vocabularies_are_registered_and_belong_to_no_record(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     registered = {one.id for one in dataset._registered_annotations.values()}
     assert registered == {
@@ -335,19 +335,19 @@ def test_the_vocabularies_are_registered_and_belong_to_no_sample(release, monkey
         "sleep-edfx-vocabulary-sex",
         "sleep-edfx-vocabulary-condition",
     }
-    for sample in dataset.samples:
-        assert not registered & {one.id for one in sample.annotations}
+    for record in dataset.records:
+        assert not registered & {one.id for one in record.annotations}
 
 
 def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     # An epoch task is the only classification task that carries a scope. Age, sex and the drug
-    # condition are asked of the whole sample.
+    # condition are asked of the whole record.
     epochs = [one for one in _streamed(dataset) if isinstance(one, ClassificationTask) and one.scope is not None]
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
-        for sample in dataset.samples
-        for one in sample.annotations
+        for record in dataset.records
+        for one in record.annotations
         if one.key == "sleep_stage" and one.span is not None
     )
     assert len(epochs) == scored
@@ -357,22 +357,22 @@ def test_a_scoring_that_cannot_be_expanded_fails_the_write(release, monkeypatch,
     # The writer reads the stream after convert returns. This error path exists only because
     # the tasks stream. Nothing hides this error.
     dataset = _convert(release, monkeypatch)
-    sample = dataset.samples[0]
+    record = dataset.records[0]
     ragged = Annotation(
         key=AnnotationKey.SLEEP_STAGE,
         value="Sleep stage W",
         span=TimeInterval.micros(0, 45 * US_PER_S),
-        id=f"{sample.sample_id}-stage-ragged",
+        id=f"{record.record_id}-stage-ragged",
     )
-    sample.add_annotations([ragged])
+    record.add_annotations([ragged])
     dataset.derive_schema()
-    with pytest.raises(TimeFFormatError, match=sample.sample_id):
+    with pytest.raises(TimeFFormatError, match=record.record_id):
         store_dataset(dataset, tmp_path / "out")
 
 
 def test_a_span_carrying_annotation_asks_for_a_region_and_not_a_value(release, monkeypatch):
     # lights_off states a fact about the recording, and it carries a span. The task asks where
-    # that moment is. The task is never a whole-sample question like age or sex.
+    # that moment is. The task is never a whole-record question like age or sex.
     dataset = _convert(release, monkeypatch)
     moment = _annotations(dataset, "sleep-edfx-SC4901E0", "lights_off")[0].span
     assert moment is not None
@@ -380,15 +380,15 @@ def test_a_span_carrying_annotation_asks_for_a_region_and_not_a_value(release, m
     assert asked
 
 
-def test_a_recording_missing_a_scoring_channel_fails_the_build(tmp_path: Path, monkeypatch):
+def test_a_recording_missing_a_scoring_signal_fails_the_build(tmp_path: Path, monkeypatch):
     study_dir = tmp_path / _STUDY
     study_dir.mkdir()
-    _write_recording(study_dir, "SC4901E0", channels=_CHANNELS[:3])
-    with pytest.raises(TimeFFormatError, match="does not hold the channels"):
+    _write_recording(study_dir, "SC4901E0", signals=_SIGNALS[:3])
+    with pytest.raises(TimeFFormatError, match="does not hold the signals"):
         _convert(tmp_path, monkeypatch)
 
 
-def test_a_telemetry_sample_carries_the_condition_of_its_night(tmp_path: Path, monkeypatch):
+def test_a_telemetry_record_carries_the_condition_of_its_night(tmp_path: Path, monkeypatch):
     study_dir = tmp_path / _TELEMETRY_STUDY
     study_dir.mkdir()
     _write_recording(study_dir, "ST7911J0", patient_name="Male_62yr")
@@ -405,11 +405,11 @@ def test_a_telemetry_sample_carries_the_condition_of_its_night(tmp_path: Path, m
 
 def test_the_series_values_match_the_recording_they_were_read_from(release, monkeypatch):
     # The count of series says nothing about what the series hold. This test reads the same
-    # channel again with edfio and compares the values. A build that decodes every sample wrong
+    # signal again with edfio and compares the values. A build that decodes every sample wrong
     # fails here.
     dataset = _convert(release, monkeypatch)
-    sample = next(one for one in dataset.samples if one.sample_id == "sleep-edfx-SC4901E0")
-    series = next(one for one in sample.time_series if one.channel == _CHANNELS[0])
+    record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
+    series = next(one for one in record.time_series if one.signal == _SIGNALS[0])
     written = edfio.read_edf(release / _STUDY / "SC4901E0-PSG.edf").signals[0].data
     read_back = series.to_numpy()
     assert len(read_back) == len(written)

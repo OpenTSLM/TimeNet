@@ -29,6 +29,7 @@ from timenet.config import settings
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import TimeNetRegistryError
 from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
+from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import resolve
@@ -68,7 +69,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
 
 
 @app.command()
-def build(
+def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     dataset_id: str,
     out: str | None = typer.Option(
         None,
@@ -79,6 +80,11 @@ def build(
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
+    ),
+    values_backend: str | None = typer.Option(
+        None,
+        "--values-backend",
+        help="Values-plane backend: 'parquet' or 'zarr' (default: the connector's declared backend).",
     ),
     isolation: bool | None = typer.Option(
         None,
@@ -97,9 +103,20 @@ def build(
     ``--no-isolation`` (or set ``TIMENET_ISOLATION=off``) to run it in the current interpreter
     instead, which is what you want while writing a connector.
 
+    ``--values-backend`` overrides the values-plane storage the connector declares. This process
+    resolves the connector's default for an in-process build; an isolated child resolves its own,
+    because importing the connector there would need the dependencies it is about to install.
+
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector.
+        BadParameter: If ``dataset_id`` has no known connector, or ``--values-backend`` names a
+            backend TimeF does not support.
     """
+    # Reject an unknown backend before anything expensive happens, so neither the isolated child nor
+    # a connector import runs for a build that cannot succeed.
+    if values_backend is not None and values_backend not in SUPPORTED_VALUES_BACKENDS:
+        raise typer.BadParameter(
+            f"unknown values backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
+        )
     # The flag is tri-state. An explicit --isolation wins over TIMENET_ISOLATION=off. An isolated
     # child exports that variable as its recursion guard and never forwards it as a flag.
     override = None if isolation is None else ("on" if isolation else "off")
@@ -114,7 +131,14 @@ def build(
         if forwarded is None:
             forwarded = str(settings().registry_path)
         try:
-            version = run_isolated(dataset_id, forwarded, force=force, keep_cache=keep_cache, quiet=console.quiet)
+            version = run_isolated(
+                dataset_id,
+                forwarded,
+                force=force,
+                keep_cache=keep_cache,
+                values_backend=values_backend,
+                quiet=console.quiet,
+            )
         except LookupError as exc:
             raise typer.BadParameter(str(exc)) from exc
         typer.echo(version)
@@ -124,18 +148,33 @@ def build(
         connector_cls = resolve(dataset_id)
     except LookupError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    # Resolve the connector's declared backend here, so the in-process path and the isolated child
+    # agree on what "no --values-backend" means. An isolated build cannot resolve it: importing the
+    # connector needs the dependencies the child is about to install.
+    connector = connector_cls()
+    resolved_backend = values_backend if values_backend is not None else connector.values_backend
     target = _resolve_target(out)
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         if isinstance(target, Path):
             version_dir = run_pipeline(
-                connector_cls(), target, progress_cb=_report_progress, force=force, keep_cache=keep_cache
+                connector,
+                target,
+                values_backend=resolved_backend,
+                progress_cb=_report_progress,
+                force=force,
+                keep_cache=keep_cache,
             )
             console.success(f"Built '{dataset_id}' → {version_dir.name}")
             typer.echo(str(version_dir))
         else:
             version = publish_pipeline(
-                connector_cls(), target, progress_cb=_report_progress, force=force, keep_cache=keep_cache
+                connector,
+                target,
+                values_backend=resolved_backend,
+                progress_cb=_report_progress,
+                force=force,
+                keep_cache=keep_cache,
             )
             console.success(f"Published '{dataset_id}' → {version}")
             typer.echo(version)

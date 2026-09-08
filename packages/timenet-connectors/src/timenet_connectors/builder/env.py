@@ -44,11 +44,12 @@ class EnvSpec:
     """The interpreter the environment is built on. Always one outside a virtualenv."""
 
 
-def env_spec(dataset_id: str) -> EnvSpec:
+def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
     """Describe the environment a dataset's connector needs.
 
     Args:
         dataset_id: The dataset id.
+        values_backend: Selected backend, or ``None`` for a default resolved by the child.
 
     Returns:
         The environment specification.
@@ -57,7 +58,13 @@ def env_spec(dataset_id: str) -> EnvSpec:
         LookupError: If no connector exists for the id.
         TimeNetBuildError: If a base distribution is not installed.
     """  # noqa: DOC502 (raised by requirements_for and _base_args, not directly here)
-    return EnvSpec(base=_base_args(), requirements=requirements_for(dataset_id), python=_base_interpreter())
+    base = _base_args()
+    # The parent cannot import the connector before its dependencies exist. When its default is
+    # unknown, include the optional backend too. An explicit Parquet build needs no Zarr dependency.
+    # Keep the parent's source/version pin; the additional requirement only requests its extra.
+    if values_backend != "parquet":
+        base += ("--with", f"timenet[zarr]=={Distribution.from_name('timenet').version}")
+    return EnvSpec(base=base, requirements=requirements_for(dataset_id), python=_base_interpreter())
 
 
 def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
@@ -90,8 +97,14 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     return [*command, *argv]
 
 
-def run_isolated(
-    dataset_id: str, out: str | Path, *, force: bool = False, keep_cache: bool = False, quiet: bool = False
+def run_isolated(  # noqa: PLR0913
+    dataset_id: str,
+    out: str | Path,
+    *,
+    force: bool = False,
+    keep_cache: bool = False,
+    values_backend: str | None = None,
+    quiet: bool = False,
 ) -> str:
     """Build a dataset in its own environment and return what the child printed on stdout.
 
@@ -107,6 +120,9 @@ def run_isolated(
             ``timenet://`` / ``http(s)://`` / ``s3://`` URL.
         force: Rebuild even if the version is already built.
         keep_cache: Keep the raw download cache after building.
+        values_backend: Values-plane backend to forward to the child (``"parquet"`` or
+            ``"zarr"``). ``None`` forwards nothing, leaving the child on the connector's
+            declared backend.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
 
     Returns:
@@ -122,7 +138,9 @@ def run_isolated(
         argv.append("--force")
     if keep_cache:
         argv.append("--keep-cache")
-    command = uv_command(env_spec(dataset_id), argv)
+    if values_backend is not None:
+        argv += ["--values-backend", values_backend]
+    command = uv_command(env_spec(dataset_id, values_backend=values_backend), argv)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
     stdout, stderr, returncode = _run_build(command, child_env)

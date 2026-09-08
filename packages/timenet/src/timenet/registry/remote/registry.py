@@ -57,7 +57,12 @@ class RemoteRegistry(WritableRegistry):
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
         payload = self._http.get_json("/datasets")
-        metadatas = [_metadata_from_summary(row) for row in payload["datasets"]]
+        metadatas = [
+            self.get_manifest(row["dataset_id"], row["version"]).metadata
+            if _summary_requires_manifest(row)
+            else _metadata_from_summary(row)
+            for row in payload["datasets"]
+        ]
         return sorted(metadatas, key=lambda m: m.dataset_id)
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
@@ -246,7 +251,17 @@ def _metadata_from_summary(row: dict) -> DatasetMetadata:
             "name": row["name"],
             "description": row["description"],
             "license": row["license"],
+            "license_url": row.get("license_url"),
             "domains": row.get("domains", []),
             "tags": row.get("tags", []),
+            "access": row.get("access", "open"),
+            "access_url": row.get("access_url"),
         }
+    )
+
+
+def _summary_requires_manifest(row: dict) -> bool:
+    """Return whether a summary omits metadata required to construct it safely."""
+    return (row["license"] == "other" and not row.get("license_url")) or (
+        row.get("access", "open") != "open" and not row.get("access_url")
     )

@@ -1,7 +1,7 @@
 """Fail when two revisions produce logically different TimeF datasets.
 
 The comparison is backend-neutral: physical Parquet/Zarr artifacts may differ, but metadata, schema,
-tasks, samples, annotations, series contracts, dtype, shape, and exact value bytes must not.
+tasks, records, annotations, series contracts, dtype, shape, and exact value bytes must not.
 """
 
 from __future__ import annotations

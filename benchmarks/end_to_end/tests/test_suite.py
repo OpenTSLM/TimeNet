@@ -14,7 +14,7 @@ def test_portable_corpus_covers_scenarios_connector_patterns_and_tasks():
     schema = dataset.schema
     assert schema is not None
     assert len(SCENARIOS) == 8
-    assert len(dataset.samples) > 100
+    assert len(dataset.records) > 100
     assert {type(task) for task in dataset.tasks} == set(schema.tasks)
     for spec in schema.time_series_specs:
         assert spec.value_shape == ()

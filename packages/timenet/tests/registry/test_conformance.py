@@ -45,15 +45,15 @@ def _second_dataset() -> TimeFDataset:
     spec = TimeSeriesSpec(spec_type="ecg_lead", name="ECG Lead", unit_value=ureg.millivolt)
     series = TimeSeries(
         spec=spec,
-        channel="II",
+        signal="II",
         time_axis=RegularAxis.from_rate_hz(16),
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
         time_series_id="other-ts-0",
         n_values=16,
     )
-    sample = dataset.add_sample(time_series=(series,), sample_id="other-sample-0")
-    sample.add_annotation(Annotation(key="age", value=70, unit="years", id="other-age-0"))
-    dataset.add_task(sample, ClassificationTask(target="afib", id="other-task-0"))
+    record = dataset.add_record(time_series=(series,), record_id="other-record-0")
+    record.add_annotation(Annotation(key="age", value=70, unit="years", id="other-age-0"))
+    dataset.add_task(record, ClassificationTask(target="afib", id="other-task-0"))
     return dataset
 
 

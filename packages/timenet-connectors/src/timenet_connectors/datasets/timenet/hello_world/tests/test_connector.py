@@ -48,22 +48,22 @@ def test_schema_covers_every_feature():
     assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}
 
 
-def test_shares_a_series_across_samples_by_id():
+def test_shares_a_series_across_records_by_id():
     dataset = _convert()
     series_by_id: dict[str, int] = {}
-    for sample in dataset.samples:
-        for ts in sample.time_series:
+    for record in dataset.records:
+        for ts in record.time_series:
             series_by_id[ts.time_series_id] = series_by_id.get(ts.time_series_id, 0) + 1
-    assert any(count >= 2 for count in series_by_id.values()), "expected a series shared across samples"
+    assert any(count >= 2 for count in series_by_id.values()), "expected a series shared across records"
 
 
-def test_shares_an_annotation_across_samples_by_id():
+def test_shares_an_annotation_across_records_by_id():
     dataset = _convert()
     ann_ids: dict[str, int] = {}
-    for sample in dataset.samples:
-        for ann in sample.annotations:
+    for record in dataset.records:
+        for ann in record.annotations:
             ann_ids[ann.id] = ann_ids.get(ann.id, 0) + 1
-    assert any(count >= 2 for count in ann_ids.values()), "expected an annotation shared across samples"
+    assert any(count >= 2 for count in ann_ids.values()), "expected an annotation shared across records"
 
 
 def test_has_a_task_chain():

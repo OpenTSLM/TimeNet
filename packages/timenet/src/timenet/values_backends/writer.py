@@ -1,7 +1,7 @@
 """Writer-side values backend seam: the abstract contract plus its shared types and factory.
 
 The values plane is the float32 waveform of every series. It is the one part of a TimeF version whose
-on-disk representation is swappable. Everything else is backend-agnostic: samples, annotations, tasks,
+on-disk representation is swappable. Everything else is backend-agnostic: records, annotations, tasks,
 and the time-series index that locates each chunk. A :class:`BaseValuesBackend` takes the deduped,
 sorted series and writes their values. It returns one :class:`ChunkPlacement` per chunk plus the list
 of value files to record in the manifest. The core writer does not know about shards, row groups, or
@@ -55,8 +55,8 @@ class ChunkPlacement:
     """Backend-defined coordinates locating the chunk inside ``chunk_file``."""
     spec_type: str
     """Spec type of the source series."""
-    channel: str
-    """Channel name of the source series."""
+    signal: str
+    """Signal name of the source series."""
     n_values: int
     """Number of values in the chunk."""
 

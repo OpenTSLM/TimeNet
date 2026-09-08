@@ -1,18 +1,18 @@
 """The Sleep-EDF connector: whole-night polysomnograms with expert sleep scoring.
 
-One sample is one recording. A recording is a ``*-PSG.edf`` file of body signals with a
+One record is one recording. A recording is a ``*-PSG.edf`` file of body signals with a
 ``*-Hypnogram.edf`` file beside it. A technician scored that hypnogram in epochs of 30 s.
 
 The release holds two studies. ``sleep-cassette`` measured the effect of age on sleep. It
 recorded each subject at home, on a cassette recorder. ``sleep-telemetry`` measured the effect
 of temazepam. It recorded each subject in hospital, on a telemetry system.
 
-The two studies used different equipment. As a result, their channel sets differ. Their spans
+The two studies used different equipment. As a result, their signal sets differ. Their spans
 differ too. A cassette recording covers about a day, and a telemetry recording about ten hours.
 
-The loop that walks the release is in ``convert``, so one place states what a sample is made of.
+The loop that walks the release is in ``convert``, so one place states what a record is made of.
 :mod:`~timenet_connectors.bases.edf.reader` reads the EDF container, and
-:mod:`~timenet_connectors.datasets.physionet.sleep_edfx.specs` states what each channel measures.
+:mod:`~timenet_connectors.datasets.physionet.sleep_edfx.specs` states what each signal measures.
 
 :mod:`~timenet_connectors.datasets.physionet.sleep_edfx.tables` turns the rows of a subject table
 into the facts it states, behind one reader that a per-sheet description drives.
@@ -87,7 +87,7 @@ class SleepEdfxRecording:
     """One recording: the file of signals, and the id that its name states.
 
     A recording name has the form ``<SC4|ST7><subject><night><recorder>0``. The name holds the
-    subject and the night. The scoring, the subject table and the sample ids all need them.
+    subject and the night. The scoring, the subject table and the record ids all need them.
 
     A recording is not one night of sleep. It starts before the night and stops after it. A
     ``*-Hypnogram.edf`` file of sleep stages is beside each recording, which
@@ -219,7 +219,7 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
 class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
     """Connector for Sleep-EDF (PhysioNet ``sleep-edfx``)."""
 
-    # Each study with the subject table that describes it. The order keeps sample ids stable.
+    # Each study with the subject table that describes it. The order keeps record ids stable.
     _STUDIES: ClassVar[tuple[tuple[str, tables.SheetShape], ...]] = (
         (_CASSETTE_STUDY, tables.CASSETTE_SHEET),
         (_TELEMETRY_STUDY, tables.TELEMETRY_SHEET),
@@ -261,7 +261,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
 
         return [SleepEdfxSource(studies=tuple(studies), subject_tables=tuple(subject_tables))]
 
-    # PLR0914: the loop holds one name for each fact a sample is made of, on purpose. A reader
+    # PLR0914: the loop holds one name for each fact a record is made of, on purpose. A reader
     # of it sees the join and each annotation, and not one call that hides both behind a name.
     def convert(self, raw_refs: list[SleepEdfxSource]) -> TimeFDataset:
         """Turn the fetched release into a dataset.
@@ -271,14 +271,14 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
 
         The annotations that state a study, a night, a sex or a drug condition come from sets
         the release fixes. ``metadata_annotation`` holds one annotation for each value it meets.
-        Every sample that states a value carries that same instance, and the writer stores it
+        Every record that states a value carries that same instance, and the writer stores it
         one time.
 
         Args:
             raw_refs: The list of one handle from :meth:`download`.
 
         Returns:
-            The dataset, with one sample for each recording it walked.
+            The dataset, with one record for each recording it walked.
         """
         source = raw_refs[0]
         dataset = TimeFDataset(metadata=self.metadata())
@@ -288,35 +288,35 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         )
         for recording in _iter_recordings(source):
             # Named and not generated, thus two builds of one archive give one set of ids.
-            sample_id = f"{_ID_PREFIX}-{recording.recording_id}"
+            record_id = f"{_ID_PREFIX}-{recording.recording_id}"
 
             file = reader.open_edf(recording.psg_path)
-            series = timeseries.build(sample_id, file, SPECS, loader=reader.build_channel_loader)
+            series = timeseries.build(record_id, file, SPECS, loader=reader.build_signal_loader)
 
             entries = reader.read_annotations(reader.open_edf(recording.hypnogram_path))
             signal_end = reader.compute_signal_end_microseconds(file.header)
             # The session may end after the signals stop, when the scoring reaches past them.
             session_end = signal_end + annotations.measure_overrun_microseconds(entries, signal_end)
 
-            sleep_stages = annotations.build(sample_id, entries, series)
+            sleep_stages = annotations.build(record_id, entries, series)
 
             recording_metadata = subject_tables.build_annotations(
-                sample_id, metadata_annotation, recording, file.header
+                record_id, metadata_annotation, recording, file.header
             )
 
-            sample = dataset.add_sample(
+            record = dataset.add_record(
                 time_series=series,
-                sample_id=sample_id,
+                record_id=record_id,
                 subject_ids=(recording.subject_id,),
                 time_span=TimeInterval.micros(0, session_end),
             )
-            sample.add_annotations(sleep_stages)
-            sample.add_annotations(recording_metadata)
+            record.add_annotations(sleep_stages)
+            record.add_annotations(recording_metadata)
 
         dataset.register_annotations(tasks.build_vocabularies(_ID_PREFIX))
         dataset.set_task_stream(
             [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
-            lambda: tasks.iter_tasks(dataset.samples, _ID_PREFIX),
+            lambda: tasks.iter_tasks(dataset.records, _ID_PREFIX),
         )
         return dataset
 

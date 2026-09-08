@@ -34,6 +34,9 @@ class BaseConnector(ABC, Generic[TRaw]):
     """Optional explicit path to the dataset card YAML. When ``None`` (the default), the connector
     reads the card from ``dataset.yaml`` in its own folder."""
 
+    values_backend: str = "parquet"
+    """Default storage backend for this connector's values plane."""
+
     def __init__(self) -> None:
         cls = type(self)
         # download() is concrete because it bridges to download_async. A subclass that overrides

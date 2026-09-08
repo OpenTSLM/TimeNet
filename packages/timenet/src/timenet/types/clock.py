@@ -108,23 +108,23 @@ def unix_us(moment: datetime | int) -> int:
 
 
 def offset_us(moment: datetime, start_time: datetime | int | None) -> int:
-    """Convert a wall-clock moment to an offset on a sample's recording timeline.
+    """Convert a wall-clock moment to an offset on a record's recording timeline.
 
     Args:
         moment: The wall-clock moment, timezone-aware.
-        start_time: The target sample's ``start_time``.
+        start_time: The target record's ``start_time``.
 
     Returns:
-        Microseconds from the sample's relative zero.
+        Microseconds from the record's relative zero.
 
     Raises:
-        TimeFValidationError: If ``start_time`` is ``None``. A sample with no wall-clock anchor has
+        TimeFValidationError: If ``start_time`` is ``None``. A record with no wall-clock anchor has
             no calendar time to measure a moment against.
     """
     if start_time is None:
         raise TimeFValidationError(
-            "a wall-clock moment needs the target sample's start_time, and that sample has none. A "
-            "sample with no wall-clock anchor has no calendar time to measure against; use an offset "
+            "a wall-clock moment needs the target record's start_time, and that record has none. A "
+            "record with no wall-clock anchor has no calendar time to measure against; use an offset "
             "into the recording instead"
         )
     return unix_us(moment) - unix_us(start_time)
