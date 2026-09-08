@@ -104,6 +104,25 @@ def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
     assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=None)) == ("--with", "timenet==9.9.9")
 
 
+@pytest.mark.parametrize("backend", [None, "zarr", "parquet"])
+@pytest.mark.parametrize("editable", [False, True])
+def test_isolated_environment_installs_backend_dependencies(monkeypatch, tmp_path, backend, editable):
+    captured = {}
+    direct_url = json.dumps({"url": tmp_path.as_uri(), "dir_info": {"editable": True}}) if editable else None
+    monkeypatch.setattr(
+        env_module.Distribution, "from_name", lambda name: _FakeDist(version="9.9.9", direct_url=direct_url)
+    )
+
+    def run(command, env):
+        captured["command"] = command
+        return str(tmp_path), "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", run)
+    run_isolated("timenet/hello-world", tmp_path, values_backend=backend)
+    dependencies = captured["command"][: captured["command"].index("timenet-build")]
+    assert ("timenet[zarr]==9.9.9" in dependencies) == (backend != "parquet")
+
+
 def test_run_isolated_disables_isolation_in_the_child(monkeypatch, tmp_path):
     captured = {}
 
@@ -157,6 +176,33 @@ def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
 
     assert "--force" in captured["command"]
     assert "--keep-cache" in captured["command"]
+
+
+def test_run_isolated_forwards_an_explicit_values_backend(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake(command, env):
+        captured["command"] = command
+        return f"{tmp_path}/x\n", "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", _fake)
+    run_isolated("timenet/hello-world", tmp_path, values_backend="zarr")
+
+    command = captured["command"]
+    assert command[command.index("--values-backend") + 1] == "zarr"
+
+
+def test_run_isolated_omits_values_backend_without_an_override(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake(command, env):
+        captured["command"] = command
+        return f"{tmp_path}/x\n", "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", _fake)
+    run_isolated("timenet/hello-world", tmp_path)
+
+    assert "--values-backend" not in captured["command"]
 
 
 def test_run_isolated_forwards_quiet_ahead_of_the_subcommand(monkeypatch, tmp_path):
