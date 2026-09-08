@@ -1,4 +1,4 @@
-# Heads, censuses, and the map
+# Heads, surveys, and the map
 
 Reference for phase 1 of the `add-dataset-connector` skill.
 
@@ -11,7 +11,7 @@ This phase answers those three questions, and each has its own tool:
 | question | tool | cost |
 | --- | --- | --- |
 | What shape is one file of this kind? | a `head()` | one small read per file type |
-| What is odd about this release? | a census | one walk, one table |
+| What is odd about this release? | a survey | one walk, one table |
 | How do the files reach TimeF? | the map | no reads at all |
 
 ## Contents
@@ -19,7 +19,7 @@ This phase answers those three questions, and each has its own tool:
 - [The budget](#the-budget)
 - [Give every raw file type a `head()`](#give-every-raw-file-type-a-head)
 - [How to open each kind of file](#how-to-open-each-kind-of-file)
-- [Census the release](#census-the-release)
+- [Survey the release](#survey-the-release)
 - [Name the set of files that one sample needs](#name-the-set-of-files-that-one-sample-needs)
 - [Choose the download shape](#choose-the-download-shape)
 - [Draw the map](#draw-the-map)
@@ -28,7 +28,7 @@ This phase answers those three questions, and each has its own tool:
 ## The budget
 
 **The context cost of phase 1 does not grow with the size of the release.** A release of 200
-recordings and one of 200 000 both give three heads and one census table. Hold that invariant. It is
+recordings and one of 200 000 both give three heads and one survey table. Hold that invariant. It is
 what keeps this phase possible on a dataset you cannot download twice.
 
 Three rules follow from it:
@@ -36,7 +36,7 @@ Three rules follow from it:
 - One head for each file **type**, never one per file.
 - A head is bounded by construction, not truncated after the read. A head of an 8 GB release reads
   one block of the container, not one whole file.
-- The census walks every file, but only its table enters the conversation. Run the walk in a
+- The survey walks every file, but only its table enters the conversation. Run the walk in a
   subagent and take back the table alone.
 
 **A block is the smallest unit the container lets you decode, and it is not the same size in every
@@ -81,7 +81,7 @@ only the part it prints.
 ### Where a head lives
 
 **A head does not ship with the connector.** Write it at
-`docs/notes/connectors/<org>/<name>/heads.py`, beside `plan.md` and the census — the place a reader
+`docs/notes/connectors/<org>/<name>/heads.py`, beside `plan.md` and the survey — the place a reader
 already goes to see how the raw release was read. A head is a tool a person runs during discovery.
 It answers a question phase 1 asks one time. Put it in the connector package and it becomes a file
 that no module imports, that no test covers, and that no gate keeps true against a changed release.
@@ -127,7 +127,7 @@ away. Write the head so it reports what it did not find.
 **Where the release states its own schema, print the declaration and the file, and compare them.**
 A declaration can be wrong. One release declares nine columns and ships seven, and the two it does
 not ship are the two a sample id would come from *(measured)*. Believe the declaration and you design
-an identity the data cannot supply. The census then checks every file against the declaration, not
+an identity the data cannot supply. The survey then checks every file against the declaration, not
 only the first one.
 
 ## How to open each kind of file
@@ -160,9 +160,9 @@ such as `np.isfinite` in place of `pc.is_finite`.
 **No format outside that table has a reader in this repo.** A release in a format the table does not
 name means you write the opener as well as the head, and the plan says so.
 
-## Census the release
+## Survey the release
 
-A census is a count, and its purpose is to find where two samples differ.
+A survey is a count, and its purpose is to find where two samples differ.
 
 **You cannot find the odd values by reading.** An anomaly worth knowing is almost always a fact
 about the *set*: one file in a hundred that differs, a value that varies per file where you assumed a
@@ -189,35 +189,35 @@ group, one row per property that differs:
 
 Then, beside it, the properties that vary *within* a group and are therefore not shape at all.
 
-- *Sleep-EDF:* the census gives two groups, `sleep-cassette` (153 recordings, 7 channels, 30 s
+- *Sleep-EDF:* the survey gives two groups, `sleep-cassette` (153 recordings, 7 channels, 30 s
   records with one file at 60 s) and `sleep-telemetry` (44 recordings, 5 channels, 10 s records)
   *(measured)*. The same channel name `EMG submental` runs at 1 Hz in one and 100 Hz in the other;
   the marker channel is named differently in each; the two sheets even encode sex in opposite
   directions, `F=1, M=2` against `M=1, F=2`. One group states 117 distinct physical ranges across
   its 153 files, the other one range for all 44.
 
-**A census that finds two shapes does not mean two modules.** It says where the code must take a
+**A survey that finds two shapes does not mean two modules.** It says where the code must take a
 value instead of a constant, and that is all it says. Every row of such a table is one of two
 things: a value the file states in its own header, or a value the description states as data.
 Neither is a branch on which part of the release you are in.
 
 **Leave out of the signature what varies file by file.** Per-file calibration is not shape. If the
-census gives one group per file the signature is too strict; if it gives one group for the whole
+survey gives one group per file the signature is too strict; if it gives one group for the whole
 release it is too loose, and you have not yet found the property that separates them.
 
 **Then count the samples**, whether or not the count is a `len()`. Prefer a count the release states
 about itself — an index file, a manifest, a row count — over one you derive, and say which you used.
 If you cannot count the samples before you convert, you do not yet know what a sample is.
 
-**Census a free-text column for its shape, not only for its presence.** A count of nulls, empty
+**Survey a free-text column for its shape, not only for its presence.** A count of nulls, empty
 strings and duplicates says the text is there. It does not say the text is finished. Ask whether
 every value terminates, and whether the length distribution has a cliff at one value. One release
 ships 123 098 captions that stop mid-sentence — 5.0% of the corpus, some of them mid-word
 *(measured)*, and no count of nulls or duplicates would have found one of them.
 
-**A census result is evidence, not truth.** It answers the question you asked and nothing else, and a
+**A survey result is evidence, not truth.** It answers the question you asked and nothing else, and a
 question you did not think to ask leaves a hole the table does not show. Two of one release's own
-census numbers were wrong and were caught only by measuring them a second time. So state every count
+survey numbers were wrong and were caught only by measuring them a second time. So state every count
 with how it was counted, and treat the build in phase 5 as what settles it.
 
 ## Name the set of files that one sample needs
@@ -350,7 +350,7 @@ Four rules make the map a check and not a picture:
   annotation can name them.
 - **One arrow, one function.** An arrow that needs two sentences is two arrows.
 - **Nothing in the map changes per study.** One spec table holds every channel name of the release,
-  and every rate comes from a header, so the same arrows draw both shapes the census found.
+  and every rate comes from a header, so the same arrows draw both shapes the survey found.
 
 Read the map right to left when you design: start from the sample you want, and ask which file states
 each part of it. Read it left to right when you code.

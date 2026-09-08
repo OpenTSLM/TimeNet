@@ -12,7 +12,7 @@ The plan is scratch and untracked. Never `git add` it.
 | phase | state | artifact |
 | --- | --- | --- |
 | 0 card and description | not started | |
-| 1 heads, census, map | not started | |
+| 1 heads, survey, map | not started | |
 | 2 gate | not started | |
 | 3 assumptions to README | not started | |
 | 4 build | not started | |
@@ -92,7 +92,7 @@ uv run python docs/notes/connectors/<org>/<name>/heads.py <path>
 <head output>
 ```
 
-### The census
+### The survey
 
 *(measured)* over the whole release.
 
@@ -139,7 +139,7 @@ Check it before you show it:
 ## 2. The model
 
 This is the section the user argues with, so every line carries the evidence that produced it. Cite
-the head or the census row above — "signals head, line 4", "census: 117 distinct ranges" — not a
+the head or the survey row above — "signals head, line 4", "survey: 117 distinct ranges" — not a
 belief. A line with no evidence is an assumption, and belongs in section 5 instead.
 
 Real values, not placeholders.
@@ -173,7 +173,7 @@ prose, never from a header, so quote the sentence.
 - **evidence**: <what in the source says this is the question being asked>
 - **one question is**: <what a single task asks>
 - **expansion**: <run-length? exact? what the boundary rule is>
-- **count**: <tasks per sample> and `<total>`, derived from the census rows `<which>`
+- **count**: <tasks per sample> and `<total>`, derived from the survey rows `<which>`
 - **therefore**: `add_tasks` / `set_task_stream`, because <the count>
 
 ### How the answer is stored
@@ -230,7 +230,7 @@ of the connector: it stays in this folder, beside this plan.
 The smoke test in phase 5 checks these. A number that does not match means the plan is wrong or the
 code is.
 
-**A number that can be derived from the census is derived from it, and the derivation is shown
+**A number that can be derived from the survey is derived from it, and the derivation is shown
 here.** A prediction that contradicts a table two sections above it is a mistake nobody has to make.
 
 | | expected | derived from | measured (phase 5) |

@@ -18,7 +18,7 @@ that shows a convention is real and followed — a reviewer checks those. An **i
 - [`convert` holds the loop](#convert-holds-the-loop)
 - [The lazy loader is I/O too, and it runs after `convert` has returned](#the-lazy-loader-is-io-too-and-it-runs-after-convert-has-returned)
 - [Building the series](#building-the-series)
-- [The census decides values, not modules](#the-census-decides-values-not-modules)
+- [The survey decides values, not modules](#the-survey-decides-values-not-modules)
 - [Dependencies](#dependencies)
 - [Tests](#tests)
 - [Names a connector reuses](#names-a-connector-reuses)
@@ -59,7 +59,7 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
 **One rule decides whether a file belongs in that list: a file that `download` or `convert`
 imports and calls is part of the connector.** Every other file you wrote to build it stays out. A
 head is the common case, so `heads.py` lives at `docs/notes/connectors/<org>/<name>/heads.py` with
-the plan and the census. See `discovery.md § Where a head lives`.
+the plan and the survey. See `discovery.md § Where a head lives`.
 
 **The half that opens files is a base, not a connector module.** A container format is not specific
 to one dataset, so its reader is shared:
@@ -96,7 +96,7 @@ back a handle instead. `discovery.md § Choose the download shape` states the li
 Check that the base fits the size before you build on it.
 
 A small connector does not need all of these. `chengsenwang/tsqa` is one `connector.py`, because it
-reads one parquet row per sample and there is nothing to divide. Add a module when the census shows
+reads one parquet row per sample and there is nothing to divide. Add a module when the survey shows
 a second kind of file or a second kind of meaning, not before.
 
 **`chengsenwang/tsqa` is also the pattern for a row-shaped release that states no id and no time
@@ -231,7 +231,7 @@ flowchart LR
     ld["loader<br/>built per channel, decodes on demand"] --> ts
 ```
 
-**One spec table covers every shape the census found.** A shared channel name is still worth a second
+**One spec table covers every shape the survey found.** A shared channel name is still worth a second
 look, because one name can cover two different measurements. Ask whether a spec — a kind and a unit
 — is still true of both, and let the header supply whatever separates them. Check every shared name
 before you write one table.
@@ -240,9 +240,9 @@ before you write one table.
   trace at 100 Hz in the other. Both are EMG in microvolts, which is what the spec states, and the
   rate that separates them comes from the header — so the shared name costs nothing here.
 
-## The census decides values, not modules
+## The survey decides values, not modules
 
-A census that finds two shapes does not mean two modules. Every difference it found is one of two
+A survey that finds two shapes does not mean two modules. Every difference it found is one of two
 things:
 
 - **A value the header states** — channels, rates, record duration, physical range. The builder reads
@@ -253,7 +253,7 @@ things:
   values. A new sheet is a new value, not a new module, and no function in `tables.py` names a study.
 
 **Where two parts of a release differ, the difference is a value of one type, never an `if` on which
-part you are in.** That is the whole rule, and the census is what tells you which fields the type
+part you are in.** That is the whole rule, and the survey is what tells you which fields the type
 needs.
 
 ## Dependencies
@@ -419,7 +419,7 @@ connector you are in, and do not rewrite the other one on the way past.
 
 Named here so nobody resolves one by accident and calls it a convention.
 
-- **Where a census lives.** A test that fails when a release grows a third shape would be the
+- **Where a survey lives.** A test that fails when a release grows a third shape would be the
   strongest version of it, but it needs the full download.
 - **Whether the spec table is code or data.** The channel-to-spec map could sit in `dataset.yaml`
   beside the card. Code keeps it type-checked; data keeps it readable to somebody who does not read

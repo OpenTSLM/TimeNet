@@ -1,6 +1,6 @@
 ---
 name: add-dataset-connector
-description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and census the release, draw the map and write the plan, get the plan approved, build the connector, then prove the build against what the plan predicted.
+description: Use when adding a new TimeNet dataset connector, i.e. converting an external dataset (from a HuggingFace repo, PhysioNet, or another source given by a link or reference) into the TimeF format. Runs six phases: read the card and the source's own words, take a head of each file type and survey the release, draw the map and write the plan, get the plan approved, build the connector, then prove the build against what the plan predicted.
 ---
 
 # Adding a dataset connector
@@ -26,7 +26,7 @@ in full.
 - [Talk to the user before a phase, not only after it](#talk-to-the-user-before-a-phase-not-only-after-it)
 - [Where to start](#where-to-start)
 - [Phase 0 — the card and the source's own words](#phase-0--the-card-and-the-sources-own-words)
-- [Phase 1 — a head of each file type, then a census of all of them](#phase-1--a-head-of-each-file-type-then-a-census-of-all-of-them)
+- [Phase 1 — a head of each file type, then a survey of all of them](#phase-1--a-head-of-each-file-type-then-a-survey-of-all-of-them)
 - [Phase 2 — the gate](#phase-2--the-gate)
 - [Phase 3 — the assumptions become the README](#phase-3--the-assumptions-become-the-readme)
 - [Phase 4 — build](#phase-4--build)
@@ -44,7 +44,7 @@ in the files, and getting it wrong produces a dataset that loads fine and answer
 So the job is to **agree a model with a person**, on evidence, before writing anything:
 
 1. **Gather evidence with tools, not assumptions.** A `head()` per file type shows the shape; a
-   census over every file shows what is odd. Both produce output a person can read.
+   survey over every file shows what is odd. Both produce output a person can read.
 2. **Propose a model**: what one sample is, its channels, its annotations, its tasks — each part
    beside the evidence that produced it.
 3. **Let the user argue with it.** Every decision must be contestable, which means the evidence that
@@ -60,7 +60,7 @@ being agreed, and the code follows from it.
 ## The two documents
 
 - **`docs/notes/connectors/<org>/<name>/plan.md`** is the working document. It holds the heads, the
-  census, the map, the sample design and the open assumptions. It is scratch. It is untracked, and
+  survey, the map, the sample design and the open assumptions. It is scratch. It is untracked, and
   you never `git add` it.
 - **`packages/.../datasets/<org>/<name>/README.md`** ships with the connector. It holds the
   assumptions the user ruled on, and every inconsistency the release contains. It is the document
@@ -80,7 +80,7 @@ at every phase boundary. A checklist sent one time is a header; a checklist re-s
 
 ```markdown
 - [ ] 0. Plan created, card confirmed by the user, description quotes captured
-- [ ] 1. A head() per file type, census over every file, map, model, predicted numbers
+- [ ] 1. A head() per file type, survey over every file, map, model, predicted numbers
 - [ ] 2. GATE — every part of the model and every assumption ruled on by the user
 - [ ] 3. Rulings written into the connector's README
 - [ ] 4. Built against the approved skeleton, tests written
@@ -95,7 +95,7 @@ have been given a report. Four rules, and they cost one message each:
 - **Say what a phase will do before it runs.** What it will do, what it will produce, and what it
   needs from the user. Every phase below carries that as **Before you start**.
 - **Announce a long step when it begins**, and say what it counts and what it will give back. The
-  census walks the whole release and takes minutes, and the skill runs it in a subagent, which is
+  survey walks the whole release and takes minutes, and the skill runs it in a subagent, which is
   what makes it invisible. Say it is running.
 - **Show the diagrams in the conversation**, not only in the plan. The sample model is the thing a
   person can argue with. A diagram filed in a document nobody is watching was never shown.
@@ -110,7 +110,7 @@ Look for `docs/notes/connectors/<org>/<name>/plan.md`.
 
 - **It does not exist.** Start at phase 0.
 - **It exists.** Read the phase ledger at its top and resume at the first phase that is not `done`.
-  Phase 1 walks the whole release, so never repeat it when the plan already holds its census.
+  Phase 1 walks the whole release, so never repeat it when the plan already holds its survey.
 
 **Check the plan's skill ref before you continue anything.** Section 0 of the plan names the branch
 the skill was read from. Run `git show <skill ref>:.agents/skills/add-dataset-connector/SKILL.md` and
@@ -129,7 +129,7 @@ the fetch. It needs one thing from them — a confirmation of the licence.
 
 1. **Ask how many datasets the link holds.** A release that bundles a corpus with its own benchmarks
    is common, and one `org/name` id cannot address both. Which one you are converting changes the
-   sample model, the task type and the census. If the link holds more than one, produce **one plan
+   sample model, the task type and the survey. If the link holds more than one, produce **one plan
    and one card per dataset**, and say which plan is which. Do not fold two datasets into one id.
 2. **Create the plan.** Copy `references/plan-template.md` to
    `docs/notes/connectors/<org>/<name>/plan.md`. That file is the template itself, so copying it is
@@ -184,12 +184,12 @@ was fetched to and how big it is, and the sentences of the description the desig
 
 **Next:** phase 1, which reads the release. Say so and continue; this hand-off needs no approval.
 
-## Phase 1 — a head of each file type, then a census of all of them
+## Phase 1 — a head of each file type, then a survey of all of them
 
 Read `references/discovery.md` before you start this phase.
 
 **Before you start, tell the user:** phase 1 opens the release and counts it. It produces the heads,
-the census table, two diagrams and the sample design. The census walks every file and takes minutes,
+the survey table, two diagrams and the sample design. The survey walks every file and takes minutes,
 and it runs in a subagent, so say when it starts and what it is counting.
 
 Two reads, with different jobs.
@@ -202,20 +202,20 @@ does not ship with the connector**: it is a discovery tool, it lives with this p
 `discovery.md § Where a head lives` says why. Give it a `__main__`, and record the command beside its
 output, so the user can run it again on any file they like.
 
-**Then census the whole release with a script.** A head shows the shape of one file. It cannot show
+**Then survey the whole release with a script.** A head shows the shape of one file. It cannot show
 you what is odd, because odd is a fact about the set: one file in a hundred writing a different
 block length, a scaling factor that varies per file where you assumed a constant, a handful of table
 rows disagreeing with their headers. You find those by counting, never by reading.
 
 **Hold this budget:** the context cost of phase 1 does not grow with the size of the release. One
-head per file *type*, not per file. The census walks every file but only its table enters the
+head per file *type*, not per file. The survey walks every file but only its table enters the
 conversation. Run the walk in a subagent and take back the table alone.
 
 Produce, into the plan:
 
 - the file inventory, including the files that belong to no sample,
 - one head per file type, each with the command that produced it,
-- the census table, including every file checked against whatever the release declares about itself,
+- the survey table, including every file checked against whatever the release declares about itself,
 - **two mermaid diagrams, both required**: the map, in four columns — what ships, what pairs it into
   samples, what opens the container, what each part means — and the sample model, tracing every
   object TimeF will hold back to the exact part of the source that states it,
@@ -226,7 +226,7 @@ Produce, into the plan:
   `connector-anatomy.md § Where an answer, an annotation and a task can live`, and why,
 - **what already exists for each part of the connector**, and whether this one reuses it,
 - the module skeleton and the test plan,
-- the numbers the build should produce, each derived from a census row,
+- the numbers the build should produce, each derived from a survey row,
 - the decisions taken and the questions genuinely left open.
 
 **Show both diagrams in the conversation.** The sample model is the artifact the user accepts or
@@ -244,21 +244,21 @@ record it as a decision**. Section 5 of the plan has two headings for exactly th
 taken with the rule that took each, and the questions genuinely left. Putting a question the repo
 already answers in front of the user is not caution; it buries the two questions that are real.
 
-**Derive every predicted number from the census, and show the derivation.** A predicted sample count
+**Derive every predicted number from the survey, and show the derivation.** A predicted sample count
 that contradicts a table two sections above it is a mistake nobody has to make. One run predicted
-55 187 samples where summing the eleven per-folder counts in its own census gives 91 094.
+55 187 samples where summing the eleven per-folder counts in its own survey gives 91 094.
 
 `references/plan-template.md` is the format. Use it as written, so every connector's plan reads the
 same. `references/fidelity.md` decides what the design may and may not do to the data;
 `references/layout.md` decides the module skeleton. Read both before you write the plan.
 
-**Tell the user:** what the release holds — the count of samples, the shapes the census found, and
+**Tell the user:** what the release holds — the count of samples, the shapes the survey found, and
 anything odd — the two diagrams, and that the plan is ready to read.
 
 **Phase 1 is done when** both diagrams are drawn and shown, every file in the inventory is either a
 node in the map or named as belonging to no sample, every node of the sample model has an inbound
-edge, the census covers every file rather than a sample of them, and the plan states a number for
-samples, tasks per sample, and expected warnings, each derived from the census. A count you cannot
+edge, the survey covers every file rather than a sample of them, and the plan states a number for
+samples, tasks per sample, and expected warnings, each derived from the survey. A count you cannot
 state is phase 1 unfinished, and a count that does not follow from the evidence above it is worse
 than none.
 
@@ -297,7 +297,7 @@ For a question that passes, say what the source states, say what each answer cha
 would do, and let the user rule. Do not resolve one silently.
 
 **Invite disagreement rather than confirmation.** "Does this look right?" gets a yes. Ask instead
-which part looks wrong, and be ready to show the head or census line behind any of them. If the user
+which part looks wrong, and be ready to show the head or survey line behind any of them. If the user
 cannot check a claim against evidence you produced, that claim is not ready to be agreed.
 
 If the user changes the model, revise the plan and walk it again. Only continue on an explicit yes.
@@ -324,7 +324,7 @@ names what nobody has decided.
 Mark any number you measured over the release yourself as *(measured)*, so a reader can tell it from
 one copied off the dataset's page. Quote the description sentences from phase 0 beside `source_url`.
 
-Use the `simple-english` skill on the prose. Do not run it over the head output or the census table;
+Use the `simple-english` skill on the prose. Do not run it over the head output or the survey table;
 those are evidence, and rewording them destroys them.
 
 Then delete the assumptions from the plan. The README owns them now.
@@ -441,7 +441,7 @@ pretraining corpus` says nothing to a reader who has not met the dataset. Name t
 that this adds a connector.
 
 **One rule decides what enters the stack: a file that `download` or `convert` imports and calls.**
-Everything else you wrote to build the connector stays out — `heads.py`, the census script, the
+Everything else you wrote to build the connector stays out — `heads.py`, the survey script, the
 plan. Those live under `docs/notes/`, which is never `git add`ed.
 
 ## Rules that hold in every phase
@@ -458,7 +458,7 @@ plan. Those live under `docs/notes/`, which is never `git add`ed.
   the checked-out branch and swaps when the branch swaps.
 - **Never `git add` the plan.** `docs/notes/` stays local, like `docs/openspec/`. The head and the
   raw release live there or in the build cache, and neither is ever committed.
-- **Never read the data to learn about the data.** Heads show shape, censuses show anomalies.
+- **Never read the data to learn about the data.** Heads show shape, surveys show anomalies.
 - **Write down what you measured, and mark it *(measured)*.** A number nobody can re-measure is a
   claim, not evidence.
 - Follow AGENTS.md: conventional commits, no `--no-verify`, TimeNet's own errors from
@@ -466,7 +466,7 @@ plan. Those live under `docs/notes/`, which is never `git add`ed.
 
 ## Further reading
 
-- `references/discovery.md` — heads, censuses, and the map.
+- `references/discovery.md` — heads, surveys, and the map.
 - `references/fidelity.md` — what a connector may and may not do to its source.
 - `references/layout.md` — how the modules of a connector divide.
 - `references/connector-anatomy.md` — the contract, the bases, the task types, a worked example.
