@@ -32,14 +32,14 @@ it:
 4. **The `README.md`** — the assumptions and the inconsistencies, last, because it describes what the
    PRs below it built.
 
-Put a mid-stack change on the branch that owns it and run `gh stack rebase --upstack`. Do not fold it
-into a higher branch.
+Put a mid-stack change on the branch that owns it. Then run `gh stack rebase --upstack`. Do not fold
+it into a higher branch.
 
 ## Each pull request stands alone
 
 **This skill's own phases create the forward-reference trap, so watch for it.** Each PR must stand
 alone: no comment, docstring or README line that a later PR deletes, and no forward-looking chatter
-such as "the next PR adds the tasks". The plan names a README that has not landed yet, and a module
+such as "the next PR adds the tasks". The plan names a README that does not exist yet, and a module
 docstring easily names a `connector.py` two branches up. Write each file as though the branch it sits
 on is the last one.
 

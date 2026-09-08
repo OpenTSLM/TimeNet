@@ -3,30 +3,31 @@
 Copy this shape into `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/README.md`.
 This file ships with the connector. It is the document somebody reads a year after the build.
 
-The warning reaches the person running the build. The README reaches the person reading the data.
-Both are needed.
+The warning reaches the person who runs the build. The README reaches the person who reads the
+data. Both are necessary.
 
 Rules:
 
 - **These seven sections, in this order, and no others.** A reader must be able to find a fact
-  without reading the whole file, and a section nobody expects is a section nobody finds. A new kind
-  of fact goes in the section that already covers it, or the standard changes for every connector.
-- **Each section has a shape, given below, and not just a heading.** A fixed heading over freeform
-  prose is not a standard.
-- **Every section below is required, even when it is empty.** Write `None.` under a heading that
-  does not apply. A section saying "None" is evidence somebody looked; a missing section is
-  ambiguous, and a reader cannot tell the difference between a clean release and an unasked
-  question. `scripts/check_connector_readmes.py` enforces the headings.
+  without reading the whole file. A section nobody expects is a section nobody finds. A new kind of
+  fact goes in the section that already covers it, or the standard changes for every connector.
+- **Each section has a shape, given in the table that follows, and not just a heading.** A fixed
+  heading over freeform prose is not a standard.
+- **Every section that follows is required, even when it is empty.** Write `None.` under a heading
+  that does not apply. A section that says "None" is evidence somebody looked. A missing section is
+  ambiguous. A reader cannot tell the difference between a clean release and an unasked question.
+  `scripts/check_connector_readmes.py` enforces the headings.
 - **One entry per inconsistency and per assumption**, with three parts: the evidence, the decision,
   and the state.
 - **The state is `Handled`, `Not built`, or `Open`.** An open entry is worth more than a tidy file,
   because it names what nobody has decided.
-- **Mark any number you measured over the release yourself as `*(measured)*`**, so a reader can tell
-  it from one copied off the dataset's page. A number nobody can re-measure is a claim, not evidence.
-- **Quote the description sentences the design relies on**, beside `source_url`, so the next reader
-  can check them rather than trust them.
+- **Mark every number you measured over the release yourself as `*(measured)*`.** Then a reader can
+  tell it from one copied off the dataset's page. A number nobody can re-measure is a claim, not
+  evidence.
+- **Quote the description sentences the design relies on**, beside `source_url`. Then the next
+  reader can check them rather than trust them.
 - **Say where the sample ids come from.** Where the source states no id and the connector built one
-  from a position, the README says so, and says that a re-release invalidates every id.
+  from a position, the README says so. The README also says that a re-release invalidates every id.
 - Use the `simple-english` skill on the prose. Do not run it over quoted evidence.
 
 ## Contents
@@ -56,9 +57,9 @@ The README this template produces has these sections, in this order:
 Two rules hold inside every section:
 
 - **A number you counted yourself is marked `*(measured)*`.** One copied from the dataset's page is
-  not. A reader has to be able to tell which claims they can re-measure.
-- **A decision states its reason.** "The table wins" is not a decision; "the table wins, because
-  published work joins against it" is.
+  not. A reader must be able to tell which claims they can re-measure.
+- **A decision states its reason.** "The table wins" is not a decision. "The table wins, because
+  published work joins against it" is one.
 
 `packages/timenet-connectors/src/timenet_connectors/datasets/physionet/sleep_edfx/README.md` is the
 worked example.

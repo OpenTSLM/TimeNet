@@ -1,13 +1,13 @@
 # How the modules of a connector divide
 
-Reference for the `add-dataset-connector` skill. The plan states the skeleton in phase 1; phase 4
+Reference for the `add-dataset-connector` skill. The plan states the skeleton in phase 1. Phase 4
 builds it. This file says what goes where and why.
 
-**How to read this.** The rules are general. Two kinds of dataset-specific text appear below and they
-are not the same thing: a **citation** such as `sleep_edfx/connector.py` points at code in this repo
-that shows a convention is real and followed — a reviewer checks those. An **illustration** marked
-*Sleep-EDF:* shows one shape a rule can take, and never narrows it. Where a template uses
-`<placeholders>`, they are yours to fill.
+**How to read this.** The rules are general. Two kinds of dataset-specific text appear in this file,
+and they are not the same thing. A **citation** such as `sleep_edfx/connector.py` points at code in
+this repo that shows a convention is real and followed. A reviewer checks a citation. An
+**illustration** marked *Sleep-EDF:* shows one shape a rule can take, and never narrows it. Where a
+template uses `<placeholders>`, they are yours to fill.
 
 ## Contents
 
@@ -31,8 +31,8 @@ that shows a convention is real and followed — a reviewer checks those. An **i
 
 ## The one rule that places every module
 
-**The module that reads a file must not be the module that says what its contents mean.** Each module
-can then be read on its own, and half of them need no fixture to test.
+**The module that reads a file must not be the module that says what its contents mean.** You can
+then read each module on its own, and half of them need no fixture to test.
 
 `connector.py` orchestrates. Nothing below it drives. It walks the release, opens what it needs, and
 hands what it opened to the functions that give it meaning. Those functions open nothing and walk
@@ -78,32 +78,32 @@ packages/timenet-connectors/src/timenet_connectors/bases/
 dataset. A base's tests live at `packages/timenet-connectors/tests/`, beside the base and not beside
 any connector.
 
-**One test decides whether a module belongs in `bases/`: could a second connector import it
+**One test decides whether a module belongs in `bases/`: can a second connector import it
 unchanged?** `bases/edf/reader.py` opens EDF files and `bases/excel.py` decodes what Excel itself
-states about a cell — a whole number, a bare time as a fraction of a day. Neither names a dataset. A
+states about a cell: a whole number, a bare time as a fraction of a day. Neither names a dataset. A
 code whose meaning changes between two sheets of one release stays in the connector, which is why
 `tables._decode_sex` did not move.
 
 **Lift on the second copy, not the third.** `find_dir_containing` was copied into two connectors
 before it moved into `download/`.
 
-**The library's own types stay inside the base.** `edfio` types do not leave `reader.py`; it gives
-back its own `EdfHeader` and `EdfFile`, so a change of library reaches one file.
+**The library's own types stay inside the base.** `edfio` types do not leave `reader.py`. That
+module gives back its own `EdfHeader` and `EdfFile`, so a change of library reaches one file.
 
 **A base is not always usable at the size you need.** `BaseHuggingFaceConnector` returns a list
-holding every row of the release, so a large Hub dataset has to write its own `download` and give
-back a handle instead. `discovery.md § Choose the download shape` states the limit and the numbers.
-Check that the base fits the size before you build on it.
+holding every row of the release. A large Hub dataset must write its own `download` and give back a
+handle instead. `discovery.md § Choose the download shape` states the limit and the numbers. Before
+you build on a base, check that it fits the size.
 
 A small connector does not need all of these. `chengsenwang/tsqa` is one `connector.py`, because it
-reads one parquet row per sample and there is nothing to divide. Add a module when the survey shows
-a second kind of file or a second kind of meaning, not before.
+reads one parquet row per sample and there is nothing to divide. When the survey shows a second
+kind of file or a second kind of meaning, add a module. Do not add one before.
 
 **`chengsenwang/tsqa` is also the pattern for a row-shaped release that states no id and no time
 axis**, which is the harder thing it demonstrates. Its corpus has neither, so `connector.py:53`
 builds `sample_id=f"row-{index}"` from the row's position and `:48` gives every series an
-`OrdinalAxis()` rather than inventing a rate. Read it when your release ships rows and no identity.
-`fidelity.md § The data` states the rule those two lines follow.
+`OrdinalAxis()` rather than inventing a rate. When your release ships rows and no identity, read
+this connector. `fidelity.md § The data` states the rule those two lines follow.
 
 The org folder needs its own `__init__.py`. `discovery.resolve(dataset_id)` imports only the one
 module and reads its `CONNECTOR`.
@@ -111,7 +111,7 @@ module and reads its `CONNECTOR`.
 ## What each module may do
 
 - **The opening modules decode nothing.** `bases/edf/reader.py` opens containers and
-  `bases/excel.py` opens workbooks; neither says what the bytes mean.
+  `bases/excel.py` opens workbooks. Neither says what the bytes mean.
   `reader.open_edf(path)` parses the header, and `reader.read_channel(file, index)` takes that open
   file.
 - **`tables.py` turns rows into facts and does no I/O at all.** It imports the stdlib,
@@ -126,8 +126,8 @@ module and reads its `CONNECTOR`.
 ## Two rules that follow
 
 **Read a file one time.** Parse a header one time and pass it on. A function that takes a path while
-its caller already holds the open file re-reads what has been read. Seven channels cost one header
-parse, not seven.
+its caller already holds the open file reads that file a second time. Seven channels cost one
+header parse, not seven.
 
 **A function touches the disk or builds a value, never both.** The half that builds a value is then
 provable with values alone, and needs no file on disk to test it.
@@ -145,21 +145,21 @@ file = reader.open_edf(recording.psg_path)
 series = timeseries.build(sample_id, file, specs.SPECS, loader=reader.build_channel_loader)
 ```
 
-`build` is handed an open file and a loader factory. It opens nothing, and it holds nothing of this
-dataset.
+`convert` hands `build` an open file and a loader factory. `build` opens nothing, and it holds
+nothing of this dataset.
 
 ## The lazy loader is I/O too, and it runs after `convert` has returned
 
 Let the loader close over the open file. The channels of one recording then share one open file and
 one memory map, and the header is parsed one time.
 `reader.build_channel_loader(file, index)` holds the file that `convert` opened, so a seven-channel
-sample opens its file once rather than once per series. Give a sample's series the same `source_id`
-and they are read together, which is what makes one open enough.
+sample opens its file once rather than once per series. Give a sample's series the same
+`source_id`. They are then read together, which is what makes one open enough.
 
 **The cost is that whatever a loader captures stays alive until it is called, and it is called after
 `convert` returns.** So a build holds every file it opened open until then. A couple of hundred open
 files is fine. A hundred thousand is not, and wants a loader that reopens by path and pays the header
-parse again. Say which case you are in, in the plan.
+parse again. In the plan, say which case you are in.
 
 ## Building the series
 
@@ -171,7 +171,7 @@ Three things, in this order:
 2. **One map from every channel name of the release to those specs**, keyed by the exact string in
    the header.
 3. **One builder that takes the map and gives the series.** It reads every other attribute from the
-   header it is handed.
+   header the caller hands it.
 
 ```python
 _KIND = TimeSeriesSpec(
@@ -188,8 +188,8 @@ SPECS = {
 }
 ```
 
-- *Sleep-EDF:* one `_EEG` spec serves both `EEG Fpz-Cz` and `EEG Pz-Oz`, and one `_MARKER` spec
-  serves the marker channel under both the names the two parts of the release give it.
+- *Sleep-EDF:* one `_EEG` spec serves both `EEG Fpz-Cz` and `EEG Pz-Oz`. One `_MARKER` spec serves
+  the marker channel under both the names the two parts of the release give it.
 
 Four rules hold here:
 
@@ -198,7 +198,7 @@ Four rules hold here:
 - **Each channel keeps its own time axis.** A `RegularAxis` whose period comes from
   `samples_per_record / record_duration` for that channel.
 - **Read the rate and the block duration from the header, never from a constant.** One channel name
-  can run at different rates in two parts of a release, and one file can write a different block
+  can run at different rates in two parts of a release. One file can write a different block
   duration from all the others.
 - **An unknown channel name raises `TimeFFormatError`.**
 
@@ -233,21 +233,21 @@ flowchart LR
 
 **One spec table covers every shape the survey found.** A shared channel name is still worth a second
 look, because one name can cover two different measurements. Ask whether a spec — a kind and a unit
-— is still true of both, and let the header supply whatever separates them. Check every shared name
-before you write one table.
+— is still true of both. Then let the header supply whatever separates them. Before you write one
+table, check every shared name.
 
 - *Sleep-EDF:* `EMG submental` is a rectified envelope at 1 Hz in one part of the release and a raw
   trace at 100 Hz in the other. Both are EMG in microvolts, which is what the spec states, and the
-  rate that separates them comes from the header — so the shared name costs nothing here.
+  rate that separates them comes from the header. As a result, the shared name costs nothing here.
 
 ## The survey decides values, not modules
 
 A survey that finds two shapes does not mean two modules. Every difference it found is one of two
 things:
 
-- **A value the header states** — channels, rates, record duration, physical range. The builder reads
+- **A value the header states**: channels, rates, record duration, physical range. The builder reads
   them and knows nothing of either study.
-- **A value the description states as data** — the header rows to skip, the columns to take by
+- **A value the description states as data**: the header rows to skip, the columns to take by
   position, the key of a row, the map of its sex column. These are the fields of one frozen
   description type: `tables.SheetShape`, of which `CASSETTE_SHEET` and `TELEMETRY_SHEET` are two
   values. A new sheet is a new value, not a new module, and no function in `tables.py` names a study.
@@ -265,11 +265,11 @@ says:
 
 > This imports each connector module. Use it for listings and error messages, not the build hot path.
 
-It walks every package under `datasets/` and imports each one to read its `CONNECTOR`. A module-level
-import in **any** connector module therefore runs for **every** connector. A connector that put
-`import huggingface_hub` at the top of its `connector.py` would make `available()` raise in an
-environment without that library, and dataset listing would break for everybody because one connector
-declared a dependency.
+It walks every package under `datasets/` and imports each one to read its `CONNECTOR`. As a result,
+a module-level import in **any** connector module runs for **every** connector. If a connector puts
+`import huggingface_hub` at the top of its `connector.py`, `available()` raises in an environment
+without that library. Dataset listing then breaks for everybody, because one connector declared a
+dependency.
 
 Two cases follow, and where the library is declared says which one you are in:
 
@@ -300,19 +300,19 @@ library inside the function, because every connector pays for that module. A bas
 because nothing else reaches it and there is nobody to protect.
 
 **A requirement is declared twice.** Once in the connector's `requirements.txt`, which the build
-installs into the environment the build runs in, and once in the root dev group, which is what puts
-it in your own environment. `make sync` is `uv sync --all-groups --all-extras`, and a
+installs into the environment the build runs in. Once in the root dev group, which is what puts it
+in your own environment. `make sync` is `uv sync --all-groups --all-extras`, and a
 `requirements.txt` is neither a group nor an extra, so syncing alone will not install it. Without
 the second declaration `ty` reports the deferred import as unresolved and the connector's test cannot
 run.
 
-**Every deferred import states its reason**, in the `noqa` or in a comment above it, so a later
-reader can retire it rather than guess at it.
+**Every deferred import states its reason**, in the `noqa` or in a comment above it. A later
+reader can then retire it rather than guess at it.
 
 ## Tests
 
 Tests live beside their connector in `<org>/<name>/tests/`, one module per module they cover. The
-split above decides what each needs:
+split between I/O and meaning decides what each needs:
 
 **The repo ships no dataset bytes. Nothing is checked into a `fixtures/` directory, and no such
 directory exists.** A test builds what it needs, synthetically, and says so in a comment:
@@ -347,7 +347,8 @@ No connector reads an environment variable, and the ones some older docs name do
 | The connector's id prefix | `_ID_PREFIX`, one module-level constant | `sleep_edfx/connector.py` |
 
 Because `download_async` gives one handle and not a list per sample, `convert` starts
-`source = raw_refs[0]`. The name `raw_refs` comes from `BaseConnector[TRaw]` and is not iterated.
+`source = raw_refs[0]`. The name `raw_refs` comes from `BaseConnector[TRaw]`, and `convert` does not
+iterate it.
 
 `__init__.py` re-exports with explicit self-aliases, so a re-exported name is unambiguously public
 to a type checker rather than an incidental import:
@@ -359,9 +360,9 @@ from timenet_connectors.datasets.physionet.sleep_edfx.connector import (
 )
 ```
 
-Fetch an archive with `ensure_archive`, then locate it with
+Fetch an archive with `ensure_archive`. Then locate it with
 `find_dir_containing(root, "<a file at the archive root>")`. Archives extract nested, and the helper
-searches with `rglob`, so you never have to guess the layout the archive produced.
+searches with `rglob`, so it is never necessary to guess the layout the archive produced.
 
 ## The keys a connector writes
 
@@ -371,8 +372,8 @@ of `StrEnum` classes.** A `StrEnum` member is a `str`, so it passes straight int
 literals cannot drift, so `ecg_qa_cot` keeps them. Two modules is the line.
 
 **A description belongs to the key, not to the value.** Every value of one key means the same kind
-of thing, so the description sits in a `dict` keyed by the key, and not in each call that builds an
-annotation.
+of thing. As a result, the description sits in a `dict` keyed by the key, and not in each call that
+builds an annotation.
 
 ## Dedupe a closed set through one holder, not through an id literal
 
@@ -380,20 +381,20 @@ Two connectors solve this two ways, and the newer one is better.
 
 - `sleep_edfx` holds `MetadataAnnotation`: an object that builds the annotation for a value on first
   sight and gives the same instance back after. Nothing computes an id, and nothing can disagree.
-- `ecg_qa_cot` computes a stable id from the value and repeats that call at both ends — once where
-  the annotation is built, once where a streamed task references it. It has to, because the task
-  stream never sees the annotation objects.
+- `ecg_qa_cot` computes a stable id from the value and repeats that call at both ends: once where
+  the annotation is built, once where a streamed task references it. It must do this, because the
+  task stream never sees the annotation objects.
 
-**Use the holder wherever the annotation and its consumer are in one pass.** Fall back to a
-value-derived id only when a stream reads the annotation back without holding it, and then route
-both ends through one function so they cannot drift.
+**Use the holder wherever the annotation and its consumer are in one pass.** Use a value-derived id
+only when a stream reads the annotation back without holding it. Then route both ends through one
+function so they cannot drift.
 
 ## A `Protocol` keeps the import one way
 
 `metadata.RecordingIdentity` is a `Protocol` naming the four fields it reads off a recording.
 `SleepEdfxRecording` matches it without declaring so. The connector imports `metadata`, and
-`metadata` imports no connector. Reach for this when a helper module needs the shape of a value that
-`connector.py` owns.
+`metadata` imports no connector. When a helper module needs the shape of a value that `connector.py`
+owns, use a `Protocol`.
 
 ## Comments explain the release, not the code
 
@@ -411,23 +412,23 @@ reading a docstring instead of the imports.
 
 ## Not a rule: docstring voice
 
-The two connectors are written in two voices and neither has won. `sleep_edfx` writes "Give the id
-of the person a recording belongs to"; `ecg_qa_cot` writes "Return the integer ecg_id". Match the
-connector you are in, and do not rewrite the other one on the way past.
+The two connectors use two voices, and neither one wins. `sleep_edfx` writes "Give the id of the
+person a recording belongs to". `ecg_qa_cot` writes "Return the integer ecg_id". Match the connector
+you are in. Do not rewrite the other one on the way past.
 
 ## Still unsettled
 
 Named here so nobody resolves one by accident and calls it a convention.
 
-- **Where a survey lives.** A test that fails when a release grows a third shape would be the
+- **Where a survey lives.** A test that fails when a release grows a third shape is the
   strongest version of it, but it needs the full download.
-- **Whether the spec table is code or data.** The channel-to-spec map could sit in `dataset.yaml`
-  beside the card. Code keeps it type-checked; data keeps it readable to somebody who does not read
+- **Whether the spec table is code or data.** The channel-to-spec map can sit in `dataset.yaml`
+  beside the card. Code keeps it type-checked. Data keeps it readable to somebody who does not read
   Python.
 - **How a sample states which part of a release it came from**, other than by an annotation.
 - **How far the lazy loaders scale.** Every file a loader captures stays open until it is called. A
-  couple of hundred is fine; a hundred thousand is not, and would want a loader that reopens by path
-  and pays the header parse again. Nobody has fixed the number where that flips.
+  couple of hundred is fine. A hundred thousand is not, and wants a loader that reopens by path
+  and pays the header parse again. Nobody fixed the number where that flips.
 - **Whether a `head()` should reach the CLI** (`timenet-build head <id>`). It is settled that a head
   is not a connector module: it lives with the discovery record and does not ship. Whether the build
   CLI grows a command for one is open.

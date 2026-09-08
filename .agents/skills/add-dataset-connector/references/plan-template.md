@@ -54,8 +54,8 @@ States are `not started`, `in progress`, `done`, and for the gate `approved <dat
 
 ### What the description states
 
-Quote the sentences the design relies on, each with where it came from. These move to the README in
-phase 3.
+Quote the sentences the design relies on, each with where it came from. These sentences move to the
+README in phase 3.
 
 > <quoted sentence>
 
@@ -64,8 +64,8 @@ phase 3.
 ### What the metadata files claim
 
 A file that describes the release rather than holding it: a `dataset_info.json`, a manifest, a data
-dictionary, a `state.json`. Read these before you open anything, because what they claim is what the
-heads then check. Phase 1 fills in the last column.
+dictionary, a `state.json`. Before you open anything, read these files, because what they claim is
+what the heads then check. Phase 1 fills in the last column.
 
 | file | what it claims | what the files show |
 | --- | --- | --- |
@@ -83,12 +83,12 @@ heads then check. Phase 1 fills in the last column.
 | `<path>` | | | | no |
 
 The **container** is what the grouping in `discovery.md` gives you for free. The **kind** is the role,
-and it is filled in only after a head has confirmed it — see
-`discovery.md § Give every raw file type a head()`. A file whose kind no head has settled is named by
-its container and left that way.
+and it is filled in only after a head confirms it — see
+`discovery.md § Give every raw file type a head()`. When no head settled the kind of a file, that
+file is named by its container and left that way.
 
-Every kind in this table is a node in the map below. Every file that belongs to no sample is named
-here once, so nobody looks for it again.
+Every kind in this table is a node in the map that follows. Every file that belongs to no sample is
+named here once, so nobody looks for it again.
 
 ### Heads
 
@@ -135,19 +135,20 @@ A dashed arrow is a part that is not written yet.
 ### The sample model — where every fact comes from
 
 Every object TimeF will hold, and the exact part of the source that states it. This is the diagram
-the user accepts or rejects, so name the part of a file rather than the file, and label every edge
-with what it carries.
+the user accepts or rejects. Name the part of a file rather than the file. Label every edge with
+what it carries.
 
 ```mermaid
 flowchart LR
 ```
 
-Check it before you show it:
+Before you show this diagram, check it:
 
 - every TimeF node has an inbound edge — one without is invented
-- every source node has an outbound edge, or is in the inventory as belonging to no sample
+- every source node has an outbound edge, or the inventory lists it as a file that belongs to no
+  sample
 - the edge that scopes an annotation says whether it came from prose or a header
-- every task traces to an annotation or to the sentence stating the question
+- every task traces to an annotation or to the sentence that states the question
 
 ## 2. The model
 
@@ -169,8 +170,8 @@ Real values, not placeholders.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 
 `TimeSeriesSpec.dtype` defaults to `float32`. A source that stores `double` fails when the writer
-first calls a loader, which is long after `convert` returned, so the two dtype columns must agree
-here. Take the source dtype from the head.
+first calls a loader. That call comes long after `convert` returned. As a result, the two dtype
+columns must agree here. Take the source dtype from the head.
 
 ### Annotations
 
@@ -211,8 +212,8 @@ A list per sample, or one handle walked at convert time. Say which and why.
 
 ### What already exists
 
-List what the tree already has for each part, before naming a module. Reuse is judged against the
-whole tree, which is the thing an author writing one connector cannot see.
+Before you name a module, list what the tree already has for each part. Reuse is judged against the
+whole tree, which is the thing an author of one connector cannot see.
 
 | this connector needs | what already does it | reused | if not, why not |
 | --- | --- | --- | --- |
@@ -230,7 +231,7 @@ whole tree, which is the thing an author writing one connector cannot see.
 | `specs.py` | the signal-name to spec map | no | no |
 
 The half that **opens** a file is a base, not a module here — see `layout.md`. A test that needs a
-file writes a synthetic one into `tmp_path`; no real bytes are checked in. `heads.py` is not a module
+file writes a synthetic one into `tmp_path`. No real bytes are checked in. `heads.py` is not a module
 of the connector: it stays in this folder, beside this plan.
 
 ### Dependencies
@@ -256,13 +257,13 @@ here.** A prediction that contradicts a table two sections above it is a mistake
 
 ## 5. Decisions and open questions
 
-Two headings, and the split matters. A gate holding ten questions trains the user to approve the
-list rather than argue with it, which is the failure the gate exists to prevent.
+Two headings, and the split matters. A gate that holds ten questions trains the user to approve the
+list rather than argue with it. This habit is the failure the gate exists to prevent.
 
 ### Decisions taken
 
 Everything a repo rule or an existing connector already answers. Take the decision, cite the rule,
-and record it here. The user can overturn any of these on reading them.
+and record it here. The user can overturn each of these decisions after reading them.
 
 | # | the question | what was decided | the rule that decided it |
 | --- | --- | --- | --- |
@@ -270,7 +271,7 @@ and record it here. The user can overturn any of these on reading them.
 
 ### Open questions
 
-A question belongs here only when all three hold: the source is silent, **and** no repo rule covers
+A question belongs here only when all three hold. The source is silent, **and** no repo rule covers
 it, **and** two defensible answers lead to different samples, tasks or counts. Anything else is a
 decision, above.
 
