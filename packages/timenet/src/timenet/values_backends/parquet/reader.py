@@ -78,9 +78,8 @@ class ParquetValuesReader(BaseValuesReader):
     def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
 
-        A series stored in one chunk, which is every series that fits the writer's chunk size, gets
-        that chunk's slice of the decoded row group back as it is. The slice shares the row group's
-        buffer, so nothing is copied and the row group lives for as long as the values do.
+        This method copies each chunk into a new array. A caller that keeps the values therefore
+        does not keep the whole decoded row group alive.
 
         Args:
             version: The opened version handle.
@@ -92,11 +91,6 @@ class ParquetValuesReader(BaseValuesReader):
         """
         # If the stored type matches the spec, skip conversion.
         target = self._target(spec)
-        if len(rows) == 1:
-            row = rows[0]
-            group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
-            chunk = group.values[row["chunk_minor_idx"]].values
-            return chunk if chunk.type == target else chunk.cast(target)
         chunks = [
             self._row_group(version, row["chunk_file"], row["chunk_major_idx"]).values[row["chunk_minor_idx"]].values
             for row in rows
