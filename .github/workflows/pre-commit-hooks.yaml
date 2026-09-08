@@ -2,9 +2,6 @@ name: Pre-commit hooks
 
 on:
   pull_request:
-    # ready_for_review is what starts the full suites once a draft is promoted. Without it, marking
-    # a pull request ready would leave the tiers below unrun and the gate red.
-    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -57,10 +54,11 @@ jobs:
       if: steps.checks.outcome == 'failure' || steps.unit.outcome == 'failure'
       run: exit 1
 
-  # Skipped on drafts. A Free plan allows 20 concurrent jobs, and the 12-deep stacks this repo
-  # pushes would otherwise ask for 36 at once and queue the quick job behind a full suite.
+  # Waits on quick, for two reasons. A Free plan allows 20 concurrent jobs, and the 12-deep stacks
+  # this repo pushes would otherwise ask for 36 at once and queue quick behind a full suite. And a
+  # branch that fails lint or a unit test costs one runner minute instead of seven.
   tests:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: [quick]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -95,7 +93,7 @@ jobs:
   # Guards the minimum supported Python. Its own job, so it builds a 3.11 environment once instead
   # of tearing down the 3.13 one mid-run.
   tests_min:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: [quick]
     runs-on: ubuntu-latest
     env:
       # Threads the interpreter through `make sync` and `make test`.
@@ -132,12 +130,10 @@ jobs:
       with:
         enable-cache: false
     - name: Report
-      # Skipped on forks, whose token has no pull-requests: write, and on drafts, where two of the
-      # three tiers did not run. A transient comment-API error must never decide the verdict, hence
-      # continue-on-error; the step below is the verdict.
+      # Skipped on forks, whose token has no pull-requests: write. A transient comment-API error
+      # must never decide the verdict, hence continue-on-error; the step below is the verdict.
       if: >-
         !cancelled()
-        && !github.event.pull_request.draft
         && github.event.pull_request.head.repo.full_name == github.repository
       continue-on-error: true
       env:
@@ -149,18 +145,14 @@ jobs:
         TESTS_MIN: ${{ needs.tests_min.result }}
       run: uv run --no-project .github/scripts/ci_report.py
     - name: Verdict
+      # A tier that quick blocked reports `skipped`, which is not a pass: quick itself is in the
+      # list and reports the failure that stopped it.
       env:
-        DRAFT: ${{ github.event.pull_request.draft }}
         RESULTS: >-
           ${{ needs.quick.result }}
           ${{ needs.tests.result }}
           ${{ needs.tests_min.result }}
       run: |
-        if [ "$DRAFT" = "true" ]; then
-          echo "Draft pull request: the 3.13 and 3.11 suites did not run."
-          echo "Mark it ready for review to run them."
-          exit 1
-        fi
         for result in $RESULTS; do
           if [ "$result" != "success" ]; then
             echo "A required tier reported '$result'."
