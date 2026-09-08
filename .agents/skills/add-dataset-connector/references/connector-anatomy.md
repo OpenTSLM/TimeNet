@@ -23,6 +23,8 @@ one: the rules for that are the skill's own, and they live in its other referenc
 - [Where an answer, an annotation and a task can live](#where-an-answer-an-annotation-and-a-task-can-live)
 - [Task types (`timenet.types.tasks`)](#task-types-timenettypestasks)
 - [Worked example: `chengsenwang/tsqa` (HuggingFace, QA)](#worked-example-chengsenwangtsqa-huggingface-qa)
+- [PhysioNet notes: `physionet/ecg_qa_cot`](#physionet-notes-physionetecgqacot)
+- [Fixture-based test pattern](#fixture-based-test-pattern)
 
 ## The `BaseConnector` contract
 
@@ -96,7 +98,7 @@ its own and imports `bases.edf.reader` and `bases.excel`.
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
 `discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
 `chengsenwang/tsqa -> ...datasets.chengsenwang.tsqa` and `physionet/ecg-qa-cot -> ...datasets.physionet.ecg_qa_cot`.
-The org folder needs its own `__init__.py`, holding a docstring and no `CONNECTOR`.
+The org folder needs its own `__init__.py` (a namespace package that exposes no `CONNECTOR`).
 
 ## The dataset card (`dataset.yaml`)
 
@@ -182,14 +184,8 @@ facility you did not know about is not a choice you made.
 | `dataset.set_task_stream(task_types, source)` | there are far more tasks than samples, or more than fit in memory | `physionet/ecg_qa_cot/connector.py:297` |
 | `sample.add_annotation` / `add_annotations` | the annotation belongs to one sample and is read back through it | `sleep_edfx/connector.py` |
 | `dataset.register_annotations` (`dataset/dataset.py:186`) | a task references an annotation that no sample carries, and many tasks reference the same one. It dedupes by id | `physionet/ecg_qa_cot/connector.py:227` |
-| `Task.target` | the answer is a short value that belongs to this one task | `chengsenwang/tsqa/connector.py:123` |
-| `Task.target_annotation_ids` (`types/tasks.py:118`) | the answer **is** stored annotations: store the text one time and point many tasks at it, instead of copying it into every task row | nothing yet — the path is written and tested only for validation |
-| `Task.input_annotation_ids` | the task is asked *about* stored annotations rather than answered by them | `physionet/ecg_qa_cot/connector.py:306` |
-| `Task.from_tasks` | this task is derived from other tasks, and a reader has to be able to follow it back | — |
 
-**A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task`
-raises `TimeFValidationError` when a task sets both, and when it sets neither
-(`dataset/dataset.py:525-533`). Set `scope` and `from_tasks` on the task itself, not on the call.
+The fields a task carries its answer in are the `Task` frame, below.
 
 **Copying an answer into every task is the mistake this table exists to prevent.** A release with
 four captions per sample and 600 000 samples writes 2.4 million copies of text it could have stored
@@ -213,9 +209,22 @@ unique strings (`types/specs.py:57-68`).
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
-Every task shares one frame on the `Task` base — `sample_ids`, `prompt`, `scope` (a `Span` narrowing the
-input), `input_annotation_ids`, `target` / `target_annotation_ids`, `rationale`, `from_tasks` — so the
-type only says what *kind* of answer it is.
+Every task shares one frame on the `Task` base, so the type only says what *kind* of answer it is:
+
+| field | what it holds | seen in |
+| --- | --- | --- |
+| `sample_ids` | the samples the task is about. `add_task` sets them; a streamed task sets its own | — |
+| `prompt` | what the model is asked. `None` for an unprompted task | `chengsenwang/tsqa/connector.py:57` |
+| `scope` | the region of the input the task is about. `None` means the whole sample | `sleep_edfx/tasks.py` |
+| `input_annotation_ids` | annotations given as context, not ones the model must produce | `physionet/ecg_qa_cot/connector.py:308` |
+| `target` | the answer inline, typed by the subclass. Reach for it when the answer is a short value belonging to this one task | `chengsenwang/tsqa/connector.py:57` |
+| `target_annotation_ids` | the answer **is** these stored annotations. Reach for it to store the text one time and point many tasks at it, instead of copying it into every task row | nothing yet — the path is written and tested only for validation |
+| `rationale` | chain of thought to train on. Any task can carry one | `physionet/ecg_qa_cot/connector.py:307` |
+| `from_tasks` | the source tasks this one was derived from, so a reader can follow it back | — |
+
+**A task sets `target` or `target_annotation_ids`, never both and never neither.** `add_task` raises
+`TimeFValidationError` on a task that sets both, and on one that sets neither
+(`dataset/dataset.py:525-533`).
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
@@ -231,9 +240,8 @@ type only says what *kind* of answer it is.
 The three series-output tasks set `answer_is_sample` and locate their answer by sample id instead of
 filling `target`. `ForecastingTask` has a second form: `target_span`, a region inside the sample the
 task is attached to, exclusive with `target_sample_id`. Use it when the future to predict lies in the
-same sample rather than in another one. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
-points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
-the bounds of every `Span` the task carries.
+same sample rather than in another one. `add_task` also checks the bounds of every `Span` a task
+carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
@@ -292,3 +300,20 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
     TSQAConnector as TSQAConnector,
 )
 ```
+
+## PhysioNet notes: `physionet/ecg_qa_cot`
+
+Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
+`download` calls `ensure_archive` / `download_files` and returns refs; `convert` shares the 12-lead
+ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
+whole-sample `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
+`AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
+`fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
+pattern, including sharing a series across many samples.
+
+## Fixture-based test pattern
+
+Tests live beside their connector, in `<org>/<name>/tests/`. Mirror the `chengsenwang/tsqa` one at
+`packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
+check a tiny raw sample into `tests/fixtures/`, then call `convert()` on it directly and assert on
+samples, tasks, annotations, and parsed values. No network, no env-var toggles.
