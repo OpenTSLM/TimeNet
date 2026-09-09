@@ -45,6 +45,9 @@ class EdfHeader(NamedTuple):
     record_duration: Fraction
     signals: tuple[str, ...]
     units: tuple[str, ...]
+    # Free text such as "HP:16Hz Rectification LP:0.7Hz". Two signals of one modality can hold
+    # different quantities, and only this field says so.
+    prefiltering: tuple[str, ...]
     samples_per_record: tuple[int, ...]
 
 
@@ -150,6 +153,7 @@ def _extract_header(edf: Any, path: Path) -> EdfHeader:
         record_duration=Fraction(str(edf.data_record_duration)),
         signals=tuple(signal.label for signal in signals),
         units=tuple(signal.physical_dimension for signal in signals),
+        prefiltering=tuple(signal.prefiltering for signal in signals),
         samples_per_record=samples_per_record,
     )
 

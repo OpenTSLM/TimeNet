@@ -23,6 +23,7 @@ class AnnotationKey(StrEnum):
     CONDITION = "condition"
     RECORDING_START_LOCAL = "recording_start_local"
     DEMOGRAPHICS_NOTE = "demographics_note"
+    PREFILTERING = "prefiltering"
 
 
 class Question(StrEnum):
