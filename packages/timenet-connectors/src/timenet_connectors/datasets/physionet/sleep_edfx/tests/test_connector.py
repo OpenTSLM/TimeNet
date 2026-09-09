@@ -19,7 +19,7 @@ from timenet.types import (
     TimeInterval,
 )
 from timenet_connectors.bases import excel
-from timenet_connectors.datasets.physionet.sleep_edfx import tables
+from timenet_connectors.datasets.physionet.sleep_edfx import specs, tables
 from timenet_connectors.datasets.physionet.sleep_edfx.connector import (
     SleepEdfxConnector,
     SleepEdfxSource,
@@ -46,6 +46,10 @@ _RECORDS = 120  # a session of 3600 s, which is short enough to write in a test
 _SESSION_SECONDS = _RECORD_SECONDS * _RECORDS
 _START = time(22, 0, 0)
 _LIGHTS_OFF_SECONDS = 22 * 60 * 60 + 30 * 60  # 22:30:00, half an hour into the session
+
+# The EDF prefiltering field, which the connector carries as an annotation. This string keeps the
+# shape of a real one and states no filter that the release states.
+_PREFILTERING = "HP:1Hz LP:90Hz"
 
 # Each recording gets this scoring: wake, then one stretch of sleep, then an unscored entry
 # that pads the file. The sleep period must cover the middle stretch alone.
@@ -81,11 +85,21 @@ _TELEMETRY_ROWS = [
 
 
 def _write_recording(
-    study_dir: Path, recording_id: str, signals: tuple[str, ...] = _SIGNALS, patient_name: str | None = None
+    study_dir: Path,
+    recording_id: str,
+    signals: tuple[str, ...] = _SIGNALS,
+    patient_name: str | None = None,
+    prefiltering: str = _PREFILTERING,
 ) -> None:
     rng = np.random.default_rng(0)
     edf_signals = [
-        edfio.EdfSignal(rng.standard_normal(_SESSION_SECONDS * 10), 10.0, label=signal, physical_dimension="uV")
+        edfio.EdfSignal(
+            rng.standard_normal(_SESSION_SECONDS * 10),
+            10.0,
+            label=signal,
+            physical_dimension="uV",
+            prefiltering=prefiltering,
+        )
         for signal in signals
     ]
     psg = edfio.Edf(
@@ -286,6 +300,10 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
     assert len([one for one in record.annotations if one.key == "sleep_stage"]) == len(_SCORING)
+    # The prefiltering annotation is the one whose value is a map, so the round trip proves that
+    # the manifest carries the signal names and not only the strings.
+    prefiltering = next(one for one in record.annotations if one.key == "prefiltering")
+    assert prefiltering.value == dict.fromkeys(_SIGNALS, _PREFILTERING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
     # fresh pass generates new ones, so compare what each task asks rather than its id.
@@ -417,3 +435,90 @@ def test_the_series_values_match_the_recording_they_were_read_from(release, monk
     assert float(read_back[-1]) == pytest.approx(float(written[-1]), rel=1e-3)
     assert series.spec.spec_type == "eeg"
     assert str(series.spec.unit_value) == "microvolt"
+
+
+def _emg_spec_type(dataset: TimeFDataset, record_id: str) -> str:
+    record = next(one for one in dataset.records if one.record_id == record_id)
+    return next(one for one in record.time_series if one.signal == "EMG submental").spec.spec_type
+
+
+def test_the_two_studies_write_their_emg_under_different_spec_types(release, tmp_path: Path, monkeypatch):
+    # The cassette recorder rectified its submental EMG and low-passed it at 0.7 Hz, so that
+    # signal holds an envelope. The telemetry recorder did neither. One spec type over both
+    # would let a consumer pool an envelope with a broadband signal and never learn it did.
+    cassette = _convert(release, monkeypatch)
+    study_dir = tmp_path / _TELEMETRY_STUDY
+    study_dir.mkdir()
+    _write_recording(study_dir, "ST7911J0", patient_name="Male_62yr")
+    telemetry = _convert(
+        tmp_path, monkeypatch, rows=_TELEMETRY_ROWS, study=_TELEMETRY_STUDY, table=tables.TELEMETRY_TABLE_NAME
+    )
+    assert _emg_spec_type(cassette, "sleep-edfx-SC4901E0") == "emg_envelope"
+    assert _emg_spec_type(telemetry, "sleep-edfx-ST7911J0") == "emg"
+
+
+def test_a_record_carries_the_prefiltering_of_every_signal(release, monkeypatch):
+    dataset = _convert(release, monkeypatch)
+    carried = _annotations(dataset, "sleep-edfx-SC4901E0", AnnotationKey.PREFILTERING)
+    assert [one.value for one in carried] == [dict.fromkeys(_SIGNALS, _PREFILTERING)]
+
+
+def test_two_recordings_that_were_filtered_alike_share_one_prefiltering_annotation(release, monkeypatch):
+    dataset = _convert(release, monkeypatch)
+    first = _annotations(dataset, "sleep-edfx-SC4901E0", AnnotationKey.PREFILTERING)[0]
+    second = _annotations(dataset, "sleep-edfx-SC4902E0", AnnotationKey.PREFILTERING)[0]
+    assert first is second
+
+
+def test_a_recording_that_states_no_prefiltering_carries_no_annotation(tmp_path: Path, monkeypatch):
+    study_dir = tmp_path / _STUDY
+    study_dir.mkdir()
+    _write_recording(study_dir, "SC4901E0", prefiltering="")
+    dataset = _convert(tmp_path, monkeypatch)
+    assert _annotations(dataset, "sleep-edfx-SC4901E0", AnnotationKey.PREFILTERING) == []
+
+
+def test_a_prefiltering_string_that_states_no_filter_is_kept(tmp_path: Path, monkeypatch):
+    # The cassette study writes "Hold during 2 seconds" here for its event marker, which is an
+    # instruction for the button and not a filter. The map keeps whatever the field holds, so
+    # nothing may describe it as a filter and nothing may drop it.
+    study_dir = tmp_path / _STUDY
+    study_dir.mkdir()
+    _write_recording(study_dir, "SC4901E0")
+    path = study_dir / "SC4901E0-PSG.edf"
+    psg = edfio.read_edf(path)
+    psg.signals[0].prefiltering = "Hold during 2 seconds"
+    psg.write(path)
+    dataset = _convert(tmp_path, monkeypatch)
+    carried = _annotations(dataset, "sleep-edfx-SC4901E0", AnnotationKey.PREFILTERING)[0]
+    assert carried.value == {**dict.fromkeys(_SIGNALS, _PREFILTERING), _SIGNALS[0]: "Hold during 2 seconds"}
+
+
+def test_a_signal_declaring_another_physical_dimension_fails_the_build(tmp_path: Path, monkeypatch):
+    # The unit written into TimeF comes from the connector's signal table. This is the check
+    # that keeps that table honest when a copy of the release states something else.
+    study_dir = tmp_path / _STUDY
+    study_dir.mkdir()
+    _write_recording(study_dir, "SC4901E0")
+    path = study_dir / "SC4901E0-PSG.edf"
+    psg = edfio.read_edf(path)
+    psg.signals[0].physical_dimension = "mV"
+    psg.write(path)
+    with pytest.raises(TimeFFormatError, match="declares the physical dimension 'mV'"):
+        _convert(tmp_path, monkeypatch)
+
+
+def test_every_signal_of_the_two_studies_declares_a_header_dimension():
+    # The check skips a signal the dimension table does not name, so a signal added to a spec
+    # table and not to that one would never be checked, and nothing else would fail.
+    assert specs.HEADER_DIMENSIONS.keys() == specs.CASSETTE_SPECS.keys() | specs.TELEMETRY_SPECS.keys()
+
+
+def test_a_cassette_recording_holding_a_telemetry_signal_fails_the_build(tmp_path: Path, monkeypatch):
+    # Each study has its own signal table, so the signal named "Marker" belongs to telemetry
+    # alone. Before the split, one table over both studies accepted it here.
+    study_dir = tmp_path / _STUDY
+    study_dir.mkdir()
+    _write_recording(study_dir, "SC4901E0", signals=(*_SIGNALS, "Marker"))
+    with pytest.raises(TimeFFormatError, match="does not record: 'Marker'"):
+        _convert(tmp_path, monkeypatch)

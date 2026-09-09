@@ -4,11 +4,11 @@ Every function here takes values and gives annotations. Nothing here opens a fil
 path. ``connector.py`` reads the release and the subject tables, then passes the values it read.
 A test can call these functions with values alone.
 
-Some facts repeat across the release. The study, the night number, the sex and the drug
-condition each come from a set that the release fixes. One annotation covers every record that
-states that value. :class:`MetadataAnnotation` holds one instance for each value. The writer
-keys its annotation table by id, and lists the records that carry each one. Many records that
-share one annotation write one row.
+Some facts repeat across the release. The study, the night number, the sex, the drug condition
+and the prefiltering of the signals each come from a set that the release fixes. One annotation
+covers every record that states that value. :class:`MetadataAnnotation` holds one instance for
+each value. The writer keys its annotation table by id, and lists the records that carry each
+one. Many records that share one annotation write one row.
 
 The age, the note and the lights-off time measure one recording. Each record gets its own.
 
@@ -39,15 +39,20 @@ _DESCRIPTIONS: dict[AnnotationKey, str] = {
     AnnotationKey.NIGHT: "Which of the subject's nights this recording is.",
     AnnotationKey.SEX: "The sex of the subject, as the subject table of the study states it.",
     AnnotationKey.CONDITION: "The drug the subject took, from the column pair of the subject table.",
+    AnnotationKey.PREFILTERING: (
+        "What each signal writes in its EDF prefiltering field, from a signal name to that "
+        "string. Most of these strings state an analog filter. A marker signal states how to "
+        "use its button."
+    ),
 }
 
 
 class MetadataAnnotation:
     """One annotation for each distinct value of a key whose values are a closed set.
 
-    Four keys take their value from a small fixed set: ``study``, ``night``, ``sex`` and
-    ``condition``. Every recording states one value of each. Without this class, each recording
-    builds its own copy of the same few annotations.
+    Five keys take their value from a small fixed set: ``study``, ``night``, ``sex``,
+    ``condition`` and ``prefiltering``. Every recording states one value of each. Without this
+    class, each recording builds its own copy of the same few annotations.
 
     This class builds the annotation for a value one time. It gives the same instance back for
     every later recording that states that value. Two records with the same sex then carry one
@@ -132,6 +137,34 @@ def build_recording_start_local(record_id: str, start_time: datetime) -> Annotat
         value=start_time.isoformat(timespec="seconds"),
         description="The local date and time the EDF header states for the first sample. The release names no zone.",
     )
+
+
+def build_prefiltering(metadata_annotation: MetadataAnnotation, header: reader.EdfHeader) -> tuple[Annotation, ...]:
+    """Give the annotation that keeps the EDF prefiltering field of each signal.
+
+    EDF states one prefiltering string for each signal, and this release uses that field to say
+    what no other field says: which study rectified its submental EMG, and what analog filter a
+    signal passed through. A marker signal states an instruction for its button there, so not
+    every string of the map is a filter.
+
+    Every recording of a study states the same strings, so the annotation is shared. The map is
+    keyed in signal-name order, so the sharing does not depend on the order a header lists its
+    signals.
+
+    Args:
+        metadata_annotation: The holder of the annotations whose values are a closed set.
+        header: The header of the signal file.
+
+    Returns:
+        One annotation whose value maps a signal name to its prefiltering string, or nothing
+        when no signal of the file states one.
+    """
+    paired = zip(header.signals, header.prefiltering, strict=True)
+    stated = dict(sorted((signal, text) for signal, text in paired if text))
+    if not stated:
+        return ()
+
+    return (metadata_annotation.get_annotation(AnnotationKey.PREFILTERING, stated),)
 
 
 def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation | None:
@@ -236,6 +269,7 @@ class SubjectTables:
             build_age(row.age),
             build_recording_start_local(record_id, header.start_time),
         ]
+        built.extend(build_prefiltering(metadata_annotation, header))
 
         if night.condition is not None:
             built.append(metadata_annotation.get_annotation(AnnotationKey.CONDITION, night.condition))
