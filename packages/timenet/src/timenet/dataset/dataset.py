@@ -39,7 +39,11 @@ class TimeFDataset:
         """
         self._metadata = metadata
         self._records: list[Record] = []
+        # The ids in _records, kept in step with it so the reference checks do not re-collect them.
+        self._record_ids: set[str] = set()
         self._tasks: list[Task] = []
+        # The ids in _tasks, kept in step with it so the id checks do not re-collect them per call.
+        self._task_ids: set[str] = set()
         # Annotations that tasks reference but no record carries, deduped by id. A task's metadata
         # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
         # instead of being copied onto every record the tasks are about.
@@ -107,6 +111,7 @@ class TimeFDataset:
                 time_span=time_span,
             )
         self._records.append(record)
+        self._record_ids.add(record.record_id)
         return record
 
     def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
@@ -333,6 +338,7 @@ class TimeFDataset:
             for record in targets:
                 record.task_ids = (*record.task_ids, task.id)
             self._tasks.append(task)
+            self._task_ids.add(task.id)
         return batch
 
     def _validate_task_batch(self, batch: tuple[Task, ...], targets: tuple[Record, ...]) -> None:
@@ -351,20 +357,19 @@ class TimeFDataset:
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
         """
-        registered_ids = {task.id for task in self._tasks}
         batch_ids = [task.id for task in batch]
         duplicated = sorted({task_id for task_id in batch_ids if batch_ids.count(task_id) > 1})
         if duplicated:
             raise TimeFValidationError(f"tasks in the batch share an id: {duplicated}")
-        reused = sorted(set(batch_ids) & registered_ids)
+        unique_batch_ids = set(batch_ids)
+        reused = sorted(unique_batch_ids & self._task_ids)
         if reused:
             raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
-        known_task_ids = registered_ids | set(batch_ids)
         for task in batch:
             for parent_id in task.from_task_ids:
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
-                if parent_id not in known_task_ids:
+                if parent_id not in self._task_ids and parent_id not in unique_batch_ids:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {task.id!r} derives from task {parent_id!r}, which is not "
                         f"registered in this dataset or part of the batch"
@@ -497,7 +502,9 @@ class TimeFDataset:
         """
         dataset = cls(metadata=metadata)
         dataset._records = list(records)
+        dataset._record_ids = {record.record_id for record in dataset._records}
         dataset._tasks = list(tasks)
+        dataset._task_ids = {task.id for task in dataset._tasks}
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._schema = schema
         return dataset
@@ -558,18 +565,23 @@ class TimeFDataset:
     def _check_record_refs(self, task: Task) -> None:
         """Reject a payload record id that is not registered in this dataset.
 
+        Most task types declare no record-id fields, so the method returns before it looks at the
+        registered ids at all. It runs for every task, including every streamed one.
+
         Args:
             task: The task to register.
 
         Raises:
             TimeFValidationError: If a payload reference names an unknown record.
         """
-        known = {record.record_id for record in self._records}
-        for field_name in type(task).refs.record_id_fields:
+        record_id_fields = type(task).refs.record_id_fields
+        if not record_id_fields:
+            return
+        for field_name in record_id_fields:
             value = getattr(task, field_name)
             record_ids = (value,) if isinstance(value, str) else value or ()
             for record_id in record_ids:
-                if record_id not in known:
+                if record_id not in self._record_ids:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} references unknown record {record_id!r}"
                     )
@@ -664,8 +676,7 @@ class TimeFDataset:
                 dataset. It also occurs if one of the record's ``task_ids`` does not resolve to a
                 registered task that links back to the record.
         """
-        registered_ids = {registered.record_id for registered in self._records}
-        if record.record_id not in registered_ids:
+        if record.record_id not in self._record_ids:
             raise TimeFValidationError(f"record {record.record_id!r} is not registered in this dataset")
         by_id = {task.id: task for task in self._tasks}
         resolved: list[Task] = []
