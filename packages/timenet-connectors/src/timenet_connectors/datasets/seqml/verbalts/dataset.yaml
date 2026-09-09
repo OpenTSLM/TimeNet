@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the seqml/verbalts connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the derived
+# schema into manifest.json. README.md beside this file records the licence positions, the value
+# scaling and every other decision this card has no field for.
+yaml_schema_version: 1
+dataset_id: seqml/verbalts
+dataset_version: 1.0.0
+name: VerbalTS
+description: >-
+  Six caption-paired time-series corpora released with VerbalTS (ICML 2025): two synthetic sets,
+  Jena weather, Istanbul traffic congestion, ETTm1 electricity windows, and BlindWays motion
+  capture. Each record is one window with its categorical attribute codes, and each caption is the
+  prompt of a generation task whose answer is that window. Weather carries three captions per
+  window and every other component carries one. Values arrive already z-scored per variable, so
+  they are dimensionless, and no component ships timestamps.
+  The components hold six different licence positions, so this card takes `other`; do not
+  redistribute the converted bytes without reading README.md.
+license: other
+license_url: https://github.com/seqml/VerbalTS
+domains:
+  - environment
+  - transport
+  - energy
+  - motion
+  - general
+tags:
+  - captions
+  - text-to-time-series
+  - weather
+  - traffic
+  - motion-capture
+  - electricity
+  - synthetic
+  - verbalts
+  - icml-2025
+source_url: https://drive.google.com/drive/folders/1N0zxkLdvpdjkwayKA2OZIJYP4nfzhOeF
+citation: >-
+  Gu, Li, Jing, Ren. VerbalTS: Generating Time Series from Texts. Proceedings of the 42nd
+  International Conference on Machine Learning, PMLR 267, 2025.
+access: open
