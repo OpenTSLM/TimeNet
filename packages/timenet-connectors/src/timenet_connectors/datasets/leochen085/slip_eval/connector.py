@@ -147,12 +147,16 @@ def _iter_windows(root: Path, folder: str) -> Iterator[SlipEvalWindow]:
 def _x_column(path: Path) -> pa.ChunkedArray:
     """Give one file's ``X`` column, reading the file only when it is not the one already held.
 
-    Every series reads its values through :func:`_read_signal`, and the writer asks for them roughly
-    in the order this connector built them. Holding one file's column turns a walk of a folder from
-    one whole-file read per signal into one per file. The cache holds exactly one, because the
-    release gives no bound on how many would fit. One entry is not one row: it is a whole file's
-    column, and the largest of those is big enough that holding a second would matter. It stays
-    reachable until another file displaces it.
+    Every series reads its values through :func:`_read_signal`. The writer asks for values grouped
+    by spec type and then by signal name, and within one such group in the order this connector
+    built the records, so a cache of one turns a read per signal into a read per file. The cache
+    holds exactly one, because the release gives no bound on how many would fit. One entry is not
+    one row: it is a whole file's column, and the largest of those is big enough that holding a
+    second would matter. It stays reachable until another file displaces it.
+
+    The function stands alone because its argument is the cache key. Folded into its caller the key
+    would gain the row and the signal, every signal would take an entry, and a cache of one would
+    hold nothing useful.
 
     Args:
         path: The parquet file.
