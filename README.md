@@ -1,5 +1,9 @@
 # TimeNet
 
+> [!NOTE]
+> This is a pre-release version and is subject to change. Performance work is in active
+> development.
+
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
