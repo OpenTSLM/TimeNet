@@ -1,6 +1,6 @@
 [project]
 name = "timenet"
-version = "0.1.0"
+version = "0.0.1"
 description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
 readme = "README.md"
 license = "MIT"
