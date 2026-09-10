@@ -191,14 +191,13 @@ def _loader_for(path: Path, row: int, signal: int) -> Callable[[], pa.Array]:
     return lambda: _read_signal(path, row, signal)
 
 
-def _series_for(window: SlipEvalWindow, record_id: str) -> tuple[TimeSeries, ...]:
+def _series_for(window: SlipEvalWindow) -> tuple[TimeSeries, ...]:
     """Build one :class:`TimeSeries` per signal of one window.
 
     The axis is the rate the card states for that folder, used as stated.
 
     Args:
         window: The window's facts.
-        record_id: The id of the record the series belong to.
 
     Returns:
         The series, in the order the ``X`` column stores them.
@@ -222,7 +221,6 @@ def _series_for(window: SlipEvalWindow, record_id: str) -> tuple[TimeSeries, ...
             time_axis=axis,
             loader=_loader_for(window.path, window.row_in_file, index),
             n_values=window.length,
-            time_series_id=f"{record_id}-{index}",
         )
         for index in range(window.signals)
     )
@@ -371,7 +369,7 @@ def _add_folder(
     for window in _iter_windows(root, name):
         record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
         dataset.add_record(
-            time_series=_series_for(window, record_id),
+            time_series=_series_for(window),
             record_id=record_id,
             subject_ids=() if window.participant is None else (window.participant,),
         )
@@ -402,7 +400,7 @@ def _add_ppg(
             if record_id is None:
                 record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
                 dataset.add_record(
-                    time_series=_series_for(window, record_id),
+                    time_series=_series_for(window),
                     record_id=record_id,
                     subject_ids=() if window.participant is None else (window.participant,),
                 )
