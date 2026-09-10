@@ -25,6 +25,7 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any
 
+from huggingface_hub import snapshot_download
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -207,22 +208,8 @@ class SlipConnector(BaseConnector[SlipSource]):
             One handle naming every shard and the table beside them.
 
         Raises:
-            ImportError: If ``huggingface_hub``, declared in this connector's ``requirements.txt``,
-                is not installed.
             TimeNetDownloadError: If the fetch returned no shards.
         """
-        # discovery.available() imports every connector module to read its CONNECTOR, and
-        # huggingface_hub is declared in this connector's requirements.txt rather than by the
-        # package. A module-level import would break dataset listing for every connector in an
-        # environment without it.
-        try:
-            from huggingface_hub import snapshot_download  # noqa: PLC0415 (see the comment above)
-        except ImportError as exc:
-            raise ImportError(
-                f"reading {self.HF_REPO!r} needs huggingface_hub, declared in this connector's "
-                "requirements.txt. Run the build without --no-isolation, or install it yourself"
-            ) from exc
-
         root = Path(
             snapshot_download(
                 self.HF_REPO, repo_type="dataset", cache_dir=str(cache_dir), allow_patterns=[_SHARDS, _META]
