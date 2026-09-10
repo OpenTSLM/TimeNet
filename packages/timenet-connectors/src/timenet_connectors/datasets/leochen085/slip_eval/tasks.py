@@ -43,7 +43,7 @@ class Window(Protocol):
         """The release's own class index, where the folder ships an integer."""
 
 
-def _label_id(folder: str, label: str) -> str:
+def label_id(folder: str, label: str) -> str:
     """Give the id of the annotation holding one class of one folder's vocabulary.
 
     The digest is taken over the label text rather than with the builtin ``hash``, which is salted
@@ -75,7 +75,7 @@ def _vocabulary_id(folder: str) -> str:
     return f"vocabulary-{folder}"
 
 
-def _benchmark_id(folder: str) -> str:
+def benchmark_id(folder: str) -> str:
     """Give the id of the annotation naming one folder.
 
     Args:
@@ -87,7 +87,7 @@ def _benchmark_id(folder: str) -> str:
     return f"benchmark-{folder}"
 
 
-def _split_id(split: str) -> str:
+def split_id(split: str) -> str:
     """Give the id of the annotation naming one split.
 
     Args:
@@ -99,7 +99,7 @@ def _split_id(split: str) -> str:
     return f"split-{split}"
 
 
-def _task_for(window: Window, record_id: str) -> ClassificationTask:
+def task_for(window: Window, record_id: str) -> ClassificationTask:
     """Build the classification task one window answers.
 
     The folder and the split are carried by the task and not by the record. A record built from the
@@ -117,13 +117,13 @@ def _task_for(window: Window, record_id: str) -> ClassificationTask:
     return ClassificationTask(
         prompt=window.prompt,
         target_schema=_vocabulary_id(window.folder),
-        target_annotation_ids=(_label_id(window.folder, window.label),),
-        input_annotation_ids=(_benchmark_id(window.folder), _split_id(window.split)),
+        target_annotation_ids=(label_id(window.folder, window.label),),
+        input_annotation_ids=(benchmark_id(window.folder), split_id(window.split)),
         record_ids=(record_id,),
     )
 
 
-def _vocabularies(found: dict[str, dict[str, int | None]]) -> list[Annotation]:
+def vocabularies(found: dict[str, dict[str, int | None]]) -> list[Annotation]:
     """Give one annotation per folder, holding that folder's whole closed set of classes.
 
     The order is the release's own, for the folders whose ``label`` column is an integer: a class

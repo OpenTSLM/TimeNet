@@ -16,7 +16,7 @@ from timenet_connectors.datasets.leochen085.slip_eval.connector import (
     _iter_windows,
     fingerprint,
 )
-from timenet_connectors.datasets.leochen085.slip_eval.tasks import _label_id
+from timenet_connectors.datasets.leochen085.slip_eval.tasks import label_id
 
 
 def _schema_of(task: Task) -> str:
@@ -93,14 +93,14 @@ def test_the_answer_is_a_reference_and_not_an_inline_copy(tmp_path: Path) -> Non
     dataset = SlipEvalConnector().convert([SlipEvalSource(root=tmp_path)])
     task = next(iter(dataset.iter_tasks()))
     assert task.target is None
-    assert task.target_annotation_ids == (_label_id("wisdm", "sitting"),)
+    assert task.target_annotation_ids == (label_id("wisdm", "sitting"),)
 
 
 def test_the_same_label_is_registered_once_and_shared(tmp_path: Path) -> None:
     _wisdm(tmp_path)
     dataset = SlipEvalConnector().convert([SlipEvalSource(root=tmp_path)])
     tasks = list(dataset.iter_tasks())
-    sitting = [t for t in tasks if t.target_annotation_ids == (_label_id("wisdm", "sitting"),)]
+    sitting = [t for t in tasks if t.target_annotation_ids == (label_id("wisdm", "sitting"),)]
     assert len(sitting) == 2  # one in train, one in test, both pointing at the one annotation
 
 
@@ -122,7 +122,7 @@ def test_the_target_schema_is_the_id_of_the_annotation_holding_the_class_set(tmp
 
 def test_a_label_id_is_the_same_in_every_build(tmp_path: Path) -> None:
     # The builtin hash is salted per interpreter; a digest over the text is not.
-    assert _label_id("wisdm", "sitting") == "wisdm-label-f87506342d69d829"
+    assert label_id("wisdm", "sitting") == "wisdm-label-f87506342d69d829"
 
 
 def test_a_split_of_several_files_numbers_rows_across_the_split(tmp_path: Path) -> None:

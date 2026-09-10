@@ -271,12 +271,38 @@ class SlipEvalConnector(BaseConnector[SlipEvalSource]):
         state = _Building.empty()
 
         for folder in folders.FOLDERS:
-            if folder.name not in folders.PPG_FOLDERS:
-                _add_folder(dataset, root, folder.name, state)
-        _add_ppg(dataset, root, state)
+            if folder.name in folders.PPG_FOLDERS:
+                continue
+            for window in _iter_windows(root, folder.name):
+                record_id = f"{_ID_PREFIX}-{folder.name}-{window.split}-{window.index:06d}"
+                dataset.add_record(
+                    time_series=_series_for(window),
+                    record_id=record_id,
+                    subject_ids=() if window.participant is None else (window.participant,),
+                )
+                _register(window, state)
+                state.of_window[folder.name, window.split, window.index] = record_id
+
+        # The three PPG folders hold the same windows under three diagnoses. A window is matched
+        # across them by its values, so the merge does not depend on the files agreeing about order.
+        seen: dict[bytes, str] = {}
+        for name in folders.PPG_FOLDERS:
+            for window in _iter_windows(root, name):
+                digest = _fingerprint_of(window)
+                record_id = seen.get(digest)
+                if record_id is None:
+                    record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
+                    dataset.add_record(
+                        time_series=_series_for(window),
+                        record_id=record_id,
+                        subject_ids=() if window.participant is None else (window.participant,),
+                    )
+                    seen[digest] = record_id
+                _register(window, state)
+                state.of_window[name, window.split, window.index] = record_id
 
         _report(root)
-        dataset.register_annotations([*state.shared.values(), *tasks._vocabularies(state.vocabularies)])
+        dataset.register_annotations([*state.shared.values(), *tasks.vocabularies(state.vocabularies)])
         dataset.set_task_stream([ClassificationTask], lambda: _iter_tasks(root, state.of_window))
         return dataset
 
@@ -286,6 +312,9 @@ def _report(root: Path) -> None:
 
     One warning per kind, naming the folders it applies to, rather than one per record: a property
     of a whole folder is one fact about the release.
+
+    Kept out of ``convert`` because inlining it puts that method over the branch limit ``ruff``
+    enforces.
 
     Args:
         root: The directory holding the eleven folders.
@@ -333,7 +362,7 @@ def _iter_tasks(root: Path, of_window: dict[tuple[str, str, int], str]) -> Itera
     """
     for folder in folders.FOLDERS:
         for window in _iter_windows(root, folder.name):
-            yield tasks._task_for(window, of_window[window.folder, window.split, window.index])
+            yield tasks.task_for(window, of_window[window.folder, window.split, window.index])
 
 
 def _register(window: SlipEvalWindow, state: _Building) -> None:
@@ -344,69 +373,12 @@ def _register(window: SlipEvalWindow, state: _Building) -> None:
         state: What the walk accumulates. Extended in place.
     """
     for key, value, annotation_id in (
-        (SlipEvalKey.LABEL, window.label, tasks._label_id(window.folder, window.label)),
-        (SlipEvalKey.SOURCE_BENCHMARK, window.folder, tasks._benchmark_id(window.folder)),
-        (SlipEvalKey.SPLIT, window.split, tasks._split_id(window.split)),
+        (SlipEvalKey.LABEL, window.label, tasks.label_id(window.folder, window.label)),
+        (SlipEvalKey.SOURCE_BENCHMARK, window.folder, tasks.benchmark_id(window.folder)),
+        (SlipEvalKey.SPLIT, window.split, tasks.split_id(window.split)),
     ):
         state.shared.setdefault(annotation_id, Annotation(key=key, value=value, id=annotation_id))
     state.vocabularies.setdefault(window.folder, {})[window.label] = window.index_of_label
-
-
-def _add_folder(
-    dataset: TimeFDataset,
-    root: Path,
-    name: str,
-    state: _Building,
-) -> None:
-    """Add every window of one folder as its own record.
-
-    Args:
-        dataset: The dataset being built.
-        root: The directory holding the eleven folders.
-        name: The folder's directory name.
-        state: What the walk accumulates. Extended in place.
-    """
-    for window in _iter_windows(root, name):
-        record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
-        dataset.add_record(
-            time_series=_series_for(window),
-            record_id=record_id,
-            subject_ids=() if window.participant is None else (window.participant,),
-        )
-        _register(window, state)
-        state.of_window[name, window.split, window.index] = record_id
-
-
-def _add_ppg(
-    dataset: TimeFDataset,
-    root: Path,
-    state: _Building,
-) -> None:
-    """Add the three PPG folders as one set of records, each answering up to three questions.
-
-    The three folders hold the same windows under three diagnoses. A window is matched across them
-    by its values, so the merge does not depend on the three files agreeing about row order.
-
-    Args:
-        dataset: The dataset being built.
-        root: The directory holding the eleven folders.
-        state: What the walk accumulates. Extended in place.
-    """
-    seen: dict[bytes, str] = {}
-    for name in folders.PPG_FOLDERS:
-        for window in _iter_windows(root, name):
-            fingerprint = _fingerprint_of(window)
-            record_id = seen.get(fingerprint)
-            if record_id is None:
-                record_id = f"{_ID_PREFIX}-{name}-{window.split}-{window.index:06d}"
-                dataset.add_record(
-                    time_series=_series_for(window),
-                    record_id=record_id,
-                    subject_ids=() if window.participant is None else (window.participant,),
-                )
-                seen[fingerprint] = record_id
-            _register(window, state)
-            state.of_window[name, window.split, window.index] = record_id
 
 
 def fingerprint(signals: Iterable[np.ndarray]) -> bytes:
