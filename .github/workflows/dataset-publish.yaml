@@ -1,0 +1,55 @@
+name: dataset-publish
+
+on:
+  push:
+
+jobs:
+  build-dataset:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: true
+        prune-cache: false
+        cache-suffix: py313
+    - name: Install dependencies
+      # `make sync` so CI and a local checkout share one definition of the dev environment: the
+      # workspace extras. Connector dependencies are not installed here; each connector's tests run
+      # in their own environment through `make test-connectors`.
+      run: make sync
+    - name: Build dataset
+      run: uv run timenet-build timenet/hello-world
+      env:
+        TIMENET_REGISTRY: https://registry.dev.timenet.ai
+        TIMENET_TOKEN: ${{ secrets.TIMENET_REGISTRY_DEV_API_KEY_TEST }}
+
+  load-dataset:
+    runs-on: ubuntu-latest
+    needs:
+      - build-dataset
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: true
+        prune-cache: false
+        cache-suffix: py313
+    - name: Install dependencies
+      # `make sync` so CI and a local checkout share one definition of the dev environment: the
+      # workspace extras. Connector dependencies are not installed here; each connector's tests run
+      # in their own environment through `make test-connectors`.
+      run: make sync
+    - name: Load dataset
+      run: uv run timenet download timenet/hello-world
+      env:
+        TIMENET_REGISTRY: https://registry.dev.timenet.ai
+        TIMENET_TOKEN: ${{ secrets.TIMENET_REGISTRY_DEV_API_KEY_TEST }}
