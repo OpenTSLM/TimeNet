@@ -136,6 +136,10 @@ def _row_group(shard: Path, group: int) -> pa.ChunkedArray:
     decode a whole row group of roughly 7,300 rows to take one of them. With one, the whole release
     decodes 85 row groups, five per shard.
 
+    The function stands alone because its arguments are the cache key. Folded into its caller the
+    key would gain the row and the signal, every signal would take an entry, and a cache of one
+    would hold nothing useful.
+
     Args:
         shard: The parquet file.
         group: Which row group of it.
@@ -144,18 +148,6 @@ def _row_group(shard: Path, group: int) -> pa.ChunkedArray:
         That row group's ``time_series`` column.
     """
     return pq.ParquetFile(shard).read_row_groups([group], columns=["time_series"]).column("time_series")
-
-
-def _read_signal(ref: _SignalRef) -> pa.Array:
-    """Read one signal's values back out of its shard.
-
-    Args:
-        ref: Where the values sit.
-
-    Returns:
-        The values as an Arrow array.
-    """
-    return _row_group(ref.shard, ref.row_group)[ref.offset][ref.signal].values
 
 
 def _shard_number(shard: Path) -> str:
@@ -264,7 +256,8 @@ class SlipConnector(BaseConnector[SlipSource]):
         # milliseconds rather than after every shard before it has been converted.
         for shard in source.shards:
             _shard_number(shard)
-        corpora = tables.corpora(_read_meta(source.meta_csv))
+        with source.meta_csv.open(encoding="utf-8", newline="") as handle:
+            corpora = tables.corpora(list(csv.DictReader(handle)))
         dataset = TimeFDataset(metadata=self.metadata())
         empty, partial, stubs, truncated = _Tally(), _Tally(), _Tally(), _Tally()
         for shard in source.shards:
@@ -365,20 +358,7 @@ def _loader_for(ref: _SignalRef) -> Callable[[], pa.Array]:
     Returns:
         A no-argument callable giving the values as an Arrow array.
     """
-    return lambda: _read_signal(ref)
-
-
-def _read_meta(path: Path) -> list[dict[str, str]]:
-    """Read ``meta.csv`` into rows.
-
-    Args:
-        path: The table's path.
-
-    Returns:
-        One dict per row, header names as the file writes them.
-    """
-    with path.open(encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+    return lambda: _row_group(ref.shard, ref.row_group)[ref.offset][ref.signal].values
 
 
 def _iter_rows(shard: Path) -> Iterator[SlipRow]:
