@@ -131,9 +131,10 @@ class _SignalRef:
 def _row_group(shard: Path, group: int) -> pa.ChunkedArray:
     """Give one row group's ``time_series`` column, decoding it only when it is not the one held.
 
-    Every series reads its values through a loader, and the writer asks for them in the order this
-    connector built the records. Without a cache every signal would decode a whole row group to take
-    one row of it. With one, each row group is decoded once.
+    Every series reads its values through a loader. Without a cache each signal would decode a whole
+    row group to take one row of it. The writer asks for values grouped by signal name and then in
+    the order this connector built the records, so within one such group a cache of one is enough to
+    turn a decode per signal into a decode per row group.
 
     The function stands alone because its arguments are the cache key. Folded into its caller the
     key would gain the row and the signal, every signal would take an entry, and a cache of one
