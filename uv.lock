@@ -3361,7 +3361,7 @@ wheels = [
 
 [[package]]
 name = "timenet"
-version = "0.0.1"
+version = "0.0.1.post1"
 source = { editable = "packages/timenet" }
 dependencies = [
     { name = "httpx" },
