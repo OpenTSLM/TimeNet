@@ -3429,7 +3429,7 @@ provides-extras = ["cli", "torch", "build", "zarr", "s3", "all"]
 
 [[package]]
 name = "timenet-connectors"
-version = "0.0.1"
+version = "0.1.0"
 source = { editable = "packages/timenet-connectors" }
 dependencies = [
     { name = "aiofiles" },
