@@ -268,7 +268,6 @@ class SlipConnector(BaseConnector[SlipSource]):
                                 _SignalRef(shard=shard, row_group=row.row_group, offset=row.offset, signal=index)
                             ),
                             n_values=length,
-                            time_series_id=f"{record_id}-s{index}",
                         )
                         for index, length in enumerate(row.lengths)
                     ),
