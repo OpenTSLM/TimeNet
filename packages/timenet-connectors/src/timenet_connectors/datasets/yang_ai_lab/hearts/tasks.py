@@ -373,6 +373,9 @@ TASK_DEFINITIONS: tuple[TaskDefinition, ...] = (
 )
 """Every task directory this connector converts, in the order it walks them."""
 
+TASK_TYPES: tuple[type[Task], ...] = tuple(dict.fromkeys(definition.task_type for definition in TASK_DEFINITIONS))
+"""The task classes the stream yields, read off the table so the two cannot disagree."""
+
 
 def option_annotations(id_prefix: str) -> tuple[Annotation, ...]:
     """Build the shared answer-vocabulary annotations the closed-answer tasks reference.
@@ -505,6 +508,8 @@ def build_task(
 ) -> Task:
     """Build the task for one test case.
 
+    The task is streamed rather than attached, so it carries its own ``record_ids``.
+
     Args:
         definition: The task directory's definition.
         record_id: The owning record's id.
@@ -523,6 +528,7 @@ def build_task(
         "id": task_id,
         "prompt": definition.prompt,
         "input_annotation_ids": input_annotation_ids,
+        "record_ids": (record_id,),
     }
     if definition.task_type is ClassificationTask:
         return ClassificationTask(

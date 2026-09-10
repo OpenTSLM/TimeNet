@@ -197,7 +197,8 @@ def _record(dataset, record_id):
 
 
 def _task(dataset, record_id):
-    return next(task for task in dataset.tasks if task.record_ids == (record_id,))
+    # The tasks stream, so they are read off the source rather than held on the dataset.
+    return next(task for task in dataset.iter_tasks() if task.record_ids == (record_id,))
 
 
 def test_is_a_connector():
@@ -228,7 +229,7 @@ def test_every_id_this_connector_writes_is_built_on_one_prefix(dataset):
         + [series.time_series_id for record in dataset.records for series in record.time_series]
         + [annotation.id for record in dataset.records for annotation in record.annotations]
         + [annotation.id for annotation in dataset.registered_annotations]
-        + [task.id for task in dataset.tasks]
+        + [task.id for task in dataset.iter_tasks()]
     )
     assert written
     assert not [identifier for identifier in written if not str(identifier).startswith(f"{_ID_PREFIX}-")]
@@ -341,6 +342,23 @@ def test_a_two_window_case_carries_both_of_its_subjects():
     assert _subject_ids("cgmacros", {}) == ()
 
 
+def test_the_task_stream_gives_the_same_tasks_when_read_again(dataset):
+    # set_task_stream reads its source more than once, so a generator that empties itself writes no
+    # task at all. This stream walks the tree again, so reading it twice reads every payload twice.
+    once = [(task.id, task.record_ids) for task in dataset.iter_tasks()]
+    again = [(task.id, task.record_ids) for task in dataset.iter_tasks()]
+    assert once == again
+    assert len(once) == len(dataset.records)
+
+
+def test_every_streamed_task_names_its_own_record_and_carries_a_distinct_id(dataset):
+    # Nothing sets a streamed task's record_ids, and the dataset holds no task list, so its
+    # duplicate-id check does not run. Both are pinned here instead.
+    assert [task.record_ids for task in dataset.iter_tasks()] == [(record.record_id,) for record in dataset.records]
+    ids = [task.id for task in dataset.iter_tasks()]
+    assert len(set(ids)) == len(ids)
+
+
 def test_classification_carries_the_label_and_the_id_of_its_vocabulary(dataset):
     task = _task(dataset, "hearts-coswara-audio_classification-30")
     assert isinstance(task, ClassificationTask)
@@ -372,8 +390,9 @@ def test_a_numpy_boolean_in_an_agent_input_becomes_plain_python(tmp_path):
 
 
 def test_a_meal_minute_lands_inside_the_window_the_record_covers(dataset):
-    # add_task measures a localization target against the span the record's series cover, so this
-    # is also the check that the offsets and the answer are counted from the same instant.
+    # The writer measures a streamed localization target against the span the record's series
+    # cover, so the round-trip test is also the check that the offsets and the answer are counted
+    # from the same instant.
     task = _task(dataset, "hearts-cgmacros-meal_time_localization-07")
     assert isinstance(task, TemporalLocalizationTask)
     assert [span.start_us for span in task.target] == [4 * 60_000_000]
@@ -449,7 +468,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, dataset):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert len(restored.records) == len(dataset.records)
-    assert len(restored.tasks) == len(dataset.tasks)
+    assert len(restored.tasks) == len(list(dataset.iter_tasks()))
     assert {annotation.key for annotation in restored.registered_annotations} == {"answer_options"}
     audio = next(r for r in restored.records if r.record_id == "hearts-coswara-audio_classification-30")
     assert np.array_equal(audio.time_series[0].to_numpy(), _SIGNAL)

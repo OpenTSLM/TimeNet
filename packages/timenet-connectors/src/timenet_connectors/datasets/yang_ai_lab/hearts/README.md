@@ -228,6 +228,18 @@ whose subject is normal (50 answers) *(measured)*. The remaining 293 classificat
 already the label. Every mapped label is checked against that directory's vocabulary, so a release
 that changes its wording stops the build instead of storing a label nothing accepts.
 
+**The tasks stream, and the connector holds none of them.** `set_task_stream` gets them, so each
+task carries its own `record_ids` and the stored record rows carry no `task_ids`. A consumer who
+reads the whole dataset loses nothing by it: `TimeFReader.read()` rebuilds that reverse map from the
+task rows. One who walks the records without their tasks reads the field empty. 1,005 tasks would
+fit in a list, so this follows the repo's convention rather than a memory limit. The stream walks
+the tree a second time and reads each payload again for its answer, which is why the read count
+below is three and not two.
+
+A stream also skips the checks that need every task at once, so nothing rejects a repeated task id.
+A task id is its record id plus `-qa`, so the ids are distinct as long as the record ids are, and a
+test pins that.
+
 No splits are produced. The release is a single frozen test set.
 
 ## Inconsistencies and decisions
@@ -437,22 +449,25 @@ in which file.
 smallest HARESPOD frame holds 300, over all 1,033 frames of the 1,005 in-scope files *(measured)*.
 The guard therefore covers a repin and not this revision.
 
-### Every file is read twice — **Handled**
+### Every file is read three times — **Handled**
 
 **Problem.** A pickle has no header. A payload's length, its rate and its axis are known only after
-the whole object is rebuilt.
+the whole object is rebuilt. That holds for the answer too: it cannot be reached without rebuilding
+the whole payload.
 
-**Decision.** Read each file once in `convert` to learn the shapes, and let the per-series loaders
-re-read it when the writer drains them, backed by a two-entry payload cache. The cache is small on
-purpose: the writer walks series in spec-type order, so every series of one file that shares a spec
-type is contiguous in that walk and two entries serve all of them.
+**Decision.** Read each file once in `convert` to learn the shapes, once more in the task stream to
+reach its answer, and let the per-series loaders re-read it when the writer drains them, backed by a
+two-entry payload cache. The cache is small on purpose: the writer walks series in spec-type order,
+so every series of one file that shares a spec type is contiguous in that walk and two entries serve
+all of them.
 
-**Consequence.** A build reads about 2.7 GB over 1.26 GB of files: every file twice, plus a third
-read of `harespod/hr_resp_pairing` and `harespod/spo2_resp_pairing`, which are 216,921,012 bytes
-*(measured)* and spread their signals over two spec types each, so the loaders unpickle them twice
-rather than once. Closing that gap needs about 50 resident payloads, which would hold 50 audio
-buffers at 48 kHz while the audio blocks are written, so the second read of a small HARESPOD frame
-is the cheaper of the two.
+**Consequence.** A build reads about 4.0 GB over 1.26 GB of files: every file three times, plus a
+fourth read of `harespod/hr_resp_pairing` and `harespod/spo2_resp_pairing`, which are 216,921,012
+bytes *(measured)* and spread their signals over two spec types each, so the loaders unpickle them
+twice rather than once. Closing the loader gap needs about 50 resident payloads, which would hold 50
+audio buffers at 48 kHz while the audio blocks are written, so the second read of a small HARESPOD
+frame is the cheaper of the two. The stream's own pass is what streaming the tasks costs here; the
+alternative is to keep 1,005 answers in memory from `convert` until the writer walks them.
 
 ### No non-finite value was found — **Handled**
 
