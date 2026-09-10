@@ -167,8 +167,23 @@ def test_metadata():
 
 def test_one_record_and_one_task_per_question(dataset):
     assert [record.record_id for record in dataset.records] == ["arfbench-000", "arfbench-001", "arfbench-002"]
-    assert len(dataset.tasks) == len(_ROWS)
-    assert all(isinstance(task, AnswerTask) for task in dataset.tasks)
+    tasks = list(dataset.iter_tasks())
+    assert len(tasks) == len(_ROWS)
+    assert all(isinstance(task, AnswerTask) for task in tasks)
+    # The tasks stream, so nothing writes them onto the records.
+    assert all(record.task_ids == () for record in dataset.records)
+
+
+def test_the_task_stream_answers_the_same_tasks_every_time_it_is_read(dataset):
+    # iter_tasks is public, so a consumer may read the stream again, and a one-shot generator would
+    # yield nothing the second time. The dataset no longer holds every task, so it cannot check ids
+    # for duplicates and this pins that instead.
+    first = list(dataset.iter_tasks())
+    second = list(dataset.iter_tasks())
+    assert len(first) == len(second) == len(_ROWS)
+    assert [task.record_ids for task in first] == [task.record_ids for task in second]
+    assert [task.prompt for task in first] == [task.prompt for task in second]
+    assert len({task.id for task in first}) == len(_ROWS)
 
 
 def test_interval_is_the_finest_one_every_cited_metric_publishes(source, dataset):
@@ -305,7 +320,7 @@ def test_two_metrics_in_one_record_keep_distinct_signal_names(dataset):
 
 
 def test_tasks_carry_the_question_and_its_answer(dataset):
-    task = dataset.tasks[0]
+    task = next(iter(dataset.iter_tasks()))
     assert task.prompt == _ROWS[0]["question"]
     assert "\n" in task.prompt
     assert task.target == _YES[0]
@@ -318,10 +333,11 @@ def test_tasks_carry_the_question_and_its_answer(dataset):
 
 def test_one_registered_annotation_per_distinct_option_list(dataset):
     ids = {annotation.id for annotation in dataset.registered_annotations}
+    tasks = list(dataset.iter_tasks())
     # Rows 0 and 2 offer the same two options, so three questions reference two lists.
     assert len(ids) == 2
-    assert dataset.tasks[0].input_annotation_ids == dataset.tasks[2].input_annotation_ids
-    assert dataset.tasks[1].input_annotation_ids != dataset.tasks[0].input_annotation_ids
+    assert tasks[0].input_annotation_ids == tasks[2].input_annotation_ids
+    assert tasks[1].input_annotation_ids != tasks[0].input_annotation_ids
 
 
 def test_record_annotations(dataset):

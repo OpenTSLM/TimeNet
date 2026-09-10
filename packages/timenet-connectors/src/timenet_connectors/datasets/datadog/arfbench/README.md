@@ -161,6 +161,14 @@ embedded newline that splits it across two physical CSV lines: all 750 questions
 task; each task points at a shared `answer_options` annotation, and the 750 tasks reference **278**
 of them *(measured)*.
 
+**The tasks stream.** `convert` builds the records and registers the option lists, then hands the
+tasks over as a stream that re-reads the QA table. Each task names its own record, and none appears
+in `Record.task_ids`, so the record rows on disk carry no task id. A read rebuilds that reverse map
+from what each task says, so `tasks_for()` still answers on a dataset read back from disk. The
+writer validates every streamed task on its way there. What a stream cannot check is what needs all
+750 tasks at once, which here is the duplicate-id check alone: no task in this dataset derives from
+another.
+
 ## Inconsistencies and decisions
 
 ### No single sampling interval answers every question — **Handled**
