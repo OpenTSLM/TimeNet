@@ -8,7 +8,8 @@ the ground truth.
 ``download`` fetches the twenty-one task directories in scope at the pinned revision, then checks
 the tree still holds the test cases this connector was written against. ``convert`` reads each
 payload once, reads the shapes off it, and attaches loaders that re-read the file later, so no
-values plane is ever held in memory.
+values plane is ever held in memory. The tasks stream: they are read off a second walk of the tree,
+after ``convert`` returns.
 """
 
 from collections.abc import Iterator
@@ -19,11 +20,12 @@ from typing import Any
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import Annotation
+from timenet.types import Annotation, Task
 from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import load_payload
 from timenet_connectors.datasets.yang_ai_lab.hearts.series import series_for
 from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import (
     TASK_DEFINITIONS,
+    TASK_TYPES,
     TaskDefinition,
     build_task,
     name_vocabulary,
@@ -119,6 +121,53 @@ def _subject_ids(source: str, payload: dict[str, Any]) -> tuple[str, ...]:
     return tuple(f"{source}-{subject}" for subject in pair)
 
 
+def _record_id(definition: TaskDefinition, index: int) -> str:
+    """Build the id of the record one test case becomes.
+
+    The record loop and the task stream both walk the tree, so both read the id from here.
+
+    Args:
+        definition: The task directory's definition.
+        index: The test-case index.
+
+    Returns:
+        The record id, built from the release's own directory and file names.
+    """
+    return f"{_ID_PREFIX}-{definition.source}-{definition.task}-{index:02d}"
+
+
+def _agent_input_id(record_id: str, key: str) -> str:
+    """Build the id of one agent-input annotation.
+
+    The record carries the annotation and a streamed task names it, so both read the id from here.
+
+    Args:
+        record_id: The owning record's id.
+        key: The payload key the annotation holds.
+
+    Returns:
+        The annotation id.
+    """
+    return f"{record_id}-{key}"
+
+
+def _input_annotation_ids(definition: TaskDefinition, record_id: str) -> tuple[str, ...]:
+    """Name the annotations the reference harness shows its agent, the answer vocabulary first.
+
+    Args:
+        definition: The task directory's definition.
+        record_id: The owning record's id.
+
+    Returns:
+        The annotation ids: the directory's registered vocabulary when it has one, then the
+        agent-input annotations the record carries.
+    """
+    inputs = tuple(_agent_input_id(record_id, key) for key in definition.input_keys)
+    if definition.options:
+        return (name_vocabulary(_ID_PREFIX, definition.task), *inputs)
+    return inputs
+
+
 def _annotations_for(
     definition: TaskDefinition, index: int, payload: dict[str, Any], record_id: str
 ) -> list[Annotation]:
@@ -154,8 +203,36 @@ def _annotations_for(
             Annotation(key="audio_quality", value=int(quality), source=_PROVENANCE, id=f"{record_id}-quality")
         )
     for key in definition.input_keys:
-        annotations.append(Annotation(key=key, value=plain(payload[key]), source=_AGENT_INPUT, id=f"{record_id}-{key}"))
+        annotations.append(
+            Annotation(key=key, value=plain(payload[key]), source=_AGENT_INPUT, id=_agent_input_id(record_id, key))
+        )
     return annotations
+
+
+def _iter_tasks(source: HeartsSource) -> Iterator[Task]:
+    """Yield the task of every test case, in the order ``convert`` built the records.
+
+    This walks the tree again and reads each payload for its answer. A pickle states nothing until
+    the whole object is rebuilt, so an answer cannot be reached without its file. The writer reads
+    the stream after ``convert`` returns, and can read it more than once, so this keeps nothing
+    between calls.
+
+    Args:
+        source: The handle to the downloaded tree.
+
+    Yields:
+        One task per test case, carrying its own record id.
+
+    Raises:
+        TimeFFormatError: If a file is not named after its index, or an answer does not fit the
+            task type its directory states.
+    """  # noqa: DOC502 (raised by _walk and build_task, not directly here)
+    for definition, index, path in _walk(source.root):
+        payload = load_payload(str(path))
+        record_id = _record_id(definition, index)
+        yield build_task(
+            definition, record_id, payload[_ANSWER_KEY], _input_annotation_ids(definition, record_id), _ID_PREFIX
+        )
 
 
 class HeartsConnector(BaseConnector[HeartsSource]):
@@ -204,16 +281,18 @@ class HeartsConnector(BaseConnector[HeartsSource]):
         return [HeartsSource(root=root)]
 
     def convert(self, raw_refs: list[HeartsSource]) -> TimeFDataset:
-        """Build one record and one task per test case.
+        """Build one record per test case and stream one task per case.
 
         Each payload is read once here, to learn its signals, lengths and time axes. The values
-        themselves stay on disk behind per-signal loaders.
+        themselves stay on disk behind per-signal loaders. The tasks come from
+        :func:`_iter_tasks`, which walks the tree again, so a task carries its own record id and
+        none reaches ``Record.task_ids``.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.
 
         Returns:
-            The dataset: one record per test case, each with its own task.
+            The dataset: one record per test case, plus the task stream.
 
         Raises:
             TimeFFormatError: If the tree holds no test case in scope.
@@ -224,20 +303,17 @@ class HeartsConnector(BaseConnector[HeartsSource]):
         records = 0
         for definition, index, path in _walk(source.root):
             payload = load_payload(str(path))
-            record_id = f"{_ID_PREFIX}-{definition.source}-{definition.task}-{index:02d}"
+            record_id = _record_id(definition, index)
             record = dataset.add_record(
                 time_series=series_for(definition.source, path, payload, record_id),
                 subject_ids=_subject_ids(definition.source, payload),
                 record_id=record_id,
             )
-            annotations = record.add_annotations(_annotations_for(definition, index, payload, record_id))
-            input_ids = tuple(annotation.id for annotation in annotations if annotation.source == _AGENT_INPUT)
-            if definition.options:
-                input_ids = (name_vocabulary(_ID_PREFIX, definition.task), *input_ids)
-            dataset.add_task(record, build_task(definition, record_id, payload[_ANSWER_KEY], input_ids, _ID_PREFIX))
+            record.add_annotations(_annotations_for(definition, index, payload, record_id))
             records += 1
         if not records:
             raise TimeFFormatError(f"HEARTS tree at {source.root} holds no test case this connector converts")
+        dataset.set_task_stream(TASK_TYPES, lambda: _iter_tasks(source))
         return dataset
 
 

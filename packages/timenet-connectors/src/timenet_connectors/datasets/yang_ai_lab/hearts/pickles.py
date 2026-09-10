@@ -1,10 +1,11 @@
 """Reading the HEARTS payloads: a restricted unpickler and a two-file cache.
 
 A pickle has no header. Nothing about a payload, not its length, not its rate, not its axis, is
-known until the whole object is rebuilt. So ``convert`` reads every file once and the writer reads
-it again when it drains the loaders. Reading is narrow on purpose: :class:`_RestrictedUnpickler`
-allows only the globals the release's own files ask for and refuses anything else by name. The cache
-holds two payloads, so a loader can re-read its file while the resident set stays small.
+known until the whole object is rebuilt. So ``convert`` reads every file once, the task stream reads
+it again to reach its answer, and the writer reads it a third time when it drains the loaders.
+Reading is narrow on purpose: :class:`_RestrictedUnpickler` allows only the globals the release's
+own files ask for and refuses anything else by name. The cache holds two payloads, so a loader can
+re-read its file while the resident set stays small.
 """
 
 from collections.abc import Sequence

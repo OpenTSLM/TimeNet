@@ -188,6 +188,8 @@ def test_the_task_carries_the_prompt_and_the_inputs_it_was_given():
     assert task.id == f"{_RECORD}-qa"
     assert task.prompt == definition.prompt
     assert task.input_annotation_ids == ids
+    # The task is streamed, so nothing attaches it to its record afterwards.
+    assert task.record_ids == (_RECORD,)
 
 
 @pytest.mark.parametrize(
