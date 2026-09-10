@@ -25,10 +25,12 @@ Run these before you open a pull request, and make them pass:
 - `make check` runs `ruff format`, `ruff check`, and `ty check`.
 - `make lint-fix` auto-fixes what ruff can.
 - `make test` runs the core test suite.
+- `make test-unit` runs the in-memory part of `make test`, for a fast answer.
 - `make test-connectors` runs each connector's tests and type-check in its own environment.
 - `make license-check` fails the build if a copyleft dependency enters the tree.
 
-To mirror CI exactly, run `uv run pre-commit run --all-files`.
+To mirror the CI quick job, run `make check-ci` and `make test-unit`. `make check-ci` runs the
+hooks over all files, the same way CI does, and adds a `ty` pass against Python 3.11.
 
 Never commit with `--no-verify`. If a hook fails, fix the underlying issue and commit again.
 

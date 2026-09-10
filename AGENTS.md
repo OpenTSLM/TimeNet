@@ -70,8 +70,11 @@ After any change, run these and make them pass before claiming the work is done:
 - `make test` — core tests in the dev environment
 - `make test-connectors` — each connector's tests and type-check in its own environment
 
-`make install-hooks` once after cloning to wire up pre-commit. To mirror CI exactly,
-run `uv run pre-commit run --all-files`.
+`make install-hooks` once after cloning to wire up pre-commit. To mirror the CI quick job,
+run `make check-ci` and `make test-unit`. `make check-ci` runs the hooks over all files, the
+same way CI does. It adds a `ty` pass against Python 3.11, because `[tool.ty.environment]`
+pins 3.13. Without that pass, a 3.11-only typing error stays hidden until the 3.11 test job
+finishes.
 
 In final summaries, state which checks you ran and call out any you could not run.
 

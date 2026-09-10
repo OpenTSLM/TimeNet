@@ -73,8 +73,10 @@ for linting and formatting, [ty](https://github.com/astral-sh/ty) for type check
 ```bash
 make sync           # install the dev environment (workspace + extras, CPU torch)
 make test           # core tests in the dev environment
+make test-unit      # the in-memory part of `make test`, for a fast answer
 make test-connectors # each connector's tests in its own environment
 make check          # format + lint + typecheck (ruff format, ruff check, ty check)
+make check-ci       # what CI checks: the hooks, plus ty on 3.13 and on 3.11
 make lint-fix       # auto-fix lint issues with ruff
 make build          # build both packages with uv
 make docs           # build the docs into site/
@@ -93,6 +95,13 @@ Run these before opening a PR, and make them pass:
 
 Every commit runs the same ruff, ty, `uv lock`, and file-hygiene checks through pre-commit. Don't
 bypass hooks with `--no-verify`; if one fails, run `make check` / `make lint-fix` and commit again.
+
+CI runs the checks as four jobs. The `quick` job answers in about 45 seconds with the hooks, the
+type checks, and the tests in `make test-unit`. It runs on every push. The `tests` and `tests_min`
+jobs run the full suite on Python 3.13 and on Python 3.11. They skip a draft pull request.
+Otherwise they wait for `quick`. A branch that fails lint or a unit test then costs one runner
+minute, not seven. The `check` job collects the three results, and it is the one required status
+check. When you mark a draft ready for review, the full set runs.
 
 ### Docs
 

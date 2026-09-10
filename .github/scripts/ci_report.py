@@ -4,17 +4,19 @@
 # ///
 """Upsert the single sticky CI comment on a pull request.
 
-Called by the last step of ``.github/workflows/pre-commit-hooks.yaml`` once the checks have run. It
-reads their outcomes from the environment, renders one Markdown report, appends that to the job
-summary, and then creates or updates exactly one PR comment.
+Called by the ``check`` job of ``.github/workflows/pre-commit-hooks.yaml`` once the tiers it
+depends on have run. It reads their results from the environment, renders one Markdown report,
+appends that to the job summary, and then creates or updates exactly one PR comment.
 
 The comment is found by :data:`MARKER` rather than by "the last comment from this token", so a run
 never edits somebody else's comment and never stacks up a new one per push. A first-time passing run
 writes no comment at all; only a failure opens one, and later runs keep editing it in place.
 
-Run it the way CI does::
+The script declares its own dependencies inline, so ``--no-project`` keeps it off the workspace
+environment: the ``check`` job never syncs one. Run it the way CI does::
 
-    uv run .github/scripts/ci_report.py
+    QUICK=success TESTS=success TESTS_MIN=success uv run --no-project \
+        .github/scripts/ci_report.py
 """
 
 from __future__ import annotations
@@ -32,8 +34,9 @@ _LABELS = {"success": "✅ Passed", "failure": "❌ Failed"}
 
 _REPRODUCE = """```bash
 make lint-fix   # auto-fix
-make check      # ruff + ty
-make test       # pytest
+make check-ci   # the hooks, plus ty on 3.13 and 3.11
+make test-unit  # the quick job's tests
+make test       # the full suite
 ```"""
 
 
@@ -80,9 +83,9 @@ def main() -> None:
     run_url = f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
 
     results = {
-        "Pre-commit hooks": env["PRECOMMIT"],
-        "Tests (Python 3.13)": env["PYTEST"],
-        "Tests (Python 3.11)": env["PYTEST_MIN"],
+        "Quick checks": env["QUICK"],
+        "Tests (Python 3.13)": env["TESTS"],
+        "Tests (Python 3.11)": env["TESTS_MIN"],
     }
     body = render(results, env["HEAD_SHA"], run_url, env["GITHUB_RUN_NUMBER"])
 
