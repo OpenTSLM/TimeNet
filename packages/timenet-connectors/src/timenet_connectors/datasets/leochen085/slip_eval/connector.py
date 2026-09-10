@@ -4,12 +4,12 @@ The release ships eleven folders, each holding fixed-length windows cut from som
 recordings, split into train and test. One row is one window and one class. The folder fixes the
 shape: how many signals, at what rate, over what vocabulary.
 
-Three of the folders — ``PPG_CVA``, ``PPG_DM`` and ``PPG_HTN`` — hold the same 650 windows under
+Three of the folders — ``PPG_CVA``, ``PPG_DM`` and ``PPG_HTN`` — hold the same windows under
 three different diagnoses. They become one record each carrying up to three tasks, rather than the
 same values stored three times.
 
 A label is registered once per folder and every task points at it, because the vocabularies are
-small and one of them, ``ptbxl``, is five whole paragraphs reused across 12,970 rows.
+small and one of them, ``ptbxl``, is whole paragraphs reused across every row of that folder.
 """
 
 from __future__ import annotations
@@ -150,8 +150,8 @@ def _x_column(path: Path) -> pa.ChunkedArray:
     in the order this connector built them. Holding one file's column turns a walk of a folder from
     one whole-file read per signal into one per file. The cache holds exactly one, because the
     release gives no bound on how many would fit. One entry is not one row: it is a whole file's
-    column, and the largest here is ``sleepEDF``'s test shard at 8,709 windows of 2 signals of 3,000
-    doubles, roughly 400 MiB. It stays reachable until another file displaces it.
+    column, and the largest of those is big enough that holding a second would matter. It stays
+    reachable until another file displaces it.
 
     Args:
         path: The parquet file.
@@ -272,8 +272,8 @@ class SlipEvalConnector(BaseConnector[SlipEvalSource]):
         """Build one record per window, and stream one classification task per window.
 
         The tasks are streamed rather than added. ``add_task`` rebuilds the set of every registered
-        task id on each call (``dataset.py:354``), so adding 92,415 of them one at a time is
-        quadratic. Streaming is also what lets the labels be registered once and referenced.
+        task id on each call, so adding this release's tasks one at a time is quadratic. Streaming
+        is also what lets the labels be registered once and referenced.
 
         Args:
             raw_refs: The single handle :meth:`download` gave back.

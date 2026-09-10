@@ -56,10 +56,10 @@ FOLDERS: tuple[Folder, ...] = (
     Folder("ptbxl", Fraction(100), ("I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"), 5),
     Folder("sleepEDF", Fraction(100), ("eeg0", "eeg1"), 5),
     Folder("studentlife", Fraction(1, 60), _numbered("sensor", 10), 3),
-    # The card says "Accelerometer + Gyroscope (6-ch)". Measured over 400 windows, the resultant
-    # magnitude of signals 0-2 is 0.0628 and of signals 3-5 is 1.0226 — body acceleration with
-    # gravity removed, and total acceleration with it kept. Both are acceleration; nothing here is
-    # a rate of turn.
+    # The card says "Accelerometer + Gyroscope (6-ch)". Measured over a sample of windows, the
+    # resultant magnitude of signals 0-2 sits near zero and of signals 3-5 near one g — body
+    # acceleration with gravity removed, and total acceleration with it kept. Both are
+    # acceleration; nothing here is a rate of turn.
     Folder(
         "uci_har",
         Fraction(50),
@@ -72,7 +72,7 @@ FOLDERS: tuple[Folder, ...] = (
 """Every folder the release ships, in the order the connector walks them."""
 
 PPG_FOLDERS: tuple[str, ...] = ("PPG_CVA", "PPG_DM", "PPG_HTN")
-"""The three folders that hold the same 650 windows under three diagnoses. One record each, three
+"""The three folders that hold the same windows under three diagnoses. One record each, three
 tasks, rather than the same values stored three times."""
 
 BY_NAME: dict[str, Folder] = {folder.name: folder for folder in FOLDERS}
