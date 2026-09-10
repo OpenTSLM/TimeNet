@@ -8,11 +8,11 @@ The corpus is far larger than memory, so nothing here holds values. ``download``
 handle naming the shards, ``convert`` walks them, every series reads its own values when asked, and
 the tasks are streamed.
 
-It does read them twice. ``convert`` decodes every value once to count, per series, how many of
-them are finite: none, which some of the release's signals answer and no length or header
-states, or some but not all, which none of them answers today. The loaders decode the values again
-when the writer asks. That second pass is what the ``all_nan_signals`` annotation and the two
-warnings cost.
+``convert`` reads the ``time_series`` column of every row, because a series must state how many
+values it holds before the writer asks for any of them. The same read answers a question no length
+and no header does: how many of a series' values are finite. None, which some of the release's
+signals answer, or some but not all, which none of them answers today. The loaders read the values
+again when the writer asks for them, which is the write itself and not a second census.
 """
 
 from __future__ import annotations

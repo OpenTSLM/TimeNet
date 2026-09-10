@@ -222,9 +222,10 @@ it means.
 **Consequence.** Those records carry a series with no numbers in it. That is a fact about the corpus,
 and the annotation makes it findable without scanning.
 
-The decision costs a second read. No length and no header marks an all-NaN series, so `convert`
-decodes every value once to find the 96, and the loaders decode them again when the writer asks. A
-build of this connector therefore reads 4.3 GB and not 2.15.
+The decision costs almost nothing. `convert` already reads the `time_series` column of every row,
+because a series must state how many values it holds before the writer asks for any of them. The
+finiteness check runs over a buffer that read has already decoded. What the annotation adds is the
+check, not the read.
 
 ### The multivariate ratio the card claims does not hold — **Handled**
 
