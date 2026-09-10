@@ -1,19 +1,22 @@
 # TimeNet
 
+*Download and explore time-series datasets through one standardized format.*
+
 > [!NOTE]
-> This is a pre-release version and is subject to change. Performance work is in active
-> development.
+> This is a pre-release version and is subject to change. We are actively working on
+> improvements around performance and integrations, and welcome community contributions.
 
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-TimeNet is a Python library and CLI for registering, fetching, and exploring time-series datasets
-in a shared format called TimeF. Every dataset gets one on-disk shape and one way to load it, so a
-consumer reads ECGs, accelerometer traces, and market series through the same API.
+Time-series data is fragmented: every dataset ships in its own shape, and teams end up rewriting
+the same loading code for each one. TimeNet replaces that with TimeF, a single shared format, and
+one set of tools to find, download, and load any dataset the same way, whether it holds ECGs,
+accelerometer traces, or market prices.
 
-TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation metrics
-are out of scope. It stops at handing you the data.
+TimeNet stops at the data. Training, inference, and modeling are out of scope; that part is up to
+you.
 
 Full documentation: <https://docs.timenet.ai/>
 
