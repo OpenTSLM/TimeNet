@@ -13,12 +13,12 @@ from timenet.errors import TimeFFormatError
 
 
 _US_PER_S = 1_000_000
-# RegularAxis holds the period as an int64 numerator of microseconds, so this is the coarsest one
-# TimeF addresses. About 292,471 years per sample: no meta.csv reaches it, and the check is here so
-# that a Freq at either end of the range fails with the cell named.
+# RegularAxis holds the period as an int64 numerator of microseconds, so this is the coarsest period
+# TimeF addresses. No meta.csv cell comes near it; the check is here so that a Freq at either end of
+# the range fails with the cell named.
 _MAX_PERIOD_US = 2**63 - 1
 
-# Freq is prose, not a number. Every form the release actually uses, measured over its 37 rows.
+# Freq is prose, not a number. Every form the release actually uses, measured over every row.
 _WORD_PERIODS_US: dict[str, int] = {
     "hourly": 3600 * _US_PER_S,
     "daily": 86400 * _US_PER_S,

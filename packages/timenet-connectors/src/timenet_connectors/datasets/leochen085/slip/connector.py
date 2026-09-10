@@ -1,15 +1,15 @@
 """The SLIP pretraining corpus connector.
 
-The release ships 17 parquet shards under ``data/``. One row is one record: a series or a set of
+The release ships its rows as parquet shards under ``data/``. One row is one record: a series or a set of
 series, four captions of it, and the name of the corpus it was drawn from. ``meta.csv`` describes
 those corpora, and the ``dataset`` column joins to it, which is how a row recovers its sampling rate.
 
-The corpus is 4.3 GB and 618,508 rows, so nothing here holds values. ``download`` gives back one
+The corpus is far larger than memory, so nothing here holds values. ``download`` gives back one
 handle naming the shards, ``convert`` walks them, every series reads its own values when asked, and
 the tasks are streamed.
 
 It does read them twice. ``convert`` decodes every value once to count, per series, how many of
-them are finite: none, which 96 of the release's 1,659,875 signals answer and no length or header
+them are finite: none, which some of the release's signals answer and no length or header
 states, or some but not all, which none of them answers today. The loaders decode the values again
 when the writer asks. That second pass is what the ``all_nan_signals`` annotation and the two
 warnings cost.
@@ -61,10 +61,10 @@ _ENDS_A_SENTENCE = (".", "!", "?", '"')
 
 
 class _Tally:
-    """Counts one kind of thing the release ships, so the build warns once about it and not once each.
+    """One running count of records that share a property, and the first of them.
 
-    A property shared by thousands of records is one fact about the release, so the report gives a
-    count and one example rather than a line per record.
+    Thousands of records sharing a property is one fact about the release, not thousands of them.
+    A tally holds that fact as a number and an example, so the build states it in one line.
     """
 
     def __init__(self) -> None:
@@ -95,7 +95,7 @@ class _Tally:
 class SlipSource:
     """What ``download`` hands ``convert``: paths, and no rows."""
 
-    shards: tuple[Path, ...]  # the 17 data/train-*.parquet files, in name order
+    shards: tuple[Path, ...]  # the data/train-*.parquet files, in name order
     meta_csv: Path  # the table describing the corpora the rows were drawn from
 
 
@@ -118,7 +118,7 @@ class _SignalRef:
 
     The row group and the offset within it are resolved when the reference is built, so reading a
     signal is one row-group read and no lookup. Resolving them per read would be a scan per signal,
-    and a full build calls the loaders 1.66 million times.
+    and a full build calls a loader once per signal.
     """
 
     shard: Path  # the parquet file
@@ -132,9 +132,8 @@ def _row_group(shard: Path, group: int) -> pa.ChunkedArray:
     """Give one row group's ``time_series`` column, decoding it only when it is not the one held.
 
     Every series reads its values through a loader, and the writer asks for them in the order this
-    connector built the records. Without a cache each of the release's 1,659,875 signals would
-    decode a whole row group of roughly 7,300 rows to take one of them. With one, the whole release
-    decodes 85 row groups, five per shard.
+    connector built the records. Without a cache every signal would decode a whole row group to take
+    one row of it. With one, each row group is decoded once.
 
     The function stands alone because its arguments are the cache key. Folded into its caller the
     key would gain the row and the signal, every signal would take an entry, and a cache of one
@@ -263,7 +262,12 @@ class SlipConnector(BaseConnector[SlipSource]):
         for shard in source.shards:
             for row in _iter_rows(shard):
                 name = row.scalars["dataset"]
-                corpus = _corpus(corpora, name, shard, row.index)
+                corpus = corpora.get(name)
+                if corpus is None:
+                    raise TimeFFormatError(
+                        f"{shard.name} row {row.index}: dataset holds {name!r}, which meta.csv does not "
+                        f"name. It states {len(corpora)} corpora, so the release has grown one"
+                    )
                 record_id = _record_id(shard, row.index)
                 axis = OrdinalAxis() if corpus.period_us is None else RegularAxis(period_us=corpus.period_us)
                 record = dataset.add_record(
@@ -304,35 +308,11 @@ class SlipConnector(BaseConnector[SlipSource]):
         return dataset
 
 
-def _corpus(corpora: dict[str, tables.SourceCorpus], name: str, shard: Path, row: int) -> tables.SourceCorpus:
-    """Give what ``meta.csv`` says about the corpus a row names.
-
-    Args:
-        corpora: What the table states, keyed by corpus name.
-        name: The value the row's ``dataset`` column holds.
-        shard: The parquet file the row came from.
-        row: The row's index in that shard.
-
-    Returns:
-        That corpus.
-
-    Raises:
-        TimeFFormatError: If the table names no such corpus, which means the release grew one and
-            its rate and its source are unknown rather than absent.
-    """
-    corpus = corpora.get(name)
-    if corpus is None:
-        raise TimeFFormatError(
-            f"{shard.name} row {row}: dataset holds {name!r}, which meta.csv does not name. "
-            f"It states {len(corpora)} corpora, so the release has grown one"
-        )
-    return corpus
-
-
 def _count_captions(row: SlipRow, record_id: str, stubs: _Tally, truncated: _Tally) -> None:
     """Count the captions of one row that are not captions.
 
-    Counted here rather than in the task stream, because the writer reads a stream more than once
+    Kept out of ``convert`` because inlining it puts that method over the local-variable limit, and
+    counted here rather than in the task stream, because the writer reads a stream more than once
     and the same caption would be counted on each pass.
 
     Args:
