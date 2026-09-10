@@ -8,7 +8,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE)
 
 Time-series data is fragmented: every dataset ships in its own shape, and teams end up rewriting
 the same loading code for each one. TimeNet replaces that with TimeF, a single shared format, and
@@ -22,7 +22,7 @@ Full documentation: <https://docs.timenet.ai/>
 
 ## How it fits together
 
-![TimeNet architecture diagram](docs/assets/architecture.svg)
+![TimeNet architecture diagram](https://raw.githubusercontent.com/OpenTSLM/TimeNet/main/docs/assets/architecture.svg)
 
 A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
 client reads the manifest from the registry and loads the data. Reading never runs connector code,
@@ -118,7 +118,7 @@ into `site/`. Published at <https://docs.timenet.ai/>, deployed from `main` by
 
 ## License
 
-TimeNet is released under the [MIT License](LICENSE).
+TimeNet is released under the [MIT License](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE).
 
 ### Dataset licenses
 
