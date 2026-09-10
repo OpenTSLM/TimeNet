@@ -23,7 +23,7 @@ jobs:
       # in their own environment through `make test-connectors`.
       run: make sync
     - name: Build dataset
-      run: uv run timenet-build timenet/hello-world
+      run: uv run timenet-build build timenet/hello-world
       env:
         TIMENET_REGISTRY: https://registry.dev.timenet.ai
         TIMENET_TOKEN: ${{ secrets.TIMENET_REGISTRY_DEV_API_KEY_TEST }}
