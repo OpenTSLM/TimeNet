@@ -171,6 +171,21 @@ def _options_id(options: Sequence[str]) -> str:
     return f"{_ID_PREFIX}-options-{digest[:12]}"
 
 
+def _record_id(index: int) -> str:
+    """Build the record id of one question, from its row number in the QA table.
+
+    The record loop and the task stream both name a record through this function, so a streamed task
+    names the record the loop built.
+
+    Args:
+        index: The question's row number.
+
+    Returns:
+        The record id.
+    """
+    return f"{_ID_PREFIX}-{index:03d}"
+
+
 def _iter_qa_rows(qa_csv: Path) -> Iterator[dict[str, str]]:
     """Stream the QA table, so its rows never sit in a list.
 
@@ -408,11 +423,14 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
         metric is read once per interval and its signals are reused, so a metric several questions
         cite is stored once.
 
+        The tasks are not built here. They stream from the QA table through :meth:`_iter_tasks`, so
+        no record carries the id of its task.
+
         Args:
             raw_refs: The single-element list from :meth:`download`.
 
         Returns:
-            The dataset: one record and one task per question.
+            The dataset: one record per question, and a task stream of one task per question.
         """
         source = raw_refs[0]
         dataset = TimeFDataset(metadata=self.metadata())
@@ -433,18 +451,32 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
                     path = source.ts_dir / f"{series_id}_{interval_s}.parquet"
                     signals[key] = _signals_for(str(path), series_id, interval_s)
                 time_series += signals[key]
-            record_id = f"{_ID_PREFIX}-{index:03d}"
-            record = dataset.add_record(time_series=time_series, record_id=record_id, start_time=ANCHOR_US)
+            record = dataset.add_record(time_series=time_series, record_id=_record_id(index), start_time=ANCHOR_US)
             record.add_annotations(_record_annotations(row, cited, interval_s))
-            dataset.add_task(
-                record,
-                AnswerTask(
-                    prompt=row["question"],
-                    target=row["correct_answer"],
-                    input_annotation_ids=(_options_id(json.loads(row["options_str"])),),
-                ),
-            )
+
+        dataset.set_task_stream([AnswerTask], lambda: self._iter_tasks(source))
         return dataset
+
+    @staticmethod
+    def _iter_tasks(source: ARFBenchSource) -> Iterator[AnswerTask]:
+        """Yield one :class:`AnswerTask` per QA row, on the record that row built.
+
+        The QA table is read again here rather than held, so the stream answers the same rows every
+        time the writer asks for them.
+
+        Args:
+            source: The download handle naming the QA table.
+
+        Yields:
+            Each question as an answer task, naming its record and its candidate-answer annotation.
+        """
+        for index, row in enumerate(_iter_qa_rows(source.qa_csv)):
+            yield AnswerTask(
+                prompt=row["question"],
+                target=row["correct_answer"],
+                input_annotation_ids=(_options_id(json.loads(row["options_str"])),),
+                record_ids=(_record_id(index),),
+            )
 
 
 CONNECTOR = ARFBenchConnector
