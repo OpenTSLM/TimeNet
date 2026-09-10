@@ -280,8 +280,8 @@ count the card states.
 verbatim across every row of that class. Label 0's report is in German and the other four are in
 English. Substituted into the folder's own prompt template the result does not parse as a sentence.
 
-**Decision.** Keep the reports as the targets. `target_schema` is `ptbxl`, so the vocabulary is
-named even though its five members are paragraphs.
+**Decision.** Keep the reports as the targets. `target_schema` is `vocabulary-ptbxl`, so the
+vocabulary is named even though its members are paragraphs.
 
 **Consequence.** `ptbxl`'s task targets are paragraphs, not labels, and they are not all in one
 language. A classification metric over five distinct strings still works.

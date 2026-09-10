@@ -25,7 +25,7 @@ from fractions import Fraction
 class Folder:
     """One evaluation folder, as the release's card describes it."""
 
-    name: str  # the directory name, which is also the task's target_schema
+    name: str  # the directory name, which the task's target_schema is built from
     rate_hz: Fraction  # the sampling rate the card states; the data states none
     signals: tuple[str, ...]  # this connector's names, not the release's; see the module docstring
     classes: int  # how many classes the card states; the build checks the data against it
