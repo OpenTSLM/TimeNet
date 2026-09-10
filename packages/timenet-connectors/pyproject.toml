@@ -1,6 +1,6 @@
 [project]
 name = "timenet-connectors"
-version = "0.0.1"
+version = "0.1.0"
 description = "Dataset connectors for TimeNet: dataset-specific logic to fetch and convert sources into the TimeF format."
 readme = "README.md"
 license = "MIT"
