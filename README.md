@@ -1,21 +1,30 @@
 # TimeNet
 
+*Download and explore time-series datasets through one standardized format.*
+
+> [!NOTE]
+> This is a pre-release version and is subject to change. We are actively working on
+> improvements around performance and integrations, and welcome community contributions.
+
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE)
 
-TimeNet is a Python library and CLI for registering, fetching, and exploring time-series datasets
-in a shared format called TimeF. Every dataset gets one on-disk shape and one way to load it, so a
-consumer reads ECGs, accelerometer traces, and market series through the same API.
+Time-series data is fragmented. TimeNet standardizes it. Every dataset used to ship in its own
+shape, forcing teams to rewrite the same loading code again and again. TimeF replaces that with
+one shared format and one set of tools to find, download, and load any dataset the same way,
+whether it holds ECGs, accelerometer traces, or market prices.
 
-TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation metrics
-are out of scope. It stops at handing you the data.
+TimeNet hands you the data and stops there. Training, inference, and modeling are up to you.
+
+We're actively growing TimeNet: adding datasets, integrating time-series ML models, and building
+connectors to data processing libraries. Contributions in any of these areas are welcome.
 
 Full documentation: <https://docs.timenet.ai/>
 
 ## How it fits together
 
-![TimeNet architecture diagram](docs/assets/architecture.svg)
+![TimeNet architecture diagram](https://raw.githubusercontent.com/OpenTSLM/TimeNet/main/docs/assets/architecture.svg)
 
 A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
 client reads the manifest from the registry and loads the data. Reading never runs connector code,
@@ -53,65 +62,9 @@ uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset); works with any tor
 Once installed, the CLI is available as `timenet`. See [Get started](https://docs.timenet.ai/get-started.html)
 to load your first dataset.
 
-## Development
-
-Clone the repo and set up the environment with uv:
-
-```bash
-git clone https://github.com/OpenTSLM/TimeNet.git
-cd TimeNet
-make sync           # install the dev environment (workspace + extras)
-make install-hooks  # set up pre-commit hooks (run once after cloning)
-```
-
-This project uses uv for environment and dependency management, [ruff](https://docs.astral.sh/ruff/)
-for linting and formatting, [ty](https://github.com/astral-sh/ty) for type checking, and
-[Zensical](https://zensical.org/) for docs.
-
-### Make targets
-
-```bash
-make sync           # install the dev environment (workspace + extras, CPU torch)
-make test           # core tests in the dev environment
-make test-unit      # the in-memory part of `make test`, for a fast answer
-make test-connectors # each connector's tests in its own environment
-make check          # format + lint + typecheck (ruff format, ruff check, ty check)
-make check-ci       # what CI checks: the hooks, plus ty on 3.13 and on 3.11
-make lint-fix       # auto-fix lint issues with ruff
-make build          # build both packages with uv
-make docs           # build the docs into site/
-make docs-serve     # serve the docs locally at http://127.0.0.1:8000
-make install-hooks  # install pre-commit hooks (run once after cloning)
-make clean          # remove .venv, caches, and built site/
-```
-
-### Verification
-
-Run these before opening a PR, and make them pass:
-
-- `make check` for `ruff format`, `ruff check`, and `ty check`
-- `make lint-fix` to auto-fix lint findings
-- `make test` for the pytest suite
-
-Every commit runs the same ruff, ty, `uv lock`, and file-hygiene checks through pre-commit. Don't
-bypass hooks with `--no-verify`; if one fails, run `make check` / `make lint-fix` and commit again.
-
-CI runs the checks as four jobs. The `quick` job answers in about 45 seconds with the hooks, the
-type checks, and the tests in `make test-unit`. It runs on every push. The `tests` and `tests_min`
-jobs run the full suite on Python 3.13 and on Python 3.11. They skip a draft pull request.
-Otherwise they wait for `quick`. A branch that fails lint or a unit test then costs one runner
-minute, not seven. The `check` job collects the three results, and it is the one required status
-check. When you mark a draft ready for review, the full set runs.
-
-### Docs
-
-`make docs-serve` gives a live preview at http://127.0.0.1:8000; `make docs` builds the static site
-into `site/`. Published at <https://docs.timenet.ai/>, deployed from `main` by
-`.github/workflows/docs.yml`.
-
 ## License
 
-TimeNet is released under the [MIT License](LICENSE).
+TimeNet is released under the [MIT License](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE).
 
 ### Dataset licenses
 
