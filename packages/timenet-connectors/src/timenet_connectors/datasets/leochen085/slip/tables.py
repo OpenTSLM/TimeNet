@@ -14,8 +14,8 @@ from timenet.errors import TimeFFormatError
 
 _US_PER_S = 1_000_000
 # RegularAxis holds the period as an int64 numerator of microseconds, so this is the coarsest period
-# TimeF addresses. No meta.csv cell comes near it; the check is here so that a Freq at either end of
-# the range fails with the cell named.
+# TimeF addresses. The check is here so that a Freq at either end of the range fails with the cell
+# named.
 _MAX_PERIOD_US = 2**63 - 1
 
 # Freq is prose, not a number. Every form the release actually uses, measured over every row.
@@ -80,8 +80,6 @@ def parse_period_us(freq: str | None) -> Fraction | None:
     if value <= 0:
         raise TimeFFormatError(f"meta.csv Freq holds {freq!r}; a rate or a period must be above zero")
     period_us = Fraction(_US_PER_S) / value if unit == "hz" else value * _UNIT_SECONDS[unit] * _US_PER_S
-    # Both ends, because `_QUANTITY` bounds neither. Caught here, where the cell can be named,
-    # rather than in RegularAxis, whose message knows nothing about meta.csv.
     if not 1 <= period_us <= _MAX_PERIOD_US:
         raise TimeFFormatError(
             f"meta.csv Freq holds {freq!r}, a period of {float(period_us):g} us; TimeF addresses "
