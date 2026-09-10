@@ -87,20 +87,6 @@ class SlipEvalWindow:
     prompt: str  # the folder's own template, verbatim
 
 
-def _splits(root: Path, folder: str) -> Iterator[tuple[str, Path]]:
-    """Give every parquet file of one folder, with the split it belongs to.
-
-    Args:
-        root: The directory holding the eleven folders.
-        folder: The folder's directory name.
-
-    Yields:
-        The split name and the file, train before test and in file-name order within each.
-    """
-    for split in ("train", "test"):
-        yield from ((split, path) for path in sorted((root / folder).glob(f"{split}-*.parquet")))
-
-
 def _iter_windows(root: Path, folder: str) -> Iterator[SlipEvalWindow]:
     """Walk one folder's splits, giving each window's facts without its values.
 
@@ -114,48 +100,46 @@ def _iter_windows(root: Path, folder: str) -> Iterator[SlipEvalWindow]:
     Raises:
         TimeFFormatError: If a file lacks a column every folder is expected to ship.
     """
-    index = 0
-    previous = ""
-    for split, path in _splits(root, folder):
-        if split != previous:
-            index, previous = 0, split
-        reader = pq.ParquetFile(path)
-        present = set(reader.schema_arrow.names)
-        for required in ("X", "text_label", "prompt"):
-            if required not in present:
-                raise TimeFFormatError(f"{path} has no {required!r} column; it holds {sorted(present)}")
-        wanted = [name for name in ("label", "text_label", "participant_id", "prompt") if name in present]
-        in_file = 0
-        for batch in reader.iter_batches(batch_size=_BATCH_ROWS, columns=[*wanted, "X"]):
-            scalars = batch.select(wanted).to_pylist()
-            column = batch.column("X")
-            counts = column.value_lengths().to_pylist()
-            lengths = column.flatten().value_lengths().to_pylist()
-            cursor = 0
-            for row, count in zip(scalars, counts, strict=True):
-                window = lengths[cursor : cursor + count]
-                if len(set(window)) > 1:
-                    raise TimeFFormatError(
-                        f"{path} row {in_file}: the window's signals have lengths {sorted(set(window))}, "
-                        f"but every signal of one window covers the same span"
+    for split in ("train", "test"):
+        index = 0
+        for path in sorted((root / folder).glob(f"{split}-*.parquet")):
+            reader = pq.ParquetFile(path)
+            present = set(reader.schema_arrow.names)
+            for required in ("X", "text_label", "prompt"):
+                if required not in present:
+                    raise TimeFFormatError(f"{path} has no {required!r} column; it holds {sorted(present)}")
+            wanted = [name for name in ("label", "text_label", "participant_id", "prompt") if name in present]
+            in_file = 0
+            for batch in reader.iter_batches(batch_size=_BATCH_ROWS, columns=[*wanted, "X"]):
+                scalars = batch.select(wanted).to_pylist()
+                column = batch.column("X")
+                counts = column.value_lengths().to_pylist()
+                lengths = column.flatten().value_lengths().to_pylist()
+                cursor = 0
+                for row, count in zip(scalars, counts, strict=True):
+                    window = lengths[cursor : cursor + count]
+                    if len(set(window)) > 1:
+                        raise TimeFFormatError(
+                            f"{path} row {in_file}: the window's signals have lengths {sorted(set(window))}, "
+                            f"but every signal of one window covers the same span"
+                        )
+                    participant = row.get("participant_id")
+                    yield SlipEvalWindow(
+                        folder=folder,
+                        split=split,
+                        index=index,
+                        path=path,
+                        row_in_file=in_file,
+                        signals=count,
+                        length=window[0],
+                        label=str(row["text_label"]),
+                        index_of_label=row["label"] if isinstance(row.get("label"), int) else None,
+                        participant=None if participant is None else f"{folder}-{participant}",
+                        prompt=str(row["prompt"]),
                     )
-                participant = row.get("participant_id")
-                yield SlipEvalWindow(
-                    folder=folder,
-                    split=split,
-                    index=index,
-                    path=path,
-                    row_in_file=in_file,
-                    signals=count,
-                    length=window[0],
-                    label=str(row["text_label"]),
-                    index_of_label=row["label"] if isinstance(row.get("label"), int) else None,
-                    participant=None if participant is None else f"{folder}-{participant}",
-                    prompt=str(row["prompt"]),
-                )
-                cursor += count
-                in_file += 1
-                index += 1
+                    cursor += count
+                    in_file += 1
+                    index += 1
 
 
 @functools.lru_cache(maxsize=1)
