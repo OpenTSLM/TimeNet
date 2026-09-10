@@ -317,8 +317,9 @@ def test_convert_maps_the_arrays_and_materialises_no_values(corpus, monkeypatch)
     dataset = _convert(corpus)
     assert modes
     assert set(modes) == {"r"}
-    # Every array is mapped once, not once per window: values, attributes and captions per split.
-    assert modes.count("r") == len(_FIXTURE_COMPONENTS) * len(_SPLITS) * 3
+    # Every array is mapped once, not once per window: values and attributes per split. The caption
+    # plane belongs to the task stream, so convert never opens it.
+    assert modes.count("r") == len(_FIXTURE_COMPONENTS) * len(_SPLITS) * 2
     monkeypatch.setattr(connector_module.pa, "array", real_pa_array)
     assert len(dataset.records[0].time_series[0].to_numpy()) == _SYNTHETIC_STEPS
 
@@ -341,7 +342,7 @@ def test_annotations_carry_the_context_and_the_codes_but_not_the_captions(corpus
 
 def test_a_one_caption_component_carries_one_task(corpus):
     dataset = _convert(corpus)
-    tasks = _generation_tasks_for(dataset.tasks, "verbalts-synthetic_u-train-00001")
+    tasks = _generation_tasks_for(dataset.iter_tasks(), "verbalts-synthetic_u-train-00001")
     assert [t.prompt for t in tasks] == list(_captions("synthetic_u", "train")[1])
     assert len(tasks) == 1
 
@@ -365,8 +366,8 @@ def test_codebooks_are_registered_once_and_carry_their_option_count(corpus):
 def test_one_generation_task_per_caption_prompted_by_that_caption(corpus):
     dataset = _convert(corpus)
     n_captions = sum(3 if r.record_id.startswith("verbalts-Weather-") else 1 for r in dataset.records)
-    assert len(dataset.tasks) == n_captions
-    tasks = _generation_tasks_for(dataset.tasks, "verbalts-Weather-train-00000")
+    assert sum(1 for _ in dataset.iter_tasks()) == n_captions
+    tasks = _generation_tasks_for(dataset.iter_tasks(), "verbalts-Weather-train-00000")
     task = next(t for t in tasks if t.prompt == _captions("Weather", "train")[0][2])
     assert task.target is None
     assert task.target_annotation_ids == ()
@@ -376,10 +377,36 @@ def test_one_generation_task_per_caption_prompted_by_that_caption(corpus):
 
 def test_a_weather_window_gets_three_specifications_of_one_target(corpus):
     dataset = _convert(corpus)
-    tasks = _generation_tasks_for(dataset.tasks, "verbalts-Weather-train-00000")
+    tasks = _generation_tasks_for(dataset.iter_tasks(), "verbalts-Weather-train-00000")
     assert len(tasks) == 3
     assert {t.target_record_id for t in tasks} == {"verbalts-Weather-train-00000"}
     assert [t.prompt for t in tasks] == list(_captions("Weather", "train")[0])
+
+
+def test_the_tasks_stream_and_no_record_lists_its_tasks(corpus):
+    # A streamed task carries its own record_ids, and the link runs one way: nothing walks from a
+    # record to its tasks any more.
+    dataset = _convert(corpus)
+    assert dataset.has_task_stream
+    assert dataset.tasks == ()
+    assert all(record.task_ids == () for record in dataset.records)
+    assert all(task.record_ids for task in dataset.iter_tasks())
+
+
+def test_the_task_stream_gives_the_same_tasks_when_read_again(corpus):
+    # set_task_stream needs a source it can read again, so a generator that empties itself is a bug.
+    dataset = _convert(corpus)
+    once = [(t.record_ids, t.prompt, t.input_annotation_ids) for t in dataset.iter_tasks()]
+    again = [(t.record_ids, t.prompt, t.input_annotation_ids) for t in dataset.iter_tasks()]
+    assert once == again
+    assert len(once) == sum(3 if r.record_id.startswith("verbalts-Weather-") else 1 for r in dataset.records)
+
+
+def test_every_streamed_task_id_is_distinct(corpus):
+    # A stream skips the dataset's cross-task duplicate-id check, so the generated ids are pinned
+    # here instead.
+    ids = [task.id for task in _convert(corpus).iter_tasks()]
+    assert len(set(ids)) == len(ids)
 
 
 def test_schema_derives_a_prefixed_key_per_attribute_and_one_task_type(corpus):
@@ -416,6 +443,8 @@ def test_convert_round_trips_through_the_writer(corpus, tmp_path):
     tasks = _generation_tasks_for(restored.tasks, "verbalts-Weather-train-00000")
     assert {t.prompt for t in tasks} == set(_captions("Weather", "train")[0])
     assert {t.target_record_id for t in tasks} == {"verbalts-Weather-train-00000"}
+    # The build wrote no record task ids; read() rebuilds the reverse link from the task rows.
+    assert len(restored.tasks_for(record, TSGenerationTask)) == 3
     assert len(record.time_series) == _WEATHER_SIGNALS
     assert np.array_equal(record.time_series[0].to_numpy(), _values("Weather", "train")[0, :, 0])
 
@@ -467,9 +496,10 @@ def test_a_values_file_that_is_not_three_dimensional_is_rejected(corpus):
 
 
 def test_a_caption_plane_that_is_not_a_rectangle_is_rejected(corpus):
+    # The captions are the stream's input, so the shape is checked when the stream reads them.
     np.save(corpus / "synthetic_u" / "train_text_caps.npy", _captions("synthetic_u", "train")[:, 0])
     with pytest.raises(TimeFFormatError, match=r"train_text_caps.npy holds an array of shape \(2,\)"):
-        _convert(corpus)
+        list(_convert(corpus).iter_tasks())
 
 
 def test_an_attribute_plane_that_disagrees_with_meta_json_is_rejected(corpus):

@@ -213,8 +213,9 @@ task lists its component's `_options` annotations in `input_annotation_ids`: the
 attribute space the caption was drawn from, which is context about the input and not part of the
 answer.
 
-A Weather window carries three tasks over one target, one per caption. Every other component
-carries one. So 104,628 records carry 130,828 tasks.
+A Weather window gets three tasks over one target, one per caption. Every other component gets one.
+So 104,628 records answer 130,828 tasks. The tasks stream rather than being materialized, so a
+record row states no task id of its own; see "The tasks stream out of the caption planes" below.
 
 ## Inconsistencies and decisions
 
@@ -382,7 +383,7 @@ a colliding key.
 **Problem.** A Weather window has three captions. Either the window or the caption could be the unit
 of the dataset.
 
-**Decision.** The window. 104,628 records carry 130,828 tasks.
+**Decision.** The window. 104,628 records answer 130,828 tasks.
 
 **Consequence.** The caption is not addressable on its own. This matches the release's own loader,
 which collapses a multi-caption window to one caption per access, so the caption is not an
@@ -422,6 +423,30 @@ synthesize. Nothing in TimeF requires `target_record_id` to be unique across tas
 
 **Consequence.** 130,828 tasks rather than 104,628. Collapsing them would lose two of the three
 specifications of every Weather window.
+
+### The tasks stream out of the caption planes — **Handled**
+
+**Problem.** The build has 130,828 tasks over 104,628 records. `add_tasks` attaches one batch to one
+record, so a caption-per-window release makes one call per window and the dataset ends up holding
+every task, every `record_ids` tuple and every `task_ids` tuple in memory. The house rule is to
+stream wherever the tasks outnumber the records.
+
+**Decision.** `set_task_stream`. `convert` builds the records and registers the codebook
+annotations, then hands over a callable that re-opens the caption planes and yields one
+`TSGenerationTask` per caption. Each streamed task carries its own `record_ids`, and the callable
+gives a fresh iterator on every call, so that reading it again gives the same tasks. The writer
+drains it once, but `iter_tasks` is public and any consumer may read it after that.
+
+**Consequence.** Three things change. A record row stores no `task_ids`, because no task is ever
+held in memory to fill them in; `TimeFReader.read()` rebuilds that reverse link from the task rows,
+so a full read still resolves a record's tasks, while a records-only read sees the column empty. The
+dataset no longer runs the checks that need every task at once, which here is the duplicate-id
+check: task ids are the UUIDv7 TimeF generates, and a test pins that they are distinct.
+`from_tasks` is unused in this connector, so no derivation check is lost. And the caption planes are
+read by the stream rather than by `convert`, so a caption plane whose row count disagrees with its
+values file raises when the stream reads it and not while the records are being built. The task
+count in the table above is unchanged: streaming decides where the tasks live, not how many there
+are.
 
 ### The task direction is text in, series out — **Handled**
 
