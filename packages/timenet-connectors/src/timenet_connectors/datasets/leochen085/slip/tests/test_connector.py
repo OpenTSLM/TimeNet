@@ -423,6 +423,16 @@ def test_a_shard_whose_name_states_no_number_raises(tmp_path: Path) -> None:
         SlipConnector().convert([SlipSource(shards=(shard,), meta_csv=_meta(tmp_path))])
 
 
+def test_a_badly_named_shard_stops_the_build_before_any_row_is_read(tmp_path: Path) -> None:
+    # Every shard's name is checked before the first row is decoded, so a release that renames its
+    # last shard fails in milliseconds instead of after every shard before it has been converted.
+    good = _shard(tmp_path, "train-00000-of-00002.parquet")
+    bad = _shard(tmp_path, "train-1-of-00002.parquet")
+    with pytest.raises(TimeFFormatError, match=r"train-NNNNN-of-NNNNN"):
+        SlipConnector().convert([SlipSource(shards=(good, bad), meta_csv=_meta(tmp_path))])
+    assert slip._row_group.cache_info().misses == 0
+
+
 def test_a_row_that_states_no_caption_raises(tmp_path: Path) -> None:
     # Every row of the pinned revision states four captions. A null is a changed release, and a
     # substituted empty string would report itself as a caption that stops mid-sentence.

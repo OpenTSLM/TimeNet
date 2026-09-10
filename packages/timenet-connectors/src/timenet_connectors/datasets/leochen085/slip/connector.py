@@ -163,6 +163,27 @@ def _read_signal(ref: _SignalRef) -> pa.Array:
     return _row_group(ref.shard, ref.row_group)[ref.offset][ref.signal].values
 
 
+def _shard_number(shard: Path) -> str:
+    """Give the number a shard's name states.
+
+    Args:
+        shard: The parquet file.
+
+    Returns:
+        The five-digit number, as the name writes it.
+
+    Raises:
+        TimeFFormatError: If the shard's name states no number. A record id is built from that
+            number, so a release that renames its shards would renumber every record.
+    """
+    match = _SHARD_NAME.match(shard.stem)
+    if match is None:
+        raise TimeFFormatError(
+            f"{shard.name} is not named train-NNNNN-of-NNNNN, so it states no number to build an id from"
+        )
+    return str(match["number"])
+
+
 def _record_id(shard: Path, row: int) -> str:
     """Give a record's id: which shard it came from, and where in it.
 
@@ -177,15 +198,9 @@ def _record_id(shard: Path, row: int) -> str:
         An id of the form ``slip-shard-00000-row-000000``.
 
     Raises:
-        TimeFFormatError: If the shard's name states no number. The id is built from that number, so
-            a release that renames its shards would renumber every record.
-    """
-    match = _SHARD_NAME.match(shard.stem)
-    if match is None:
-        raise TimeFFormatError(
-            f"{shard.name} is not named train-NNNNN-of-NNNNN, so it states no number to build an id from"
-        )
-    return f"{_ID_PREFIX}-shard-{match['number']}-row-{row:06d}"
+        TimeFFormatError: If the shard's name states no number.
+    """  # noqa: DOC502 (raised by _shard_number, not directly here)
+    return f"{_ID_PREFIX}-shard-{_shard_number(shard)}-row-{row:06d}"
 
 
 def _caption_id(record_id: str, index: int) -> str:
@@ -270,6 +285,10 @@ class SlipConnector(BaseConnector[SlipSource]):
                 states no number; or if a row states no caption.
         """  # noqa: DOC502 (raised by the helpers below, not directly here)
         source = raw_refs[0]
+        # Checked over every shard before any row is read, so a renamed shard stops the build in
+        # milliseconds rather than after the shards before it have been converted.
+        for shard in source.shards:
+            _shard_number(shard)
         corpora = tables.corpora(_read_meta(source.meta_csv))
         dataset = TimeFDataset(metadata=self.metadata())
         empty, stubs, truncated = _Tally(), _Tally(), _Tally()
