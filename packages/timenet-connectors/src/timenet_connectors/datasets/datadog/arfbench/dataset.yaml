@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the datadog/arfbench connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: one record per question; one signal per (metric, tag group); the finest sampling interval
+# every metric a question cites publishes, which keeps all 750 questions and opens 205 of the
+# release's 748 series files. The filename is the join key to the QA table, so the files' own
+# query_name column, the pandas index column and the repeated group count are dropped.
+#
+# Training convention: the answer rides as an unprompted AnswerTask on the record, with the
+# candidate answers in a shared answer_options annotation. Values keep the source's float64 and the
+# release states no physical unit, so every signal is dimensionless. A row whose value is null is
+# carried as a missing timestep rather than deleted, so a consumer reads these series with
+# to_numpy_and_mask() or to_arrow().
+yaml_schema_version: 1
+dataset_id: datadog/arfbench
+dataset_version: 1.0.0
+name: ARFBench
+description: >-
+  750 multiple-choice questions about anomalies in 142 observability metrics from 63 Datadog
+  production incidents, each paired with the metric series the question cites.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Datadog/ARFBench
+citation: >-
+  Xie, S., Cohen, B., Goswami, M., Shen, J., Khwaja, E., Liu, C., Asker, D., Abou-Amal, O., and
+  Talwalkar, A. (2026). ARFBench: Benchmarking Time Series Question Answering Ability for Software
+  Incident Response. arXiv:2604.21199. https://arxiv.org/abs/2604.21199
+access: open
+domains:
+  - observability
+tags:
+  - observability
+  - anomaly-detection
+  - qa
+  - multiple-choice
+  - datadog
+  - huggingface
