@@ -7,8 +7,10 @@ The release holds two studies. ``sleep-cassette`` measured the effect of age on 
 recorded each subject at home, on a cassette recorder. ``sleep-telemetry`` measured the effect
 of temazepam. It recorded each subject in hospital, on a telemetry system.
 
-The two studies used different equipment. As a result, their signal sets differ. Their spans
-differ too. A cassette recording covers about a day, and a telemetry recording about ten hours.
+The two studies used different equipment. As a result, their signal sets differ, and their
+submental EMG signals are not one measurement: the cassette recorder rectified that signal and
+low-passed it at 0.7 Hz, and the telemetry recorder did neither. Their spans differ too. A
+cassette recording covers about a day, and a telemetry recording about ten hours.
 
 The loop that walks the release is in ``convert``, so one place states what a record is made of.
 :mod:`~timenet_connectors.bases.edf.reader` reads the EDF container, and
@@ -37,8 +39,7 @@ from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLoca
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
-from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, tables, tasks
-from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
+from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, specs, tables, tasks
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
@@ -57,6 +58,8 @@ _TELEMETRY_STUDY = "sleep-telemetry"
 
 # The three characters that each study writes at the front of its recording ids.
 _STUDY_CODES = {_CASSETTE_STUDY: "SC4", _TELEMETRY_STUDY: "ST7"}
+
+_STUDY_SPECS = {_CASSETTE_STUDY: specs.CASSETTE_SPECS, _TELEMETRY_STUDY: specs.TELEMETRY_SPECS}
 
 # A recording id is eight characters: the three its study writes, the two digits of the subject
 # number, the night, and two more for the recorder and a trailing zero.
@@ -291,7 +294,8 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             record_id = f"{_ID_PREFIX}-{recording.recording_id}"
 
             file = reader.open_edf(recording.psg_path)
-            series = timeseries.build(record_id, file, SPECS, loader=reader.build_signal_loader)
+            series = timeseries.build(record_id, file, _STUDY_SPECS[recording.study], loader=reader.build_signal_loader)
+            specs.check_header_dimensions(recording.psg_path, file.header)
 
             entries = reader.read_annotations(reader.open_edf(recording.hypnogram_path))
             signal_end = reader.compute_signal_end_microseconds(file.header)

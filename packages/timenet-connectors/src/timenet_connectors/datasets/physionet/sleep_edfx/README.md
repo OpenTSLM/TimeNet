@@ -1,6 +1,6 @@
 # Sleep-EDF: the inconsistencies of the release, and the decisions of this connector
 
-Sleep-EDF holds six inconsistencies. Each one forces a design or preprocessing decision. This
+Sleep-EDF holds nine inconsistencies. Each one forces a design or preprocessing decision. This
 document states those decisions.
 
 *(measured)* marks a number that this connector took from the release itself, and not from the
@@ -19,13 +19,21 @@ source wins for a named reason, and the connector keeps the other beside it.**
 | --- | --- | --- |
 | age, sex | the subject table | the EDF header, kept in a `demographics_note` |
 | lights off | the subject table | — |
-| rate, gain, unit of a signal | that file's own EDF header | — |
+| rate, gain of a signal | that file's own EDF header | — |
+| unit of a signal | this connector's signal table | the EDF dimension, which the build checks |
+| what a signal measures | this connector's signal table | kept as a `prefiltering` annotation |
 | sleep stage | the hypnogram | — |
 | where the session ends | the later of the signals and the scoring | the connector keeps both |
 
 
 The subject table wins for the facts about a person because it is the registry of the study, and
 published work joins against it.
+
+The signal table wins for the unit because the header does not always state one. It is not a free
+choice: the build refuses any file whose header declares a dimension that the release does not
+declare for that signal. That check reads the dimension string alone. It cannot see a scale, which
+EDF states in the physical range, and the rectal temperature section below states where that
+matters.
 
 ## The tasks this connector builds
 
@@ -140,6 +148,66 @@ differently.
 
 ## Inconsistencies
 
+### The two studies filtered the same signal differently — **Handled**
+
+**Problem.** EDF states one `prefiltering` string for each signal, and this release uses that field
+to say things that no other field says. The cassette recorder rectified its submental EMG and
+low-passed the result at 0.7 Hz, so a cassette EMG value is an amplitude envelope. The telemetry
+recorder passed the same muscle through 0.03 to 800 Hz and rectified nothing, so a telemetry EMG
+value is a potential. The rates follow the filtering: the cassette EMG runs at 1 Hz and the
+telemetry EMG at 100 Hz *(measured)*. The EEG and EOG signals differ too, though less deeply:
+cassette states `HP:0.5Hz LP:100Hz [enhanced cassette BW]` and telemetry states
+`LP:800Hz HP:0.03Hz`, over the same 100 Hz sampling. Each string is constant inside its study, on
+all 153 cassette and all 44 telemetry files *(measured)*.
+
+The release card states the cassette processing in its own words, in the
+`Sleep Cassette Study and Data` section of <https://physionet.org/content/sleep-edfx/1.0.0/>:
+
+> The submental-EMG signal was electronically highpass filtered, rectified and low-pass filtered
+> after which the resulting EMG envelope expressed in uV rms (root-mean-square) was sampled at 1Hz.
+
+The spec type takes its name from that sentence.
+
+**Decision.** The cassette EMG signal gets the spec type `emg_envelope` and the telemetry one
+keeps `emg`, because two spec types is the only thing that stops a filter from returning both.
+Every record also carries a `prefiltering` annotation, from a signal name to the string that
+signal's own header states. Both studies state the same strings on every recording, so the release
+stores two of those annotations *(measured)*.
+
+**Consequence.** A consumer who filters on the spec type `emg` gets the 44 telemetry signals and
+not the 153 cassette ones, so pooling an envelope with a broadband signal now takes a deliberate
+step. `spec_type` is the writer's primary sort key, so the cassette EMG signals sit elsewhere in
+the written order than they did. A consumer who wants what the header states about any other
+signal reads the annotation and joins it on the signal name.
+
+### The header does not state the unit of every signal — **Handled**
+
+**Problem.** The EDF physical dimension is not a usable unit on three signals. `Temp rectal`
+states `DegC` on 85 of the 153 cassette files and nothing at all on the other 68, and the split
+runs through the study rather than between the two studies. `Marker` states `ID+M-E` on all 44
+telemetry files, which names a marker convention and not a physical dimension. `Resp oro-nasal`
+states nothing on any of the 153 files *(measured)*.
+
+The release card says what that marker string means, in the `Sleep Telemetry Study and Data`
+section of <https://physionet.org/content/sleep-edfx/1.0.0/>:
+
+> The physical marker dimension ID+M-E relates to the fact that pressing the marker (M) button
+> generated two-second deflections from a baseline value that either identifies the telemetry unit
+> (ID = 1 or 2 if positive) or marks an error (E) in the telemetry link if negative.
+
+A telemetry unit number is not a physical quantity, so no unit converts it.
+
+**Decision.** The unit comes from this connector's signal table and never from the header. The
+build then checks every header against that table and refuses any file that declares a dimension
+the release does not declare for that signal, so a copy whose EEG header read `mV` fails the build
+instead of shipping amplitudes that are wrong by a factor of 1000.
+
+**Consequence.** All 153 rectal temperature signals are written in degrees Celsius, and the 68
+that declare nothing get a unit the release does not state for them. The `ID+M-E` string reaches no
+consumer. The rate and the gain still come from each file's own header. The release states a gain
+on every file, but a stated gain is not always a right one, and the rectal temperature section
+below states where it is not.
+
 ### The scoring reaches past the signals — **Handled**
 
 **Problem.** A hypnogram and the PSG it scores are two files, and nothing makes them agree. 155
@@ -182,7 +250,29 @@ stored count thus converts to a different value from file to file.
 
 **Consequence.** Two recordings that share a stored count do not share a microvolt value. A
 consumer that caches a gain across files, or assumes the cassette study is uniform, gets the
-wrong amplitude.
+wrong amplitude. The connector writes the decoded value and not the stored count, so the values
+plane doubles: 4,356,948,980 values are 8,713,897,960 B as int16 and 17,427,795,920 B as float32
+before compression, against 8,714,278,888 B of PSG file on disk *(measured)*.
+
+### The rectal temperature range does not decode to a body temperature — **Handled**
+
+**Problem.** `Temp rectal` declares `physical_range = (0, 30)` on 95 of the 153 cassette files. The
+other 58 declare a range that reaches a body temperature, 47 of them `(34, 40)` and the rest one of
+six wider ranges. Decoded through each file's own gain, the 95 have per-file medians from 3.57 to
+14.47 and the 58 from 35.14 to 37.62 *(measured)*. The header dimension does not predict the split:
+40 of the 95 declare `DegC`. The 85-stated and 68-unstated split of the section above is about the
+unit and this one is about the scale, so neither predicts the other.
+
+**Decision.** The connector applies the range each file declares and corrects nothing, so those 95
+signals are written in degrees Celsius that are not a body temperature. Every EDF reader produces
+the same values from the same files. To correct here is to invent a calibration that the release
+does not state.
+
+**Consequence.** A consumer who pools rectal temperature across the cassette study gets two
+populations. Nothing in the artifact carries the declared header range, so the filter has to be on
+the value itself. The dimension check cannot catch this: the release writes both `DegC` and nothing
+for this signal, so the table accepts both, and the scale lives in the range and not in the
+dimension.
 
 ### Lights off can fall outside the session — **Handled**
 
@@ -231,3 +321,19 @@ short file then looks like a whole one.
 about its own length. A consumer never receives a record whose signals end early with no warning.
 Whoever runs the build learns that this copy of the release is not the copy that this connector
 expects.
+
+## What this connector does not read
+
+The EDF transducer type field stays unread. Over all 197 headers it is a function of the signal
+label with no exception: `Ag-AgCl electrodes` for the four biopotential signals,
+`Oral-nasal thermistors` for the airflow, `Rectal thermistor` for the temperature, and
+`Marker button` for cassette against `MarkerButton` for telemetry. That is 1,291 fields of 80
+bytes, 103,280 B in all *(measured)*. A consumer who has the signal labels rebuilds the field
+from them.
+
+`RECORDS-v1` stays unread. The release ships that 1,037 B text file to name the 61-recording subset
+the sleep-staging literature reports against, the Sleep-EDF-20 and Sleep-EDF-39 set of 39 cassette
+and 22 telemetry recordings. No record is marked as a member. The subset is exactly derivable from
+what a record already carries: a cassette recording whose subject number is under 20, or a
+telemetry recording whose condition is `placebo`. That rule reproduces the file with no recording
+missing and none added, checked against all 197 records and `ST-subjects.xls` *(measured)*.
