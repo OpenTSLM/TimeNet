@@ -20,6 +20,8 @@ from timenet.types import (
     TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
     Version,
     ureg,
 )
@@ -674,3 +676,125 @@ def test_add_task_rejects_multiple_inline_answers(make_series):
             record,
             TSCorrespondenceTask(target=(record.record_id,), target_time_series_ids=(series_id,)),
         )
+
+
+class _CountingList(list):
+    """A list that counts how often something iterates it."""
+
+    def __init__(self, items=()):
+        super().__init__(items)
+        self.iterations = 0
+
+    def __iter__(self):
+        self.iterations += 1
+        return super().__iter__()
+
+
+def test_add_task_rejects_an_unknown_payload_record_ref(make_series):
+    ds = _dataset()
+    record = ds.add_record(time_series=(make_series(),))
+    with pytest.raises(TimeFValidationError, match="references unknown record 'missing'"):
+        ds.add_task(record, TSGenerationTask(prompt="q", target_record_id="missing"))
+
+
+def test_add_task_rejects_an_unknown_payload_record_ref_among_known_ones(make_series):
+    ds = _dataset()
+    source = ds.add_record(time_series=(make_series(),))
+    with pytest.raises(TimeFValidationError, match="target_record_id references unknown record 'missing'"):
+        ds.add_task(
+            source,
+            TSEditingTask(prompt="q", source_record_id=source.record_id, target_record_id="missing"),
+        )
+
+
+def test_add_task_accepts_a_registered_payload_record_ref(make_series):
+    ds = _dataset()
+    source = ds.add_record(time_series=(make_series(),))
+    target = ds.add_record(time_series=(make_series(),))
+    task = ds.add_task(source, TSGenerationTask(prompt="q", target_record_id=target.record_id))
+    assert task.target_record_id == target.record_id
+
+
+def test_streamed_task_validation_rejects_an_unknown_payload_record_ref(make_series):
+    ds = _dataset()
+    ds.add_record(time_series=(make_series(),), record_id="r-0")
+    task = TSGenerationTask(prompt="q", target_record_id="missing")
+    task.record_ids = ("r-0",)
+    ds.set_task_stream([TSGenerationTask], lambda: iter((task,)))
+    with pytest.raises(TimeFValidationError, match="references unknown record 'missing'"):
+        list(ds.iter_streamed_tasks_validated())
+
+
+def test_add_task_does_not_scan_the_records_for_a_task_without_record_id_fields(make_series):
+    # A dataset with many records and one task per record must not pay a full record scan per task:
+    # AnswerTask declares no record-id fields, so there is nothing to resolve against.
+    ds = _dataset()
+    records = [ds.add_record(time_series=(make_series(),)) for _ in range(5)]
+    ds._records = _CountingList(ds._records)
+    for record in records:
+        ds.add_task(record, AnswerTask(prompt="q", target="a"))
+    assert ds._records.iterations == 0
+
+
+def test_add_task_does_not_rescan_the_records_for_a_task_with_record_id_fields(make_series):
+    # TSGenerationTask does declare a record-id field, so the early return above does not cover it.
+    # A connector with one such task per record would otherwise pay a full record scan per task.
+    ds = _dataset()
+    source = ds.add_record(time_series=(make_series(),))
+    target = ds.add_record(time_series=(make_series(),))
+    ds._records = _CountingList(ds._records)
+    for _ in range(5):
+        ds.add_task(source, TSGenerationTask(prompt="q", target_record_id=target.record_id))
+    assert ds._records.iterations == 0
+
+
+def test_tasks_for_does_not_rescan_the_records(make_series):
+    ds = _dataset()
+    record = ds.add_record(time_series=(make_series(),))
+    ds.add_task(record, AnswerTask(prompt="q", target="a"))
+    ds._records = _CountingList(ds._records)
+    assert len(ds.tasks_for(record)) == 1
+    assert ds._records.iterations == 0
+
+
+def test_add_task_does_not_rescan_the_registered_tasks(make_series):
+    # One add_task per record is the normal connector shape. Collecting the registered ids on each
+    # call would make a converter quadratic in its own task count.
+    ds = _dataset()
+    record = ds.add_record(time_series=(make_series(),))
+    ds._tasks = _CountingList(ds._tasks)
+    for _ in range(5):
+        ds.add_task(record, AnswerTask(prompt="q", target="a"))
+    assert ds._tasks.iterations == 0
+
+
+def test_record_refs_see_the_records_that_came_from_from_parts(make_series):
+    # from_parts is the reader's path back from disk. Its records count as registered ids too.
+    ds = _dataset()
+    source = ds.add_record(time_series=(make_series(),))
+    target = ds.add_record(time_series=(make_series(),))
+    reloaded = TimeFDataset.from_parts(
+        metadata=_metadata(),
+        records=ds.records,
+        tasks=(),
+        schema=ds.derive_schema(),
+    )
+    task = reloaded.add_task(source, TSGenerationTask(prompt="q", target_record_id=target.record_id))
+    assert reloaded.tasks == (task,)
+    with pytest.raises(TimeFValidationError, match="references unknown record 'missing'"):
+        reloaded.add_task(source, TSGenerationTask(prompt="q", target_record_id="missing"))
+
+
+def test_add_task_rejects_an_id_that_came_from_from_parts(make_series):
+    # The same for a task id: a task read back from disk is registered.
+    ds = _dataset()
+    record = ds.add_record(time_series=(make_series(),))
+    loaded = ds.add_task(record, ClassificationTask(target="a", id="task-0"))
+    reloaded = TimeFDataset.from_parts(
+        metadata=_metadata(),
+        records=ds.records,
+        tasks=(loaded,),
+        schema=ds.derive_schema(),
+    )
+    with pytest.raises(TimeFValidationError, match="already registered"):
+        reloaded.add_task(record, ClassificationTask(target="b", id="task-0"))
