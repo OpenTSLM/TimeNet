@@ -122,10 +122,10 @@ vibration = TimeSeriesSpec(
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
-`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`; scalar
-values of a non-`"str"`/`"enum"` dtype preserve their NumPy type on disk, and `"str"`/`"enum"` values
-read back as text. An `"enum"` dtype stores values as a PyArrow
-dictionary array; the torch bridge maps them to integer codes.
+`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`. A
+scalar value of a non-`"str"`/`"enum"` dtype keeps its NumPy type on disk. A `"str"`/`"enum"` value
+reads back as text. An `"enum"` dtype stores values as a PyArrow
+dictionary array. The torch bridge maps them to integer codes.
 Multidimensional values require the Zarr
 values backend.
 
@@ -294,14 +294,15 @@ timeline. A **step** frame reads them as ordinal indices into one series' own ar
 you annotate with for any span. It and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
 always build a concrete leaf.
 
-Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
-meaningful on a windowed record that starts partway into the recording. `TimePoint(start_us=...)` is one
-point. `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
-covers the whole record, or a subset of series named by `time_series_ids` (`None` = every series). Build
-with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
-has integers. For a wall-clock moment, build it from the record (`record.time_point(at)` /
-`record.time_interval(start, end)`), which supplies its own `start_time` as the anchor. Bounds are stored
-as whole microseconds, so two equal regions compare equal.
+Time spans sit on the recording timeline, the same frame as a series' `time_axis`. As a result, a
+bound stays meaningful on a windowed record that starts partway into the recording.
+`TimePoint(start_us=...)` is one point. `TimeInterval(start_us=..., end_us=...)` is the half-open
+range `[start_us, end_us)`. Either covers the whole record, or a subset of series named by
+`time_series_ids` (`None` = every series). Build with `.seconds()` for the seconds a recording
+documents itself in, or `.micros()` when the source already has integers. For a wall-clock moment,
+build it from the record (`record.time_point(at)` / `record.time_interval(start, end)`), which
+supplies its own `start_time` as the anchor. Bounds are stored as whole microseconds, so two equal
+regions compare equal.
 
 Step spans count a series' own ordinal positions, for a series that has no clock at all. A step index
 means nothing without a series to count on, so a step span names exactly one `time_series_id` (a single
@@ -309,9 +310,9 @@ str). `StepPoint(time_series_id=..., start=...)` is one step.
 `StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
 are no unit builders. Construct them directly.
 
-Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
-irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
-span against the axis of every series it names and rejects a mismatch.
+Which frame fits is decided by the series' **axis**, not by the caller. A timeline axis (regular or
+irregular) takes a time span. An ordinal axis takes a step span. [`add_task`](timef-dataset.md)
+validates a span against the axis of every series it names and rejects a mismatch.
 
 ```python
 # a time interval on one series; start is stored as 5_000_000
@@ -512,9 +513,9 @@ hierarchy, listed at the end of this section.
 | `TimeNetRegistryError` | `TimeNetError` | a registry cannot be loaded/reached/served |
 | `TimeNetDatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
 | `TimeNetAccessError` | `TimeNetError` | a dataset needs credentialed or restricted access, so TimeNet does not host its data |
-| `TimeNetDownloadError` | `TimeNetError` | TimeNet could not fetch a dataset's source data, or what arrived is not what was expected |
+| `TimeNetDownloadError` | `TimeNetError` | TimeNet fails to fetch a dataset's source data, or what arrives does not match what is expected |
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
-| `TimeFEditError` | `TimeFValidationError` | an edit would leave a dataset referentially inconsistent |
+| `TimeFEditError` | `TimeFValidationError` | an edit leaves a dataset referentially inconsistent |
 | `TimeNetInvalidCardError` | `TimeNetError`, `ValueError` | a dataset card YAML is malformed or fails schema validation |
 | `TimeNetBuildError` | `TimeNetError` | a build run failed: the connector build, or the environment it needed |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |

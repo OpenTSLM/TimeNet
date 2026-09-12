@@ -56,7 +56,7 @@ rotating shards) or `zarr` (a chunked array store). The control plane stays the 
 
 ## The manifest
 
-`manifest.json` is a single JSON object. A reader parses it, checks `timef_format_version` against
+`manifest.json` is a single JSON object. A reader parses it, validates `timef_format_version` against
 the versions it supports, and rebuilds the dataset types from the flat descriptors it holds.
 
 | Key | Meaning |
@@ -85,7 +85,7 @@ together, plus the tasks and annotations that point at them.
 | --- | --- | --- |
 | `record_id` | id | The record's id. |
 | `start_time_us` | int64 | Wall-clock start, in microseconds since the Unix epoch. |
-| `time_span` | struct | The record's declared session span. Null unless the record declares an explicit one; `check_span_within_window` validates annotation spans against it. |
+| `time_span` | struct | The record's declared session span. Null unless the record declares an explicit one. `check_span_within_window` validates annotation spans against it. |
 | `subject_ids` | list of id | The subjects the record belongs to. |
 | `time_series` | list of struct | The series in this record, with their metadata and time axis. |
 | `task_ids` | list of id | The tasks that reference this record. |
@@ -165,8 +165,8 @@ into chunks of at most `chunk_max_bytes`, buffers chunks until they reach `row_g
 and flushes them as one row group. A shard rotates once it reaches `shard_target_bytes`. A row group
 never spans two shards, so the index locators are exact.
 
-The defaults are a 128 MiB shard target, a 4 MiB row-group target, a 1 MiB chunk limit, and zstd
-compression at level 19 (Parquet) or 9 (Zarr).
+The defaults are a 128 MiB shard target, a 4 MiB row-group target, and a 1 MiB chunk limit.
+Compression defaults to zstd, at level 19 for Parquet or 9 for Zarr.
 
 ## How the parts link together
 
@@ -248,9 +248,9 @@ with TimeFWriter(root, dataset, value_encoding="dictionary") as writer:
 ### Id storage
 
 An entity id is a UUIDv7 string by default. When every value in an id's space is a canonical UUID,
-the writer stores that column as 16 raw bytes (`binary(16)`) instead of a 36-character string. A
-reader reads the choice off the records table's Parquet schema and decodes the bytes back to the
-canonical string, so a caller always sees a string id.
+the writer stores that column as 16 raw bytes (`binary(16)`), not a 36-character string. A reader
+reads the choice off the records table's Parquet schema. It decodes the bytes back to the canonical
+string, so a caller always sees a string id.
 
 ## Integrity
 

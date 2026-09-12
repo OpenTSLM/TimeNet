@@ -89,7 +89,7 @@ Zarr stores one array for each `(spec_type, stores_time_offsets)` pair.
 Each array has shape `(total_steps, *value_shape)` and uses the spec's dtype.
 Irregular values use `_irregular/`, with matching int64 time offsets under `_time_offsets/`.
 One index row describes a series across its time axis.
-Zarr stores every scalar dtype, including `str`. It has no dictionary layer, so a `str` series may be
+Zarr stores every scalar dtype, including `str`. It has no dictionary layer, so a `str` series can be
 larger on disk and slower to read than Parquet's dictionary encoding.
 An enum stores int32 positions in the declared categories, which the reader uses to restore labels.
 
@@ -110,7 +110,7 @@ sequences. Recordings can have different durations. Every series that shares a `
 the same dtype and trailing shape. Parquet deliberately rejects N-D specs, which stay on Zarr. The
 Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer types,
 `bool`, `str`, and `enum`. The Zarr backend stores every scalar dtype too, including `str`, though it
-has no dictionary layer, so a free-form string signal may be larger on disk and slower to read than
+has no dictionary layer, so a free-form string signal can be larger on disk and slower to read than
 Parquet's dictionary encoding. An `enum` signal stores int32 codebook indices compactly. A dataset's
 values plane uses **one** backend for the whole dataset (the manifest's single `values_backend`
 field), so a dataset needing N-D tensors must be entirely Zarr. They cannot be mixed per signal.

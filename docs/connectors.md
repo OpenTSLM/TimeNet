@@ -77,10 +77,10 @@ The system finds connectors lazily, by dataset id. There is no central registry 
 concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
 names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
 beside it, next to a `requirements.txt` when the connector needs libraries of its own. A connector for
-a source with real-world inconsistencies can also carry a `README.md` beside those files, documenting
-the assumptions and decisions its `convert()` makes. As a result, `timenet-build build <org>/<name>`
-imports only that package. Reusable bases live under `bases/`. Each connector declares its own id in
-`metadata()`. An id is a lowercase `org/name` pair.
+a source with real-world inconsistencies can also carry a `README.md` beside those files. This
+`README.md` documents the assumptions and decisions its `convert()` makes. As a result,
+`timenet-build build <org>/<name>` imports only that package. Reusable bases live under `bases/`. Each
+connector declares its own id in `metadata()`. An id is a lowercase `org/name` pair.
 
 ## Dependencies and credentials
 
@@ -104,15 +104,15 @@ List every dependency the connector needs, even one that another connector alrea
 no shared requirement fragments. If several connectors share one file, an edit to that file can break
 a connector that you did not check.
 
-Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
-automatically (needed only for gated sources; a fully private Hub dataset has no auto-converted
-parquet ref, so `BaseHuggingFaceConnector` does not support it). Downloaded source files cache under
-`<TIMENET_CACHE>` (see [client config](client.md#configuration)).
+Credentials come from the environment. For the HuggingFace Hub, the connector reads a token from
+`HF_TOKEN` automatically. It needs the token only for gated sources. A fully private Hub dataset has no
+auto-converted parquet ref, so `BaseHuggingFaceConnector` does not support it. Downloaded source files
+cache under `<TIMENET_CACHE>` (see [client config](client.md#configuration)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
-and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
-at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
-works), and run `timenet-build build <id>` yourself. A `load` or `download` of a credentialed
+and an `access_url` on its card. TimeNet never hosts such data, so you must build it yourself. Get
+access at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
+works), and run `timenet-build build <id>`. A `load` or `download` of a credentialed
 dataset from a hosted registry raises with the `access_url` instead of serving bytes.
 
 ## Downloading artifacts

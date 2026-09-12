@@ -61,7 +61,7 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 === "Spark"
 
     !!! planned "Planned"
-        No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
+        There is no Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
         directory. Spark can read its Parquet control tables directly. Reading series values depends
         on the manifest's values backend: Parquet values are accessible to Parquet tooling, while
         Zarr values need a Zarr-aware reader.
@@ -92,7 +92,7 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 
 One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
 demo is simple. Each record is one noisy signal. The label is `above_zero` or `below_zero`, by the
-sign of the mean. So a classifier only must recover that sign.
+sign of the mean. So a classifier must recover only that sign.
 
 ```python
 from sklearn.linear_model import LogisticRegression
@@ -120,8 +120,8 @@ print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 `to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
 `FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
 because scikit-learn needs it. Every `test-mean` record is the same length, so the default
-`features="timestep"` (a rectangular matrix) fits; a dataset with variable-length records would pass
-`features="series"` instead, for one variable-length sequence per record (a `ListArray` / object
+`features="timestep"` (a rectangular matrix) fits. A dataset with variable-length records uses
+`features="series"` instead, for one variable-length sequence per record (a `ListArray` or object
 array). `test-mean` has a single task type, so `task` is inferred here. When a dataset carries
 several tasks, pass `task=...`.
 

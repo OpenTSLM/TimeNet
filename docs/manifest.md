@@ -101,10 +101,11 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 ## `ManifestCounts`
 
-The fields are `records`, `annotations`, `registered_annotations` (the count of task-referenced
-annotations that no record carries; a reader can skip its annotation-recovery scan when this is
-zero), `tasks` (a dict of `task_type -> count`), `time_series_chunks`, `time_series_index_rows`,
-and `time_series_specs` (a dict of `spec_type -> series count`). All fields default to `0` or `{}`.
+`ManifestCounts` has these fields: `records`, `annotations`, `registered_annotations`, `tasks`,
+`time_series_chunks`, `time_series_index_rows`, and `time_series_specs`. `registered_annotations`
+counts the task-referenced annotations that no record carries. A reader can skip its
+annotation-recovery scan when this count is zero. `tasks` is a dict of `task_type -> count`.
+`time_series_specs` is a dict of `spec_type -> series count`. All fields default to `0` or `{}`.
 
 ## `ManifestFiles`
 

@@ -7,7 +7,7 @@ tags:
 
 # `timenet-build`
 
-The producer command-line tool. It drives a [connector](../connectors.md) through the
+This is the producer command-line tool. It drives a [connector](../connectors.md) through the
 [build pipeline](../build.md). It writes a TimeF version directory that a
 [registry](../registry.md) can use. The directory has a `manifest.json`, Parquet control tables, and
 a Parquet or Zarr values plane. The tool ships with `timenet-connectors`, separate from the consumer
@@ -46,8 +46,8 @@ derive_schema, store. Then it writes the dataset into the output registry.
     `No such option '--quiet'`.
 
 If `$TIMENET_REGISTRY` (or `--out`) names a remote registry (`timenet://`, `s3://`, `http(s)://`),
-`build` publishes straight to it instead of writing a local directory, and prints the published version
-to stdout instead of a path.
+`build` publishes straight to it instead of writing a local directory. It then prints the published
+version to stdout instead of a path.
 
 ## Output streams
 
@@ -83,7 +83,7 @@ python -c "from timenet.client import TimeNet; \
 
 ## Planned commands
 
-Only `build` exists today. Publishing to an S3 or hosted registry already works, through `--out` (see
+Only `build` exists today. You can already publish to an S3 or hosted registry, through `--out` (see
 above). `validate` and `inspect` are planned as separate subcommands.
 
 For the authoring loop behind these commands, see [Build & publish](../build.md) and

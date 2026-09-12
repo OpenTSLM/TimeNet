@@ -23,15 +23,18 @@ same primitives describe any sensor stream, from an ECG to a market series.
 
 ## Ingesting a dataset
 
+Records stay separate from the annotations and tasks built on them. This split lets a recording gain
+new tasks later, without repackaging it into a new task-specific dataset.
+
 To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The engine drives it
 through a fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an
 in-memory dataset (CPU only). The engine then derives the schema from the data. It stores the result
-as a `manifest.json` plus control tables in Parquet; the values plane itself is Parquet or Zarr,
-depending on the connector. The leaf value types, such as annotations, spans, and specs, are frozen
+as a `manifest.json` plus control tables in Parquet. The connector determines whether the values plane
+itself is Parquet or Zarr. The leaf value types, such as annotations, spans, and specs, are frozen
 dataclasses, so they round-trip deterministically. `Record` and `Task` stay mutable, so annotations
-and tasks can attach to them after construction. Reading a compiled version from a remote registry
-never runs connector code; a local registry can build a missing version first (see
-[client](../client.md)).
+and tasks can attach to them after construction. When you read a compiled version from a remote
+registry, the registry never runs connector code. A local registry can build a missing version first
+(see [client](../client.md)).
 
 ```mermaid
 flowchart LR

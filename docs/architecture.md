@@ -16,16 +16,17 @@ for per-component detail.
 ## The big picture
 
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
-**client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
-The values plane can be Parquet or Zarr. Against a remote registry, reading never runs connector code.
-Against a local registry, `load` can first build a dataset that the registry does not have from an
-installed connector.
+**SDK** reads its manifest from a **registry** and loads the data.
+
+The control plane is Parquet. The values plane can be Parquet or Zarr. Against a remote registry,
+reading never runs connector code. Against a local registry, `load` can first build a dataset that
+the registry does not have from an installed connector.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
 | **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (`pip install timenet`) |
 | **registry** | a served location | compiled TimeF versions | the SDK reads it and build publishes to it |
-| **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-build` CLI | connector authors (clone it) |
+| **`timenet-connectors`** | a repository | connector recipes + cards + the `timenet-build` CLI | connector authors (clone it) |
 
 There can be several registries: one public, private internal ones, or a local directory.
 
@@ -47,7 +48,7 @@ CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` (the card's human-authored metadata plus the schema derived from the data)
-is the single source of truth the SDK reads. `open_version` returns a handle: the manifest plus a
+is the single source of truth that the SDK reads. `open_version` returns a handle: the manifest plus a
 filesystem-rooted view of the version's files. `TimeFReader` reads through this handle. It loads each
 series only on first use, not every file up front. Because the SDK never imports connector code,
 everything a consumer needs to interpret either values backend lives in the manifest.
@@ -60,8 +61,8 @@ Three producer-side pieces, each with one job:
 
 | Role | What it is | Job |
 | --- | --- | --- |
-| **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
-| **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `keep_cache`. Knows no dataset specifics. |
+| **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. It knows nothing about the engine or registry. |
+| **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `keep_cache`. It knows no dataset specifics. |
 | **Builder** | the `timenet-build` CLI ([build](build.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
 
 ```
@@ -98,15 +99,15 @@ flow reads it straight back.
   `manifest.json`. It never runs connector code or globs the directory.
 - Types are plain frozen dataclasses. Specs, data sources, and annotations are frozen
   [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
-  synthesis. That keeps multiprocessing `DataLoader` workers safe.
-- Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()`,
-  `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
-  per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
-  dtype-preserving multidimensional values.
-- Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
+  synthesis. That round-trip keeps multiprocessing `DataLoader` workers safe.
+- Every value enters as Arrow and leaves as Arrow. A [`TimeSeries`](timef-dataset.md) exposes
+  `to_arrow()`, `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the
+  scalar dtype and per-timestep shape. The writer stores typed scalar values in Parquet by default
+  and uses Zarr for dtype-preserving multidimensional values.
+- Units use [pint](https://pint.readthedocs.io). One shared unit registry owns every definition
   and conversion.
-- Commits are atomic. The writer stages a version into a temp directory and publishes it with a
-  single atomic rename. Once `manifest.json` is present, the writer commits the version.
+- Commits are atomic. The writer stages a version into a temporary directory and publishes it with
+  a single atomic rename. Once `manifest.json` is present, the writer commits the version.
 - Versions are immutable. Edits are copy-on-write. To remove a row, the writer writes a new version
   through the same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)). Stable
   never-reused ids keep references valid. Content-defined chunking keeps the rewrite cheap on a

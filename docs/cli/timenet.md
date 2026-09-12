@@ -7,8 +7,8 @@ tags:
 
 # `timenet`
 
-The consumer command-line tool. It mirrors the [client SDK](../client.md). You can do the same tasks
-from the shell that you do in Python. Install it with the `cli` extra:
+This is the consumer command-line tool. It mirrors the [client SDK](../client.md). You can do the
+same tasks from the shell that you do in Python. Install it with the `cli` extra:
 
 ```bash
 pip install 'timenet[cli]'
@@ -45,14 +45,15 @@ after `search`, `-q` is the short form of `--query`.
 
 ## Selecting a registry
 
-The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then the hosted
-registry (`timenet://`). [`timenet-build build`](build.md)'s `--out` resolves the same first two steps,
-but falls back to the local default (`<home>/registry`) instead, since a build needs a place to write.
-Set `--registry`/`--out` or `$TIMENET_REGISTRY` to the same value on both tools to make the one that
-writes a dataset and the one that reads it agree. All registry backends serve data today: local,
-`s3://`, and hosted. See [Registry](../registry.md) for how each backend works, and
-[Configuration](../client.md#configuration) for the storage and cache paths that the commands read and
-write.
+The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then the
+hosted registry (`timenet://`). [`timenet-build build`](build.md)'s `--out` resolves the same first
+two steps. Then it falls back to the local default (`<home>/registry`), because a build needs a
+place to write. Set `--registry`/`--out` or `$TIMENET_REGISTRY` to the same value on both tools.
+This step makes sure that the tool that writes a dataset and the tool that reads it agree on the
+registry. All registry backends serve data today: local, `s3://`, and hosted. See
+[Registry](../registry.md) for how each backend works. See
+[Configuration](../client.md#configuration) for the storage and cache paths that the commands read
+and write.
 
 ## Pinning versions
 

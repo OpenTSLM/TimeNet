@@ -7,10 +7,16 @@ tags:
 
 # TimeNet
 
-TimeNet is a Python library and CLI. You use it to search, download, and load time-series
-datasets in a shared format called TimeF. TimeF gives every dataset one on-disk shape and one
-way to load it. A consumer reads ECGs, accelerometer traces, and market series through the same
-API.
+Today, when someone defines a new task on an existing recording, the common practice is to
+build a whole new dataset for that task. PTB-XL shows the pattern: it was repackaged once for
+ECG-QA, again for ECG-Reasoning-Benchmark, and again for PULSE.
+
+TimeNet stops this pattern with a shared format called TimeF. TimeF keeps records separate from
+the tasks and annotations built on them. This separation lets the same record gain a new task
+later, without a new copy of the dataset. TimeF also gives every dataset one on-disk shape and
+one way to load it. A consumer reads ECGs, accelerometer traces, and market series through the
+same API. TimeNet is the Python library and CLI you use to search, download, and load these
+datasets.
 
 !!! info "Scope"
     TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation

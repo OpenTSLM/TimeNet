@@ -10,9 +10,10 @@ tags:
 
 An annotation is side-information attached to a [record](records.md). Every annotation has two parts.
 The **scope** says which signals and which point or window in time the annotation refers to. The
-**content** is the annotation's payload: a `value` of any scalar, list, or map, plus an optional
-free-text `description` that can be as short as a tag or as long as a paragraph of reasoning. One
-`Annotation` class covers every case. The optional `span` says how the annotation sits in time.
+**content** is the annotation's payload: a `value` of any scalar, list, or map. An optional
+free-text `description` adds more detail. It can be as short as a tag or as long as a paragraph of
+reasoning. One `Annotation` class covers every case. The optional `span` says how the annotation sits
+in time.
 A span is a `TimePoint` or a `TimeInterval`. Both read as microseconds on the source recording
 timeline. The step frame (`StepPoint` and `StepInterval`, counted in a series' own ordinals) is for
 [tasks](tasks.md) on an ordinal series. Annotations do not use it. The `Annotation` class is a
@@ -81,7 +82,7 @@ Annotation(
 
 ## Across signals
 
-Annotations are not tied to one signal. A single event can span a vibration sensor, a temperature
+Annotations are not tied to one signal. A single event can affect a vibration sensor, a temperature
 probe, and a current sensor together. The shared timing indicates one physical process, not a
 per-signal artifact.
 
@@ -92,4 +93,4 @@ per-signal artifact.
 A record holds a *tuple* of annotations. Several spans can sit on one signal. Windows can overlap or
 nest. All three ways of sitting in time can coexist on one signal. The text field is free-form, so an
 annotation can carry a multi-sentence reading rather than a label. This reading lets the annotation
-become a reasoning target. That is the bridge to [tasks](tasks.md).
+become a reasoning target. This reading connects annotations to [tasks](tasks.md).

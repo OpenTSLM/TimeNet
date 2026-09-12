@@ -9,10 +9,10 @@ tags:
 # Time series
 
 A time series is one signal of a [record](records.md): typed values over time. A record carries one
-or more time series. Each one names its channel with `signal` (for example, "vibration" and
-"temperature" on the same machine), and carries a separate `time_series_id` used to dedupe and share
-chunks. The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
-offset is always in microseconds, and a sampling rate is always in hertz. A g-scale accelerometer signal
+or more time series. Each one names its signal with the `signal` field (for example, "vibration" and
+"temperature" on the same machine). Each one also carries a separate `time_series_id`, used to dedupe
+and share chunks. The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
+offset is always in microseconds. A sampling rate is always in hertz. A g-scale accelerometer signal
 and a °C temperature signal therefore read through the same API.
 
 <figure markdown="span">
@@ -53,7 +53,7 @@ series = dataset.records[0].time_series[0]
 values = series.to_numpy()   # a numpy array in the spec's dtype
 ```
 
-`to_numpy()` raises `TimeFValidationError` if the loaded array contains nulls. Use `to_numpy_and_mask()`
+If the loaded array contains nulls, `to_numpy()` raises `TimeFValidationError`. Use `to_numpy_and_mask()`
 or `to_arrow()` instead to preserve missingness. A nullable spec without actual nulls still supports
 `to_numpy()`, and so do NaN and infinity values.
 
@@ -66,7 +66,7 @@ values[present]      # only the observed timesteps
 ```
 
 The values array holds zero, false, or an empty string at each missing position.
-That placeholder is not an observation. The mask carries that information.
+That placeholder is not an observation. The mask carries this fact.
 
 The PyTorch dataset returns the same pair. The item gives `"series"` for the value tensors.
 It gives `"series_masks"` for one boolean tensor per series.

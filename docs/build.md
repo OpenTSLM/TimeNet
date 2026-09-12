@@ -10,9 +10,9 @@ tags:
 
 Build turns a [connector](connectors.md)'s raw source into a stored TimeF version. A version is a
 `manifest.json`, Parquet control tables, and a Parquet or Zarr values plane. TimeNet writes the version
-into a [registry](registry.md). Build runs on your machine. It can publish to a local registry, or
-straight to S3 or the hosted registry when you point it at one. The command
-[`timenet-build build`](cli/build.md) drives it. This page explains what happens underneath.
+into a [registry](registry.md). Build runs on your machine. When you point it at one, it can publish
+to a local registry, or straight to S3 or the hosted registry. The command
+[`timenet-build build`](cli/build.md) drives it. This page explains what happens internally.
 
 ## The pipeline
 
@@ -46,7 +46,7 @@ run_pipeline(
    which streams the dataset through [`TimeFWriter`](timef-writer.md) and returns the committed
    version directory.
 5. clean: the engine removes `cache_dir` again. Pass `keep_cache=True`, or `--keep-cache` on the
-   CLI, to keep the raw sources. A `cache_dir` you passed in yourself is never removed.
+   CLI, to keep the raw sources. The engine never removes a `cache_dir` you passed in yourself.
 
 `run_pipeline` is idempotent. If a version is already committed, it short-circuits, unless you pass
 `force=True`. Distributed scheduling across connectors is out of scope for now.
@@ -56,8 +56,8 @@ run_pipeline(
 `store` is the publish step for every backend.
 [`WritableRegistry.store`](registry.md#writing-to-a-registry) is the general primitive. For a local
 registry, the output directory is itself a valid local registry. For S3 or the hosted registry,
-`store` uploads and commits the version directly, so pointing `--out` (or `$TIMENET_REGISTRY`) at one
-publishes there in the same build.
+`store` uploads and commits the version directly. Pointing `--out` (or `$TIMENET_REGISTRY`) at one
+publishes to that backend in the same build.
 
 ## The authoring loop
 
@@ -68,10 +68,10 @@ Building a dataset follows one path:
 2. Put its [dataset card](manifest.md), `dataset.yaml`, beside it. When the connector loads the card,
    TimeNet validates it against the packaged `dataset-card.schema.json`.
 3. Build it with [`timenet-build build`](cli/build.md).
-4. Verify the dataset: point the SDK at the output directory. The output directory is itself a valid
-   local registry.
-5. Publish it: point `--out` (or `$TIMENET_REGISTRY`) at a local directory, an S3 bucket, or the
-   hosted registry.
+4. Point the SDK at the output directory to verify the dataset. The output directory is itself a
+   valid local registry.
+5. Point `--out` (or `$TIMENET_REGISTRY`) at a local directory, an S3 bucket, or the hosted registry
+   to publish it.
 
 See [Connectors](connectors.md) to learn how to write the `download` and `convert` steps. See the
 [`timenet.engine` API](api/engine.md) for the full symbol listing.

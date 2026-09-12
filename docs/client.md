@@ -55,11 +55,11 @@ precedence for any value is **CLI flag / argument > environment variable > defau
 
 | Env var | Default | What |
 | --- | --- | --- |
-| `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
+| `TIMENET_HOME` | `~/.cache/timenet` | Root path for local state. If you set it, TimeNet relocates everything below. |
 | `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-build build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
 | `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
-| `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
+| `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry. If unset, TimeNet reads anonymously (enough for public data). |
 | `TIMENET_ISOLATION` | `on` | Whether a build runs in an environment built from the connector's requirements. `off` runs it in the current interpreter. |
 
 The configuration is a `pydantic-settings` model, `timenet.config.TimeNetSettings`. You can add new
@@ -73,7 +73,7 @@ settings there.
 | `get(dataset_id, version=None)` | Returns a dataset's [manifest](manifest.md). |
 | `search(...)` | Filters datasets. This mirrors [`registry.search`](registry.md#search). |
 | `download(dataset_id, version=None, *, force=False)` | Copies a version's files into local storage as an explicit disk cache, and returns the directory. This method is idempotent unless you set `force`. |
-| `load(dataset_id, version=None, *, auto_build=True)` | Reads a `TimeFDataset` with lazy per-series values through the registry's `open_version` handle. A local or S3 registry reads them in place; a remote registry downloads the whole version to local storage first, then reads it locally. Against a local registry, a missing dataset is built first if an installed package registers a connector for it; set `auto_build=False` to fail fast instead. |
+| `load(dataset_id, version=None, *, auto_build=True)` | Reads a `TimeFDataset` with lazy per-series values through the registry's `open_version` handle. A local or S3 registry reads the values in place. A remote registry downloads the whole version to local storage first, then reads it locally. If an installed package registers a connector for the dataset id, TimeNet builds a missing dataset first in a local registry. Set `auto_build=False` to fail fast instead. |
 | `load_torch(dataset_id, version=None)` | Wraps `load` in a read-only `torch.utils.data.Dataset`. This needs the `torch` extra. |
 
 ## Remote loading

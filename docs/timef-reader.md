@@ -29,8 +29,8 @@ with TimeFReader(version) as reader:
 ```
 
 You can use `TimeFReader` as a context manager. Its `close()` method, called by `__exit__`, releases
-the open handles and decoded-chunk caches of the selected values backend, and also closes the index
-and annotations control-table handles and clears their caches.
+the open handles and decoded-chunk caches of the selected values backend. It also closes the index
+and annotations control-table handles, and clears their caches.
 
 ## What is eager vs lazy
 
@@ -63,7 +63,7 @@ decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterv
 Everything pickles. `Annotation`, `Task`, and `TimeSeriesSpec` also compare equal to the original data,
 field by field, which is why multiprocessing `DataLoader` workers are safe for them. `TimeSeries`
 itself sets `eq=False` and compares by identity instead, since the writer dedupes by `time_series_id`,
-not by value; see the round-trip guarantee below for what it preserves regardless.
+not by value. See the round-trip guarantee below for what it preserves regardless.
 
 ## Value reads
 

@@ -41,14 +41,14 @@ are extras. You can add them.
     ```
 
 The `torch` extra accepts any torch build. If you already have a CUDA torch (for example, for
-training), you keep it as-is. For a small CPU-only torch, install it from the PyTorch CPU index
-first:
+training), you do not need to reinstall it. For a small CPU-only torch, install it from the
+PyTorch CPU index first:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-To work on TimeNet or author connectors, clone the repo and sync with uv:
+To work on TimeNet or author connectors, clone the repository and sync with uv:
 
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
@@ -67,11 +67,13 @@ timenet-build build timenet/hello-world
 ```
 
 The build writes into your local registry (`~/.cache/timenet/registry` by default). Point the
-[`TimeNet`](client.md) client at it by setting `$TIMENET_REGISTRY`, then load the dataset:
+[`TimeNet`](client.md) client at it. Set the `$TIMENET_REGISTRY` environment variable:
 
 ```bash
 export TIMENET_REGISTRY=~/.cache/timenet/registry
 ```
+
+Then load the dataset:
 
 ```python
 import pandas as pd
