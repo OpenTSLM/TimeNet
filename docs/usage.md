@@ -31,7 +31,6 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 === "pandas"
 
     ```python
-    import numpy as np
     import pandas as pd
     from timenet.client import TimeNet
 
@@ -120,15 +119,16 @@ print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 
 `to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
 `FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
-because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
-sequence per record (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
-`test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
-tasks, pass `task=...`.
+because scikit-learn needs it. Every `test-mean` record is the same length, so the default
+`features="timestep"` (a rectangular matrix) fits; a dataset with variable-length records would pass
+`features="series"` instead, for one variable-length sequence per record (a `ListArray` / object
+array). `test-mean` has a single task type, so `task` is inferred here. When a dataset carries
+several tasks, pass `task=...`.
 
 The full runnable version is
 [`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
 
 !!! tip "scikit-learn is optional"
-    It backs this example only. It is not a TimeNet dependency. Run `pip install scikit-learn`, then
-    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow. The
-    model on top is your choice.
+    It backs this example only. It is not a TimeNet dependency. Run
+    `uv run --with scikit-learn examples/test_mean_classifier.py`. TimeNet hands you the values as
+    NumPy or Arrow. The model on top is your choice.

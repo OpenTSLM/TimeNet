@@ -13,7 +13,7 @@ fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A co
 knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
 
 `BaseConnector` is the contract for a connector. It lives in the `timenet` package
-(`timenet.connectors`). Concrete connectors live in the `timenet-connectors` repo, next to their
+(`timenet.connectors`). Concrete connectors live in the `timenet-connectors` package, next to their
 [dataset card](manifest.md).
 
 ---
@@ -76,9 +76,11 @@ annotations, by `id`.
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
 concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
 names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
-beside it, next to a `requirements.txt` when the connector needs libraries of its own. As a result,
-`timenet-build build <org>/<name>` imports only that package. Reusable bases live under `bases/`.
-Each connector declares its own id in `metadata()`. An id is a lowercase `org/name` pair.
+beside it, next to a `requirements.txt` when the connector needs libraries of its own. A connector for
+a source with real-world inconsistencies can also carry a `README.md` beside those files, documenting
+the assumptions and decisions its `convert()` makes. As a result, `timenet-build build <org>/<name>`
+imports only that package. Reusable bases live under `bases/`. Each connector declares its own id in
+`metadata()`. An id is a lowercase `org/name` pair.
 
 ## Dependencies and credentials
 
@@ -103,7 +105,8 @@ no shared requirement fragments. If several connectors share one file, an edit t
 a connector that you did not check.
 
 Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
-automatically (needed only for gated or private sources). Downloaded source files cache under
+automatically (needed only for gated sources; a fully private Hub dataset has no auto-converted
+parquet ref, so `BaseHuggingFaceConnector` does not support it). Downloaded source files cache under
 `<TIMENET_CACHE>` (see [client config](client.md#configuration)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
@@ -186,8 +189,9 @@ while you write a connector for a large source, because each rebuild downloads t
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. As a result, a test can hand it a checked-in fixture and
-skip `download` entirely. See each connector's `tests/fixtures/` directory (for example
-`datasets/chengsenwang/tsqa/tests/fixtures/`) and the `_convert()` helpers next to them.
+skip `download` entirely. See each connector's `tests/test_connector.py` (for example
+`datasets/chengsenwang/tsqa/tests/test_connector.py`), where a hand-written fixture (rows shaped like
+the raw source) sits beside the `_convert()` helper that feeds it to the connector.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
