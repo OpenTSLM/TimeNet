@@ -66,8 +66,12 @@ make sync  # install the dev environment (workspace + extras)
 timenet-build build timenet/hello-world
 ```
 
-The build writes into your local registry. The [`TimeNet`](client.md) client looks there by
-default. Now load the dataset:
+The build writes into your local registry (`~/.cache/timenet/registry` by default). Point the
+[`TimeNet`](client.md) client at it by setting `$TIMENET_REGISTRY`, then load the dataset:
+
+```bash
+export TIMENET_REGISTRY=~/.cache/timenet/registry
+```
 
 ```python
 import pandas as pd
