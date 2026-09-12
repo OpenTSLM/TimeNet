@@ -28,15 +28,16 @@ timenet download chengsenwang/tsqa
 
 | Command | What it does |
 | --- | --- |
-| `timenet list` | Print every dataset in the registry with its latest version. |
+| `timenet list` | Print every dataset in the registry (one row per dataset, using its latest version's metadata). |
 | `timenet search [flags]` | Filter datasets. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). |
 | `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): metadata, schema, and counts. |
 | `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). If a local version already exists, it skips the copy. |
 | `timenet cache info` | List downloaded datasets on disk (location, id, version, size) and the total. |
 | `timenet cache clear` | Remove downloads and the raw cache. It prompts first. `-y` skips the prompt. `--all` also clears built data. |
 
-Every command writes its status to stderr. It writes its machine-readable result (a path) to stdout.
-Therefore, you can capture `timenet download <id>` in a script safely.
+Every command writes its status to stderr. `timenet download` writes its machine-readable result (a
+path) to stdout. Therefore, you can capture `timenet download <id>` in a script safely. `list`,
+`search`, `info`, and `cache info` print a human-readable table to stdout instead.
 
 `--quiet`/`-q` removes that status output. It belongs to `timenet` itself. Therefore, it goes before
 the subcommand: `timenet --quiet list`, not `timenet list --quiet`. Be careful with the collision:
@@ -44,10 +45,12 @@ after `search`, `-q` is the short form of `--query`.
 
 ## Selecting a registry
 
-The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then the local
-default (`<home>/registry`). [`timenet-build build`](build.md) resolves the same way. Therefore, the
-tool that writes a dataset and the tool that reads it always agree. Today, only local registries serve
-data. The `s3://` and hosted backends are [deferred](../registry.md). See
+The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then the hosted
+registry (`timenet://`). [`timenet-build build`](build.md)'s `--out` resolves the same first two steps,
+but falls back to the local default (`<home>/registry`) instead, since a build needs a place to write.
+Set `--registry`/`--out` or `$TIMENET_REGISTRY` to the same value on both tools to make the one that
+writes a dataset and the one that reads it agree. All registry backends serve data today: local,
+`s3://`, and hosted. See [Registry](../registry.md) for how each backend works, and
 [Configuration](../client.md#configuration) for the storage and cache paths that the commands read and
 write.
 
@@ -61,4 +64,4 @@ timenet info chengsenwang/tsqa@1.0.0     # pinned
 timenet download chengsenwang/tsqa       # latest
 ```
 
-If you pin a version that is not committed, the tool exits with a `TimeNetDatasetNotFoundError`.
+If you pin a version that is not committed, the tool prints a one-line error message and exits non-zero.
