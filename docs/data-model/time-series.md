@@ -9,13 +9,14 @@ tags:
 # Time series
 
 A time series is one signal of a [record](records.md): typed values over time. A record carries one
-or more time series. Each one has a `time_series_id` (for example, the vibration and temperature signals
-of a machine). The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
+or more time series. Each one names its channel with `signal` (for example, "vibration" and
+"temperature" on the same machine), and carries a separate `time_series_id` used to dedupe and share
+chunks. The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
 offset is always in microseconds, and a sampling rate is always in hertz. A g-scale accelerometer signal
 and a °C temperature signal therefore read through the same API.
 
 <figure markdown="span">
-  ![One signal labelled with its time_series_id, spec, and units](../assets/figures/time-series-example.svg)
+  ![One signal labelled with its signal name, time_series_id, spec, and units](../assets/figures/time-series-example.svg)
 </figure>
 
 ## Time offsets and timestamps
@@ -52,9 +53,9 @@ series = dataset.records[0].time_series[0]
 values = series.to_numpy()   # a numpy array in the spec's dtype
 ```
 
-`to_numpy()` raises `TimeFValidationError` if the loaded array contains nulls.
-In some cases, the previous conversion lost the distinction between missing values and NaN.
-A nullable spec without actual nulls still supports this method. NaN and infinity remain valid values.
+`to_numpy()` raises `TimeFValidationError` if the loaded array contains nulls. Use `to_numpy_and_mask()`
+or `to_arrow()` instead to preserve missingness. A nullable spec without actual nulls still supports
+`to_numpy()`, and so do NaN and infinity values.
 
 For a nullable series, `to_arrow()` keeps nulls exactly. `to_numpy_and_mask()` returns the values and a
 validity mask, a boolean array that marks present timesteps:
