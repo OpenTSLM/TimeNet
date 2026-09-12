@@ -20,7 +20,7 @@ to keep in sync.
 
 The packaged `manifest.schema.json` (JSON Schema draft 2020-12) pins the on-disk shape. This file
 is the formal contract for external consumers. It is published as
-[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and is
+[`manifest.schema.json`](https://docs.timenet.ai/schemas/manifest.schema.json) and is
 available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the output of
 `to_dict()` against this schema.
 
@@ -101,9 +101,10 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 ## `ManifestCounts`
 
-The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
-`time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
-`spec_type -> series count`). All fields default to `0` or `{}`.
+The fields are `records`, `annotations`, `registered_annotations` (the count of task-referenced
+annotations that no record carries; a reader can skip its annotation-recovery scan when this is
+zero), `tasks` (a dict of `task_type -> count`), `time_series_chunks`, `time_series_index_rows`,
+and `time_series_specs` (a dict of `spec_type -> series count`). All fields default to `0` or `{}`.
 
 ## `ManifestFiles`
 

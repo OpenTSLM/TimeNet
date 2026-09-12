@@ -25,7 +25,7 @@ install is enough to build them. Clone the repository only to *author* a connect
 
 ```bash
 timenet-build [--quiet] build <dataset_id> \
-    [--out <dir>] [--force] [--keep-cache] [--no-isolation]
+    [--out <dir>] [--force] [--keep-cache] [--values-backend <parquet|zarr>] [--no-isolation]
 ```
 
 This command runs the connector for `<dataset_id>` through the pipeline: download, convert,
@@ -37,6 +37,7 @@ derive_schema, store. Then it writes the dataset into the output registry.
 | `--out <dir>` | `$TIMENET_REGISTRY`, else `<home>/registry` | Where to write. If the directory is absent, the tool creates it. |
 | `--force`, `-f` | off | Rebuild a version that is already built instead of reusing it. |
 | `--keep-cache` | off | Keep the raw download cache. The tool removes it after a successful build. |
+| `--values-backend <parquet\|zarr>` | the connector's declared backend | Override the values-plane storage backend. |
 | `--isolation` / `--no-isolation` | on | Build in an environment made from the connector's `requirements.txt`. `--no-isolation` (or `TIMENET_ISOLATION=off`) builds in the current interpreter. |
 | `--quiet`, `-q` | off | Suppress status output. Belongs to `timenet-build`, not to `build`. |
 
@@ -44,8 +45,9 @@ derive_schema, store. Then it writes the dataset into the output registry.
     `timenet-build --quiet build <id>` works. `timenet-build build <id> --quiet` exits `2` with
     `No such option '--quiet'`.
 
-If `$TIMENET_REGISTRY` names a remote registry (`timenet://`, `s3://`, `http(s)://`), there is no
-local place to build into. Then `build` exits `2` and asks for `--out`.
+If `$TIMENET_REGISTRY` (or `--out`) names a remote registry (`timenet://`, `s3://`, `http(s)://`),
+`build` publishes straight to it instead of writing a local directory, and prints the published version
+to stdout instead of a path.
 
 ## Output streams
 
@@ -65,7 +67,7 @@ ls "$DIR"/manifest.json
 | --- | --- |
 | `0` | The tool built the dataset, or reused an already-built version. |
 | `1` | An expected failure (a `TimeNetError`): a one-line `Error: ...` on stderr, no traceback. |
-| `2` | A usage error: an unknown dataset id, a bad flag, or a remote `$TIMENET_REGISTRY`. |
+| `2` | A usage error: an unknown dataset id, a bad flag. |
 
 Anything else is a bug and surfaces its traceback.
 
@@ -81,8 +83,8 @@ python -c "from timenet.client import TimeNet; \
 
 ## Planned commands
 
-Only `build` exists today. `validate`, `inspect`, and `publish` (to an S3 or hosted registry) are
-planned. They will land with the remote registry backends.
+Only `build` exists today. Publishing to an S3 or hosted registry already works, through `--out` (see
+above). `validate` and `inspect` are planned as separate subcommands.
 
 For the authoring loop behind these commands, see [Build & publish](../build.md) and
 [Connectors](../connectors.md).

@@ -60,7 +60,6 @@ precedence for any value is **CLI flag / argument > environment variable > defau
 | `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
 | `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
-| `TIMENET_DOWNLOAD_MODE` | `on_demand` | How a remote `load` fetches bytes: `on_demand` (lazy range reads, cache-first) or `full` (download the whole version first). |
 | `TIMENET_ISOLATION` | `on` | Whether a build runs in an environment built from the connector's requirements. `off` runs it in the current interpreter. |
 
 The configuration is a `pydantic-settings` model, `timenet.config.TimeNetSettings`. You can add new
@@ -74,31 +73,21 @@ settings there.
 | `get(dataset_id, version=None)` | Returns a dataset's [manifest](manifest.md). |
 | `search(...)` | Filters datasets. This mirrors [`registry.search`](registry.md#search). |
 | `download(dataset_id, version=None, *, force=False)` | Copies a version's files into local storage as an explicit disk cache, and returns the directory. This method is idempotent unless you set `force`. |
-| `load(dataset_id, version=None, *, download=None)` | Reads a `TimeFDataset` with lazy per-series values, in place, through the registry's `open_version` handle. This does not download the whole dataset. `download` (`"full"` / `"on_demand"`) overrides the fetch mode for a remote registry; it is ignored for local. |
+| `load(dataset_id, version=None, *, auto_build=True)` | Reads a `TimeFDataset` with lazy per-series values through the registry's `open_version` handle. A local or S3 registry reads them in place; a remote registry downloads the whole version to local storage first, then reads it locally. Against a local registry, a missing dataset is built first if an installed package registers a connector for it; set `auto_build=False` to fail fast instead. |
 | `load_torch(dataset_id, version=None)` | Wraps `load` in a read-only `torch.utils.data.Dataset`. This needs the `torch` extra. |
 
 ## Remote loading
 
-Against a remote registry, `load` fetches bytes one of two ways, set by `TIMENET_DOWNLOAD_MODE`
-(default `on_demand`) or the per-call `download=` argument:
-
-- `on_demand`: the reader range-reads Parquet footers and value slices straight from presigned URLs,
-  pulling only the bytes a query touches. It is cache-first, reusing any complete files a prior `full`
-  load or `download()` left in `TIMENET_STORAGE`.
-- `full`: download the whole version into `TIMENET_STORAGE` first (in parallel, committed atomically),
-  then read it locally. This is what `download()` does.
+Against a remote registry, `load` always downloads the whole version into `TIMENET_STORAGE` first
+(in parallel, committed atomically, the same path `download()` uses), then reads it locally. On-demand
+range reads straight from presigned URLs, without a full download, are not implemented today.
 
 ```python
 client = TimeNet("timenet://")
-# Uses $TIMENET_DOWNLOAD_MODE (on_demand by default).
-client.load("chengsenwang/tsqa")
-# Force a full download, then read locally.
-client.load("chengsenwang/tsqa", download_mode="full")
+client.load("chengsenwang/tsqa")  # downloads the full version, then reads it locally
 ```
 
-A Zarr-backed version always takes the `full` path: its store driver can't range-read presigned URLs.
-Both modes are no-ops for a local registry, which already reads in place, and `download=` is ignored
-there.
+A local or S3 registry reads a version in place instead, with no separate download step.
 
 ## Versions
 
@@ -130,7 +119,7 @@ from timenet.client import TimeNet
 # needs: pip install 'timenet[torch]'
 ds = TimeNet().load_torch("chengsenwang/tsqa")
 item = ds[0]
-series, question = item["series"][0], item["tasks"][0].question
+series, question = item["series"][0], item["tasks"][0].prompt
 ```
 
 To feed a `DataLoader`, select the fields that your model needs. Use a `transform` on the dataset,

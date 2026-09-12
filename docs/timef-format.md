@@ -85,6 +85,7 @@ together, plus the tasks and annotations that point at them.
 | --- | --- | --- |
 | `record_id` | id | The record's id. |
 | `start_time_us` | int64 | Wall-clock start, in microseconds since the Unix epoch. |
+| `time_span` | struct | The record's declared session span. Null unless the record declares an explicit one; `check_span_within_window` validates annotation spans against it. |
 | `subject_ids` | list of id | The subjects the record belongs to. |
 | `time_series` | list of struct | The series in this record, with their metadata and time axis. |
 | `task_ids` | list of id | The tasks that reference this record. |
@@ -105,11 +106,13 @@ One row per [annotation](data-model/annotations.md).
 | `id` | id | The annotation's id. |
 | `key` | string | The annotation key. |
 | `value` | string | The value, JSON-encoded. Null for a pure marker. |
+| `source` | string | Optional per-instance provenance (rater, method, or model). Null when unset. |
 | `span` | struct | The time span the annotation covers. Null for a static annotation. |
 | `record_ids` | list of id | The records the annotation applies to. |
 
 A span struct holds `start_us`, `end_us`, and the `time_series_ids` it is scoped to. A null `end_us`
-means the span is a point at `start_us`.
+means the span is a point at `start_us`. A `frame` column (`"seconds"` or `"steps"`) distinguishes a
+wall-clock span from a step-counted one.
 
 ### time_series_index/part-00000000.parquet
 
@@ -137,7 +140,8 @@ Tasks are partitioned by type, one directory per [task type](data-model/tasks.md
 shares a common set of columns: `id`, `record_ids`, `from_task_ids`, `prompt`, `scope`,
 `input_annotation_ids`, `target_annotation_ids`, and `rationale`. Each type then adds its own payload
 columns. A classification task adds `target` and `target_schema`. A scalar prediction adds `target`,
-`unit`, and `target_name`. A temporal localization adds a list of span structs.
+`unit`, and `target_name`. A temporal localization adds a list of span structs and a `mode` string
+(sparse or exhaustive coverage).
 
 ## The values plane
 

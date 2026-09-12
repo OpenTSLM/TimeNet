@@ -21,8 +21,8 @@ with TimeFWriter(root, dataset) as writer:
 # committed at <root>/<dataset_id>/<version>/
 ```
 
-Most connectors do not use `TimeFWriter` directly. `BaseConnector.store()` and the
-[engine](build.md) wrap it.
+Most connectors do not use `TimeFWriter` directly. The [engine](build.md)'s `store_dataset()`
+wraps it.
 
 ---
 
@@ -58,6 +58,7 @@ parts and does not assume fixed names.
 | `compression` | `"zstd"` | Codec for the values (Parquet codec, or Zarr Blosc inner codec). |
 | `compression_level` | 19 (Parquet) / 9 (Zarr) | Fixed compression level, for reproducible output. |
 | `values_backend` | `"parquet"` | Storage backend for the values plane: `"parquet"` or `"zarr"`. |
+| `data_page_size` | backend default | Target uncompressed bytes per Parquet data page. Ignored by the Zarr backend. |
 | `progress_cb` | `None` | The writer calls this with each `WriteProgressEvent`. |
 
 The writer measures the targets in uncompressed value bytes. On disk, files are smaller because of
@@ -88,7 +89,8 @@ Zarr stores one array for each `(spec_type, stores_time_offsets)` pair.
 Each array has shape `(total_steps, *value_shape)` and uses the spec's dtype.
 Irregular values use `_irregular/`, with matching int64 time offsets under `_time_offsets/`.
 One index row describes a series across its time axis.
-Zarr stores every scalar dtype except `str`.
+Zarr stores every scalar dtype, including `str`. It has no dictionary layer, so a `str` series may be
+larger on disk and slower to read than Parquet's dictionary encoding.
 An enum stores int32 positions in the declared categories, which the reader uses to restore labels.
 
 Zarr does not represent nulls directly. Nullable specs write a boolean array under `_validity/`.
@@ -107,19 +109,19 @@ imports the extra. A Zarr series can hold embeddings, pose tensors, spectrogram 
 sequences. Recordings can have different durations. Every series that shares a `spec_type` must have
 the same dtype and trailing shape. Parquet deliberately rejects N-D specs, which stay on Zarr. The
 Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer types,
-`bool`, `str`, and `enum`. The Zarr backend stores every scalar dtype **except `str`**: it
-has no dictionary layer, so free-form string signals inflate on disk and read slowly, and the writer
-rejects them. An `enum` signal stores int32 codebook indices compactly. A dataset's
+`bool`, `str`, and `enum`. The Zarr backend stores every scalar dtype too, including `str`, though it
+has no dictionary layer, so a free-form string signal may be larger on disk and slower to read than
+Parquet's dictionary encoding. An `enum` signal stores int32 codebook indices compactly. A dataset's
 values plane uses **one** backend for the whole dataset (the manifest's single `values_backend`
-field), so a dataset with a `str` signal must be entirely Parquet, and a dataset needing
-N-D tensors must be entirely Zarr. They cannot be mixed per signal.
+field), so a dataset needing N-D tensors must be entirely Zarr. They cannot be mixed per signal.
 A [copy-on-write edit](#copy-on-write-edits) keeps the backend of
 the base version, unless overridden.
 
 ## Streaming and chunking
 
 `write()` removes duplicate series by `time_series_id`. The writer calls the loader of each unique
-series exactly once. `write()` sorts the series by `(spec_type, signal, time_series_id)`. Then it
+series exactly once. `write()` sorts the series by `(spec_type, source_id or "", signal,
+time_series_id)`. The `source_id` component groups one recording's series contiguously. Then it
 streams the series through the values backend.
 
 With Parquet, the writer splits each series into chunks of at most `chunk_max_bytes`. It buffers the
@@ -234,7 +236,6 @@ Intrinsic checks for each record, annotation, and task happen at insertion (see
 - Per-series check, while each loader runs. The values of a series must meet these conditions:
     - The values are not empty.
     - The values match the `dtype` and `value_shape` of the spec.
-    - The values are finite, when their dtype supports non-finite values.
     - `len(values) == n_values`. Every series must declare `n_values`.
 
 ## Commit protocol
@@ -254,7 +255,6 @@ The writer assembles the [manifest](manifest.md) from these parts:
 - the complete file list
 - a per-file SHA-256 checksum for every staged artifact, including Zarr metadata and chunks
 - the values-backend tag
-- the `id_encoding` map
 
 A copy-on-write edit also records a `derived_from` lineage block.
 
@@ -276,9 +276,10 @@ a committed version is always consistent.
 
 Removing a record strips the id of that record from the `record_ids` list of every task. It also
 drops task ids that the surviving records can no longer resolve. A task can lose a **required**
-reference: a forecasting `target_record_id` or `context_record_ids`, its last remaining record, or a
-`from_task` edge to a removed task. When this happens, the edit fails with `TimeFEditError`, unless
-`cascade=True`. With `cascade=True`, the edit removes the invalidated dependents transitively.
+reference: a forecasting `target_record_id` or `context_record_ids`, its last remaining record, an
+unreachable `target_annotation_ids` entry, or a `from_task` edge to a removed task. When this
+happens, the edit fails with `TimeFEditError`, unless `cascade=True`. With `cascade=True`, the edit
+removes the invalidated dependents transitively.
 
 The `derived_from` field in the new manifest records the base version and the operation.
 

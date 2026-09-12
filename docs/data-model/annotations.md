@@ -10,13 +10,14 @@ tags:
 
 An annotation is side-information attached to a [record](records.md). Every annotation has two parts.
 The **scope** says which signals and which point or window in time the annotation refers to. The
-free-text **content** can be as short as a tag or as long as a paragraph of reasoning. One
+**content** is the annotation's payload: a `value` of any scalar, list, or map, plus an optional
+free-text `description` that can be as short as a tag or as long as a paragraph of reasoning. One
 `Annotation` class covers every case. The optional `span` says how the annotation sits in time.
 A span is a `TimePoint` or a `TimeInterval`. Both read as microseconds on the source recording
 timeline. The step frame (`StepPoint` and `StepInterval`, counted in a series' own ordinals) is for
 [tasks](tasks.md) on an ordinal series. Annotations do not use it. The `Annotation` class is a
-keyword-only frozen dataclass with `key`, `value`, `unit` and `description` fields. A connector
-authors it directly, or subclasses it with field defaults for reuse.
+keyword-only frozen dataclass with `key`, `value`, `span`, `unit`, `description`, and `source` fields.
+A connector authors it directly, or subclasses it with field defaults for reuse.
 
 ## Record-wide facts
 
@@ -88,7 +89,7 @@ per-signal artifact.
   ![Three stacked signals sharing one window](../assets/figures/cross-sensor.svg)
 </figure>
 
-A record holds a *list* of annotations. Several spans can sit on one signal. Windows can overlap or
+A record holds a *tuple* of annotations. Several spans can sit on one signal. Windows can overlap or
 nest. All three ways of sitting in time can coexist on one signal. The text field is free-form, so an
 annotation can carry a multi-sentence reading rather than a label. This reading lets the annotation
 become a reasoning target. That is the bridge to [tasks](tasks.md).
