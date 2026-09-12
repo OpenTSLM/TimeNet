@@ -29,7 +29,8 @@ with TimeFReader(version) as reader:
 ```
 
 You can use `TimeFReader` as a context manager. Its `close()` method, called by `__exit__`, releases
-the open handles and decoded-chunk caches of the selected values backend.
+the open handles and decoded-chunk caches of the selected values backend, and also closes the index
+and annotations control-table handles and clears their caches.
 
 ## What is eager vs lazy
 
@@ -39,8 +40,9 @@ use.
 `TimeFReader` reads the time-series index and the annotations table one pruned row group at a time.
 It decodes only the row groups that a lookup's key statistics cannot rule out. Tasks decode on first
 access to `.tasks`. Per-series values and `Record` construction stay lazy. `read()` and
-`iter_records()` build records with loader closures. When the code calls `to_arrow()`, `to_numpy()`,
-or `read_steps()`, these closures pull data from storage.
+`iter_records()` build records with lazy loader objects, picklable so a `DataLoader` worker can hold
+them. When the code calls `to_arrow()`, `to_numpy()`, or `read_steps()`, these loaders pull data from
+storage.
 
 `iter_records(record_ids=...)` filters on the stored id column. It streams records one at a time and
 does not build a `TimeFDataset`.
@@ -58,8 +60,10 @@ descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Anno
 decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
 `StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
 
-Everything pickles and compares equal to the original data, field by field. This equality is why
-multiprocessing `DataLoader` workers are safe.
+Everything pickles. `Annotation`, `Task`, and `TimeSeriesSpec` also compare equal to the original data,
+field by field, which is why multiprocessing `DataLoader` workers are safe for them. `TimeSeries`
+itself sets `eq=False` and compares by identity instead, since the writer dedupes by `time_series_id`,
+not by value; see the round-trip guarantee below for what it preserves regardless.
 
 ## Value reads
 
@@ -86,8 +90,9 @@ calls `close()`, it releases them.
 ## Errors
 
 `DatasetVersion.open_local` and a registry's `open_version` build the handle. If the version directory
-has no `manifest.json`, they raise `FileNotFoundError`. If the manifest is malformed or is an
-unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestError`).
+has no `manifest.json`, `open_local` raises `FileNotFoundError`, while a registry's `open_version`
+raises `TimeNetDatasetNotFoundError` instead. If the manifest is malformed or is an unsupported
+version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestError`).
 
 Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
 file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
