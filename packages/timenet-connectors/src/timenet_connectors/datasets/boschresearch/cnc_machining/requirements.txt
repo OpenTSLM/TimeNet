@@ -1,0 +1,2 @@
+# h5py reads the source HDF5 vibration recordings.
+h5py==3.16.0

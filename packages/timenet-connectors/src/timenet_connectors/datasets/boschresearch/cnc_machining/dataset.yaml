@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: boschresearch/cnc-machining
+dataset_version: 1.0.0
+name: Bosch CNC Machining
+description: "Tri-axial CNC milling-machine vibration recordings labeled by process health."
+license: CC-BY-4.0
+domains:
+  - general
+tags:
+  - acceleration
+  - anomaly-detection
+  - cnc
+  - manufacturing
+  - vibration
