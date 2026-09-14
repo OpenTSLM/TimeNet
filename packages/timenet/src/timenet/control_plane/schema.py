@@ -69,23 +69,23 @@ def source_path(parent_path: str | None, position: int) -> str:
 
 DDL: Final = """
 CREATE TABLE meta (
-    key   VARCHAR PRIMARY KEY,
+    key   VARCHAR NOT NULL,
     value VARCHAR NOT NULL
 );
 
 CREATE TABLE datasets (
-    dataset_id VARCHAR PRIMARY KEY,
+    dataset_id VARCHAR NOT NULL,
     metadata   VARCHAR
 );
 
 CREATE TABLE records (
-    record_id     VARCHAR PRIMARY KEY,
+    record_id     VARCHAR NOT NULL,
     start_time_us BIGINT,
     metadata      VARCHAR
 );
 
 CREATE TABLE axes (
-    axis_id             VARCHAR PRIMARY KEY,
+    axis_id             VARCHAR NOT NULL,
     axis_type           VARCHAR NOT NULL,
     period_numerator_us BIGINT,
     period_denominator  BIGINT,
@@ -95,7 +95,7 @@ CREATE TABLE axes (
 );
 
 CREATE TABLE specs (
-    spec_id  VARCHAR PRIMARY KEY,
+    spec_id  VARCHAR NOT NULL,
     name     VARCHAR NOT NULL,
     unit     VARCHAR NOT NULL,
     dtype    VARCHAR NOT NULL,
@@ -103,9 +103,9 @@ CREATE TABLE specs (
 );
 
 CREATE TABLE sources (
-    source_id        VARCHAR PRIMARY KEY,
-    record_id        VARCHAR NOT NULL REFERENCES records(record_id),
-    parent_source_id VARCHAR REFERENCES sources(source_id),
+    source_id        VARCHAR NOT NULL,
+    record_id        VARCHAR NOT NULL,
+    parent_source_id VARCHAR,
     path             VARCHAR NOT NULL,
     depth            INTEGER NOT NULL,
     name             VARCHAR NOT NULL,
@@ -114,49 +114,46 @@ CREATE TABLE sources (
 );
 
 CREATE TABLE signals (
-    signal_id VARCHAR PRIMARY KEY,
+    signal_id VARCHAR NOT NULL,
     name      VARCHAR NOT NULL,
-    axis_id   VARCHAR NOT NULL REFERENCES axes(axis_id),
-    spec_id   VARCHAR NOT NULL REFERENCES specs(spec_id),
+    axis_id   VARCHAR NOT NULL,
+    spec_id   VARCHAR NOT NULL,
     n_values  BIGINT  NOT NULL,
     metadata  VARCHAR
 );
 
 CREATE TABLE source_signals (
-    source_id VARCHAR NOT NULL REFERENCES sources(source_id),
-    signal_id VARCHAR NOT NULL REFERENCES signals(signal_id),
-    position  INTEGER NOT NULL,
-    PRIMARY KEY (source_id, signal_id)
+    source_id VARCHAR NOT NULL,
+    signal_id VARCHAR NOT NULL,
+    position  INTEGER NOT NULL
 );
 
 CREATE TABLE signal_chunks (
-    signal_id  VARCHAR NOT NULL REFERENCES signals(signal_id),
+    signal_id  VARCHAR NOT NULL,
     chunk_idx  INTEGER NOT NULL,
     chunk_file VARCHAR NOT NULL,
     row_group  INTEGER NOT NULL,
     row_offset BIGINT  NOT NULL,
-    n_values   BIGINT  NOT NULL,
-    PRIMARY KEY (signal_id, chunk_idx)
+    n_values   BIGINT  NOT NULL
 );
 
 CREATE TABLE tasks (
-    task_id  VARCHAR PRIMARY KEY,
+    task_id  VARCHAR NOT NULL,
     prompt   VARCHAR NOT NULL,
     metadata VARCHAR
 );
 
 CREATE TABLE task_items (
-    task_id    VARCHAR NOT NULL REFERENCES tasks(task_id),
+    task_id    VARCHAR NOT NULL,
     role       VARCHAR NOT NULL CHECK (role IN ('input', 'target')),
     position   INTEGER NOT NULL,
     item_type  VARCHAR NOT NULL CHECK (item_type IN ('text', 'record')),
     text_value VARCHAR,
-    record_id  VARCHAR REFERENCES records(record_id),
-    PRIMARY KEY (task_id, role, position)
+    record_id  VARCHAR
 );
 
 CREATE TABLE annotation_contents (
-    content_id VARCHAR PRIMARY KEY,
+    content_id VARCHAR NOT NULL,
     name       VARCHAR NOT NULL,
     value      VARCHAR NOT NULL,
     unit       VARCHAR,
@@ -164,15 +161,15 @@ CREATE TABLE annotation_contents (
 );
 
 CREATE TABLE annotation_occurrences (
-    occurrence_id   BIGINT  PRIMARY KEY,
-    content_id      VARCHAR NOT NULL REFERENCES annotation_contents(content_id),
+    occurrence_id   BIGINT  NOT NULL,
+    content_id      VARCHAR NOT NULL,
     object_type     VARCHAR NOT NULL CHECK (object_type IN ('dataset', 'task', 'record', 'source', 'signal')),
-    on_dataset_id   VARCHAR REFERENCES datasets(dataset_id),
-    on_task_id      VARCHAR REFERENCES tasks(task_id),
-    on_record_id    VARCHAR REFERENCES records(record_id),
-    on_source_id    VARCHAR REFERENCES sources(source_id),
-    on_signal_id    VARCHAR REFERENCES signals(signal_id),
-    scope_record_id VARCHAR REFERENCES records(record_id),
+    on_dataset_id   VARCHAR,
+    on_task_id      VARCHAR,
+    on_record_id    VARCHAR,
+    on_source_id    VARCHAR,
+    on_signal_id    VARCHAR,
+    scope_record_id VARCHAR,
     span_type       VARCHAR NOT NULL CHECK (span_type IN ('static', 'point', 'interval')),
     start_us        BIGINT,
     end_us          BIGINT,
@@ -190,17 +187,16 @@ CREATE TABLE annotation_occurrences (
 """
 """Every table, in an order that lets each foreign key reference a table that already exists."""
 
-INDEXES: Final = """
-CREATE INDEX sources_by_record      ON sources (record_id);
-CREATE INDEX sources_by_parent      ON sources (parent_source_id);
-CREATE INDEX sources_by_path        ON sources (path);
-CREATE INDEX source_signals_by_source ON source_signals (source_id);
-CREATE INDEX source_signals_by_signal ON source_signals (signal_id);
-CREATE INDEX task_items_by_record   ON task_items (record_id);
-CREATE INDEX occurrences_by_scope   ON annotation_occurrences (scope_record_id);
-CREATE INDEX occurrences_by_content ON annotation_occurrences (content_id);
-CREATE INDEX occurrences_by_signal  ON annotation_occurrences (on_signal_id);
-CREATE INDEX occurrences_by_source  ON annotation_occurrences (on_source_id);
+INDEXES: Final = ""
+"""No persistent indexes are shipped.
+
+Measured on ECG-QA (1.35M control rows): plain tables are 19.4 MB, the same content with primary
+keys, foreign keys and ten indexes is 189.0 MB. The indexes are the whole difference, and they do
+not pay for themselves. Point lookups run in 0.5-5 ms either way, and the one query that joins
+annotations to tasks across the whole dataset is *ten times faster* without them (41 ms indexed,
+4 ms not), because the planner hash-joins columns instead of walking ART nodes.
+
+Add an index here only when a measured query needs one, and record the measurement alongside it.
 """
 """The indexes built after the rows are in.
 
@@ -234,3 +230,118 @@ TARGET_COLUMNS: Final = {
     "signal": "on_signal_id",
 }
 """Which foreign key column holds the target, for each kind of annotated object."""
+
+
+#: Every invariant the dropped PRIMARY KEY and FOREIGN KEY constraints used to enforce, as a query
+#: that must return no rows. The writer runs these against the finished database before it publishes
+#: the version, which is the only moment they can be violated: a version is written once by one
+#: process and is immutable afterwards, so a constraint carried in the shipped file would re-check,
+#: for the rest of the dataset's life, something that cannot change. Each check is one bulk
+#: anti-join rather than a lookup per row.
+VALIDATIONS: Final = (
+    ("duplicate record_id", "SELECT record_id FROM records GROUP BY record_id HAVING count(*) > 1"),
+    ("duplicate source_id", "SELECT source_id FROM sources GROUP BY source_id HAVING count(*) > 1"),
+    ("duplicate signal_id", "SELECT signal_id FROM signals GROUP BY signal_id HAVING count(*) > 1"),
+    ("duplicate task_id", "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1"),
+    ("duplicate axis_id", "SELECT axis_id FROM axes GROUP BY axis_id HAVING count(*) > 1"),
+    ("duplicate spec_id", "SELECT spec_id FROM specs GROUP BY spec_id HAVING count(*) > 1"),
+    (
+        "duplicate content_id",
+        "SELECT content_id FROM annotation_contents GROUP BY content_id HAVING count(*) > 1",
+    ),
+    (
+        "duplicate occurrence_id",
+        "SELECT occurrence_id FROM annotation_occurrences GROUP BY occurrence_id HAVING count(*) > 1",
+    ),
+    (
+        "duplicate (source_id, signal_id) link",
+        "SELECT source_id, signal_id FROM source_signals GROUP BY source_id, signal_id HAVING count(*) > 1",
+    ),
+    (
+        "duplicate (signal_id, chunk_idx)",
+        "SELECT signal_id, chunk_idx FROM signal_chunks GROUP BY signal_id, chunk_idx HAVING count(*) > 1",
+    ),
+    (
+        "source names a record that does not exist",
+        "SELECT s.source_id FROM sources s ANTI JOIN records r ON r.record_id = s.record_id",
+    ),
+    (
+        "source names a parent that does not exist",
+        "SELECT s.source_id FROM sources s ANTI JOIN sources p ON p.source_id = s.parent_source_id "
+        "WHERE s.parent_source_id IS NOT NULL",
+    ),
+    (
+        "source sits in a different record than its parent",
+        "SELECT s.source_id FROM sources s JOIN sources p ON p.source_id = s.parent_source_id "
+        "WHERE p.record_id <> s.record_id",
+    ),
+    (
+        "source path disagrees with its parent's",
+        "SELECT s.source_id FROM sources s JOIN sources p ON p.source_id = s.parent_source_id "
+        "WHERE NOT starts_with(s.path, p.path || '.') OR s.depth <> p.depth + 1",
+    ),
+    (
+        "signal names an axis that does not exist",
+        "SELECT g.signal_id FROM signals g ANTI JOIN axes a ON a.axis_id = g.axis_id",
+    ),
+    (
+        "signal names a spec that does not exist",
+        "SELECT g.signal_id FROM signals g ANTI JOIN specs sp ON sp.spec_id = g.spec_id",
+    ),
+    (
+        "link names a source that does not exist",
+        "SELECT ss.signal_id FROM source_signals ss ANTI JOIN sources s ON s.source_id = ss.source_id",
+    ),
+    (
+        "link names a signal that does not exist",
+        "SELECT ss.signal_id FROM source_signals ss ANTI JOIN signals g ON g.signal_id = ss.signal_id",
+    ),
+    (
+        "chunk names a signal that does not exist",
+        "SELECT c.signal_id FROM signal_chunks c ANTI JOIN signals g ON g.signal_id = c.signal_id",
+    ),
+    (
+        "task item names a task that does not exist",
+        "SELECT ti.task_id FROM task_items ti ANTI JOIN tasks t ON t.task_id = ti.task_id",
+    ),
+    (
+        "task item names a record that does not exist",
+        "SELECT ti.task_id FROM task_items ti ANTI JOIN records r ON r.record_id = ti.record_id "
+        "WHERE ti.record_id IS NOT NULL",
+    ),
+    (
+        "occurrence names content that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o "
+        "ANTI JOIN annotation_contents c ON c.content_id = o.content_id",
+    ),
+    (
+        "occurrence names a record that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN records r ON r.record_id = o.on_record_id "
+        "WHERE o.on_record_id IS NOT NULL",
+    ),
+    (
+        "occurrence names a source that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN sources s ON s.source_id = o.on_source_id "
+        "WHERE o.on_source_id IS NOT NULL",
+    ),
+    (
+        "occurrence names a signal that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN signals g ON g.signal_id = o.on_signal_id "
+        "WHERE o.on_signal_id IS NOT NULL",
+    ),
+    (
+        "occurrence names a task that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN tasks t ON t.task_id = o.on_task_id "
+        "WHERE o.on_task_id IS NOT NULL",
+    ),
+    (
+        "occurrence scope names a record that does not exist",
+        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN records r ON r.record_id = o.scope_record_id "
+        "WHERE o.scope_record_id IS NOT NULL",
+    ),
+    (
+        "signal length disagrees with its chunks",
+        "SELECT g.signal_id FROM signals g JOIN (SELECT signal_id, sum(n_values) AS total FROM signal_chunks "
+        "GROUP BY signal_id) c ON c.signal_id = g.signal_id WHERE c.total <> g.n_values",
+    ),
+)

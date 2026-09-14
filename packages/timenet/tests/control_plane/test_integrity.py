@@ -1,8 +1,12 @@
-"""What the database refuses to store.
+"""What the writer refuses to publish.
 
-The draft points an annotation at its object with an ``object_type``/``object_id`` pair. A foreign
-key references one table, so that pair cannot have one, and nothing stops an occurrence naming an
-object that does not exist. These tests pin the integrity the typed columns buy instead.
+The shipped database declares no primary or foreign keys: they cost ten times the file size, and a
+version is immutable once written, so an invariant that holds at publish time holds for the rest of
+its life. These tests pin that the write-time checks still catch everything those constraints used
+to catch, at the one moment it can go wrong.
+
+CHECK constraints are still declared, because they cost nothing, so the cases they cover still fail
+at insert time.
 """
 
 import duckdb
@@ -10,12 +14,14 @@ import pytest
 
 from timenet.control_plane import TimeFWriter, schema as ddl
 import timenet.control_plane.writer as writer_module
+from timenet.control_plane.writer import _validate
+from timenet.errors import TimeFValidationError
 from timenet.testing import make_dataset
 
 
 @pytest.fixture
 def connection(tmp_path):
-    """An empty control database with the real schema, open for writing."""
+    """A control database holding one valid record, source, axis, spec, and annotation content."""
     connection = duckdb.connect()
     connection.execute(f"ATTACH '{tmp_path / 'control.duckdb'}' AS control")
     connection.execute("USE control")
@@ -53,47 +59,85 @@ def _occurrence(**overrides):
     return tuple(row.values())
 
 
-def test_annotation_on_a_missing_signal_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute(
-            "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            _occurrence(object_type="signal", on_record_id=None, on_signal_id="does-not-exist"),
-        )
+def _insert_occurrence(connection, **overrides):
+    connection.execute(
+        "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _occurrence(**overrides)
+    )
 
 
-def test_annotation_pointing_at_nothing_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
-        connection.execute(
-            "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            _occurrence(on_record_id=None),
-        )
+def test_a_clean_database_validates(connection):
+    _validate(connection)
 
 
-def test_annotation_pointing_at_two_things_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
-        connection.execute(
-            "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            _occurrence(on_source_id="s1"),
-        )
+def test_annotation_on_a_missing_signal_is_caught(connection):
+    _insert_occurrence(connection, object_type="signal", on_record_id=None, on_signal_id="does-not-exist")
+    with pytest.raises(TimeFValidationError, match="occurrence names a signal that does not exist"):
+        _validate(connection)
 
 
-def test_unknown_object_type_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
-        connection.execute(
-            "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            _occurrence(object_type="banana"),
-        )
+def test_source_under_a_missing_record_is_caught(connection):
+    connection.execute("INSERT INTO sources VALUES ('s2', 'missing', NULL, '0001', 0, 'X', 1, NULL)")
+    with pytest.raises(TimeFValidationError, match="source names a record that does not exist"):
+        _validate(connection)
 
 
-def test_linking_a_signal_to_a_missing_source_is_refused(connection):
+def test_source_under_a_missing_parent_is_caught(connection):
+    connection.execute("INSERT INTO sources VALUES ('s2', 'r1', 'missing', '0000.0000', 1, 'X', 0, NULL)")
+    with pytest.raises(TimeFValidationError, match="source names a parent that does not exist"):
+        _validate(connection)
+
+
+def test_source_in_a_different_record_than_its_parent_is_caught(connection):
+    connection.execute("INSERT INTO records VALUES ('r2', NULL, NULL)")
+    connection.execute("INSERT INTO sources VALUES ('s2', 'r2', 's1', '0000.0000', 1, 'X', 0, NULL)")
+    with pytest.raises(TimeFValidationError, match="different record than its parent"):
+        _validate(connection)
+
+
+def test_linking_a_missing_signal_is_caught(connection):
+    connection.execute("INSERT INTO source_signals VALUES ('s1', 'missing-signal', 0)")
+    with pytest.raises(TimeFValidationError, match="link names a signal that does not exist"):
+        _validate(connection)
+
+
+def test_linking_to_a_missing_source_is_caught(connection):
     connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
-    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute("INSERT INTO source_signals VALUES ('missing-source', 'sig1', 0)")
+    connection.execute("INSERT INTO source_signals VALUES ('missing-source', 'sig1', 0)")
+    with pytest.raises(TimeFValidationError, match="link names a source that does not exist"):
+        _validate(connection)
 
 
-def test_linking_a_missing_signal_to_a_source_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute("INSERT INTO source_signals VALUES ('s1', 'missing-signal', 0)")
+def test_duplicate_signal_id_is_caught(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'II', 'a1', 'sp1', 10, NULL)")
+    with pytest.raises(TimeFValidationError, match="duplicate signal_id"):
+        _validate(connection)
+
+
+def test_signal_naming_a_missing_axis_is_caught(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'missing-axis', 'sp1', 10, NULL)")
+    with pytest.raises(TimeFValidationError, match="signal names an axis that does not exist"):
+        _validate(connection)
+
+
+def test_chunk_naming_a_missing_signal_is_caught(connection):
+    connection.execute("INSERT INTO signal_chunks VALUES ('missing', 0, 'f.parquet', 0, 0, 10)")
+    with pytest.raises(TimeFValidationError, match="chunk names a signal that does not exist"):
+        _validate(connection)
+
+
+def test_signal_length_disagreeing_with_its_chunks_is_caught(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 99, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'f.parquet', 0, 0, 10)")
+    with pytest.raises(TimeFValidationError, match="signal length disagrees with its chunks"):
+        _validate(connection)
+
+
+def test_task_item_naming_a_missing_record_is_caught(connection):
+    connection.execute("INSERT INTO tasks VALUES ('t1', 'Diagnose.', NULL)")
+    connection.execute("INSERT INTO task_items VALUES ('t1', 'input', 0, 'record', NULL, 'missing')")
+    with pytest.raises(TimeFValidationError, match="task item names a record that does not exist"):
+        _validate(connection)
 
 
 def test_one_signal_can_hang_off_several_sources(connection):
@@ -101,21 +145,31 @@ def test_one_signal_can_hang_off_several_sources(connection):
     connection.execute("INSERT INTO records VALUES ('r2', NULL, NULL)")
     connection.execute("INSERT INTO sources VALUES ('s2', 'r2', NULL, '0000', 0, 'Monitor', 0, NULL)")
     connection.execute("INSERT INTO signals VALUES ('shared', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('shared', 0, 'f.parquet', 0, 0, 10)")
     connection.execute("INSERT INTO source_signals VALUES ('s1', 'shared', 0)")
     connection.execute("INSERT INTO source_signals VALUES ('s2', 'shared', 0)")
+    _validate(connection)
     rows = connection.execute("SELECT count(*) FROM source_signals WHERE signal_id = 'shared'").fetchone()
     assert rows is not None
     assert rows[0] == 2
 
 
-def test_source_under_a_missing_record_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute("INSERT INTO sources VALUES ('s2', 'missing', NULL, '0001', 0, 'X', 1, NULL)")
+# CHECK constraints cost no storage, so they stay declared and still fire at insert time.
 
 
-def test_source_under_a_missing_parent_is_refused(connection):
-    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute("INSERT INTO sources VALUES ('s2', 'r1', 'missing', '0000.0000', 1, 'X', 0, NULL)")
+def test_annotation_pointing_at_nothing_is_refused(connection):
+    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
+        _insert_occurrence(connection, on_record_id=None)
+
+
+def test_annotation_pointing_at_two_things_is_refused(connection):
+    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
+        _insert_occurrence(connection, on_source_id="s1")
+
+
+def test_unknown_object_type_is_refused(connection):
+    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
+        _insert_occurrence(connection, object_type="banana")
 
 
 def test_task_item_with_a_bad_role_is_refused(connection):
@@ -124,26 +178,29 @@ def test_task_item_with_a_bad_role_is_refused(connection):
         connection.execute("INSERT INTO task_items VALUES ('t1', 'sideways', 0, 'text', 'x', NULL)")
 
 
-def test_duplicate_signal_id_is_refused(connection):
-    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
-    with pytest.raises(duckdb.ConstraintException):
-        connection.execute("INSERT INTO signals VALUES ('sig1', 'II', 'a1', 'sp1', 10, NULL)")
+# the writer's own guards
 
 
 def test_writer_refuses_to_overwrite_a_committed_version(tmp_path):
     dataset = make_dataset(n_records=1, n_values=32)
     with TimeFWriter(tmp_path, dataset.metadata) as writer:
         writer.write(dataset)
-    with pytest.raises(Exception, match="already holds a committed version"):
+    with pytest.raises(TimeFValidationError, match="already holds a committed version"):
         TimeFWriter(tmp_path, dataset.metadata)
 
 
-def test_a_failed_build_leaves_nothing_behind(tmp_path):
-    dataset = make_dataset(n_records=1, n_values=32)
-    with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset.metadata) as writer:
+def test_a_build_that_fails_validation_publishes_nothing(tmp_path, monkeypatch):
+    """A validation failure must leave no version behind, not a half-valid one."""
+    dataset = make_dataset(n_records=2, n_values=32)
+    monkeypatch.setattr(
+        ddl, "VALIDATIONS", (*ddl.VALIDATIONS, ("a check that always fails", "SELECT record_id FROM records"))
+    )
+    with (
+        pytest.raises(TimeFValidationError, match="a check that always fails"),
+        TimeFWriter(tmp_path, dataset.metadata) as writer,
+    ):
         writer.write(dataset)
-        raise RuntimeError("build blew up after writing")
-    # The version committed before the error, so it exists; what must not survive is a staging dir.
+    assert not (tmp_path / dataset.metadata.dataset_id / "1.0.0" / "manifest.json").exists()
     assert not list(tmp_path.glob("**/*.tmp-*"))
 
 
