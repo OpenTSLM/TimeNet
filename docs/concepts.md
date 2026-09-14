@@ -16,7 +16,7 @@ This page collects the vocabulary that appears across these docs. Follow a link 
 | **Dataset** | A named, versioned collection of records in TimeF, addressed as `org/name` (for example `chengsenwang/tsqa`). |
 | **Record** | One recording in a dataset (for example, a single patient trace): its [time series](timef-dataset.md), tasks, and annotations. |
 | **Time series** | One logical stream within a record, with shape `(n_steps, *value_shape)` and a dtype declared by its spec. You read values on demand with [`to_arrow()`, `to_numpy()`, or `read_steps()`](timef-dataset.md). |
-| **Manifest** | The compiled [`manifest.json`](manifest.md) for a dataset version: the card's metadata plus the schema derived from the data. The single source of truth the SDK reads. |
+| **Manifest** | The compiled [`manifest.json`](manifest.md) for a dataset version: the card's metadata plus the schema derived from the data. It is the single source of truth that the SDK reads. |
 | **Connector** | One [`BaseConnector`](connectors.md) per dataset. `download()` fetches the raw source. `convert()` builds a `TimeFDataset`. It knows nothing about the engine or registry. |
 | **Engine** | [`run_pipeline`](build.md): drives any connector through the fixed `download -> convert -> derive_schema -> store` pipeline, and owns caching and idempotency. |
 | **Build** | Running a connector through the engine to compile a dataset and publish it to a registry, via the [`timenet-build`](build.md) CLI. |

@@ -19,7 +19,7 @@ Every task, whatever its type, can carry these fields:
 | --- | --- |
 | `record_ids` | The records the task is about, populated by `add_task`. |
 | `prompt` | What the model is asked. `None` for an unprompted task. |
-| `scope` | A [`Span`](#the-span-primitive) narrowing the input to a region. `None` means the whole record. |
+| `scope` | A [`Span`](#the-span-primitive) that narrows the input to a region. `None` means the whole record. |
 | `input_annotation_ids` | Annotations handed to the model as context. |
 | `target` | The answer, typed by the subclass. |
 | `target_annotation_ids` | The answer *by reference*: stored annotations rather than an inline copy. |
@@ -28,7 +28,9 @@ Every task, whatever its type, can carry these fields:
 
 Because prompt and scope are shared, a task type is defined by only **what kind of thing its answer
 is**. The answer is a category, free text, a number, a set of regions, or a produced series. There are
-eight concrete types.
+eight concrete types. This number comes from a survey of commonly used datasets. The set of eight is
+fixed but extensible. One record can carry many task types without being repackaged into a new
+task-specific dataset each time.
 
 ## The Span primitive
 
@@ -40,8 +42,8 @@ numbers mean, so the frame is the type. The four concrete leaves are `TimePoint`
 
 A **time span** reads its bounds as whole microseconds on the **source recording timeline**. This is
 the same frame a series' axis places its values in. So a time span stays meaningful on a windowed
-record that starts partway into the recording. It covers the whole record when `time_series_ids` is
-`None`, or a subset of series when it names them (a tuple of ids).
+record that starts partway into the recording. When `time_series_ids` is `None`, it covers the whole
+record. When it names series (a tuple of ids), it covers only that subset.
 
 ```python
 from timenet.types import TimeInterval, TimePoint
@@ -206,11 +208,11 @@ TemporalLocalizationTask(
 ```
 
 <figure markdown="span">
-  ![A few spans and points out; unmarked time is unlabeled](../assets/figures/task-localization-sparse.svg)
+  ![A few spans and points out. Unmarked time stays unlabeled.](../assets/figures/task-localization-sparse.svg)
 </figure>
 
 <figure markdown="span">
-  ![Contiguous segments tile the recording; gaps are errors](../assets/figures/task-localization-exhaustive.svg)
+  ![Contiguous segments tile the recording. Gaps are errors.](../assets/figures/task-localization-exhaustive.svg)
 </figure>
 
 ## ForecastingTask

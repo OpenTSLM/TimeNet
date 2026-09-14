@@ -36,18 +36,18 @@ An unrecognized scheme, for example `gs://` or `az://`, raises `ValueError` inst
 local path. `open_registry` expands `~` in a local path or a `file://` URI.
 
 !!! note "Catalog support"
-    Every backend serves reads and publishes with `store` (remote publishing needs a writer token; the
-    S3 backend reads AWS credentials from the environment). The S3 backend has no catalog, so `list` and
-    `search` are unsupported there.
+    Every backend serves reads and publishes with `store`. Remote publishing needs a writer token, and
+    the S3 backend reads AWS credentials from the environment. The S3 backend has no catalog, so `list`
+    and `search` are unsupported there.
 
 ### Remote registries
 
 `http(s)://` and `timenet://` both select `RemoteRegistry`. `timenet://` is a shorthand for the hosted
-`https://registry.timenet.ai` service root and takes no path: dataset ids are passed to the client
-methods, not folded into the registry URI. An `http(s)://` URI is used verbatim as the service root,
+`https://registry.timenet.ai` service root and takes no path. You pass dataset ids to the client
+methods, not into the registry URI. The SDK uses an `http(s)://` URI verbatim as the service root,
 which is how you point at a private or a dev deployment.
 
-The HTTP transport authenticates with a bearer token read from `$TIMENET_TOKEN`. When it is unset the
+The HTTP transport authenticates with a bearer token read from `$TIMENET_TOKEN`. When it is unset, the
 SDK talks to the registry anonymously (no `Authorization` header), which is enough for public reads.
 Set it to reach private datasets or to write:
 
@@ -65,8 +65,9 @@ hardcoded. Install the extra:
 pip install 'timenet[s3]'
 ```
 
-The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
-data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
+The layout under the prefix matches the hosted registry's bucket convention,
+`datasets/org/name/version/…` with `manifest.json` beside the data files. `store` uploads to a
+temporary `version.tmp-<uuid>` prefix and moves each object into place
 (`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
 a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
 `download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
@@ -79,14 +80,14 @@ Every backend implements this contract: four data-access methods and one shared 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
-| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
-| `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
-| `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
+| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory that holds it. |
+| `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for binary reading. |
+| `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. The filesystem of the handle must serve range reads, for out-of-order Parquet footer and value-slice reads. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
 over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}/{version}/manifest`,
-`.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
+`.../download/{relpath}`). `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
 S3 backend has no catalog, so `list_datasets` and `search` raise `NotImplementedError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
@@ -100,7 +101,7 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 
 | Method | Description |
 | --- | --- |
-| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, and skips an already-committed version unless `force`. |
+| `store(dataset, *, force=False, values_backend="parquet", progress_cb=None)` | Compile a dataset and publish it. Returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and `values_backend` (`"parquet"` or `"zarr"`) selects the values-plane backend. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
@@ -128,18 +129,18 @@ when `--out` is absent. The `timenet_connectors.builder` and `load` helpers use 
 
 `RemoteRegistry.store` compiles the dataset locally, then hands the artifacts to the service over the
 REST contract. Dataset bytes never pass through the API: the service issues a presigned PUT per file and
-the SDK uploads straight to the object store. The token must be a writer token (`$TIMENET_TOKEN`); an
-anonymous or read-only caller is rejected by the service.
+the SDK uploads straight to the object store. The token must be a writer token (`$TIMENET_TOKEN`). The
+service rejects an anonymous or read-only caller.
 
 1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
    schema first if the dataset has none. An already-committed version returns early unless `force`.
-2. `POST /datasets/{id}/{version}/publish` with the compiled `manifest.json` as the body. The service
-   registers the pending version and returns the list of files it expects.
-3. For each file, `POST /datasets/{id}/{version}/publish/upload-url` with `{"path": relpath}` to get a
-   presigned grant (`{"url", "headers"}`), then `PUT` the file's bytes to that URL with the returned
-   headers.
-4. `POST /datasets/{id}/{version}/finalize` to commit the version. The staging directory is removed
-   whether or not the publish succeeds.
+2. `POST /api/v1/datasets/{id}/{version}/publish` with the compiled `manifest.json` as the body. The
+   service registers the pending version and returns the list of files it expects.
+3. For each file, `POST /api/v1/datasets/{id}/{version}/publish/upload-url` with `{"path": relpath}` to
+   get a presigned grant (`{"url", "headers"}`). Then `PUT` the file's bytes to that URL with the
+   returned headers.
+4. `POST /api/v1/datasets/{id}/{version}/finalize` to commit the version. TimeNet removes the staging
+   directory whether or not the publish succeeds.
 
 ```python
 from timenet.registry import open_writable_registry
@@ -173,8 +174,8 @@ A negative `limit` raises `ValueError`.
 | `tag` | dataset declares all of these tags |
 
 The type-filters, `task` and `time_series_spec`, resolve each dataset's schema from its committed
-manifest. The manifest always carries the derived schema, so the registry does not need a
-`precomputed_schema`.
+manifest. The manifest always carries the derived schema, so search reads the schema straight from
+the manifest instead of caching it separately.
 
 ---
 

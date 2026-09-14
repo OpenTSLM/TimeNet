@@ -115,16 +115,17 @@ vibration = TimeSeriesSpec(
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
 | `data_source` | `DataSource \| None` | no | The source that produced this modality. |
 | `dtype` | `str` | no | Canonical NumPy scalar dtype, `"str"` for text, or `"enum"` for a categorical value. Defaults to `"float32"`. |
+| `categories` | `tuple[str, ...]` | required for `dtype="enum"` | The ordered category labels. Must be non-empty and unique. Empty for every other dtype. |
 | `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
 | `nullable` | `bool` | no | Whether a timestep can be missing. The default `False` rejects all nulls. |
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
-`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`; scalar
-values of a non-`"str"`/`"enum"` dtype preserve their NumPy type on disk, and `"str"`/`"enum"` values
-read back as text. An `"enum"` dtype stores values as a PyArrow
-dictionary array; the torch bridge maps them to integer codes.
+`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`. A
+scalar value of a non-`"str"`/`"enum"` dtype keeps its NumPy type on disk. A `"str"`/`"enum"` value
+reads back as text. An `"enum"` dtype stores values as a PyArrow
+dictionary array. The torch bridge maps them to integer codes.
 Multidimensional values require the Zarr
 values backend.
 
@@ -143,7 +144,8 @@ If a source uses NaN or another marker for missing measurements, its connector m
 markers into nulls.
 
 Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
-The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
+The writer rejects partial nulls. `nullable` is a uniform flag: every dtype supports the same null
+mechanism, and only the fill/placeholder representation differs per dtype.
 
 `TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
 the loaded array contains nulls. In some cases, the previous conversion lost the distinction between
@@ -193,9 +195,10 @@ subclass with field defaults for reuse. The annotations round-trip without runti
 | `TimeInterval` | none | A bounded region, on specific signals or the whole record. |
 
 Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
-`description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
-(`"years"`) or a `pint.Unit` (`ureg.millivolt`, stored as its canonical name). TimeNet validates both
-against the shared registry on construction. An unrecognized unit string raises `ValueError`. On the
+`description: str | None = None`, `source: str | None = None`, `id: str` (auto uuid7). `unit` takes
+either a unit string (`"years"`) or a `pint.Unit` (`ureg.millivolt`, stored as its canonical name).
+TimeNet validates both against the shared registry on construction. An unrecognized unit string
+raises `TimeFValidationError` (a `ValueError` subclass). On the
 temporal shapes, `time_series_ids=None` means **trial-level**, that is the whole record. A non-empty
 tuple restricts the annotation to those signals. Each id must match a `TimeSeries.time_series_id` on
 the record.
@@ -270,7 +273,7 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 | `ForecastingTask` | `forecasting` | a produced series | `context_record_ids`, `target_record_id`, `target_span` |
 | `TSEditingTask` | `ts_editing` | a produced series | `source_record_id`, `target_record_id` |
 | `TSGenerationTask` | `ts_generation` | a produced series | `target_record_id` |
-| `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
+| `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids`, `target_time_series_ids` |
 
 `TaskType` is the enum of type tags. TimeNet derives `TASKS` at import from a walk of the `Task`
 subclass tree. Therefore it registers every concrete task in the module by its `task_type`. If two
@@ -291,14 +294,15 @@ timeline. A **step** frame reads them as ordinal indices into one series' own ar
 you annotate with for any span. It and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
 always build a concrete leaf.
 
-Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
-meaningful on a windowed record that starts partway into the recording. `TimePoint(start_us=...)` is one
-point. `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
-covers the whole record, or a subset of series named by `time_series_ids` (`None` = every series). Build
-with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
-has integers. For a wall-clock moment, build it from the record (`record.time_point(at)` /
-`record.time_interval(start, end)`), which supplies its own `start_time` as the anchor. Bounds are stored
-as whole microseconds, so two equal regions compare equal.
+Time spans sit on the recording timeline, the same frame as a series' `time_axis`. As a result, a
+bound stays meaningful on a windowed record that starts partway into the recording.
+`TimePoint(start_us=...)` is one point. `TimeInterval(start_us=..., end_us=...)` is the half-open
+range `[start_us, end_us)`. Either covers the whole record, or a subset of series named by
+`time_series_ids` (`None` = every series). Build with `.seconds()` for the seconds a recording
+documents itself in, or `.micros()` when the source already has integers. For a wall-clock moment,
+build it from the record (`record.time_point(at)` / `record.time_interval(start, end)`), which
+supplies its own `start_time` as the anchor. Bounds are stored as whole microseconds, so two equal
+regions compare equal.
 
 Step spans count a series' own ordinal positions, for a series that has no clock at all. A step index
 means nothing without a series to count on, so a step span names exactly one `time_series_id` (a single
@@ -306,9 +310,9 @@ str). `StepPoint(time_series_id=..., start=...)` is one step.
 `StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
 are no unit builders. Construct them directly.
 
-Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
-irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
-span against the axis of every series it names and rejects a mismatch.
+Which frame fits is decided by the series' **axis**, not by the caller. A timeline axis (regular or
+irregular) takes a time span. An ordinal axis takes a step span. [`add_task`](timef-dataset.md)
+validates a span against the axis of every series it names and rejects a mismatch.
 
 ```python
 # a time interval on one series; start is stored as 5_000_000
@@ -395,7 +399,8 @@ StepInterval(time_series_id="tsqa", start=132, stop=144)
   ))
   ```
 - `TSCorrespondenceTask`: which candidate record corresponds to the query. If that pool is set, the
-  answer must come from `candidate_record_ids`.
+  answer must come from `candidate_record_ids`. `target_time_series_ids` lets the answer name the
+  corresponding signals instead of whole records.
   ```python
   dataset.add_task(query, TSCorrespondenceTask(
       prompt="Which recording is most similar to this one?",
@@ -460,6 +465,10 @@ A dataset's descriptive identity (authored in the card).
 | `domains` | `tuple[Domain, ...]` | no | Application/clinical domains. |
 | `tags` | `tuple[str, ...]` | no | Free-form labels. |
 | `source_url` | `str \| None` | no | Canonical source URL. |
+| `license_url` | `str \| None` | no | Where to read the full license text. Required when `license` is `License.OTHER`. |
+| `citation` | `str \| None` | no | How to cite the dataset, when the source asks for attribution. |
+| `access` | `Access` | no | How a user obtains the data (default `Access.OPEN`, which needs nothing). |
+| `access_url` | `str \| None` | no | Where to obtain access (the DUA or credentialing page). Required when `access` is not `OPEN`. |
 | `yaml_schema_version` | `int` | no | The card's field-schema version (default `1`). |
 
 ---
@@ -471,19 +480,22 @@ into the manifest. It holds flat descriptors for specs and annotations, and the 
 subclasses.
 
 ```python
-DatasetSchema(
-    time_series_specs: tuple[TimeSeriesSpec, ...] = (),
-    annotations:       tuple[AnnotationDescriptor, ...] = (),
-    tasks:             tuple[type[Task], ...] = (),
-)
+@dataclass(frozen=True)
+class DatasetSchema:
+    time_series_specs: tuple[TimeSeriesSpec, ...] = ()
+    annotations: tuple[AnnotationDescriptor, ...] = ()
+    tasks: tuple[type[Task], ...] = ()
 ```
 
 ---
 
 ## Enums
 
-- `Domain`: `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
+- `Domain`: `HEALTH`, `CARDIOLOGY`, `RESPIRATORY`, `SLEEP`, `ACTIVITY`, `MOTION`, `ECONOMICS`,
+  `FINANCE`, `ENVIRONMENT`, `ENERGY`, `TRANSPORT`, `OBSERVABILITY`, `AUDIO`, `GENERAL`.
 - `License`: SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, `CC0-1.0`, ...).
+- `Access`: `OPEN`, `CREDENTIALED`, `RESTRICTED`. How a user obtains the source data, separate from
+  the license.
 
 All are `StrEnum`, so members compare equal to their string values.
 
@@ -500,7 +512,12 @@ hierarchy, listed at the end of this section.
 | `TimeNetError` | `Exception` | base for all TimeNet errors |
 | `TimeNetRegistryError` | `TimeNetError` | a registry cannot be loaded/reached/served |
 | `TimeNetDatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
+| `TimeNetAccessError` | `TimeNetError` | a dataset needs credentialed or restricted access, so TimeNet does not host its data |
+| `TimeNetDownloadError` | `TimeNetError` | TimeNet fails to fetch a dataset's source data, or what arrives does not match what is expected |
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
+| `TimeFEditError` | `TimeFValidationError` | an edit leaves a dataset referentially inconsistent |
+| `TimeNetInvalidCardError` | `TimeNetError`, `ValueError` | a dataset card YAML is malformed or fails schema validation |
+| `TimeNetBuildError` | `TimeNetError` | a build run failed: the connector build, or the environment it needed |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
 | `TimeNetInvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |
 
@@ -510,9 +527,10 @@ an invariant. Examples: a negative `Version` component, a `unit_value` that is n
 malformed dataset ref, a `dataset_id` that is not an `org/name` pair, or a version supplied twice. It
 subclasses `ValueError`, so `except ValueError` keeps catching all of it.
 
-Plain `ValueError` is for genuine programming bugs, not bad data or input. One example: two `Task`
-classes declare the same `task_type`, a definition bug raised at import. That is never a data or input
-problem. A tag of TimeF validation failure on it makes the distinction useless.
+Plain `ValueError` is for genuine programming bugs, not bad data or input. One example:
+`Record.to_arrow()` called on a record with more than one signal, the wrong shortcut for its shape.
+That is never a data or input problem. A tag of TimeF validation failure on it makes the distinction
+useless.
 
 `timenet.errors` also defines the warnings TimeNet raises. `TimeNetWarning` is the base, and it
 derives from `UserWarning`. `SpanOutsideWindowWarning` is raised where a span leaves its window and
