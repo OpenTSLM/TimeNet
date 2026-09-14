@@ -23,7 +23,7 @@ import pyarrow as pa
 
 from timenet.control_plane import schema as ddl
 from timenet.control_plane.model import Annotation, DeclarativeDataset, Record, RecordRef, Signal, Source, Task
-from timenet.control_plane.values import ChunkLocator, PendingSignal, ValuesPlaneWriter, axis_columns
+from timenet.control_plane.values import PARQUET, ChunkLocator, PendingSignal, ValuesWriter, axis_columns, values_writer
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import CONTROL_DB_FILE, MANIFEST_FILE
@@ -173,15 +173,19 @@ def axis_id(axis: Any) -> str:
 
 
 class TimeFWriter:
-    """Writes one dataset version: a DuckDB control plane plus a Parquet values plane."""
+    """Writes one dataset version: a DuckDB control plane plus a Parquet or Zarr values plane."""
 
-    def __init__(self, root: Path, metadata: DatasetMetadata, **values_options: Any) -> None:
+    def __init__(
+        self, root: Path, metadata: DatasetMetadata, *, values_backend: str = PARQUET, **values_options: Any
+    ) -> None:
         """Bind the writer to its output location and the version's metadata.
 
         Args:
             root: The registry root. The version lands at ``<root>/<dataset_id>/<version>``.
             metadata: The dataset's metadata, including its id and version.
-            values_options: Byte budgets forwarded to :class:`~timenet.control_plane.values.ValuesPlaneWriter`.
+            values_backend: Which values plane to write, from
+                :data:`~timenet.control_plane.values.VALUES_BACKENDS`.
+            values_options: Byte budgets and codec settings forwarded to that backend.
 
         Raises:
             TimeFValidationError: If the version is already committed at this location.
@@ -191,6 +195,7 @@ class TimeFWriter:
         if (self._final_dir / MANIFEST_FILE).exists():
             raise TimeFValidationError(f"{self._final_dir} already holds a committed version")
         self._staging_dir = self._final_dir.parent / f"{self._final_dir.name}.tmp-{uuid.uuid4().hex}"
+        self._values_backend = values_backend
         self._values_options = values_options
         self._manifest: Manifest | None = None
 
@@ -259,7 +264,7 @@ class TimeFWriter:
             The manifest of the committed version.
         """
         db_path = self._staging_dir / CONTROL_DB_FILE
-        values = ValuesPlaneWriter(self._staging_dir, **self._values_options)
+        values = values_writer(self._values_backend, self._staging_dir, **self._values_options)
         # The block size can only be set when the database is created, so the file is attached
         # rather than opened directly.
         connection = duckdb.connect()
@@ -281,7 +286,7 @@ class TimeFWriter:
         self._manifest = self._commit(db_path, values, counts)
         return self._manifest
 
-    def _commit(self, db_path: Path, values: ValuesPlaneWriter, counts: dict[str, int]) -> Manifest:
+    def _commit(self, db_path: Path, values: ValuesWriter, counts: dict[str, int]) -> Manifest:
         """Write the manifest, then move the staging directory into place atomically.
 
         Returns:
@@ -305,6 +310,7 @@ class TimeFWriter:
                 time_series_index_rows=counts["signal_chunks"],
             ),
             value_encoding=values.value_encoding,
+            values_backend=self._values_backend,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
         if not db_path.exists():
@@ -358,7 +364,7 @@ def _statements(script: str) -> Iterable[str]:
 
 def _stream_into(
     connection: duckdb.DuckDBPyConnection,
-    values: ValuesPlaneWriter,
+    values: ValuesWriter,
     records: Iterable[Record],
     tasks: Iterable[Task],
     annotations: Iterable[Annotation],
@@ -396,6 +402,10 @@ def _stream_into(
         _load_task(loader, task)
     for locator in values.finish():
         _add_chunk(loader, locator)
+    # Declared after the values plane closes, so a chunk row can be anti-joined against the
+    # artifacts that really exist rather than against the ones the writer meant to create.
+    for chunk_file, backend in values.artifacts:
+        loader.artifacts.add((chunk_file, backend))
 
     for inserter in loader.all():
         inserter.flush()
@@ -404,6 +414,7 @@ def _stream_into(
         "sources": loader.sources.count,
         "signals": loader.signals.count,
         "source_signals": loader.source_signals.count,
+        "values_artifacts": loader.artifacts.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
         "annotations": loader.contents.count,
@@ -442,8 +453,8 @@ def _add_chunk(loader: "_Loader", locator: ChunkLocator) -> None:
             locator.signal_id,
             locator.chunk_idx,
             locator.chunk_file,
-            locator.row_group,
-            locator.row_offset,
+            locator.chunk_major_idx,
+            locator.chunk_minor_idx,
             locator.n_values,
         )
     )
@@ -507,8 +518,11 @@ class _Loader:
             connection, "signals", ("signal_id", "name", "axis_id", "spec_id", "n_values", "metadata")
         )
         self.source_signals = _BatchInserter(connection, "source_signals", ("source_id", "signal_id", "position"))
+        self.artifacts = _BatchInserter(connection, "values_artifacts", ("chunk_file", "backend"))
         self.chunks = _BatchInserter(
-            connection, "signal_chunks", ("signal_id", "chunk_idx", "chunk_file", "row_group", "row_offset", "n_values")
+            connection,
+            "signal_chunks",
+            ("signal_id", "chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_idx", "n_values"),
         )
         self.tasks = _BatchInserter(connection, "tasks", ("task_id", "prompt", "metadata"))
         self.items = _BatchInserter(
@@ -560,6 +574,7 @@ class _Loader:
             self.sources,
             self.signals,
             self.source_signals,
+            self.artifacts,
             self.chunks,
             self.tasks,
             self.items,
@@ -676,8 +691,8 @@ def _load(
                 locator.signal_id,
                 locator.chunk_idx,
                 locator.chunk_file,
-                locator.row_group,
-                locator.row_offset,
+                locator.chunk_major_idx,
+                locator.chunk_minor_idx,
                 locator.n_values,
             )
         )
@@ -689,6 +704,7 @@ def _load(
         "sources": loader.sources.count,
         "signals": loader.signals.count,
         "source_signals": loader.source_signals.count,
+        "values_artifacts": loader.artifacts.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
         "annotations": loader.contents.count,

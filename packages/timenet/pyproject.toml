@@ -47,8 +47,14 @@ Issues = "https://github.com/OpenTSLM/TimeNet/issues"
 s3 = [
     "boto3>=1.34",
 ]
+# The Zarr values backend. zarr is imported lazily, so a Parquet-only install never pulls it in, and
+# a reader that opens a Zarr-written version without it gets an "install timenet[zarr]" message.
+zarr = [
+    "zarr>=3",
+]
 all = [
     "timenet[s3]",
+    "timenet[zarr]",
 ]
 
 [tool.uv.sources]

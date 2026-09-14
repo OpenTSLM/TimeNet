@@ -1,25 +1,30 @@
-"""Write signal values into the Parquet values plane, and read them back by locator.
+"""Write signal values into the Parquet values plane, read them back by locator, and pick a backend.
 
-Nothing here is new. It calls the same :class:`~timenet.parquet.sharded.RotatingPartWriter`, the same
-:mod:`~timenet.parquet.encodings`, and the same :mod:`~timenet.parquet.value_encoding` the current
-writer calls, and it does the same self-check on the finished shard. That is the point: the control
-plane moves to a database, and the bulk numeric data keeps the byte-budgeted row groups and the
-measured per-modality encoding choice exactly as they are.
+The Parquet path is unchanged. It calls the same :class:`~timenet.parquet.sharded.RotatingPartWriter`,
+the same :mod:`~timenet.parquet.encodings`, and the same :mod:`~timenet.parquet.value_encoding` the
+current writer calls, and it does the same self-check on the finished shard. The control plane moves
+to a database, and the bulk numeric data keeps the byte-budgeted row groups and the measured
+per-modality encoding choice exactly as they are.
 
-The only thing that changes is where a chunk's locator is recorded. It used to go into the
-``time_series_index`` Parquet table. It now goes into the ``signal_chunks`` table of the database.
+Two things are new. A chunk's locator is recorded in the ``signal_chunks`` table of the database
+rather than in the ``time_series_index`` Parquet table, and the locator no longer speaks Parquet:
+``chunk_major_idx`` and ``chunk_minor_idx`` mean whatever the backend that wrote the artifact says
+they mean. Parquet reads them as a row group and a row inside it. Zarr reads the major index as an
+element offset and leaves the minor index unset. :data:`VALUES_BACKENDS` names the backends, and
+:func:`values_writer` and :func:`read_values` are the seam both sides go through.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Final, Protocol
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.dataset.axis import IrregularAxis, RegularAxis, TimeAxis
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
@@ -38,16 +43,30 @@ from timenet.parquet.value_encoding import ValueEncoding, select_value_encoding
 # idea against an in-memory hierarchy.
 _ENCODING_SAMPLE_ARRAYS = 64
 
+PARQUET: Final = "parquet"
+"""The default values backend: byte-budgeted Parquet shards with per-modality encodings."""
+
+ZARR: Final = "zarr"
+"""The Zarr values backend: one chunked typed array per modality."""
+
+VALUES_BACKENDS: Final = (PARQUET, ZARR)
+"""Every backend a writer may target and a reader can resolve."""
+
 
 @dataclass(frozen=True)
 class ChunkLocator:
-    """Where one chunk of a signal's values landed in the values plane."""
+    """Where one chunk of a signal's values landed, in terms its backend interprets.
+
+    ``chunk_file`` names an artifact: a Parquet shard, or a Zarr array inside the store. The two
+    indexes address a run of values inside it. Parquet uses both (row group, then row). Zarr uses
+    only the major one (the element offset along the array) and leaves ``chunk_minor_idx`` ``None``.
+    """
 
     signal_id: str
     chunk_idx: int
     chunk_file: str
-    row_group: int
-    row_offset: int
+    chunk_major_idx: int
+    chunk_minor_idx: int | None
     n_values: int
 
 
@@ -61,6 +80,114 @@ class PendingSignal:
     dtype: str
     values: np.ndarray
     time_offsets_us: np.ndarray | None
+
+
+class ValuesWriter(Protocol):
+    """What the control-plane writer needs from a values backend.
+
+    A backend takes signals one at a time and hands back locators as they reach disk, names the
+    artifacts it wrote so the write-time validation can check the chunk rows against them, and lists
+    the files it produced so the manifest can checksum them.
+    """
+
+    @property
+    def parts(self) -> list[str]:
+        """Every file written, as version-relative paths, for the manifest."""
+        ...
+
+    @property
+    def artifacts(self) -> list[tuple[str, str]]:
+        """Every ``(chunk_file, backend)`` a locator may name, for ``values_artifacts``."""
+        ...
+
+    @property
+    def value_encoding(self) -> dict[str, str]:
+        """The encoding chosen per modality, or empty for a backend that chooses none."""
+        ...
+
+    def add(self, signal: "PendingSignal") -> list[ChunkLocator]:
+        """Take one signal and return the locators of any chunks that reached disk."""
+        ...
+
+    def finish(self) -> list[ChunkLocator]:
+        """Flush everything still buffered and return its locators."""
+        ...
+
+
+def values_writer(backend: str, staging_dir: Path, **options: Any) -> ValuesWriter:
+    """Open the values-plane writer for one backend.
+
+    Args:
+        backend: One of :data:`VALUES_BACKENDS`.
+        staging_dir: The version's staging directory.
+        options: Byte budgets and codec settings, forwarded to the backend.
+
+    Returns:
+        The writer.
+
+    Raises:
+        TimeFValidationError: If ``backend`` is not a known values backend.
+    """
+    if backend == PARQUET:
+        return ValuesPlaneWriter(staging_dir, **options)
+    if backend == ZARR:
+        # Imported here because zarr is an optional extra; the Parquet core never needs it.
+        from timenet.control_plane.zarr_values import ZarrValuesPlaneWriter  # noqa: PLC0415
+
+        return ZarrValuesPlaneWriter(staging_dir, **options)
+    raise TimeFValidationError(f"unknown values backend {backend!r}; known: {', '.join(VALUES_BACKENDS)}")
+
+
+def read_values(root: Path, locators: Sequence[ChunkLocator], backend_of: Mapping[str, str]) -> np.ndarray:
+    """Read one signal's values, sending each locator to the backend that wrote its artifact.
+
+    Args:
+        root: The version directory.
+        locators: The signal's chunk locators, in any order.
+        backend_of: Which backend wrote each artifact, from ``values_artifacts``.
+
+    Returns:
+        The signal's values, concatenated back into one array.
+
+    Raises:
+        TimeFFormatError: If a locator names an artifact no backend declared.
+    """  # noqa: DOC502 - raised by _runs_by_backend
+    pieces: list[np.ndarray] = []
+    for backend, run in _runs_by_backend(sorted(locators, key=lambda item: item.chunk_idx), backend_of):
+        if backend == ZARR:
+            from timenet.control_plane.zarr_values import read_chunks as read_zarr_chunks  # noqa: PLC0415
+
+            pieces.append(read_zarr_chunks(root, run))
+        else:
+            pieces.append(read_chunks(root, run))
+    return np.concatenate(pieces) if pieces else np.asarray([])
+
+
+def _runs_by_backend(
+    locators: Sequence[ChunkLocator], backend_of: Mapping[str, str]
+) -> list[tuple[str, list[ChunkLocator]]]:
+    """Split a signal's locators into consecutive runs that share a backend.
+
+    Args:
+        locators: The locators, in chunk order.
+        backend_of: Which backend wrote each artifact.
+
+    Returns:
+        One ``(backend, locators)`` pair per run. A signal normally yields exactly one.
+
+    Raises:
+        TimeFFormatError: If a locator names an artifact no backend declared.
+    """
+    runs: list[tuple[str, list[ChunkLocator]]] = []
+    for locator in locators:
+        backend = backend_of.get(locator.chunk_file)
+        if backend is None:
+            raise TimeFFormatError(f"no backend declared for values artifact {locator.chunk_file!r}")
+        if runs and runs[-1][0] == backend:
+            runs[-1][1].append(locator)
+        else:
+            runs.append((backend, [locator]))
+    return runs
 
 
 def plan_chunks(n_values: int, itemsize: int, chunk_max_bytes: int) -> list[tuple[int, int]]:
@@ -148,6 +275,16 @@ class ValuesPlaneWriter:
     def parts(self) -> list[str]:
         """The relative path of every shard written, in order."""
         return self._parts
+
+    @property
+    def artifacts(self) -> list[tuple[str, str]]:
+        """Every shard a locator may name, tagged with this backend.
+
+        Returns:
+            One ``(chunk_file, 'parquet')`` pair per shard. A Parquet shard is one file, so the
+            artifact list and the file list happen to coincide here; they do not for Zarr.
+        """
+        return [(part, PARQUET) for part in self._parts]
 
     @property
     def value_encoding(self) -> dict[str, str]:
@@ -296,8 +433,8 @@ class _ModalityStream:
                 signal_id=signal_id,
                 chunk_idx=chunk_idx,
                 chunk_file=chunk_file,
-                row_group=row_group,
-                row_offset=row_offset,
+                chunk_major_idx=row_group,
+                chunk_minor_idx=row_offset,
                 n_values=n_values,
             )
             for row_offset, (signal_id, chunk_idx, n_values) in enumerate(self._pending)
@@ -331,7 +468,8 @@ def read_chunks(root: Path, locators: Sequence[ChunkLocator]) -> np.ndarray:
     """Read one signal's values back by locator, one row group at a time.
 
     This is the same access pattern the current values reader uses: open the shard, read the one row
-    group the locator names, and slice the row inside it. Nothing scans a whole file.
+    group ``chunk_major_idx`` names, and slice row ``chunk_minor_idx`` inside it. Nothing scans a
+    whole file.
 
     Args:
         root: The version directory holding the shards.
@@ -339,14 +477,19 @@ def read_chunks(root: Path, locators: Sequence[ChunkLocator]) -> np.ndarray:
 
     Returns:
         The signal's values, concatenated back into one array.
+
+    Raises:
+        TimeFFormatError: If a locator carries no row offset, which no Parquet shard can address.
     """
     pieces: list[np.ndarray] = []
     for locator in sorted(locators, key=lambda item: item.chunk_idx):
+        if locator.chunk_minor_idx is None:
+            raise TimeFFormatError(f"{locator.chunk_file}: a Parquet locator needs a row offset, got none")
         parquet_file = pq.ParquetFile(root / locator.chunk_file)
-        group = parquet_file.read_row_group(locator.row_group, columns=["values"])
+        group = parquet_file.read_row_group(locator.chunk_major_idx, columns=["values"])
         # Take the list scalar's child array rather than as_py(): a Python list of floats would come
         # back as float64 whatever the column's dtype, silently widening a float32 signal.
-        chunk = group.column("values")[locator.row_offset].values
+        chunk = group.column("values")[locator.chunk_minor_idx].values
         pieces.append(chunk.to_numpy(zero_copy_only=False))
     return np.concatenate(pieces) if pieces else np.asarray([])
 

@@ -35,6 +35,19 @@ and ``path`` records the whole ancestry as zero-padded positions (``0000.0001``)
 a prefix match and depth-first display order is ``ORDER BY path``, neither of which needs recursion.
 A materialized path is a liability when a tree gets re-parented; these trees are written once and
 never edited in place, so it is free.
+
+**A chunk locator names an artifact and two integers, not a Parquet row group.** ``signal_chunks``
+used to carry ``(chunk_file, row_group, row_offset)``, which is Parquet vocabulary. A Zarr store has
+no row groups, so that schema could only ever describe one values backend. The columns are now
+``(chunk_file, chunk_major_idx, chunk_minor_idx)`` and the backend that wrote the artifact says what
+they mean: Parquet reads them as a row group and a row inside it, Zarr reads the major index as an
+element offset along the array and leaves the minor index null. Both are still one addressed read.
+
+``values_artifacts`` is the other half. It lists every artifact the values plane wrote and which
+backend wrote it, so a chunk row can be checked against a declared artifact at write time and a
+reader can pick the right backend without a per-chunk tag. It is also why the backend is a property
+of the artifact rather than of the whole version: the reader resolves it once per artifact, which is
+already the granularity it opens files at.
 """
 
 from typing import Final
@@ -128,13 +141,18 @@ CREATE TABLE source_signals (
     position  INTEGER NOT NULL
 );
 
-CREATE TABLE signal_chunks (
-    signal_id  VARCHAR NOT NULL,
-    chunk_idx  INTEGER NOT NULL,
+CREATE TABLE values_artifacts (
     chunk_file VARCHAR NOT NULL,
-    row_group  INTEGER NOT NULL,
-    row_offset BIGINT  NOT NULL,
-    n_values   BIGINT  NOT NULL
+    backend    VARCHAR NOT NULL CHECK (backend IN ('parquet', 'zarr'))
+);
+
+CREATE TABLE signal_chunks (
+    signal_id       VARCHAR NOT NULL,
+    chunk_idx       INTEGER NOT NULL,
+    chunk_file      VARCHAR NOT NULL,
+    chunk_major_idx BIGINT  NOT NULL,
+    chunk_minor_idx BIGINT,
+    n_values        BIGINT  NOT NULL
 );
 
 CREATE TABLE tasks (
@@ -214,6 +232,7 @@ TABLES: Final = (
     "sources",
     "signals",
     "source_signals",
+    "values_artifacts",
     "signal_chunks",
     "tasks",
     "task_items",
@@ -299,6 +318,26 @@ VALIDATIONS: Final = (
     (
         "chunk names a signal that does not exist",
         "SELECT c.signal_id FROM signal_chunks c ANTI JOIN signals g ON g.signal_id = c.signal_id",
+    ),
+    (
+        "duplicate values artifact",
+        "SELECT chunk_file FROM values_artifacts GROUP BY chunk_file HAVING count(*) > 1",
+    ),
+    (
+        "chunk names an artifact the values plane did not declare",
+        "SELECT c.chunk_file FROM signal_chunks c ANTI JOIN values_artifacts a ON a.chunk_file = c.chunk_file",
+    ),
+    # The neutral locator cannot say in its column types that a Parquet chunk needs both indexes and
+    # a Zarr chunk needs only one. The artifact's backend says it instead, once the rows are in.
+    (
+        "parquet chunk without a row offset",
+        "SELECT c.chunk_file FROM signal_chunks c JOIN values_artifacts a ON a.chunk_file = c.chunk_file "
+        "WHERE a.backend = 'parquet' AND c.chunk_minor_idx IS NULL",
+    ),
+    (
+        "zarr chunk with a row offset",
+        "SELECT c.chunk_file FROM signal_chunks c JOIN values_artifacts a ON a.chunk_file = c.chunk_file "
+        "WHERE a.backend = 'zarr' AND c.chunk_minor_idx IS NOT NULL",
     ),
     (
         "task item names a task that does not exist",

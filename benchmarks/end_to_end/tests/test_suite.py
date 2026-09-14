@@ -1,12 +1,15 @@
 """Unit tests for the synthetic corpus and regression calculations."""
 
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
+from benchmarks.end_to_end import corpus
 from benchmarks.end_to_end.benchmark import regression_percent
 from benchmarks.end_to_end.core import MATRIX, capabilities, write_and_fingerprint
 from benchmarks.end_to_end.corpus import build_corpus
+from timenet.dataset.axis import RegularAxis
 
 
 def test_portable_corpus_covers_the_shapes_that_break():
@@ -84,3 +87,27 @@ def test_chunking_does_not_change_the_logical_content(tmp_path: Path):
     first, _ = write_and_fingerprint(tmp_path / "small", small, scale=1)
     second, _ = write_and_fingerprint(tmp_path / "large", large, scale=1)
     assert first == second
+
+
+def test_a_changed_period_changes_the_logical_content(tmp_path: Path, monkeypatch):
+    """The other half of the fingerprint: a writer that halved every period must not print PASS."""
+    case = MATRIX[0]
+    first, _ = write_and_fingerprint(tmp_path / "first", case, scale=1)
+    monkeypatch.setattr(corpus, "FAST", RegularAxis(period_us=Fraction(1_000_000, 250)))
+    second, _ = write_and_fingerprint(tmp_path / "second", case, scale=1)
+    assert first != second
+
+
+@pytest.mark.parametrize("profile", ("portable", "rich"))
+def test_the_two_values_backends_agree_on_logical_content(tmp_path: Path, profile):
+    """What makes the backends interchangeable: same corpus in, same logical content out."""
+    if not capabilities()["zarr"]:
+        pytest.skip("active revision does not support the zarr values backend")
+    if profile == "rich" and not capabilities()["rich"]:
+        pytest.skip("active revision does not support the rich profile")
+    by_backend = {case.values_backend: case for case in MATRIX if case.profile == profile}
+    assert set(by_backend) == {"parquet", "zarr"}
+    digests = {
+        backend: write_and_fingerprint(tmp_path / backend, case, scale=1)[0] for backend, case in by_backend.items()
+    }
+    assert digests["parquet"] == digests["zarr"]

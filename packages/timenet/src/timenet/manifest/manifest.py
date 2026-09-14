@@ -48,6 +48,14 @@ class Manifest:
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
+    values_backend: str = "parquet"
+    """Which backend wrote ``files.time_series``, and therefore how a chunk locator reads.
+
+    The control database says the same thing per artifact in its ``values_artifacts`` table, and
+    that is what the reader dispatches on. This copy is here for the consumer that has only the
+    manifest: it can see that a version needs the ``zarr`` extra, or that a Zarr store's thousands of
+    small files are one logical artifact, before downloading anything. Absent means ``parquet``.
+    """
     value_encoding: dict[str, str] = field(default_factory=dict)
     """``spec_type`` -> the values-column encoding that its shards carry.
 
@@ -103,6 +111,7 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
+            "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
             "build_env": dict(self.build_env),
         }
@@ -139,6 +148,7 @@ class Manifest:
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
+            values_backend=_values_backend(data),
             value_encoding=_dict_block(data, "value_encoding"),
             build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
@@ -162,6 +172,30 @@ class Manifest:
         except json.JSONDecodeError as exc:
             raise TimeNetInvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
         return cls.from_dict(data)
+
+
+def _values_backend(data: dict[str, Any]) -> str:
+    """Read the ``values_backend`` field, defaulting to Parquet when it is absent.
+
+    Args:
+        data: The manifest dict.
+
+    Returns:
+        The backend name.
+
+    Raises:
+        TimeNetInvalidManifestError: If the field is present but is not a known backend.
+    """
+    # Imported here, not at module scope: timenet.control_plane imports this module through its
+    # writer, so a top-level import would close the cycle.
+    from timenet.control_plane.values import VALUES_BACKENDS  # noqa: PLC0415
+
+    backend = data.get("values_backend", "parquet")
+    if backend not in VALUES_BACKENDS:
+        raise TimeNetInvalidManifestError(
+            f"unknown manifest values_backend {backend!r}; known: {', '.join(VALUES_BACKENDS)}"
+        )
+    return backend
 
 
 def _dict_block(data: dict[str, Any], key: str) -> dict:

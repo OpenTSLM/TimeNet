@@ -13,7 +13,7 @@ import duckdb
 import pytest
 
 from timenet.control_plane import TimeFWriter, schema as ddl
-import timenet.control_plane.writer as writer_module
+from timenet.control_plane.values import ValuesPlaneWriter
 from timenet.control_plane.writer import _validate
 from timenet.errors import TimeFValidationError
 from timenet.testing import make_dataset
@@ -33,6 +33,7 @@ def connection(tmp_path):
     connection.execute("INSERT INTO axes VALUES ('a1', 'regular', 2000, 1, 0, NULL, NULL)")
     connection.execute("INSERT INTO specs VALUES ('sp1', 'ECG', 'mV', 'float32', false)")
     connection.execute("INSERT INTO annotations VALUES ('c1', 'patient_sex', 'male', NULL, NULL)")
+    connection.execute("INSERT INTO values_artifacts VALUES ('f.parquet', 'parquet')")
     yield connection
     connection.close()
 
@@ -126,6 +127,44 @@ def test_chunk_naming_a_missing_signal_is_caught(connection):
         _validate(connection)
 
 
+# The locator is backend-neutral, so what a Parquet shard and a Zarr array each need out of it can
+# no longer be said in a column type. These checks say it instead.
+
+
+def test_chunk_naming_an_undeclared_artifact_is_caught(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'never-written.parquet', 0, 0, 10)")
+    with pytest.raises(TimeFValidationError, match="chunk names an artifact the values plane did not declare"):
+        _validate(connection)
+
+
+def test_parquet_chunk_without_a_row_offset_is_caught(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'f.parquet', 0, NULL, 10)")
+    with pytest.raises(TimeFValidationError, match="parquet chunk without a row offset"):
+        _validate(connection)
+
+
+def test_zarr_chunk_with_a_row_offset_is_caught(connection):
+    connection.execute("INSERT INTO values_artifacts VALUES ('time_series.zarr/ecg', 'zarr')")
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'time_series.zarr/ecg', 128, 0, 10)")
+    with pytest.raises(TimeFValidationError, match="zarr chunk with a row offset"):
+        _validate(connection)
+
+
+def test_a_zarr_chunk_needs_only_an_element_offset(connection):
+    connection.execute("INSERT INTO values_artifacts VALUES ('time_series.zarr/ecg', 'zarr')")
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'time_series.zarr/ecg', 128, NULL, 10)")
+    _validate(connection)
+
+
+def test_an_unknown_values_backend_is_refused(connection):
+    with pytest.raises(duckdb.ConstraintException, match="CHECK"):
+        connection.execute("INSERT INTO values_artifacts VALUES ('x', 'hdf5')")
+
+
 def test_signal_length_disagreeing_with_its_chunks_is_caught(connection):
     connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 99, NULL)")
     connection.execute("INSERT INTO signal_chunks VALUES ('sig1', 0, 'f.parquet', 0, 0, 10)")
@@ -210,7 +249,7 @@ def test_staging_is_removed_when_the_write_itself_fails(tmp_path, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("values plane failed")
 
-    monkeypatch.setattr(writer_module.ValuesPlaneWriter, "add", explode)
+    monkeypatch.setattr(ValuesPlaneWriter, "add", explode)
     with pytest.raises(RuntimeError, match="values plane failed"), TimeFWriter(tmp_path, dataset.metadata) as writer:
         writer.write(dataset)
     assert not list(tmp_path.glob("**/*.tmp-*"))

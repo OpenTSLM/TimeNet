@@ -1,4 +1,4 @@
-"""Read a dataset version's control plane with SQL, and its values through the Parquet plane.
+"""Read a dataset version's control plane with SQL, and its values through whichever backend wrote them.
 
 The queries here are the reason for the whole exercise. Reconstructing one task means walking
 ``Task -> Records -> recursive Sources -> Signals -> axis and spec -> annotations at every level``.
@@ -20,7 +20,7 @@ import duckdb
 import numpy as np
 
 from timenet.control_plane import schema as ddl
-from timenet.control_plane.values import ChunkLocator, read_chunks
+from timenet.control_plane.values import ChunkLocator, read_values
 from timenet.errors import TimeFFormatError
 from timenet.format.constants import CONTROL_DB_FILE
 
@@ -298,6 +298,7 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         self._target = str(database) if database is not None else str(self._root / CONTROL_DB_FILE)
         if database is None and not (self._root / CONTROL_DB_FILE).exists():
             raise TimeFFormatError(f"no control database at {self._root / CONTROL_DB_FILE}")
+        self._backends: dict[str, str] | None = None
         self._opened: duckdb.DuckDBPyConnection | None = _connect(self._target)
         version = self.connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         if version is None:
@@ -708,14 +709,30 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         return [
             ChunkLocator(*row)
             for row in self.connection.execute(
-                "SELECT signal_id, chunk_idx, chunk_file, row_group, row_offset, n_values "
+                "SELECT signal_id, chunk_idx, chunk_file, chunk_major_idx, chunk_minor_idx, n_values "
                 "FROM signal_chunks WHERE signal_id = ? ORDER BY chunk_idx",
                 [signal_id],
             ).fetchall()
         ]
 
+    def values_backends(self) -> dict[str, str]:
+        """Return which backend wrote each values artifact.
+
+        A locator's two indexes mean different things per backend, so a reader has to know this
+        before it can follow one. The table is one row per shard or array, not per chunk, and it is
+        read once and kept: dispatching per chunk would cost a lookup on every values read.
+
+        Returns:
+            A mapping from artifact path to backend name.
+        """
+        if self._backends is None:
+            self._backends = dict(
+                self.connection.execute("SELECT chunk_file, backend FROM values_artifacts").fetchall()
+            )
+        return self._backends
+
     def values(self, signal_id: str) -> np.ndarray:
-        """Read one signal's values out of the Parquet values plane.
+        """Read one signal's values out of the values plane, whichever backend wrote it.
 
         Args:
             signal_id: The signal.
@@ -723,7 +740,7 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         Returns:
             The signal's values.
         """
-        return read_chunks(self._root, self.chunk_locators(signal_id))
+        return read_values(self._root, self.chunk_locators(signal_id), self.values_backends())
 
 
 _REMOTE_SCHEMES = ("http://", "https://", "s3://", "gs://", "az://")
