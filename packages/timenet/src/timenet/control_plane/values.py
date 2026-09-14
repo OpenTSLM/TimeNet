@@ -171,6 +171,46 @@ def read_values(root: Path, locators: Sequence[ChunkLocator], backend_of: Mappin
     return np.concatenate(pieces) if pieces else np.asarray([])
 
 
+def read_many_values(
+    root: Path, locators: Sequence[ChunkLocator], backend_of: Mapping[str, str]
+) -> dict[int, np.ndarray]:
+    """Read many signals' values in one pass, sending each artifact to the backend that wrote it.
+
+    Args:
+        root: The version directory.
+        locators: Chunk locators for any number of signals, in any order.
+        backend_of: Which backend wrote each artifact, from ``values_artifacts``.
+
+    Returns:
+        Each signal's values, keyed by signal id.
+
+    Raises:
+        TimeFFormatError: If a locator names an artifact no backend declared.
+    """
+    grouped: dict[str, list[ChunkLocator]] = {}
+    for locator in locators:
+        backend = backend_of.get(locator.chunk_file)
+        if backend is None:
+            raise TimeFFormatError(f"no backend declared for values artifact {locator.chunk_file!r}")
+        grouped.setdefault(backend, []).append(locator)
+
+    found: dict[int, np.ndarray] = {}
+    for backend, run in grouped.items():
+        if backend == ZARR:
+            # Zarr addresses an element offset along one array, so there is no row group to share.
+            # Each signal is still one addressed read; only the Parquet path gains from grouping.
+            from timenet.control_plane.zarr_values import read_chunks as read_zarr_chunks  # noqa: PLC0415
+
+            by_signal: dict[int, list[ChunkLocator]] = {}
+            for locator in run:
+                by_signal.setdefault(locator.signal_id, []).append(locator)
+            for signal_id, signal_locators in by_signal.items():
+                found[signal_id] = read_zarr_chunks(root, sorted(signal_locators, key=lambda it: it.chunk_idx))
+        else:
+            found.update(read_many_chunks(root, run))
+    return found
+
+
 def _runs_by_backend(
     locators: Sequence[ChunkLocator], backend_of: Mapping[str, str]
 ) -> list[tuple[str, list[ChunkLocator]]]:
@@ -516,6 +556,49 @@ class _ModalityStream:
             if not encodings.applied_matches(encoding, applied):
                 raise TimeFValidationError(f"{part}: asked for {encoding}, Parquet applied {sorted(applied)}")
         return locators
+
+
+def read_many_chunks(root: Path, locators: Sequence[ChunkLocator]) -> dict[int, np.ndarray]:
+    """Read many signals' values, touching each row group once however many signals it holds.
+
+    Reading signal by signal re-opens the shard and re-reads the row group for every signal, which
+    is the wrong shape as soon as a caller wants a batch: a series shared by several records is read
+    once per use, and neighbouring signals almost always sit in the row group just decoded. Grouping
+    the locators by ``(artifact, row group)`` first turns that into one read per row group.
+
+    Args:
+        root: The version directory holding the shards.
+        locators: Chunk locators for any number of signals, in any order.
+
+    Returns:
+        Each signal's values, keyed by signal id and concatenated back in chunk order.
+
+    Raises:
+        TimeFFormatError: If a locator carries no row offset, which no Parquet shard can address.
+    """
+    by_group: dict[tuple[str, int], list[ChunkLocator]] = {}
+    for locator in locators:
+        if locator.chunk_minor_idx is None:
+            raise TimeFFormatError(f"{locator.chunk_file}: a Parquet locator needs a row offset, got none")
+        by_group.setdefault((locator.chunk_file, locator.chunk_major_idx), []).append(locator)
+
+    pieces: dict[int, list[tuple[int, np.ndarray]]] = {}
+    open_files: dict[str, pq.ParquetFile] = {}
+    for (chunk_file, row_group), group_locators in sorted(by_group.items()):
+        parquet_file = open_files.get(chunk_file)
+        if parquet_file is None:
+            parquet_file = pq.ParquetFile(root / chunk_file)
+            open_files[chunk_file] = parquet_file
+        column = parquet_file.read_row_group(row_group, columns=["values"]).column("values")
+        for locator in group_locators:
+            # The list scalar's child array, not as_py(): a Python list of floats would come back as
+            # float64 whatever the column's dtype, silently widening a float32 signal.
+            chunk = column[locator.chunk_minor_idx].values.to_numpy(zero_copy_only=False)
+            pieces.setdefault(locator.signal_id, []).append((locator.chunk_idx, chunk))
+    return {
+        signal_id: np.concatenate([chunk for _, chunk in sorted(parts)]) if len(parts) > 1 else parts[0][1]
+        for signal_id, parts in pieces.items()
+    }
 
 
 def read_chunks(root: Path, locators: Sequence[ChunkLocator]) -> np.ndarray:

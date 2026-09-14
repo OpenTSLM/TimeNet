@@ -25,7 +25,7 @@ import duckdb
 import numpy as np
 
 from timenet.control_plane import schema as ddl
-from timenet.control_plane.values import ChunkLocator, read_values
+from timenet.control_plane.values import ChunkLocator, read_many_values, read_values
 from timenet.errors import TimeFFormatError
 from timenet.format.constants import CONTROL_DB_FILE
 
@@ -330,6 +330,17 @@ FROM signal_chunks c
 JOIN values_artifacts va ON va.artifact_id = c.artifact_id
 WHERE c.signal_id = ?
 ORDER BY c.chunk_idx
+"""
+
+# The same locators for a batch of signals: one query however many are asked for. Ordering by
+# artifact and row group hands the values plane its work already grouped, so it opens each shard
+# once and decodes each row group once.
+_BATCH_CHUNK_LOCATORS = """
+SELECT c.signal_id, c.chunk_idx, va.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values
+FROM signal_chunks c
+JOIN values_artifacts va ON va.artifact_id = c.artifact_id
+WHERE c.signal_id IN (SELECT unnest(?))
+ORDER BY va.chunk_file, c.chunk_major_idx, c.chunk_minor_idx
 """
 
 
@@ -831,6 +842,29 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             The signal's values.
         """
         return read_values(self._root, self.chunk_locators(signal_id), self.values_backends())
+
+    def values_for(self, signal_ids: Sequence[int]) -> dict[int, np.ndarray]:
+        """Read many signals' values in one pass over the values plane.
+
+        Calling :meth:`values` per signal is the slow way round, for the same reason calling
+        :meth:`record` per record is: it re-opens the shard and re-decodes the row group for every
+        signal, so a series shared by several records is decoded once per use and neighbouring
+        signals in the row group just decoded are decoded again. This asks for the locators of every
+        wanted signal in one query and hands them to the values plane grouped by row group, so each
+        row group is decoded once.
+
+        Args:
+            signal_ids: The signals to read, as :class:`SignalView` carries them. Ids naming no
+                signal are skipped.
+
+        Returns:
+            Each signal's values, keyed by signal id.
+        """
+        wanted = list(signal_ids)
+        if not wanted:
+            return {}
+        locators = [ChunkLocator(*row) for row in self.connection.execute(_BATCH_CHUNK_LOCATORS, [wanted]).fetchall()]
+        return read_many_values(self._root, locators, self.values_backends())
 
 
 _REMOTE_SCHEMES = ("http://", "https://", "s3://", "gs://", "az://")
