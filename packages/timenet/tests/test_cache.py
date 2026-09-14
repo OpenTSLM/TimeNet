@@ -1,8 +1,8 @@
 import pytest
 
 from timenet.cache import cached_datasets, clear_cache, human_bytes
+from timenet.control_plane import TimeFWriter
 from timenet.testing import make_dataset
-from timenet.writer import TimeFWriter
 
 
 @pytest.fixture(autouse=True)
@@ -14,10 +14,9 @@ def _home(tmp_path, monkeypatch):
 
 
 def _write(root):
-    dataset = make_dataset()
-    dataset.derive_schema()
-    with TimeFWriter(root, dataset) as writer:
-        writer.write()
+    dataset = make_dataset(n_records=1, n_values=64)
+    with TimeFWriter(root, dataset.metadata) as writer:
+        writer.write(dataset)
 
 
 @pytest.mark.parametrize(
@@ -42,8 +41,8 @@ def test_cached_datasets_lists_registry_and_storage(_home):
     _write(_home / "storage")
     cached = cached_datasets()
     locations = {(c.location, c.dataset_id, c.version) for c in cached}
-    assert ("registry", "timenet/hello-world", "1.0.0") in locations
-    assert ("storage", "timenet/hello-world", "1.0.0") in locations
+    assert ("registry", "test/bedside", "1.0.0") in locations
+    assert ("storage", "test/bedside", "1.0.0") in locations
     assert all(c.size_bytes > 0 for c in cached)
 
 

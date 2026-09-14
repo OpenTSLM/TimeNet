@@ -6,9 +6,9 @@ Sources for the concept figures in the docs. Two kinds, handled differently.
 
 `gen_concept_figures.py` draws the schematic concept figures (one plain signal plus the minimum marks
 that explain a span, a point, or an input-to-output arrow) and writes them to `../assets/figures/*.svg`.
-They carry no domain detail; that lives in the page HTML around each image. Those SVGs are committed and
-referenced from the doc pages. This is **not** wired into `make docs`; regenerate by hand when the
-concepts change:
+They carry no domain detail; that lives in the page HTML around each image. Those SVGs are committed,
+and the data-model pages reference the ones they need. This is **not** wired into `make docs`;
+regenerate by hand when the concepts change:
 
 ```bash
 uv run docs/scripts/gen_concept_figures.py

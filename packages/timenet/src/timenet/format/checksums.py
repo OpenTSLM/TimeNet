@@ -1,7 +1,8 @@
-"""File checksums recorded in the manifest and verified on read.
+"""File checksums recorded in the manifest and verified on download.
 
-The reader must hash files the same way the writer did, or :meth:`~timenet.reader.TimeFReader.verify`
-means nothing. The algorithm and the block size live here so both sides call the same code.
+A download must hash files the same way the writer did, or the check in
+:mod:`timenet.registry.remote` means nothing. The algorithm and the block size live here so both
+sides call the same code.
 """
 
 import hashlib

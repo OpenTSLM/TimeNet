@@ -26,7 +26,6 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 
 @dataclass(frozen=True)
@@ -49,8 +48,6 @@ class Manifest:
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    values_backend: str = ValuesBackend.PARQUET
-    """Storage backend for the time-series values plane."""
     value_encoding: dict[str, str] = field(default_factory=dict)
     """``spec_type`` -> the values-column encoding that its shards carry.
 
@@ -68,7 +65,7 @@ class Manifest:
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
-        """Validate the format version, the values backend, and the denormalized ``dataset_id``.
+        """Validate the format version and the denormalized ``dataset_id``.
 
         ``dataset_id`` is a top-level copy of ``metadata.dataset_id``, so a consumer can read the id
         without parsing the metadata block. The two values must match.
@@ -84,11 +81,6 @@ class Manifest:
             raise TimeNetInvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
-            )
-        if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
-            raise TimeNetInvalidManifestError(
-                f"unsupported values_backend {self.values_backend!r}; "
-                f"supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
             )
         if self.dataset_id != self.metadata.dataset_id:
             raise TimeNetInvalidManifestError(
@@ -111,7 +103,6 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
-            "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
             "build_env": dict(self.build_env),
         }
@@ -148,7 +139,6 @@ class Manifest:
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
-            values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
             build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
@@ -346,6 +336,7 @@ def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
         "annotations": [_part_to_dict(part) for part in files.annotations],
         "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
         "tasks": [_part_to_dict(part) for part in files.tasks],
+        "control_db": _part_to_dict(files.control_db) if files.control_db is not None else None,
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
 
@@ -356,11 +347,15 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
+        # Inside the try: a null 'files' block must surface as an invalid-manifest error, not as a
+        # raw AttributeError from .get on None.
+        control = data.get("control_db")
         return ManifestFiles(
-            records=_parts(data["records"], "records"),
-            annotations=_parts(data["annotations"], "annotations"),
-            time_series_index=_parts(data["time_series_index"], "time_series_index"),
+            records=_parts(data.get("records", ()), "records"),
+            annotations=_parts(data.get("annotations", ()), "annotations"),
+            time_series_index=_parts(data.get("time_series_index", ()), "time_series_index"),
             tasks=_parts(data.get("tasks", ()), "tasks"),
+            control_db=_part_from_dict(control, "control_db") if control is not None else None,
             time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:

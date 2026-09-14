@@ -2,23 +2,23 @@ from pathlib import Path
 
 from _fake_registry import build_fake, build_publish_fake
 import httpx
+import numpy as np
 import pytest
 
 from timenet.client import TimeNet
+from timenet.control_plane import TimeFWriter
 from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
-from timenet.testing import assert_datasets_equal, make_dataset
+from timenet.testing import make_dataset
 from timenet.types import Access, Domain, License
-from timenet.writer import TimeFWriter
 
 
 @pytest.fixture
 def version_dir(tmp_path) -> tuple[Path, Manifest]:
-    dataset = make_dataset()
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path, dataset) as writer:
-        writer.write()
+    dataset = make_dataset(n_records=2, n_values=64)
+    with TimeFWriter(tmp_path, dataset.metadata) as writer:
+        writer.write(dataset)
     manifest = Manifest.from_json(next(tmp_path.rglob("manifest.json")).read_text())
     return next(tmp_path.rglob("manifest.json")).parent, manifest
 
@@ -163,18 +163,24 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_load_full_round_trips(version_dir, tmp_path):
+def test_open_full_round_trips(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
-    assert_datasets_equal(make_dataset(), loaded)
+    source = make_dataset(n_records=2, n_values=64)
+    # a remote open materializes the version, then reads the control plane locally
+    with client.open(manifest.metadata.dataset_id) as reader:
+        assert reader.record_ids() == sorted(record.id for record in source.records)
+        assert reader.task_ids() == sorted(task.id for task in source.tasks)
+        for record in source.records:
+            for signal in record.signals():
+                np.testing.assert_array_equal(reader.values(signal.id), signal.values)
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):
     transport, state = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
-    dataset = make_dataset()
+    dataset = make_dataset(n_records=1, n_values=64)
     version = registry.store(dataset)
     assert version == str(dataset.metadata.dataset_version)
     assert state["finalized"] is True
@@ -183,8 +189,6 @@ def test_store_publishes_uploads_and_finalizes(tmp_path):
 
 
 def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
-    import httpx  # noqa: PLC0415
-
     def handler(request):
         # The service omits every declared file from its upload list. store() must reject that before
         # uploading, rather than publish an incomplete version.
@@ -196,12 +200,12 @@ def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
-        registry.store(make_dataset(), force=True)
+        registry.store(make_dataset(n_records=1, n_values=64), force=True)
 
 
 def test_remote_registry_uses_client_storage_path(tmp_path):
     # A URL-configured remote registry must cache under the client's storage_path, so download() and
-    # load() share one cache-first directory.
+    # open() share one cache-first directory.
     client = TimeNet(registry="https://registry.example.test", storage_path=tmp_path / "store")
     assert isinstance(client._registry, RemoteRegistry)
     assert client._registry._cache_dir == client._storage == tmp_path / "store"
@@ -211,4 +215,4 @@ def test_store_without_write_token_is_rejected(tmp_path):
     transport, _ = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
     with pytest.raises(TimeNetRegistryError):
-        registry.store(make_dataset())
+        registry.store(make_dataset(n_records=1, n_values=64))

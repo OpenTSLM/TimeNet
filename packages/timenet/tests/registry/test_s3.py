@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 
@@ -10,7 +11,22 @@ import pyarrow.fs as pafs  # noqa: E402
 from timenet.client import TimeNet  # noqa: E402
 from timenet.errors import TimeNetRegistryError  # noqa: E402
 from timenet.registry import S3Registry  # noqa: E402
-from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
+from timenet.testing import make_dataset  # noqa: E402
+
+
+def _source():
+    return make_dataset(n_records=1, n_values=64)
+
+
+def _assert_round_trip(reader, source) -> None:
+    """The control plane gave back every record, task and signal that was stored."""
+    assert reader.record_ids() == sorted(record.id for record in source.records)
+    assert reader.task_ids() == sorted(task.id for task in source.tasks)
+    for record in source.records:
+        view = reader.record(record.id)
+        assert [signal.signal_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+        for signal in record.signals():
+            np.testing.assert_array_equal(reader.values(signal.id), signal.values)
 
 
 @pytest.fixture
@@ -37,35 +53,49 @@ def s3_root(monkeypatch):
     server.stop()
 
 
-def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
+def test_store_and_round_trip(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = registry.store(make_dataset())
-    assert version == str(make_dataset().metadata.dataset_version)
+    source = _source()
+    assert registry.store(source) == str(source.metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)  # lazy S3 range reads
-    assert_datasets_equal(make_dataset(), loaded)
+    client.download(source.metadata.dataset_id)
+    with client.open(source.metadata.dataset_id) as reader:
+        _assert_round_trip(reader, source)
+
+
+def test_an_uncached_version_opens_straight_from_s3(s3_root, tmp_path):
+    # Nothing is in the cache yet, so the handle points at the objects themselves rather than a
+    # downloaded copy: pyarrow serves it with range reads, no whole-version fetch.
+    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
+    source = _source()
+    registry.store(source)
+    handle = registry.open_version(source.metadata.dataset_id)
+    assert isinstance(handle.filesystem, pafs.S3FileSystem)
+    assert handle.root.startswith("tn-test/registry/datasets/")
 
 
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     # Keys sit under <prefix>/datasets/... so the bucket matches the hosted registry's layout and can
     # hold other top-level prefixes beside the datasets.
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    registry.store(make_dataset())
+    registry.store(_source())
     keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test")["Contents"]]
     assert keys  # something was stored
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
-def test_download_then_load_serves_from_cache(s3_root, tmp_path):
+def test_download_then_open_serves_from_cache(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    dataset_id = make_dataset().metadata.dataset_id
-    registry.store(make_dataset())
+    source = _source()
+    dataset_id = source.metadata.dataset_id
+    registry.store(source)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
     assert (path / "manifest.json").exists()
     handle = registry.open_version(dataset_id)
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
-    assert_datasets_equal(make_dataset(), client.load(dataset_id))
+    with client.open(dataset_id) as reader:
+        _assert_round_trip(reader, source)
 
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):

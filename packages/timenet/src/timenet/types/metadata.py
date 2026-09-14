@@ -184,9 +184,9 @@ class DatasetMetadata:
 
         This method validates the card against the packaged ``dataset-card.schema.json`` before
         construction. Authoring mistakes then surface as clear, aggregated messages instead of a stack
-        trace from deep inside coercion. PyYAML and jsonschema are optional. This method imports them
-        lazily, so the types package does not depend on them. Install the ``timenet[build]`` extra
-        to use this.
+        trace from deep inside coercion. PyYAML and jsonschema are neither core dependencies nor part
+        of any extra. This method imports them lazily, so the types package does not depend on them.
+        Install them to use this.
 
         Args:
             path: Path to the card YAML file.
@@ -195,8 +195,8 @@ class DatasetMetadata:
             The constructed :class:`DatasetMetadata`.
 
         Raises:
-            TimeNetInvalidCardError: If the build extra is missing, or the card is unreadable, is not a
-                mapping, fails schema validation, or has an invalid field value.
+            TimeNetInvalidCardError: If PyYAML or jsonschema is not installed, or the card is
+                unreadable, is not a mapping, fails schema validation, or has an invalid field value.
         """
         from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
 
@@ -206,7 +206,8 @@ class DatasetMetadata:
             import yaml  # noqa: PLC0415
         except ModuleNotFoundError as exc:
             raise TimeNetInvalidCardError(
-                "reading a dataset card needs PyYAML and jsonschema; install the 'timenet[build]' extra"
+                "reading a dataset card needs PyYAML and jsonschema; install them with "
+                "`uv pip install pyyaml jsonschema`"
             ) from exc
 
         from timenet.schemas import DATASET_CARD_SCHEMA  # noqa: PLC0415

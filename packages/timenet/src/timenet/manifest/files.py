@@ -25,30 +25,39 @@ class ManifestFiles:
     """Descriptors for every artifact of a dataset version, grouped by kind. Readers use this data, not a glob.
 
     Each artifact is a list of parts. This lets any artifact shard later without a change to the
-    manifest format. Today the writer creates one part for ``records``, ``annotations``, and
-    ``time_series_index``. ``tasks`` and ``time_series`` already have several parts. Each part is a
-    :class:`FilePart` object, with its own path, checksum, and size.
+    manifest format. The writer fills ``control_db`` with the control database and ``time_series``
+    with the values plane's parts; the four Parquet control-table tuples that the database replaces
+    stay empty. Each part is a :class:`FilePart` object, with its own path, checksum, and size.
     """
 
-    records: tuple[FilePart, ...]
+    records: tuple[FilePart, ...] = ()
     """Parts of the records table."""
-    annotations: tuple[FilePart, ...]
+    annotations: tuple[FilePart, ...] = ()
     """Parts of the annotations table."""
-    time_series_index: tuple[FilePart, ...]
+    time_series_index: tuple[FilePart, ...] = ()
     """Parts of the time series index table."""
     tasks: tuple[FilePart, ...] = ()
     """Parts of the task tables. There is one table for each task type."""
     time_series: tuple[FilePart, ...] = ()
     """Parts of the time series data. Each part is also a shard."""
+    control_db: FilePart | None = None
+    """The DuckDB control-plane database, when the version stores its control plane that way.
+
+    A version carries either the sharded control tables above or this single file, never both. The
+    file holds every control-plane entity (records, sources, signals, tasks, annotations) in one
+    embedded database. It is one part, not a tuple, because the database does its own paging: it
+    never shards.
+    """
 
     def all_files(self) -> tuple[FilePart, ...]:
         """Return every file descriptor across all artifacts, in a stable order.
 
         Returns:
-            The parts of ``records``, ``annotations``, ``time_series_index``, ``tasks``, and
-            ``time_series``, joined into one tuple.
+            The parts of ``records``, ``annotations``, ``time_series_index``, ``tasks``,
+            ``control_db``, and ``time_series``, joined into one tuple.
         """
-        return (*self.records, *self.annotations, *self.time_series_index, *self.tasks, *self.time_series)
+        control = (self.control_db,) if self.control_db is not None else ()
+        return (*self.records, *self.annotations, *self.time_series_index, *self.tasks, *control, *self.time_series)
 
     def all_parts(self) -> tuple[str, ...]:
         """Return the version-relative path of every file, in the same order as :meth:`all_files`.

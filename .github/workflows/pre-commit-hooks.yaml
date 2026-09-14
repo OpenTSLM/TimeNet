@@ -77,12 +77,6 @@ jobs:
       id: pytest
       continue-on-error: true
       run: make test
-    - name: Test connectors in per-connector environments
-      # Each connector's tests and type-check run in an environment built from its own
-      # requirements.txt, the same way a build runs.
-      id: connectors
-      continue-on-error: true
-      run: make test-connectors
     - name: Check dependency licenses
       id: license
       continue-on-error: true
@@ -90,7 +84,6 @@ jobs:
     - name: Fail if any check failed
       if: >-
         steps.pytest.outcome == 'failure'
-        || steps.connectors.outcome == 'failure'
         || steps.license.outcome == 'failure'
       run: exit 1
 

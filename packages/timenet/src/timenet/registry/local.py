@@ -1,20 +1,18 @@
 """A registry backed by a local ``<root>/<dataset_id>/<version>/`` directory tree."""
 
-from collections.abc import Callable
 from pathlib import Path
 import shutil
 from typing import BinaryIO
 
 import pyarrow.fs as pafs
 
-from timenet.dataset import TimeFDataset
+from timenet.control_plane import DeclarativeDataset, TimeFWriter
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version, validate_dataset_id
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
@@ -84,7 +82,7 @@ class LocalRegistry(WritableRegistry):
             known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
             raise TimeNetDatasetNotFoundError(
                 f"no committed version for dataset {dataset_id!r}; this registry has: {known}. "
-                "Build one with `timenet-build build <id>`."
+                "Write one into this registry with `store()`."
             )
         path = self._dataset_dir(dataset_id) / resolved / MANIFEST_FILE
         if not path.exists():
@@ -126,31 +124,20 @@ class LocalRegistry(WritableRegistry):
             raise ValueError(f"relpath {relpath!r} escapes dataset {dataset_id!r} version {version!r}")
         return target.open("rb")
 
-    def store(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    ) -> str:
+    def store(self, dataset: DeclarativeDataset, *, force: bool = False) -> str:
         """Compile a dataset and write it into this registry's directory tree.
 
-        Stream the dataset through a :class:`~timenet.writer.TimeFWriter`. The writer stages under
-        ``<version>.tmp-*`` and publishes with a single atomic rename. It skips an already-committed
-        version unless the caller sets ``force``.
+        The writer stages under ``<version>.tmp-*`` and publishes with one atomic rename, so an
+        interrupted build never leaves a half-written version behind.
 
         Args:
-            dataset: The populated dataset to store.
+            dataset: The populated dataset to store. Its metadata names the id and version.
             force: Overwrite an already-committed version instead of skipping it.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
 
         Returns:
             The stored version string.
+
         """
-        if dataset.schema is None:
-            dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)
         dataset_id = dataset.metadata.dataset_id
         # _dataset_dir validates the id. This rejects any ``..`` that would let the write or the
@@ -160,8 +147,8 @@ class LocalRegistry(WritableRegistry):
             return version
         if force and final_dir.exists():
             shutil.rmtree(final_dir)
-        with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
-            writer.write()
+        with TimeFWriter(self._root, dataset.metadata) as writer:
+            writer.write(dataset)
         return version
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:

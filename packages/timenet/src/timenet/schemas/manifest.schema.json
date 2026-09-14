@@ -207,14 +207,18 @@
     },
     "files": {
       "type": "object",
-      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["records", "annotations", "time_series_index"],
+      "description": "File descriptors, grouped by kind. 'control_db' is a single part or null; every other artifact is a list of parts, never a bare string. A version carries either 'control_db' or the Parquet control tables it replaces, so the side it does not use is present and empty rather than absent.",
+      "required": ["records", "annotations", "time_series_index", "tasks", "control_db", "time_series"],
       "properties": {
-        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
+        "control_db": {
+          "oneOf": [{ "$ref": "#/$defs/filePart" }, { "type": "null" }],
+          "description": "The DuckDB database holding the whole control plane: records, sources, signals, axes, tasks and annotations. One part rather than a list, because the database pages itself and never shards. Null for a version that stores its control plane in the Parquet tables below instead."
+        },
+        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" }, "description": "Parts of the records table. Empty when 'control_db' names a database." },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" }, "description": "Parts of the annotations table. Empty when 'control_db' names a database." },
+        "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" }, "description": "Parts of the time-series index table. Empty when 'control_db' names a database." },
+        "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" }, "description": "Parts of the task tables, one table per task type. Empty when 'control_db' names a database." },
+        "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" }, "description": "Parts of the values plane. Each part is one shard, read through the chunk locators." }
       }
     },
     "filePart": {

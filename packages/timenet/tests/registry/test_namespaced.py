@@ -1,58 +1,34 @@
-from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import RegularAxis
-from timenet.reader import TimeFReader
+import dataclasses
+
+import numpy as np
+
+from timenet.control_plane import DeclarativeDataset, TimeFReader, TimeFWriter
 from timenet.registry import DatasetVersion, LocalRegistry
-from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
-from timenet.types import (
-    ClassificationTask,
-    DatasetMetadata,
-    License,
-    TimeSeriesSpec,
-    Version,
-    ureg,
-)
-from timenet.writer import TimeFWriter
+from timenet.testing import make_dataset, make_metadata
+from timenet.types import License
 
 
-def _namespaced_dataset() -> TimeFDataset:
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="ChengsenWang/TSQA",
-            dataset_version=Version(1, 0, 0),
-            name="TSQA",
-            description="A namespaced dataset.",
-            license=License.APACHE_2_0,
-        )
+def _namespaced_dataset() -> DeclarativeDataset:
+    dataset = make_dataset(n_records=1, n_values=8)
+    dataset.metadata = dataclasses.replace(
+        make_metadata(dataset_id="ChengsenWang/TSQA"),
+        name="TSQA",
+        description="A namespaced dataset.",
+        license=License.APACHE_2_0,
     )
-    spec = TimeSeriesSpec(
-        spec_type="tsqa_series",
-        name="Series",
-        unit_value=ureg.dimensionless,
-    )
-    series = TimeSeries(
-        spec=spec,
-        signal="v",
-        time_axis=RegularAxis.from_rate_hz(1),
-        loader=sine_loader(n=8, sampling_rate_hz=1.0),
-        time_series_id="ns-ts-0",
-        n_values=8,
-    )
-    record = dataset.add_record(time_series=(series,), record_id="ns-record-0")
-    dataset.add_task(record, ClassificationTask(target="x", id="ns-task-0"))
     return dataset
 
 
 def _write(root, dataset):
-    dataset.derive_schema()
-    with TimeFWriter(root, dataset) as writer:
-        writer.write()
+    with TimeFWriter(root, dataset.metadata) as writer:
+        writer.write(dataset)
 
 
 def test_list_datasets_finds_multiple_namespaced(tmp_path):
-    _write(tmp_path, make_dataset())  # namespaced id: timenet/hello-world
+    _write(tmp_path, make_dataset(n_records=1, n_values=8))  # namespaced id: test/bedside
     _write(tmp_path, _namespaced_dataset())  # namespaced id: ChengsenWang/TSQA
     ids = {m.dataset_id for m in LocalRegistry(tmp_path).list_datasets()}
-    assert ids == {"timenet/hello-world", "ChengsenWang/TSQA"}
+    assert ids == {"test/bedside", "ChengsenWang/TSQA"}
 
 
 def test_get_manifest_and_open_file_namespaced(tmp_path):
@@ -69,8 +45,14 @@ def test_namespaced_round_trip(tmp_path):
     _write(tmp_path, _namespaced_dataset())
     version_dir = tmp_path / "ChengsenWang" / "TSQA" / "1.0.0"
     assert version_dir.exists()
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert_datasets_equal(original, reader.read())
+    with TimeFReader.open_version(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader.record_ids() == sorted(record.id for record in original.records)
+        assert reader.task_ids() == sorted(task.id for task in original.tasks)
+        for record in original.records:
+            view = reader.record(record.id)
+            assert [signal.signal_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+            for signal in record.signals():
+                np.testing.assert_array_equal(reader.values(signal.id), signal.values)
 
 
 def test_cache_dir_is_ignored_by_list(tmp_path):

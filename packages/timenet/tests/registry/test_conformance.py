@@ -13,47 +13,34 @@ import uuid
 from _fake_registry import build_service_fake
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import RegularAxis
+from timenet.control_plane import DeclarativeDataset
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
-from timenet.testing import make_dataset, sine_loader
-from timenet.types import (
-    Annotation,
-    ClassificationTask,
-    DatasetMetadata,
-    Domain,
-    License,
-    TimeSeriesSpec,
-    Version,
-    ureg,
-)
+from timenet.testing import make_dataset, make_metadata
+from timenet.types import Domain, License, Version
 
 
-def _second_dataset() -> TimeFDataset:
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="demo/other",
-            dataset_version=Version(1, 1, 0),
-            name="Other Dataset",
-            description="A second small dataset.",
-            license=License.MIT,
-            domains=(Domain.CARDIOLOGY,),
-            tags=("clinical",),
-        )
+DATASET_ID = "test/bedside"
+
+
+def _dataset(**metadata_updates) -> DeclarativeDataset:
+    """A small dataset whose metadata the caller can override field by field."""
+    dataset = make_dataset(n_records=1, n_values=64)
+    dataset.metadata = dataclasses.replace(dataset.metadata, **metadata_updates)
+    return dataset
+
+
+def _second_dataset() -> DeclarativeDataset:
+    dataset = make_dataset(n_records=1, n_values=64)
+    dataset.metadata = dataclasses.replace(
+        make_metadata(dataset_id="demo/other"),
+        dataset_version=Version(1, 1, 0),
+        name="Other Dataset",
+        description="A second small dataset.",
+        license=License.MIT,
+        domains=(Domain.CARDIOLOGY,),
+        tags=("clinical",),
     )
-    spec = TimeSeriesSpec(spec_type="ecg_lead", name="ECG Lead", unit_value=ureg.millivolt)
-    series = TimeSeries(
-        spec=spec,
-        signal="II",
-        time_axis=RegularAxis.from_rate_hz(16),
-        loader=sine_loader(n=16, sampling_rate_hz=16.0),
-        time_series_id="other-ts-0",
-        n_values=16,
-    )
-    record = dataset.add_record(time_series=(series,), record_id="other-record-0")
-    record.add_annotation(Annotation(key="age", value=70, unit="years", id="other-age-0"))
-    dataset.add_task(record, ClassificationTask(target="afib", id="other-task-0"))
     return dataset
 
 
@@ -95,7 +82,7 @@ def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
 def backend(request, tmp_path, monkeypatch) -> Backend:
     """A writable registry of the requested kind, seeded via ``store``.
 
-    Holds timenet/hello-world at 1.0.0 and 1.1.0 (so latest-resolution has a real choice) plus a
+    Holds test/bedside at 1.0.0 and 1.1.0 (so latest-resolution has a real choice) plus a
     second dataset demo/other, so listing has more than one id to sort.
     """
     kind = request.param
@@ -111,9 +98,8 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
     else:
         registry = _s3_registry(request, tmp_path, monkeypatch)
         supports_listing = False
-    newer = make_dataset()
-    newer._metadata = dataclasses.replace(newer.metadata, dataset_version=Version(1, 1, 0))
-    for dataset in (make_dataset(), newer, _second_dataset()):
+    newer = _dataset(dataset_version=Version(1, 1, 0))
+    for dataset in (_dataset(), newer, _second_dataset()):
         registry.store(dataset)
     return Backend(registry=registry, supports_listing=supports_listing)
 
@@ -123,14 +109,14 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
 
 @pytest.mark.parametrize("version", [None, "", "latest"])
 def test_get_manifest_resolves_latest(backend, version):
-    # hello-world has 1.0.0 and 1.1.0; the sentinels must resolve to the newest.
-    manifest = backend.registry.get_manifest("timenet/hello-world", version)
-    assert manifest.metadata.dataset_id == "timenet/hello-world"
+    # test/bedside has 1.0.0 and 1.1.0; the sentinels must resolve to the newest.
+    manifest = backend.registry.get_manifest(DATASET_ID, version)
+    assert manifest.metadata.dataset_id == DATASET_ID
     assert str(manifest.metadata.dataset_version) == "1.1.0"
 
 
 def test_get_manifest_pins_an_explicit_version(backend):
-    manifest = backend.registry.get_manifest("timenet/hello-world", "1.0.0")
+    manifest = backend.registry.get_manifest(DATASET_ID, "1.0.0")
     assert str(manifest.metadata.dataset_version) == "1.0.0"  # the older version is still addressable
 
 
@@ -141,16 +127,16 @@ def test_get_manifest_unknown_id_raises(backend):
 
 def test_get_manifest_unknown_version_raises(backend):
     with pytest.raises(TimeNetDatasetNotFoundError):
-        backend.registry.get_manifest("timenet/hello-world", "9.9.9")
+        backend.registry.get_manifest(DATASET_ID, "9.9.9")
 
 
 # ---- open_file --------------------------------------------------------------------------------
 
 
 def test_open_file_reads_a_manifest_part(backend):
-    manifest = backend.registry.get_manifest("timenet/hello-world")
+    manifest = backend.registry.get_manifest(DATASET_ID)
     relpath = manifest.files.all_parts()[0]
-    with backend.registry.open_file("timenet/hello-world", "1.0.0", relpath) as handle:
+    with backend.registry.open_file(DATASET_ID, "1.0.0", relpath) as handle:
         assert handle.read()  # a real, non-empty binary stream
 
 
@@ -158,27 +144,35 @@ def test_open_file_rejects_traversal(backend):
     # LocalRegistry guards up front (ValueError "escapes"); S3 and remote reject implicitly because the
     # escaped key/route does not exist (TimeNetDatasetNotFoundError). Either way a caller cannot read out of tree.
     with pytest.raises((ValueError, TimeNetDatasetNotFoundError)):
-        backend.registry.open_file("timenet/hello-world", "1.0.0", "../../escape")
+        backend.registry.open_file(DATASET_ID, "1.0.0", "../../escape")
 
 
 # ---- open_version -----------------------------------------------------------------------------
 
 
 def test_open_version_manifest_matches(backend):
-    version = backend.registry.open_version("timenet/hello-world")  # no pin -> latest
-    assert version.manifest.metadata.dataset_id == "timenet/hello-world"
+    version = backend.registry.open_version(DATASET_ID)  # no pin -> latest
+    assert version.manifest.metadata.dataset_id == DATASET_ID
     assert str(version.manifest.metadata.dataset_version) == "1.1.0"
+
+
+def test_open_version_names_the_control_database(backend):
+    # Every backend publishes the DuckDB control plane as one manifest part, so a reader can find it
+    # from the manifest alone.
+    version = backend.registry.open_version(DATASET_ID)
+    assert version.manifest.files.control_db is not None
+    assert version.manifest.files.control_db.path == "control.duckdb"
 
 
 # ---- exists -----------------------------------------------------------------------------------
 
 
 def test_exists_true_for_committed(backend):
-    assert backend.registry.exists("timenet/hello-world", "1.0.0")
+    assert backend.registry.exists(DATASET_ID, "1.0.0")
 
 
 def test_exists_false_for_unknown_version(backend):
-    assert not backend.registry.exists("timenet/hello-world", "9.9.9")
+    assert not backend.registry.exists(DATASET_ID, "9.9.9")
 
 
 # ---- store ------------------------------------------------------------------------------------
@@ -186,11 +180,11 @@ def test_exists_false_for_unknown_version(backend):
 
 def test_store_is_idempotent(backend):
     # The version is already committed by the fixture; a second store must skip, not raise.
-    assert backend.registry.store(make_dataset()) == "1.0.0"
+    assert backend.registry.store(_dataset()) == "1.0.0"
 
 
 def test_store_force_republishes(backend):
-    assert backend.registry.store(make_dataset(), force=True) == "1.0.0"
+    assert backend.registry.store(_dataset(), force=True) == "1.0.0"
 
 
 # ---- list_datasets (catalog-only) -------------------------------------------------------------
@@ -200,6 +194,6 @@ def test_list_datasets_returns_latest_metadata_sorted(backend):
     if not backend.supports_listing:
         pytest.skip("backend has no catalog")
     metadatas = backend.registry.list_datasets()
-    assert [m.dataset_id for m in metadatas] == ["demo/other", "timenet/hello-world"]
-    hello = next(m for m in metadatas if m.dataset_id == "timenet/hello-world")
-    assert str(hello.dataset_version) == "1.1.0"  # latest version only, not 1.0.0
+    assert [m.dataset_id for m in metadatas] == ["demo/other", DATASET_ID]
+    bedside = next(m for m in metadatas if m.dataset_id == DATASET_ID)
+    assert str(bedside.dataset_version) == "1.1.0"  # latest version only, not 1.0.0

@@ -1,1 +1,0 @@
-"""Zarr values-backend implementation."""

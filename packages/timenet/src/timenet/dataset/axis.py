@@ -16,10 +16,11 @@ This module uses two words that are not interchangeable, because the format name
 
 **timestamp**
     An absolute point on the wall clock, in Unix microseconds. Exactly one field carries one:
-    :attr:`~timenet.dataset.Record.start_time`. It is what a record's relative zero refers to.
+    :attr:`~timenet.control_plane.model.Record.start_time_us`. It is what a record's relative zero
+    refers to.
 
 The wall clock enters once and composes by addition. A value's timestamp is the record's
-``start_time`` plus the value's time offset. The recording's own zero anchors the time offset.
+``start_time_us`` plus the value's time offset. The recording's own zero anchors the time offset.
 The Unix epoch anchors the timestamp.
 
 The period is a :class:`~fractions.Fraction` of microseconds, not a float rate. Not every real
@@ -257,8 +258,9 @@ class IrregularAxis:
     """A placement no formula produces, so this axis writes down every time offset beside the values.
 
     This axis holds only the pair a builder can state and the writer can verify without a read. That
-    pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
-    them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
+    pair is the first and the last stored time offset. The time offsets themselves ride the values
+    plane, beside the values, as
+    :attr:`~timenet.control_plane.model.Signal.time_offsets_us` supplies them.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
     identity and round-trips as a value through the records struct. An axis holding the array does

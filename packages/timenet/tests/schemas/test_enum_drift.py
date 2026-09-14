@@ -6,9 +6,9 @@ Adding a license/domain/annotation/task in Python without updating the schema fa
 import jsonschema
 import pytest
 
+from timenet.parquet.value_encoding import ValueEncoding
 from timenet.schemas import DATASET_CARD_SCHEMA, MANIFEST_SCHEMA
 from timenet.types import Access, AnnotationType, Domain, License, TaskType
-from timenet.writer.value_encoding import ValueEncoding
 
 
 def _schema_enum(schema, name):

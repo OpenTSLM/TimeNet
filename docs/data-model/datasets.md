@@ -26,16 +26,18 @@ newest committed version.
 from timenet.client import TimeNet
 
 client = TimeNet()
-client.load("chengsenwang/tsqa")          # latest committed version
-client.load("chengsenwang/tsqa@1.0.0")    # a pinned, immutable snapshot
+client.open("chengsenwang/tsqa")          # latest committed version
+client.open("chengsenwang/tsqa@1.0.0")    # a pinned, immutable snapshot
 ```
 
 Immutability makes **full data lineage** possible downstream. Every batch a model trains on traces
-back to the exact TimeF bytes of one version, not a moving target.
+back to the exact TimeF bytes of one version, not a moving target. It is also what lets the control
+plane drop its keys and indexes: an invariant checked once at publish time holds for the rest of the
+version's life.
 
 ## Where a dataset lives
 
-A [registry](../registry.md) serves a dataset. It hands the compiled manifests and parquet to the
-[SDK](../client.md). A registry never runs connector code. It can be a local directory, an S3 prefix,
-or a remote host. The output of [build](../build.md) is itself a valid registry. The same
-`org/name` id resolves across all of them.
+A [registry](../registry.md) serves a dataset. It hands the manifest and the version's files to the
+[SDK](../client.md), and it never runs producer code. It can be a local directory, an S3 prefix, or
+a remote host. The output of a [`TimeFWriter`](../timef-writer.md) is itself a valid registry. The
+same `org/name` id resolves across all of them.

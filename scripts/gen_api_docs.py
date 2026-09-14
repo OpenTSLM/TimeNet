@@ -1,9 +1,9 @@
 """Generate the API reference pages and nav from the package module tree.
 
-Discovers the public top-level modules of ``timenet`` and ``timenet_connectors``,
-writes one mkdocstrings stub per module into ``docs/api/``, regenerates the API
-Reference landing page, and rewrites the marked ``api-nav`` region of
-``zensical.toml`` so the sidebar always matches the generated pages.
+Discovers the public top-level modules of ``timenet``, writes one mkdocstrings
+stub per module into ``docs/api/``, regenerates the API Reference landing page,
+and rewrites the marked ``api-nav`` region of ``zensical.toml`` so the sidebar
+always matches the generated pages.
 
 Adding a new public SDK module makes it appear automatically; only genuinely
 internal surfaces are dropped via ``EXCLUDE`` below. Reads source straight from
@@ -28,24 +28,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = REPO_ROOT / "zensical.toml"
 OUTPUT_DIR = REPO_ROOT / "docs" / "api"
 
-# The two workspace packages and their importable roots on disk.
+# The workspace package and its importable root on disk.
 PACKAGE_ROOTS = {
     "timenet": REPO_ROOT / "packages" / "timenet" / "src" / "timenet",
-    "timenet_connectors": REPO_ROOT / "packages" / "timenet-connectors" / "src" / "timenet_connectors",
 }
 
 # Public top-level modules that are intentionally NOT part of the documented API
 # surface. Discovery picks up every other non-underscore top-level module on its
 # own, so only genuinely internal surfaces need listing here.
 EXCLUDE = {
-    "timenet.cli",  # console-script plumbing (Typer app), not a code API
     "timenet.cache",  # cache-inspection helper
     "timenet.refs",  # internal org/id@version parser
-    "timenet.torch",  # optional torch adapter (covered in the guide)
     "timenet.schemas",  # packaged JSON-Schema data, not code
     "timenet.testing",  # test-support helpers shipped in src
-    "timenet_connectors.builder",  # producer CLI entry point
-    "timenet_connectors.datasets",  # dynamic connector plugins, discovered by id
 }
 
 # Comment markers in zensical.toml delimiting the nav region this script rewrites.
@@ -186,7 +181,7 @@ def _yaml_escape(text: str) -> str:
 
 _INDEX_HEADER = """\
 ---
-description: "Auto-generated API reference for the timenet and timenet-connectors packages."
+description: "Auto-generated API reference for the timenet package."
 ---
 
 # API Reference

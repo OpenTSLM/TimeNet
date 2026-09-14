@@ -21,6 +21,10 @@ def test_default_registry_path_rejects_remote(monkeypatch):
         default_registry_path()
 
 
-def test_unknown_dataset_error_is_actionable(tmp_path):
-    with pytest.raises(TimeNetDatasetNotFoundError, match="Build one with"):
+def test_unknown_dataset_error_points_at_a_method_that_exists(tmp_path):
+    # The message used to name `timenet-build build <id>`, a console script this repo no longer
+    # ships. Anything it names has to be on the object the caller already holds.
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
         LocalRegistry(tmp_path).get_manifest("nope/missing")
+    assert "store()" in str(caught.value)
+    assert hasattr(LocalRegistry(tmp_path), "store")

@@ -13,8 +13,8 @@ without a series to count on, so a step span names exactly one ``time_series_id`
 series that has no timeline at all: an ordinal sequence has positions but no clock.
 
 The series' axis decides which frame fits it, not the caller. A timeline axis (regular or
-irregular) takes a time span. An ordinal axis takes a step span.
-:meth:`~timenet.dataset.TimeFDataset.add_task` checks a span against the axis of every series it names.
+irregular) takes a time span. An ordinal axis takes a step span. A span holds no reference to the
+series it names, so it cannot check the pairing itself. The builder that has both does that.
 
 Build a concrete leaf. The bases (:class:`Span`, :class:`TimeSpan`, :class:`StepSpan`) are abstract, so
 every span in circulation carries the shape and frame it means::

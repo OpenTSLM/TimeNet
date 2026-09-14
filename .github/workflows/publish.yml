@@ -11,17 +11,8 @@ on:
         options:
           - TestPyPI
           - PyPI
-      package:
-        description: Package(s) to publish
-        required: true
-        default: both
-        type: choice
-        options:
-          - both
-          - timenet
-          - timenet-connectors
 
-run-name: Publish ${{ inputs.package }} to ${{ inputs.target }}
+run-name: Publish timenet to ${{ inputs.target }}
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -52,37 +43,18 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
       - name: Build
-        run: |
-          if [ "${{ inputs.package }}" = "both" ]; then
-            uv build --all-packages
-          else
-            uv build --package "${{ inputs.package }}"
-          fi
+        run: uv build --package timenet
       - name: Smoke test built artifacts
-        # Import each built wheel and sdist in an isolated environment to catch missing files or
-        # broken metadata before uploading. timenet-connectors depends on timenet, so hand it the
-        # wheel we just built when it is present (a `both` run); otherwise timenet resolves from the
-        # default index, which requires it to be published already.
+        # Import the built wheel and sdist in an isolated environment to catch missing files or
+        # broken metadata before uploading.
         run: |
           set -euo pipefail
           shopt -s nullglob
-          timenet_whl=(dist/timenet-*.whl)
-          smoke() {
-            local module="$1"; shift
-            local args=() artifact
-            for artifact in "$@"; do args+=(--with "$artifact"); done
-            echo "::group::import $module"
-            uv run --isolated --no-project "${args[@]}" \
-              python -c "import $module; print('smoke ok:', $module.__name__)"
+          for artifact in dist/timenet-*.whl dist/timenet-*.tar.gz; do
+            echo "::group::import timenet from $artifact"
+            uv run --isolated --no-project --with "$artifact" \
+              python -c "import timenet; print('smoke ok:', timenet.__name__)"
             echo "::endgroup::"
-          }
-          for artifact in dist/*; do
-            case "$artifact" in
-              dist/timenet-*.whl | dist/timenet-*.tar.gz)
-                smoke timenet "$artifact" ;;
-              dist/timenet_connectors-*.whl | dist/timenet_connectors-*.tar.gz)
-                smoke timenet_connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
-            esac
           done
       - name: Publish
         run: |

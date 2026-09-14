@@ -1,6 +1,6 @@
 ---
 icon: lucide/shapes
-description: "TimeF value types: versions, units, specs, tasks, annotations, and metadata."
+description: "TimeF value types: versions, units, specs, metadata, enums, and errors."
 tags:
   - reference
   - types
@@ -9,9 +9,13 @@ tags:
 # Types
 
 The TimeF value types live in `timenet.types`. Each concept has one module, re-exported from the
-package. Every schema-carrying type is a **plain frozen dataclass**. Therefore it pickles and
-round-trips through [`TimeFReader`](timef-reader.md) without runtime class synthesis. Errors live in
-`timenet.errors`.
+package. Every type here is a **plain frozen dataclass**, so it pickles and compares by value with
+no runtime class synthesis, which is what makes multiprocessing `DataLoader` workers safe. Errors
+live in `timenet.errors`.
+
+The types a version actually stores are `TimeSeriesSpec`, `DataSource`, `DatasetMetadata`, and
+`Version`. The [data model](data-model/index.md) pages cover the hierarchy itself: records, sources,
+signals, annotations, and tasks all live in `timenet.control_plane`.
 
 ---
 
@@ -95,8 +99,8 @@ DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acm
 ## TimeSeriesSpec
 
 The contract for a measurement **modality**: its type tag, display name, value unit, scalar dtype,
-and per-timestep shape. One spec is shared across every logical stream of a modality. The stream
-identifier lives on [`TimeSeries.signal`](timef-dataset.md), not here.
+and per-timestep shape. One spec is shared across every signal of a modality. A signal's own name
+and id live on the [`Signal`](data-model/signals.md), not here.
 
 ```python
 from timenet.types import TimeSeriesSpec, ureg
@@ -119,44 +123,17 @@ vibration = TimeSeriesSpec(
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
 | `nullable` | `bool` | no | Whether a timestep can be missing. The default `False` rejects all nulls. |
 
-The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
-`dtype="uint8"`, `value_shape=(height, width, 3)`, and
-`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`; scalar
-values of a non-`"str"`/`"enum"` dtype preserve their NumPy type on disk, and `"str"`/`"enum"` values
-read back as text. An `"enum"` dtype stores values as a PyArrow
-dictionary array; the torch bridge maps them to integer codes.
-Multidimensional values require the Zarr
-values backend.
+A signal's values are a 1-D NumPy array, and the dtype it carries is the dtype that comes back out.
+The values plane preserves it on disk, and the control plane records it on the spec.
 
-### Missing values
+`value_shape` and `dimension_names` describe a per-timestep shape wider than a scalar, and `nullable`
+claims that a timestep can be absent. The control plane stores `spec_type`, `name`, `unit`, `dtype`,
+and `nullable` per modality; it does not store a shape, and neither values backend writes a validity
+mask today. A consumer that wants a per-timestep mask therefore has nothing to build one from, which
+is why `timenet.torch` leaves `series_masks` empty rather than asserting an all-present mask that
+nothing on disk backs.
 
-Python callers use `None` to supply a missing timestep when `nullable=True`.
-Constructors reject `None` when `nullable=False`.
-Arrow stores missingness in a validity bitmap, a separate bit for each timestep.
-The numeric array does not contain Python objects.
-
-For example, `[1.0, None, NaN]` has validity `[True, False, True]`.
-The first position contains the measurement `1.0`. The second measurement is absent.
-The third contains a floating-point value that represents an undefined numerical result.
-TimeF preserves special floating-point values such as NaN and positive or negative infinity.
-If a source uses NaN or another marker for missing measurements, its connector must translate those
-markers into nulls.
-
-Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
-The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
-
-`TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
-the loaded array contains nulls. In some cases, the previous conversion lost the distinction between
-missing values and NaN.
-A nullable spec without actual nulls still supports `to_numpy()`. NaN and infinity remain valid values.
-
-`TimeSeries.to_numpy_and_mask()` returns values and a validity mask, a boolean array that marks
-present timesteps. Together, the values and mask preserve the missingness that Arrow stores.
-Missing positions hold zero, false, or an empty string. These fill values are not observations.
-The PyTorch dataset returns the same pair as `"series"` and `"series_masks"`.
-Every series has a boolean mask, including an all-true mask for a non-nullable series.
-
-Connectors that reuse a modality can subclass with field defaults:
+A builder that reuses a modality can subclass with field defaults:
 
 ```python
 from dataclasses import dataclass
@@ -172,287 +149,30 @@ class Vibration(TimeSeriesSpec):
 
 ---
 
-## Annotations
+## Annotations, tasks, and spans
 
-An annotation is extra context on a [`Record`](timef-dataset.md). It is side information. A task can
-read it as input, or it can become a task's question or answer. It has one of three scope levels, and
-the scopes combine:
+`timenet.types` also carries `Annotation`, the `Task` subclass tree with its `TASKS` registry, and
+the `Span` types (`TimePoint`, `TimeInterval`, `StepPoint`, `StepInterval`). These are the
+type-level vocabulary a `DatasetSchema` declares, and the manifest codec serializes them.
 
-- record: the whole record (a static fact, or a trial-level temporal marker),
-- time range: a time span (`TimePoint` or `TimeInterval`) in the recording timeline,
-- signal: one or more specific signals (`time_series_ids`).
+They are not what a version stores. The control plane has its own
+[`Annotation`](data-model/annotations.md), which is a `(name, value, unit)` payload plus a span type
+of `static`, `point`, or `interval`, and its own [`Task`](data-model/tasks.md), which is a prompt
+with ordered input and target items. Build a dataset with those, from `timenet.control_plane`.
 
-It is one flat frozen dataclass. The optional `span` gives it a shape. `key` / `value` / `unit` /
-`description` / `id` are **instance fields**. Therefore connectors author annotations directly, or
-subclass with field defaults for reuse. The annotations round-trip without runtime class synthesis.
-
-| `span` | Extra fields | Scope |
-| --- | --- | --- |
-| absent | `value` (required) | Whole record, time-independent (a subject's age, condition, firmware, device, ticker). |
-| `TimePoint` | none | One time offset, on specific signals or the whole record. |
-| `TimeInterval` | none | A bounded region, on specific signals or the whole record. |
-
-Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
-`description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
-(`"years"`) or a `pint.Unit` (`ureg.millivolt`, stored as its canonical name). TimeNet validates both
-against the shared registry on construction. An unrecognized unit string raises `ValueError`. On the
-temporal shapes, `time_series_ids=None` means **trial-level**, that is the whole record. A non-empty
-tuple restricts the annotation to those signals. Each id must match a `TimeSeries.time_series_id` on
-the record.
-
-```python
-from timenet.types import Annotation, TimeInterval, TimePoint
-
-# record scope
-Annotation(key="operating_hours", value=1200, unit="hours")
-
-# time range on the whole record (trial-level)
-Annotation(key="artifact", span=TimeInterval.seconds(10.0, 12.0))
-
-# signal + time range: the vibration and current signals, seconds 5 to 6
-Annotation(
-    key="fault",
-    value="bearing fault",
-    span=TimeInterval.seconds(5.0, 6.0, time_series_ids=("vibration", "current")),
-)
-
-# one time offset on a single signal
-Annotation(key="impact", span=TimePoint.seconds(4.2, time_series_ids=("vibration",)))
-```
-
-A connector that emits the same key repeatedly can subclass with field defaults:
-
-```python
-from dataclasses import dataclass
-
-@dataclass(frozen=True, kw_only=True)
-class OperatingHours(Annotation):
-    key: str = "operating_hours"
-    unit: str | None = "hours"
-```
-
-`annotation_type_of(ann)` returns the `AnnotationType` (`STATIC` / `POINT` / `INTERVAL`). There is no
-reverse mapping, because one class covers every shape. `AnnotationDescriptor` is the type-level
-projection (`key`, `annotation_type`, `value_type`, `unit`, `description`). TimeNet hoists it into the
-schema and manifest at write time.
-
----
-
-## Tasks
-
-A task is one labeled training target. It references one or more records. The class is the type tag.
-You can use it as a search filter, for example `search(task=AnswerTask)`. The instance carries the
-payload. Tasks are mutable, so [`add_task`](timef-dataset.md) can populate `record_ids` after
-construction.
-
-Every task is `inputs -> one typed answer`, and the shared frame lives on the `Task` base:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `id` | `str` | Auto uuid7. |
-| `record_ids` | `tuple[str, ...]` | The records the task is about. `add_task` can populate this after construction. |
-| `prompt` | `str \| None` | What the model is asked. `None` means an unprompted task. |
-| `scope` | `Span \| None` | The input region. `None` means the whole record. |
-| `input_annotation_ids` | `tuple[str, ...]` | Annotations given to the model as context. |
-| `target` | typed per subclass | The answer, inline. |
-| `target_annotation_ids` | `tuple[str, ...]` | The answer by reference to stored annotations. |
-| `rationale` | `str \| None` | Chain of thought to train on. Any task can carry one. |
-| `from_tasks` | `tuple[Task, ...]` | Source tasks this one derives from (plus a `from_task_ids` property). |
-
-A subclass therefore adds only what makes its answer a different *kind* of thing:
-
-| Class | `task_type` | Answer | Extra payload |
-| --- | --- | --- | --- |
-| `ClassificationTask` | `classification` | `target: str` (a label) | `target_schema` |
-| `AnswerTask` | `answer` | `target: str` (free text) | none |
-| `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
-| `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[TimePoint \| TimeInterval, ...]` | `mode` |
-| `ForecastingTask` | `forecasting` | a produced series | `context_record_ids`, `target_record_id`, `target_span` |
-| `TSEditingTask` | `ts_editing` | a produced series | `source_record_id`, `target_record_id` |
-| `TSGenerationTask` | `ts_generation` | a produced series | `target_record_id` |
-| `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
-
-`TaskType` is the enum of type tags. TimeNet derives `TASKS` at import from a walk of the `Task`
-subclass tree. Therefore it registers every concrete task in the module by its `task_type`. If two
-classes claim the same tag, TimeNet rejects them instead of a silent collapse. Task payloads are
-fixed in code, unlike specs and annotations. TimeNet resolves them on read against `TASKS`, not from
-the manifest.
-
-The first four types carry a scalar-ish `target`. Therefore generic training code reads `task.target`
-for any of them. The three series-output types are the exception. Their answer is a *series*. They
-set `answer_is_record` and point at the record that holds it, instead of a value in `target`.
-
-### Span
-
-A task's `scope` and a localization target are **spans**: one region a task or annotation localizes. A
-span has a shape (a point, or a half-open interval) and a **frame**, and the frame is the type. The
-frame decides what the bounds mean. A **time** frame reads them as microseconds on the source recording
-timeline. A **step** frame reads them as ordinal indices into one series' own array. `Span` is the base
-you annotate with for any span. It and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
-always build a concrete leaf.
-
-Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
-meaningful on a windowed record that starts partway into the recording. `TimePoint(start_us=...)` is one
-point. `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
-covers the whole record, or a subset of series named by `time_series_ids` (`None` = every series). Build
-with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
-has integers. For a wall-clock moment, build it from the record (`record.time_point(at)` /
-`record.time_interval(start, end)`), which supplies its own `start_time` as the anchor. Bounds are stored
-as whole microseconds, so two equal regions compare equal.
-
-Step spans count a series' own ordinal positions, for a series that has no clock at all. A step index
-means nothing without a series to count on, so a step span names exactly one `time_series_id` (a single
-str). `StepPoint(time_series_id=..., start=...)` is one step.
-`StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
-are no unit builders. Construct them directly.
-
-Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
-irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
-span against the axis of every series it names and rejects a mismatch.
-
-```python
-# a time interval on one series; start is stored as 5_000_000
-TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",))
-
-# a time point, on every series in the record
-TimePoint.seconds(1.2)
-
-# a region of an ordinal series (order only, no clock, like TSQA):
-# the interval covering steps 132 to 143
-StepInterval(time_series_id="tsqa", start=132, stop=144)
-```
-
-### Per-type payloads
-
-- `ClassificationTask`: one categorical label, for the whole record or for `scope`. `target_schema`
-  names the vocabulary of the target (`None` for free-form).
-  ```python
-  dataset.add_task(
-      record, ClassificationTask(target="faulty", target_schema="condition")
-  )
-  dataset.add_task(
-      record,
-      ClassificationTask(
-          target="fault_episode",
-          target_schema="condition",
-          scope=TimeInterval.seconds(
-              120.0, 480.0, time_series_ids=(vibration.time_series_id,)
-          ),
-      ),
-  )
-  ```
-- `AnswerTask`: free text. Without a `prompt`, it is a caption. With a `prompt`, it is an answer to a
-  question. A `rationale` adds the reasoning trace to supervise.
-  ```python
-  dataset.add_task(record, AnswerTask(
-      target="A 10-second vibration trace with a bearing-fault signature "
-      "after 5 s.",
-  ))
-  dataset.add_task(record, AnswerTask(
-      prompt="What happens between 12s and 18s?",
-      target="A bearing fault on the vibration signal.",
-  ))
-  ```
-- `ScalarPredictionTask`: a numeric target that keeps its type. TimeNet validates `unit` against the
-  shared pint registry, and stores a `pint.Unit` as its name. `target_name` names the quantity.
-  ```python
-  dataset.add_task(record, ScalarPredictionTask(
-      target=62.0, unit="bpm", target_name="mean_heart_rate"
-  ))
-  ```
-- `TemporalLocalizationTask`: find the regions that match the prompt. `mode` is `SPARSE` or
-  `EXHAUSTIVE`. `SPARSE` leaves unmarked time unlabeled. `EXHAUSTIVE` needs the spans to tile the
-  region of interest, and a gap is an error.
-  ```python
-  dataset.add_task(record, TemporalLocalizationTask(
-      prompt="Locate all R-peaks in lead II.",
-      target=(
-          TimePoint.seconds(1.20, time_series_ids=("II",)),
-          TimePoint.seconds(2.05, time_series_ids=("II",)),
-      ),
-  ))
-  ```
-- `ForecastingTask`: predict a series' future values. The future is a whole separate record
-  (`target_record_id`) or a region of the attached record (`target_span`, an interval with an explicit
-  `scope` for the context). Exactly one of the two is required.
-  ```python
-  dataset.add_task(future, ForecastingTask(
-      context_record_ids=("rec_001::history",),
-      target_record_id="rec_001::future",
-  ))
-  ```
-- `TSEditingTask` / `TSGenerationTask`: produce a series. `TSEditingTask` uses a source record plus an
-  instruction. `TSGenerationTask` uses the specification alone.
-  ```python
-  dataset.add_task(source, TSEditingTask(
-      prompt="Remove the baseline wander.",
-      source_record_id="ecg-raw",
-      target_record_id="ecg-clean",
-  ))
-  dataset.add_task(spec_record, TSGenerationTask(
-      prompt="10 s of 150 bpm sinus tachycardia at 500 Hz.",
-      target_record_id="ecg-synth-0001",
-  ))
-  ```
-- `TSCorrespondenceTask`: which candidate record corresponds to the query. If that pool is set, the
-  answer must come from `candidate_record_ids`.
-  ```python
-  dataset.add_task(query, TSCorrespondenceTask(
-      prompt="Which recording is most similar to this one?",
-      candidate_record_ids=("rec-a", "rec-b"),
-      target=("rec-b",),
-  ))
-  ```
-
-### Composition (`from_tasks`)
-
-A task can derive from earlier tasks, or from the annotations that motivated them, via `from_tasks`.
-The derived task records its source chain. This is how a handful of base labels multiply into many
-higher-level training examples:
-
-```python
-base = ClassificationTask(target="faulty")
-dataset.add_tasks(record, [
-    base,
-    AnswerTask(
-        prompt="Is this machine healthy?",
-        rationale="The trace is classified faulty: a bearing fault is present.",
-        target="No.",
-        from_tasks=(base,),
-    ),
-])
-```
-
-### Annotations vs tasks
-
-An annotation is record-level information. A task is a learning target. A connector can use the same
-source annotation in either role:
-
-- As task **input**, the annotation grounds the model: list it in `input_annotation_ids`. An
-  `Annotation` can mark a bearing fault on the vibration signal over seconds 5 to 6. It then supplies
-  the detail for an `AnswerTask` prompt.
-- As the task **target**, copy the information into the task payload, or point at the stored
-  annotations with `target_annotation_ids` and leave `target` unset. The by-reference form avoids a
-  copy of, for example, a night of sleep-stage intervals into a task row.
-
-A task gives its answer inline **or** by reference, never both. `add_task` rejects a task that sets
-both. It also rejects a task that sets neither, unless its answer is a produced series. The two roles
-are separate fields. Therefore a training adapter can tell context from answer, and will not leak a
-target-derived annotation back to the model.
-
-Annotations carry signal and time-range scope. Therefore one recording yields many targets: a
-whole-record classification, scoped labels per signal, windowed questions, and follow-up tasks that
-compose them via `from_tasks`.
+`annotation_type_of(ann)` returns the `AnnotationType` of a `timenet.types.Annotation`
+(`STATIC` / `POINT` / `INTERVAL`). `AnnotationDescriptor` is its type-level projection.
 
 ---
 
 ## DatasetMetadata
 
-A dataset's descriptive identity (authored in the card).
+A dataset's descriptive identity. It names the version the writer commits, and it is the block a
+consumer reads out of the manifest before it downloads anything.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `dataset_id` | `str` | yes | `org/name` pair (one slash) that matches the card / connector module path. |
+| `dataset_id` | `str` | yes | `org/name` pair (one slash). It chooses the output directory. |
 | `dataset_version` | `Version` | yes | The upstream source's semantic version. |
 | `name` | `str` | yes | Display name. |
 | `description` | `str` | yes | One-sentence description. |
@@ -460,15 +180,22 @@ A dataset's descriptive identity (authored in the card).
 | `domains` | `tuple[Domain, ...]` | no | Application/clinical domains. |
 | `tags` | `tuple[str, ...]` | no | Free-form labels. |
 | `source_url` | `str \| None` | no | Canonical source URL. |
+| `license_url` | `str \| None` | no | Where the upstream license is stated. |
+| `citation` | `str \| None` | no | How to cite the source. |
+| `access` | `Access` | no | `OPEN`, `CREDENTIALED`, or `RESTRICTED`. Defaults to `OPEN`. |
+| `access_url` | `str \| None` | no | Where to obtain access, for a non-open dataset. |
 | `yaml_schema_version` | `int` | no | The card's field-schema version (default `1`). |
+
+A non-`OPEN` dataset cannot be redistributed, so a hosted registry refuses to serve its bytes and
+the client raises `TimeNetAccessError` pointing at `access_url`.
 
 ---
 
 ## DatasetSchema
 
-A dataset's type declaration. TimeNet derives it from the data, never by hand, then serializes it
-into the manifest. It holds flat descriptors for specs and annotations, and the real built-in `Task`
-subclasses.
+A dataset's type declaration: flat descriptors for the specs and annotations it uses, plus the
+built-in `Task` subclasses it carries. The [manifest](manifest.md) serializes it directly, so there
+is no separate set of entry types to keep in sync.
 
 ```python
 DatasetSchema(
@@ -478,12 +205,20 @@ DatasetSchema(
 )
 ```
 
+The control plane answers the same questions from the database itself, through the `specs` table and
+`reader.counts()`, so `TimeFWriter` leaves the manifest's schema block empty. Registry filters that
+read it, `search(task=...)` and `search(time_series_spec=...)`, therefore match nothing on a version
+this writer produced.
+
 ---
 
 ## Enums
 
-- `Domain`: `HEALTH`, `CARDIOLOGY`, `SLEEP`, `ACTIVITY`, `ECONOMICS`, `FINANCE`, `GENERAL`.
+- `Domain`: `HEALTH`, `CARDIOLOGY`, `RESPIRATORY`, `SLEEP`, `ACTIVITY`, `MOTION`, `ECONOMICS`,
+  `FINANCE`, `ENVIRONMENT`, `ENERGY`, `TRANSPORT`, `OBSERVABILITY`, `AUDIO`, `GENERAL`.
 - `License`: SPDX-style identifiers (`MIT`, `Apache-2.0`, `CC-BY-4.0`, `CC0-1.0`, ...).
+- `Access`: `OPEN`, `CREDENTIALED`, `RESTRICTED`.
+- `AxisType`: `REGULAR`, `IRREGULAR`, `ORDINAL`, in `timenet.dataset`.
 
 All are `StrEnum`, so members compare equal to their string values.
 
@@ -500,6 +235,8 @@ hierarchy, listed at the end of this section.
 | `TimeNetError` | `Exception` | base for all TimeNet errors |
 | `TimeNetRegistryError` | `TimeNetError` | a registry cannot be loaded/reached/served |
 | `TimeNetDatasetNotFoundError` | `TimeNetError` | an unknown dataset id/version |
+| `TimeNetAccessError` | `TimeNetError` | a non-open dataset is asked of a registry that does not host its data |
+| `TimeNetDownloadError` | `TimeNetError` | a fetch fails or lands bytes that do not match the manifest |
 | `TimeFValidationError` | `TimeNetError`, `ValueError` | a dataset/array violates a TimeF invariant |
 | `TimeFFormatError` | `TimeNetError` | a corrupt or unsupported on-disk artifact |
 | `TimeNetInvalidManifestError` | `TimeFFormatError`, `ValueError` | a malformed `manifest.json` |

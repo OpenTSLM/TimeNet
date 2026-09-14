@@ -12,8 +12,8 @@ same task type, with ``scope`` unset or set. A caption is an :class:`AnswerTask`
 The class is the type tag (for example, a filter such as ``search(task=ClassificationTask)``). The
 instance carries the payload. Task payload shapes are fixed in code, unlike specs and annotations.
 So the reader resolves tasks against the built-in :data:`TASKS` registry. It does not rebuild them
-from the manifest. Tasks are mutable, so :meth:`~timenet.dataset.TimeFDataset.add_task` can set
-``record_ids`` after construction.
+from the manifest. Tasks are mutable, so the builder that assembles a dataset can set ``record_ids``
+after construction.
 """
 
 from collections.abc import Iterable
@@ -105,7 +105,7 @@ class Task:
     id: str = field(default_factory=new_id)
     """Unique task identifier, a UUIDv7 string by default."""
     record_ids: tuple[str, ...] = ()
-    """Ids of the records this task is about. ``add_task`` sets them."""
+    """Ids of the records this task is about. The builder sets them."""
     prompt: str | None = None
     """What the model is asked, when the task is prompted. ``None`` for an unprompted task."""
     scope: Span | None = None
@@ -117,7 +117,7 @@ class Task:
     as a series (see ``answer_is_record``)."""
     target_annotation_ids: tuple[str, ...] = ()
     """The answer by reference: it is these stored annotations, not an inline copy of them. It is
-    exclusive with ``target``. :meth:`~timenet.dataset.TimeFDataset.add_task` enforces that."""
+    exclusive with ``target``. The builder enforces that."""
     rationale: str | None = None
     """Chain of thought to train on. Any task can carry one. ``None`` when the source stores none."""
     from_tasks: tuple["Task", ...] = ()
@@ -135,8 +135,7 @@ class Task:
     def spans(self) -> tuple[Span, ...]:
         """Return every span the task carries: its ``scope`` and any span-valued payload field.
 
-        This lets :meth:`~timenet.dataset.TimeFDataset.add_task` check a task's spans without knowledge
-        of its concrete type.
+        This lets a builder check a task's spans without knowledge of its concrete type.
 
         Returns:
             The task's spans, ``scope`` first.
@@ -153,9 +152,9 @@ class Task:
     def check_against_scope(self) -> None:
         """Validate payload that depends on the task's finalized ``scope``.
 
-        :meth:`~timenet.dataset.TimeFDataset.add_task` calls this after stamping any ``scope=`` passed
-        there, so a scope supplied at registration is in force. The base task has nothing scope-dependent
-        to check. :class:`ForecastingTask` overrides it.
+        The builder calls this after it stamps any ``scope=`` passed at registration, so a late scope
+        is in force. The base task has nothing scope-dependent to check. :class:`ForecastingTask`
+        overrides it.
         """
 
 
@@ -282,10 +281,9 @@ class ForecastingTask(Task):
     (the type says so), and it is exclusive with ``target_record_id``. It is in the same frame as
     ``scope``. For a series with a timeline, that is a :class:`~timenet.types.spans.TimeInterval` in
     microseconds. For a series that counts in steps, it is a :class:`~timenet.types.spans.StepInterval`,
-    the only frame an ordinal series can carry. :meth:`~timenet.dataset.TimeFDataset.add_task` checks that
-    it falls inside the record, because that method has the record. It needs an explicit ``scope`` for
-    the context region. A ``scope`` of ``None`` means the whole record, which covers the region to
-    predict."""
+    the only frame an ordinal series can carry. The builder checks that it falls inside the record,
+    because the builder has the record. It needs an explicit ``scope`` for the context region. A
+    ``scope`` of ``None`` means the whole record, which covers the region to predict."""
 
     def __post_init__(self) -> None:
         """Reject a forecasting task with a bad target or a self-referential context.
@@ -299,8 +297,8 @@ class ForecastingTask(Task):
                 Its context is already ``scope``, so a context record would re-expose the target
                 region. If ``target_span`` is a point, which spans no values. :meth:`check_against_scope`
                 checks for a missing scope, a frame mismatch, or a context that leaks the target. It
-                runs once ``add_task`` has stamped any ``scope=``, and also here when the task is built
-                with its own ``scope``.
+                runs once the builder has stamped any late ``scope=``, and also here when the task is
+                built with its own ``scope``.
         """
         if self.target_span is None:
             if self.target_record_id is None:
@@ -338,7 +336,7 @@ class ForecastingTask(Task):
                 f"ForecastingTask target_span is the region to predict, so it must be an interval with a "
                 f"duration, not a point: got {self.target_span!r}"
             )
-        if self.scope is not None:  # early check. add_task re-checks after it stamps any late scope=
+        if self.scope is not None:  # early check. check_against_scope re-runs once a late scope= lands
             self._check_scope_against_target(self.scope, self.target_span)
 
     def check_against_scope(self) -> None:
@@ -355,7 +353,7 @@ class ForecastingTask(Task):
             raise TimeFValidationError(
                 "ForecastingTask target_span needs an explicit scope for the context region. A scope of "
                 "None means the whole record (see Task.scope), which covers the region that target_span "
-                "predicts. Pass scope= on the task or to add_task"
+                "predicts. Set scope= on the task"
             )
         self._check_scope_against_target(self.scope, self.target_span)
 

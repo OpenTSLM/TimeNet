@@ -156,7 +156,7 @@ def build_publish_fake(*, token: str = "tok_rw"):  # noqa: S107
             return httpx.Response(403, json={"detail": "write scope required"})
         if path.endswith("/publish"):
             state["manifest"] = json.loads(request.content)
-            files = [p["path"] for group in state["manifest"]["files"].values() for p in group]
+            files = list(Manifest.from_dict(state["manifest"]).files.all_parts())
             state["published"] = files
             return httpx.Response(200, json={"files": sorted(files)})
         if path.endswith("/publish/upload-url"):
@@ -237,8 +237,8 @@ def _service_write(root: Path, manifests: dict, parts: list[str], request: httpx
     dataset_id, version, action = "/".join(parts[:2]), parts[2], "/".join(parts[3:])
     if action == "publish":
         manifests[dataset_id, version] = request.content
-        files = json.loads(request.content)["files"]
-        return httpx.Response(200, json={"files": [p["path"] for group in files.values() for p in group]})
+        declared = Manifest.from_json(request.content.decode()).files.all_parts()
+        return httpx.Response(200, json={"files": list(declared)})
     if action == "publish/upload-url":
         relpath = json.loads(request.content)["path"]
         url = f"http://blob.local/upload/{dataset_id}/{version}/{relpath}"

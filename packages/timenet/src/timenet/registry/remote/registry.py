@@ -1,11 +1,11 @@
 """A registry backed by the hosted TimeNet HTTP service.
 
-Talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`. It lists and
-searches the catalog, fetches manifests, streams files, downloads versions, and publishes datasets.
+Talks to ``timenet-registry`` through :class:`~timenet.registry.remote._http.RegistryHttpClient`. It
+lists and searches the catalog, fetches manifests, streams files, downloads versions, and publishes
+datasets.
 Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
-from collections.abc import Callable
 from pathlib import Path
 import shutil
 import tempfile
@@ -14,7 +14,7 @@ from typing import BinaryIO, cast
 import httpx
 
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
+from timenet.control_plane import DeclarativeDataset, TimeFWriter
 from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
@@ -23,7 +23,6 @@ from timenet.registry.remote._http import RegistryHttpClient
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class RemoteRegistry(WritableRegistry):
@@ -152,14 +151,7 @@ class RemoteRegistry(WritableRegistry):
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
 
-    def store(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    ) -> str:
+    def store(self, dataset: DeclarativeDataset, *, force: bool = False) -> str:
         """Compile a dataset locally and publish it to the remote registry.
 
         Compiles to a temporary directory, then runs the service publish flow: POST the manifest, PUT
@@ -169,8 +161,6 @@ class RemoteRegistry(WritableRegistry):
         Args:
             dataset: The populated dataset to store.
             force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
 
         Returns:
             The stored version string.
@@ -178,16 +168,14 @@ class RemoteRegistry(WritableRegistry):
         Raises:
             TimeNetRegistryError: If the service requests a file that was not produced locally.
         """
-        if dataset.schema is None:
-            dataset.derive_schema()
         dataset_id = dataset.metadata.dataset_id
         version = str(dataset.metadata.dataset_version)
         if not force and self.exists(dataset_id, version):
             return version
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
-            with TimeFWriter(staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
-                writer.write()
+            with TimeFWriter(staging_root, dataset.metadata) as writer:
+                writer.write(dataset)
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             declared = {part.path for part in Manifest.from_json(manifest_bytes.decode()).files.all_files()}

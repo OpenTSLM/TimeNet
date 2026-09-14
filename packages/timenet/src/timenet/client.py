@@ -2,9 +2,8 @@
 
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
 (the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
-``load``. Against a local registry, ``load`` builds a dataset the registry does not have when an
-installed package registers a connector for its id; against a remote registry it never runs connector
-code.
+``open``. ``open`` hands back a :class:`~timenet.control_plane.TimeFReader` over the version, which
+is where records, tasks, annotations, and values are read.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -12,22 +11,16 @@ code.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
-from timenet.builders import find_builder
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.control_plane import TimeFReader
+from timenet.errors import TimeFValidationError, TimeNetAccessError
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
-
-
-if TYPE_CHECKING:
-    from timenet.torch import TimeFTorchDataset
 
 
 # This code is at module scope, where `list` is the builtin type. The class has a method
@@ -176,52 +169,27 @@ class TimeNet:
         )
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
-        """Read the dataset into memory through the registry's storage handle.
+    def open(self, dataset_id: str, version: str | None = None) -> TimeFReader:
+        """Open a dataset version's control plane for reading.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
-
-        Against a local registry, a dataset the registry does not have is built first, if some
-        installed package registers a connector for its id. Set ``auto_build`` false to fail fast
-        instead of starting a download and a build. A remote registry raises as before.
+        A local or S3 registry reads in place; a remote registry materializes the version to local
+        storage first (see :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote open
+        fetches the whole version.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
 
         Returns:
-            The dataset with lazy, per-series loaders that use the registry handle.
+            A reader over the version. Close it, or use it as a context manager.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
-                declares a different version than the one asked for.
-            TimeNetBuildError: If the build runs but fails.
-        """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
+            TimeNetDatasetNotFoundError: If the version is absent.
+        """  # noqa: DOC502 - raised by the registry's open_version
         dataset_id, version = _resolve_ref(dataset_id, version)
         self._reject_unhosted_access(dataset_id, version)
-        try:
-            handle = self._registry.open_version(dataset_id, version)
-        except TimeNetDatasetNotFoundError as miss:
-            if not auto_build or not isinstance(self._registry, LocalRegistry):
-                raise
-            builder = find_builder(dataset_id)
-            if builder is None:
-                raise
-            # A connector produces one declared version. Reject a pin it cannot satisfy before the
-            # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
-            # not pins, so a fresh build satisfies them.
-            if version not in {None, "", "latest"}:
-                declared = builder.declared_version(dataset_id)
-                if declared is not None and version != declared:
-                    raise TimeNetDatasetNotFoundError(
-                        f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
-                    ) from miss
-            builder.build(dataset_id, self._registry.root)
-            handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        handle = self._registry.open_version(dataset_id, version)
+        return TimeFReader.open_version(handle)
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
@@ -244,22 +212,5 @@ class TimeNet:
             return
         raise TimeNetAccessError(
             f"{dataset_id!r} is {metadata.access.value}: TimeNet does not host its data. Get access at "
-            f"{metadata.access_url}, then build it locally with `timenet-build build {dataset_id}`."
+            f"{metadata.access_url}, then build it into a local registry with TimeFWriter and read it from there."
         )
-
-    def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
-        """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.
-
-        This method needs the ``torch`` extra (``pip install 'timenet[torch]'``). The code
-        imports the torch view lazily, so base users do not need torch installed.
-
-        Args:
-            dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest.
-
-        Returns:
-            A :class:`~timenet.torch.TimeFTorchDataset` over the loaded dataset.
-        """
-        from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
-
-        return TimeFTorchDataset(self.load(dataset_id, version))

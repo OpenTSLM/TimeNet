@@ -77,3 +77,23 @@ def test_from_yaml_rejects_non_mapping(tmp_path):
 def test_from_yaml_rejects_missing_file(tmp_path):
     with pytest.raises(TimeNetInvalidCardError):
         DatasetMetadata.from_yaml(tmp_path / "does_not_exist.yaml")
+
+
+def test_missing_yaml_dependency_names_something_installable(tmp_path, monkeypatch):
+    # The message used to name a `timenet[build]` extra, which this repo does not declare. Whatever
+    # it names has to be resolvable, so check the names against the declared extras.
+    import builtins  # noqa: PLC0415
+
+    real_import = builtins.__import__
+
+    def fail_on_yaml(name, *args, **kwargs):
+        if name in {"yaml", "jsonschema"}:
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_on_yaml)
+    with pytest.raises(TimeNetInvalidCardError) as caught:
+        DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD))
+    message = str(caught.value)
+    assert "pyyaml" in message and "jsonschema" in message
+    assert "timenet[" not in message

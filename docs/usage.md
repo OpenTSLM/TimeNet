@@ -1,134 +1,123 @@
 ---
 icon: lucide/plug
-description: "Load a TimeNet dataset into pandas, polars, Spark, or PyTorch."
+description: "Load a TimeNet dataset into pandas, polars, or PyTorch."
 tags:
   - usage
   - pandas
   - polars
-  - spark
   - torch
 ---
 
-# Usage
+# Load into your stack
 
-Every dataset loads the same way. Then it hands off to your framework. There are two entry points:
+Every dataset reads the same way: open a version, walk it in batches, and hand each batch to your
+framework. Two consumer views ship with TimeNet, and both are thin wrappers over the same batched
+reader calls.
 
-- `TimeNet().load("org/name")` returns an in-memory [`TimeFDataset`](timef-dataset.md) with lazy
-  per-series values. Use it for single-node work (pandas, polars, torch).
-- `TimeNet().download("org/name")` returns the local TimeF version directory. Its control tables are
-  Parquet. Its values plane is Parquet or Zarr, as recorded in the manifest.
+- `timenet.pandas` delivers one record as a one-row frame whose cells hold whole value arrays.
+- `timenet.torch` delivers one record as a dict of tensors.
 
 Example status:
 
-- [x] pandas: load a record's series into a `DataFrame`
-- [x] polars: `pl.from_arrow` over `to_arrow()`
-- [x] PyTorch: `load_torch` plus a `DataLoader`
-- [ ] Spark: planned
-
-Each series carries its own `signal` and `time_axis`. It reads its values lazily through
-`to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded record.
+- [x] pandas: `TimeFPandasDataset` and `iter_record_frames`
+- [x] polars: build a frame from the arrays `values_for()` returns
+- [x] PyTorch: `TimeFTorchDataset` and `TimeFIterableStream`
 
 === "pandas"
 
+    An array-cell frame is one row per record: `record_id`, `time_axis`, then one column per
+    signal whose cell holds that signal's whole value array in the dtype it was stored in. Nothing
+    pads, resamples, reindexes, or casts, so a 500 Hz ECG lead sits beside a 1 Hz temperature in
+    the same row.
+
     ```python
-    import numpy as np
-    import pandas as pd
     from timenet.client import TimeNet
+    from timenet.pandas import TimeFPandasDataset
 
-    # read in place through the registry (lazy per-series values)
-    dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.records[0].time_series[0]
-
-    values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
-    # tsqa is an ordinal series: it has an order and no timeline, so there is no time
-    # column to build. A regularly sampled series would use series.time_axis.time_offset_us(i).
-    frame = pd.DataFrame({series.signal: values})
+    with TimeNet("./local_registry").open("demo/hello-world") as reader:
+        for record_id, frame in TimeFPandasDataset(reader).items():
+            print(record_id, frame.columns.tolist())
     ```
+
+    A record can name the same signal twice, at two rates or over two windows. Those need two
+    columns, so a repeated name carries the signal's id as well: `I (record-000-lead-i)`.
 
 === "polars"
 
+    polars has no array-cell idea, so build the frame from the arrays directly. One record's
+    signals need not share a length, so pick the ones that belong in one frame rather than
+    zipping all of them.
+
     ```python
     import polars as pl
+
     from timenet.client import TimeNet
 
-    dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.records[0].time_series[0]
-
-    # pl.from_arrow reads the Arrow array into a polars Series without a copy.
-    column = pl.from_arrow(series.to_arrow())
-    frame = pl.DataFrame({series.signal: column})
+    with TimeNet("./local_registry").open("demo/hello-world") as reader:
+        record = reader.record("record-000")
+        signals = record.signals()
+        values = reader.values_for([s.signal_id for s in signals])
+        frame = pl.DataFrame(
+            {s.name: values[s.signal_id] for s in signals if s.name == "I"}
+        )
     ```
-
-=== "Spark"
-
-    !!! planned "Planned"
-        No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
-        directory. Spark can read its Parquet control tables directly. Reading series values depends
-        on the manifest's values backend: Parquet values are accessible to Parquet tooling, while
-        Zarr values need a Zarr-aware reader.
 
 === "PyTorch"
 
+    An item is one record: `record_id`, `series` as tensors that keep the stored dtype, plus
+    `tasks`, `annotations`, and `series_masks`.
+
     ```python
     from torch.utils.data import DataLoader
+
     from timenet.client import TimeNet
+    from timenet.torch import TimeFIterableStream
 
     # needs: pip install 'timenet[torch]'
-    ds = TimeNet().load_torch("chengsenwang/tsqa")
-    item = ds[0]
-    series, prompt = item["series"][0], item["tasks"][0].prompt
-
-    # Series lengths vary between records, so batch with a collate_fn that picks
-    # out what the model needs.
-    loader = DataLoader(
-        ds,
-        batch_size=8,
-        collate_fn=lambda batch: [
-            (x["series"][0], x["tasks"][0].target) for x in batch
-        ],
-    )
+    with TimeNet("./local_registry").open("demo/hello-world") as reader:
+        stream = TimeFIterableStream(reader, batch_size=512)
+        loader = DataLoader(
+            stream,
+            batch_size=8,
+            collate_fn=lambda batch: [item["series"][0] for item in batch],
+        )
+        for batch in loader:
+            ...
     ```
 
-## Example: train a classifier end-to-end
+    Series lengths and dtypes differ between records, so a `DataLoader` that batches records needs
+    a `collate_fn` of its own, or `batch_size=1`.
 
-One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
-demo is simple. Each record is one noisy signal. The label is `above_zero` or `below_zero`, by the
-sign of the mean. So a classifier only must recover that sign.
+## Batch, do not loop
+
+Both views hydrate a batch of records in one round of queries and read that batch's values in one
+pass over the values plane. Reading a record at a time instead scans the control-plane tables per
+record and re-decodes a row group per signal; on a 618,508-record corpus that is the difference
+between 29 records a second and 15,540. A view of your own should keep the same shape:
 
 ```python
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-
-from timenet.client import TimeNet
-import timenet_connectors
-
-# Build the connector's dataset into the local registry (the producer
-# side), then load it back.
-timenet_connectors.build("timenet/test-mean")
-dataset = TimeNet().load("timenet/test-mean")
-
-# Pair each record's values with its target. Materialization is deferred by
-# default (Arrow); ask for output="numpy" since scikit-learn needs it.
-x, y = dataset.to_features_and_targets(output="numpy")
-
-x_train, x_test, y_train, y_test = train_test_split(
-    x, y, test_size=0.25, stratify=y, random_state=0
-)
-model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
-print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
+batch = list(itertools.islice(reader.iter_records(batch_size=512), 512))
+wanted = [s.signal_id for record in batch for s in record.signals()]
+values = reader.values_for(wanted)
 ```
 
-`to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
-`FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
-because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
-sequence per record (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
-`test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
-tasks, pass `task=...`.
+## Splitting across workers
 
-The full runnable version is
-[`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
+`TimeFIterableStream` reads the slice the reader partitions for the current `DataLoader` worker, so
+`num_workers` workers together see every record exactly once. `TimeFPandasDataset` takes
+`worker_index` and `num_workers` for the same split. The reader drops its database connection when
+it is pickled into a worker and opens a new one there, so passing an open reader across the process
+boundary is safe.
 
-!!! tip "scikit-learn is optional"
-    It backs this example only. It is not a TimeNet dependency. Run `pip install scikit-learn`, then
-    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow. The
-    model on top is your choice.
+## Map-style access
+
+`TimeFTorchDataset` addresses records by position, where position `i` is the record the control
+plane gave surrogate id `i`. Use it when a sampler needs random access. A `DataLoader` with a batch
+sampler calls `__getitems__`, which hydrates the whole batch in one round; plain `__getitem__` pays
+a round of queries and a values pass for a single item.
+
+## Windows
+
+To train on windows rather than whole recordings, read the window instead of the recording.
+`reader.values_window(signal_id, start, stop)` reads one, and `reader.values_windows(windows)` reads
+many in one pass, coalescing the windows that share a row group.

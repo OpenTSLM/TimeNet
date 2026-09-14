@@ -12,7 +12,7 @@ Runs after ``zensical build`` and works on the ``site/`` output plus the ``docs/
 
 Run it with the docs env::
 
-    uv run --group docs --extra build python scripts/gen_site_extras.py
+    uv run --group docs python scripts/gen_site_extras.py
 """
 
 from __future__ import annotations
@@ -243,7 +243,7 @@ def _meta_tag(soup: BeautifulSoup, attr: str, key: str, content: str) -> None:
         soup.head.append(soup.new_tag("meta", attrs={attr: key, "content": content}))
 
 
-_API_ROOTS = ("timenet", "timenet_connectors")
+_API_ROOTS = ("timenet",)
 
 
 def _load_griffe() -> dict:
@@ -252,10 +252,7 @@ def _load_griffe() -> dict:
     Returns:
         A mapping of top-level package name to its loaded Griffe module.
     """
-    search = [
-        str(REPO_ROOT / "packages" / "timenet" / "src"),
-        str(REPO_ROOT / "packages" / "timenet-connectors" / "src"),
-    ]
+    search = [str(REPO_ROOT / "packages" / "timenet" / "src")]
     return {root: griffe.load(root, search_paths=search) for root in _API_ROOTS}
 
 

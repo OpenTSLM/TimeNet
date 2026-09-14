@@ -1,9 +1,8 @@
 # AGENTS.md
 
 TimeNet is infrastructure for a shared time-series format called TimeF. It has two sides: a consumer
-SDK and CLI (`timenet`) to find, download, and load datasets, and a connectors package
-(`timenet-connectors`) that converts external sources into TimeF. Datasets are addressed by an
-`org/name` id.
+SDK (`timenet`) to find, download, and read datasets, and a writer that compiles a builder's
+declarative dataset into TimeF. Datasets are addressed by an `org/name` id.
 
 ## Scope
 Instructions for contributors and coding agents working in this repository.
@@ -19,9 +18,9 @@ Instructions for contributors and coding agents working in this repository.
 the code under `packages/`; trust the code where the two ever disagree.
 
 Build it with `make docs`, or `make docs-serve` for a live-reloading preview. `make docs-preview`
-serves exactly what GitHub Pages publishes. `docs/api/` and `docs/catalog/datasets.{md,json}` are
-generated and git-ignored, so change the generator under `scripts/` rather than those files.
-Everything else under `docs/`, including `docs/catalog/benchmarks.md`, is hand-written.
+serves exactly what GitHub Pages publishes. `docs/api/` is generated and git-ignored, along with the
+`api-nav` region of `zensical.toml`, so change `scripts/gen_api_docs.py` rather than those. Every
+other page under `docs/` is hand-written.
 
 ### Code blocks
 - Hard-wrap prose near 100 columns. Wrap code inside a fence at 80, counting the fence's own
@@ -37,29 +36,26 @@ Everything else under `docs/`, including `docs/catalog/benchmarks.md`, is hand-w
 - When a comment makes a line too long, put it on its own line above the code rather than
   squeezing the code. Re-split a long string with implicit concatenation so the value is unchanged.
 
-Task-specific workflows live as agent skills under `.agents/skills/` (finding and loading datasets,
-adding a dataset connector). They load on demand, so they stay out of this file.
+Task-specific workflows live as agent skills under `.agents/skills/` (finding and reading datasets).
+They load on demand, so they stay out of this file.
 
 ## Workspace Layout
-This is a `uv` workspace. Code lives in two packages under `packages/`:
-- `packages/timenet` — the `timenet` SDK and CLI: the TimeF format plus dataset,
-  reader, and writer definitions, and the `timenet` console script.
-- `packages/timenet-connectors` — the `timenet_connectors` package: dataset-specific
-  logic to fetch raw sources and convert them into TimeF. Depends on `timenet`, which
-  it resolves locally via `[tool.uv.sources]`.
+This is a `uv` workspace. Code lives in one package under `packages/`:
+- `packages/timenet` — the `timenet` SDK: the TimeF format, the DuckDB control plane
+  with its reader and writer, the Parquet and Zarr values planes, and the registry client.
 
-Each package keeps source under `src/` and tests under `tests/`
-(`packages/<name>/src`, `packages/<name>/tests`). The root `pyproject.toml` owns the
-workspace definition and the shared ruff/ty/pytest config; per-package
-`pyproject.toml` files own their name, version, and dependencies.
+The package keeps source under `src/` and tests under `tests/`
+(`packages/timenet/src`, `packages/timenet/tests`). The root `pyproject.toml` owns the
+workspace definition and the shared ruff/ty/pytest config; the package's own
+`pyproject.toml` owns its name, version, and dependencies.
+
+`benchmarks/` and `spikes/` sit outside `packages/` and are not workspace members.
 
 ## Python And uv
 - Use `uv` for all Python workflows. The build backend is `uv_build`.
-- Configure the environment with `make sync`. It installs every workspace member and the
-  workspace extras (`timenet[cli,torch]`). It does not install connector dependencies. Each
-  connector declares its own in a `requirements.txt`, and `make test-connectors` runs that
-  connector's tests and type-check in an environment built from it.
-- Build distributables with `make build` (`uv build --package <name>` per member).
+- Configure the environment with `make sync`. It runs `uv sync --all-groups --all-extras`, so
+  every dependency group and every `timenet` extra (`s3`, `torch`, `zarr`) is installed.
+- Build distributables with `make build` (`uv build --package timenet`).
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
 - Keep `uv.lock` committed; the `uv-lock` pre-commit hook enforces freshness.
 
@@ -67,8 +63,7 @@ workspace definition and the shared ruff/ty/pytest config; per-package
 After any change, run these and make them pass before claiming the work is done:
 - `make check` — `ruff format`, `ruff check`, `ty check`
 - `make lint-fix` — auto-fix lint findings
-- `make test` — core tests in the dev environment
-- `make test-connectors` — each connector's tests and type-check in its own environment
+- `make test` — the whole suite (`packages/` plus the end-to-end benchmark tests)
 
 `make install-hooks` once after cloning to wire up pre-commit. To mirror the CI quick job,
 run `make check-ci` and `make test-unit`. `make check-ci` runs the hooks over all files, the
@@ -89,16 +84,16 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
 `gh stack rebase --upstack` to propagate, rather than mixing concerns into a higher branch.
 
 ## Conventions
-- Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);
-  underscores for Python import packages and modules (`timenet`, `timenet.cli`,
-  `timenet_connectors`). Keep the layers distinct.
+- Dash-separated names for user-facing and distribution names (`timenet-datasets`, the
+  `duckdb-control-plane` spike); underscores for Python import packages and modules
+  (`timenet`, `timenet.control_plane`, `timenet.parquet`). Keep the layers distinct.
 - Branch names follow [Conventional Branch](https://conventionalbranch.org/):
   `<type>/<description>` in lowercase with hyphens, e.g. `feature/dataset-register`,
   `bugfix/empty-timef-input`. Common types: `feature/`, `bugfix/`, `hotfix/`,
   `release/`, `chore/`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
-  `<type>(<scope>): <summary>`, e.g. `feat(cli): add dataset register command`,
-  `fix(cli): handle empty TimeF input`. Drop the scope when none applies
+  `<type>(<scope>): <summary>`, e.g. `feat(reader): add a windowed values read`,
+  `fix(writer): handle empty TimeF input`. Drop the scope when none applies
   (`chore: refresh lockfile`). Mark breaking changes with `!` or a
   `BREAKING CHANGE:` footer.
 - Never use `git commit --no-verify`. If a hook fails, fix the underlying issue
@@ -121,4 +116,4 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
 - Prefer small, reviewable changes.
 - Don't delete user-owned files unless explicitly asked.
 - Match the existing style instead of reformatting adjacent code.
-- Add type hints; both packages ship `py.typed`, so `ty` must stay green.
+- Add type hints; the package ships `py.typed`, so `ty` must stay green.

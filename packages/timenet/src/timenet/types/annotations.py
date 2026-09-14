@@ -6,7 +6,7 @@ ticker symbol. A :class:`~timenet.types.spans.TimePoint` marks one time offset. 
 :class:`~timenet.types.spans.TimeInterval` marks a bounded region of the original recording timeline.
 :class:`Annotation` is a flat frozen dataclass. It carries ``key``, ``unit``, and ``description`` as
 instance fields. A connector can author it directly, or subclass it with field defaults for reuse.
-:class:`~timenet.reader.TimeFReader` can rebuild identical instances from the manifest without runtime
+:class:`~timenet.control_plane.TimeFReader` can rebuild identical instances from the manifest without runtime
 class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema and
 manifest.
 """

@@ -13,15 +13,15 @@ converts. Each dataset keeps the license set by whoever published it.
 
 ## Where a dataset's license lives
 
-Every dataset ships a card (`dataset.yaml`) with two fields that tell you what applies:
+Every version's `manifest.json` carries a metadata block with two fields that tell you what applies:
 
-- `license`: an SPDX identifier, such as `MIT`, `Apache-2.0`, or `CC-BY-4.0`. The dataset-card schema
-  limits this field to a fixed set of SPDX identifiers, kept in sync with `timenet.types.License`, so
-  the value is always one you can look up on [SPDX](https://spdx.org/licenses/).
+- `license`: an SPDX identifier, such as `MIT`, `Apache-2.0`, or `CC-BY-4.0`. The value comes from
+  `timenet.types.License`, a fixed set, so it is always one you can look up on
+  [SPDX](https://spdx.org/licenses/).
 - `source_url`: where the data comes from. Open it to read the upstream terms in full. This field is
   optional, so a purely synthetic dataset may leave it out.
 
-The [dataset catalog](datasets.md) lists both fields per dataset.
+`TimeNet().get("org/name").metadata` reads both without downloading any data.
 
 ## Before you download
 

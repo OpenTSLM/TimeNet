@@ -1,6 +1,6 @@
 ---
 icon: lucide/file-json
-description: "The compiled manifest.json: the single source of truth the SDK reads."
+description: "The compiled manifest.json: the contract a consumer reads before it opens anything."
 tags:
   - reference
   - manifest
@@ -8,21 +8,11 @@ tags:
 
 # Manifest
 
-The **Dataset Manifest** (`manifest.json`) is the compiled single source of truth that the SDK
-reads. It contains the card's metadata, the schema derived from the data, counts, and file
-pointers. It is pure data and does no file I/O. The [writer](timef-writer.md) writes it last, so
-its presence marks a committed version. The [reader](timef-reader.md) reads it first. The manifest
-lives in `timenet.manifest`.
-
-The [`DatasetSchema`](types.md#datasetschema) type already holds flat descriptors. The manifest's
-`schema` block is a direct serialization of this type. The manifest has no separate "entry" types
-to keep in sync.
-
-The packaged `manifest.schema.json` (JSON Schema draft 2020-12) pins the on-disk shape. This file
-is the formal contract for external consumers. It is published as
-[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and is
-available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the output of
-`to_dict()` against this schema.
+`manifest.json` is the contract for a dataset version. It carries the dataset's identity, a
+checksummed descriptor for every file, the counts the build recorded, and which values backend
+wrote the values plane. It is pure data and does no file I/O: the [writer](timef-writer.md) writes
+it last, so its presence marks a committed version, and a consumer reads it first. It lives in
+`timenet.manifest`.
 
 ---
 
@@ -32,48 +22,33 @@ available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the o
 from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
 
 Manifest(
-    dataset_id="physionet/ecg-qa-cot",
+    dataset_id="demo/bedside-monitor",
     metadata=metadata,          # DatasetMetadata
     files=files,                # ManifestFiles (required)
-    schema=schema,              # DatasetSchema (default: empty)
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env=None,             # environment provenance (see below)
+    build_env={},               # environment provenance
     timef_format_version=1,     # validated against the supported set {1}
 )
 ```
 
-`values_backend` names the [values backend](timef-writer.md#values-backends) that wrote
-`files.time_series`. The reader uses this value to select the backend. If the key is absent, the
-reader uses `"parquet"`.
+`values_backend` names the backend that wrote `files.time_series`. The control database says the
+same thing per artifact in its `values_artifacts` table, and that is what the reader dispatches on.
+The manifest copy is for the consumer that has only the manifest: it can see that a version needs
+the `zarr` extra, or that a Zarr store's thousands of small files are one logical artifact, before
+downloading anything. An absent value means `parquet`.
 
-`value_encoding` gives the [values encoding](timef-writer.md#values-encoding) that wrote the shards
-of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
-each file, so the reader does not need it. The field lets a builder see which encoding a build
-selected. The field is empty for a backend that has no such choice.
+`value_encoding` gives the [values encoding](timef-format.md#choosing-the-values-encoding) that
+wrote each spec type's shards. No code reads it. Parquet records the applied encoding in every
+file's footer, so a reader decodes a shard without it; the field lets a builder see what a build
+chose. It is empty for a backend that makes no such choice.
 
-`build_env` records the environment that produced the version. It gives the interpreter version and
-every installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+`build_env` records the environment that produced the version: the interpreter version and every
+installed package with its version. `timenet.provenance.build_env` collects it. Like
+`value_encoding`, it is provenance only.
 
-The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
-multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
-separate format version.
-
-A spec records its `nullable` flag in the same way. When an older manifest omits the flag, the current
-SDK reads it as `False`. The current SDK can therefore read artifacts written before nullability
-support without changing their missing-value behavior.
-
-Nullable artifacts also use `timef_format_version=1`. This does not guarantee that older SDKs can
-read newer nullable artifacts correctly. SDKs from before nullability support can ignore the Zarr
-validity arrays, which mark present timesteps. Those SDKs can treat missing-value placeholders as
-observations.
-
-For nullable artifacts, use an SDK that supports nullability. Format version 1 alone does not show
-whether a reader supports the `nullable` flag and its storage representation.
-
-If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
+Constructing or parsing a `Manifest` with an unsupported `timef_format_version` raises
 `TimeNetInvalidManifestError`.
 
 ### Codec
@@ -85,37 +60,41 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 `from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema` and
 `counts` default to empty. The parser drops unmodeled metadata keys. A malformed block raises
-`TimeNetInvalidManifestError`. This error names the offending block.
+`TimeNetInvalidManifestError`, naming the block at fault.
 
 ### Serialization notes
 
 - Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). The shared
   registry converts them back.
-- A spec carries its data source inline. As a result, the reader does not resolve it against a
-  side table.
-- Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
-  `TASKS` registry. An unknown `task_type` raises `TimeNetInvalidManifestError`. The annotation
-  `value_type` round-trips as a string. The reader uses it to decode values.
+- A spec carries its data source inline, so the reader does not resolve it against a side table.
 
 ---
 
-## `ManifestCounts`
-
-The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
-`time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
-`spec_type -> series count`). All fields default to `0` or `{}`.
-
 ## `ManifestFiles`
 
-`ManifestFiles` groups file descriptors by kind: `records`, `annotations`, and
-`time_series_index` (required), plus `tasks` and `time_series` (tuples, empty by default). A
-reader uses this list. It never uses a directory glob.
+`ManifestFiles` describes every artifact of a version. A reader uses this list; it never globs the
+directory.
 
-Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
-`checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
-live in separate structures.
+| Field | What it holds |
+| --- | --- |
+| `control_db` | The DuckDB control-plane database. One `FilePart`, not a tuple: the database pages itself and never shards. |
+| `time_series` | The values plane's parts, one `FilePart` each. |
 
-`all_files()` returns every descriptor. `all_parts()` returns only the paths.
+Each entry is a `FilePart` carrying the file's `path` (version-relative), its `checksum` (with the
+`sha256:` prefix), and its `size` in bytes, so a path and its digest never live in separate
+structures. `all_files()` returns every descriptor; `all_parts()` returns only the paths, which is
+what a download iterates.
+
+A version carries either `control_db` or the Parquet control tables it replaces (`records`,
+`annotations`, `time_series_index` and `tasks`), never both, so those four tuples are empty
+whenever `control_db` names a database.
+
+## `ManifestCounts`
+
+What the writer records: `records`, `annotations` (distinct payloads), `registered_annotations`
+(attachments of those payloads), `time_series_chunks`, and `time_series_index_rows`. Two more fields
+exist and stay empty: `tasks` and `time_series_specs`, both keyed breakdowns the control database
+answers directly. All fields default to `0` or `{}`.
 
 ---
 

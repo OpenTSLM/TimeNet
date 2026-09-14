@@ -8,12 +8,12 @@ tags:
 
 # Registry
 
-A registry serves compiled TimeF versions to the SDK. A compiled TimeF version has manifests,
-Parquet control tables, and a values plane in Parquet or Zarr format. A registry never runs
-connector code. The registry code lives in `timenet.registry`.
+A registry serves committed TimeF versions to the SDK. A committed version is a `manifest.json`, one
+DuckDB control-plane database, and a values plane in Parquet or Zarr. A registry serves files; it
+never runs producer code. The registry code lives in `timenet.registry`.
 
 You can have several registries: a public registry, private internal registries, or a local
-directory. The output of [build](build.md) is itself a valid local registry.
+directory. The output of a [`TimeFWriter`](timef-writer.md) is itself a valid local registry.
 
 ## Choosing a registry
 
@@ -36,9 +36,9 @@ An unrecognized scheme, for example `gs://` or `az://`, raises `ValueError` inst
 local path. `open_registry` expands `~` in a local path or a `file://` URI.
 
 !!! note "Catalog support"
-    Every backend serves reads and publishes with `store` (remote publishing needs a writer token; the
-    S3 backend reads AWS credentials from the environment). The S3 backend has no catalog, so `list` and
-    `search` are unsupported there.
+    Every backend serves reads and publishes with `store` (remote publishing needs a writer token;
+    the S3 backend reads AWS credentials from the environment). The S3 backend has no catalog, so
+    `list` and `search` are unsupported there.
 
 ### Remote registries
 
@@ -67,10 +67,11 @@ pip install 'timenet[s3]'
 
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
-(`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
-a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
-`download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
-fetch by an explicit `org/name@version`.
+(`manifest.json` last), so a failed publish never leaves a partial version. `open_version` serves a
+version already in the local cache from disk, and otherwise hands back a handle that reads lazily
+through a pyarrow `S3FileSystem` (range reads, no whole-version download). The backend has no
+catalog, so `list` and `search` are unsupported: publish and fetch by an explicit
+`org/name@version`.
 
 ## `BaseRegistry`
 
@@ -95,17 +96,17 @@ lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
 ## Writing to a registry
 
-A `WritableRegistry` adds one write method to the read contract. As a result,
-[build](build.md) can publish into any backend, not only a local directory:
+A `WritableRegistry` adds one write method to the read contract, so a build can publish into any
+backend, not only a local directory:
 
 | Method | Description |
 | --- | --- |
-| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, and skips an already-committed version unless `force`. |
+| `store(dataset, *, force=False)` | Compile a [`DeclarativeDataset`](timef-writer.md) and publish it; returns the stored version. It skips an already-committed version unless `force`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
-`LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
-which stages under `<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` runs
-the [publish flow](#remote-publishing) below. `S3Registry` uploads to a temporary prefix and moves each
+`LocalRegistry` implements `store` with a [`TimeFWriter`](timef-writer.md), which stages under
+`<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` runs the
+[publish flow](#remote-publishing) below. `S3Registry` uploads to a temporary prefix and moves each
 object into place (`manifest.json` last).
 `open_writable_registry(uri)` resolves a URI like `open_registry` but returns a `WritableRegistry`.
 
@@ -117,12 +118,11 @@ version = registry.store(dataset)   # schema derived if needed, atomic commit
 ```
 
 Every backend is a `WritableRegistry`. As a result, this type alone does not show if a backend is a
-directory the engine can write to or a remote stub. `local_registry_path(uri)` gives this
+directory a writer can compile into or a remote stub. `local_registry_path(uri)` gives this
 information. It returns the directory that a `file://` URI or a plain path names. It raises
-`TimeNetRegistryError` for a remote scheme. `default_registry_path()` uses `local_registry_path` to find
-the default local registry. It uses `$TIMENET_REGISTRY` when its value is a local path. Otherwise,
-it uses `<home>/registry`. This is how [`timenet-build build`](cli/build.md) resolves its output
-when `--out` is absent. The `timenet_connectors.builder` and `load` helpers use it too.
+`TimeNetRegistryError` for a remote scheme. `default_registry_path()` uses `local_registry_path` to
+find the default local registry. It uses `$TIMENET_REGISTRY` when its value is a local path.
+Otherwise, it uses `<home>/registry`.
 
 ### Remote publishing
 
@@ -158,9 +158,8 @@ registry.search(
 ```
 
 Every filter takes a scalar value or a list. The registry ignores `None` filters and combines all
-non-`None` filters with AND logic. The consumer CLI, `timenet search`, mirrors this behavior
-exactly. `limit` caps the number of results, with a default of 100. `limit=0` returns no results.
-A negative `limit` raises `ValueError`.
+non-`None` filters with AND logic. `limit` caps the number of results, with a default of 100.
+`limit=0` returns no results. A negative `limit` raises `ValueError`.
 
 | Filter | Matches |
 | --- | --- |
@@ -172,9 +171,9 @@ A negative `limit` raises `ValueError`.
 | `dataset_id` | dataset id is any of these |
 | `tag` | dataset declares all of these tags |
 
-The type-filters, `task` and `time_series_spec`, resolve each dataset's schema from its committed
-manifest. The manifest always carries the derived schema, so the registry does not need a
-`precomputed_schema`.
+The type filters, `task` and `time_series_spec`, resolve each dataset's schema from its committed
+manifest rather than from a side index. A version whose manifest carries no schema block therefore
+matches neither of them; filter such a dataset by id, domain, license, or tag.
 
 ---
 

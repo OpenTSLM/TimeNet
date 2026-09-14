@@ -17,6 +17,11 @@ RECORDS_TEMPLATE = "records/part-{:08d}.parquet"
 ANNOTATIONS_TEMPLATE = "annotations/part-{:08d}.parquet"
 INDEX_TEMPLATE = "time_series_index/part-{:08d}.parquet"
 
+# The DuckDB control plane stores every control-plane entity in this one file, in place of the
+# sharded control tables above. It sits at the version root so a reader (or a remote range read)
+# finds it from the manifest without a directory listing.
+CONTROL_DB_FILE = "control.duckdb"
+
 # PART_INDEX_DIGITS sets how many digits pad the part or shard numbers. Lexical order matches
 # numeric order only while the count fits that width, so part_path() refuses any index past the
 # ceiling.

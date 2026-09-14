@@ -13,7 +13,6 @@ unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version`
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
 
-from collections.abc import Callable
 import os
 from pathlib import Path
 import shutil
@@ -23,14 +22,13 @@ from urllib.parse import urlparse
 import uuid
 
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
+from timenet.control_plane import DeclarativeDataset, TimeFWriter
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version, validate_dataset_id
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 if TYPE_CHECKING:
@@ -154,14 +152,7 @@ class S3Registry(WritableRegistry):
         root = self._key(dataset_id, resolved)
         return DatasetVersion(manifest=manifest, filesystem=self._s3_filesystem(), root=f"{self._bucket}/{root}")
 
-    def store(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    ) -> str:
+    def store(self, dataset: DeclarativeDataset, *, force: bool = False) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
 
         Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then moves each object
@@ -172,14 +163,11 @@ class S3Registry(WritableRegistry):
         Args:
             dataset: The populated dataset to store.
             force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
 
         Returns:
             The stored version string.
+
         """
-        if dataset.schema is None:
-            dataset.derive_schema()
         dataset_id = dataset.metadata.dataset_id
         version = str(dataset.metadata.dataset_version)
         if not force and self.exists(dataset_id, version):
@@ -189,8 +177,8 @@ class S3Registry(WritableRegistry):
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
-            with TimeFWriter(staging, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
-                writer.write()
+            with TimeFWriter(staging, dataset.metadata) as writer:
+                writer.write(dataset)
             version_dir = staging / dataset_id / version
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
             files = sorted(path for path in version_dir.rglob("*") if path.is_file())

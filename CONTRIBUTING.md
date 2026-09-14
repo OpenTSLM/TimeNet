@@ -5,18 +5,15 @@ needs to pass, and the naming conventions we use.
 
 ## Development setup
 
-TimeNet is a [`uv`](https://docs.astral.sh/uv/) workspace with two packages under `packages/`. You
+TimeNet is a [`uv`](https://docs.astral.sh/uv/) workspace with one package under `packages/`. You
 need Python 3.11 or newer (we test 3.11 through 3.13).
 
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
 cd TimeNet
-make sync            # install both packages and the dev + docs groups
+make sync            # uv sync --all-groups --all-extras
 make install-hooks   # wire up pre-commit (run once)
 ```
-
-`make sync` does not install connector dependencies. Each connector declares its own in a
-`requirements.txt`, and `make test-connectors` builds a per-connector environment from it.
 
 ## Verify your change
 
@@ -26,7 +23,6 @@ Run these before you open a pull request, and make them pass:
 - `make lint-fix` auto-fixes what ruff can.
 - `make test` runs the core test suite.
 - `make test-unit` runs the in-memory part of `make test`, for a fast answer.
-- `make test-connectors` runs each connector's tests and type-check in its own environment.
 - `make license-check` fails the build if a copyleft dependency enters the tree.
 
 To mirror the CI quick job, run `make check-ci` and `make test-unit`. `make check-ci` runs the
@@ -37,7 +33,7 @@ Never commit with `--no-verify`. If a hook fails, fix the underlying issue and c
 ## Commit and branch naming
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
-`<type>(<scope>): <summary>`, for example `feat(cli): add dataset register command`. Drop the scope
+`<type>(<scope>): <summary>`, for example `feat(reader): add a windowed values read`. Drop the scope
 when none applies. Mark a breaking change with `!` or a `BREAKING CHANGE:` footer.
 
 Branches follow [Conventional Branch](https://conventionalbranch.org/): `<type>/<description>` in
@@ -57,7 +53,7 @@ This adds a `Signed-off-by` line certifying the
 
 A few things the linters and reviewers expect:
 
-- Add type hints. Both packages ship `py.typed`, so `ty` must stay green.
+- Add type hints. The package ships `py.typed`, so `ty` must stay green.
 - Write Google-style docstrings on public modules, classes, and functions. Tests are exempt.
 - Raise TimeNet's own exceptions from `timenet.errors` (`TimeFValidationError`, `TimeFFormatError`)
   rather than raw `ValueError` or `Exception`.

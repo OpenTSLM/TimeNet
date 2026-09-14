@@ -24,7 +24,7 @@ from timenet.types import (
 )
 
 
-def _manifest(*, values_backend: str = "parquet") -> Manifest:
+def _manifest() -> Manifest:
     holter = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
@@ -66,9 +66,9 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
             tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
+            control_db=FilePart("control.duckdb", "sha256:ff", 60),
             time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
         ),
-        values_backend=values_backend,
     )
 
 
@@ -79,8 +79,14 @@ def test_files_all_parts_concatenates_in_order():
         *(p.path for p in files.annotations),
         *(p.path for p in files.time_series_index),
         *(p.path for p in files.tasks),
+        files.control_db.path if files.control_db else None,
         *(p.path for p in files.time_series),
     )
+
+
+def test_files_all_parts_omits_an_absent_control_db():
+    files = replace(_manifest().files, control_db=None)
+    assert "control.duckdb" not in files.all_parts()
 
 
 def test_default_format_version():
@@ -275,32 +281,14 @@ def test_optional_schema_and_counts_default_empty():
     assert m.counts == ManifestCounts()
 
 
-def test_values_backend_defaults_to_parquet():
-    assert _manifest().values_backend == "parquet"
-    assert _manifest().to_dict()["values_backend"] == "parquet"
+def test_control_db_round_trips():
+    assert Manifest.from_json(_manifest().to_json()).files.control_db == _manifest().files.control_db
 
 
-def test_values_backend_absent_reads_as_parquet():
-    d = _manifest().to_dict()
-    del d["values_backend"]  # a pre-backend manifest
-    assert Manifest.from_dict(d).values_backend == "parquet"
-
-
-def test_values_backend_round_trips():
-    m = _manifest(values_backend="parquet")
-    assert Manifest.from_json(m.to_json()).values_backend == "parquet"
-
-
-def test_unknown_values_backend_rejected_when_parsing():
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
-        _manifest(values_backend="feather")
-
-
-def test_unknown_values_backend_rejected():
+def test_control_db_absent_reads_as_none():
     data = _manifest().to_dict()
-    data["values_backend"] = "hdf5"
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
-        Manifest.from_dict(data)
+    del data["files"]["control_db"]  # a version whose control plane is not a database
+    assert Manifest.from_dict(data).files.control_db is None
 
 
 def test_unmodeled_metadata_keys_dropped():
@@ -331,7 +319,15 @@ def test_non_string_dataset_version_rejected():
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["schema", "counts", "metadata", "files"])
+@pytest.mark.parametrize(
+    "block",
+    [
+        "schema",
+        "counts",
+        "metadata",
+        "files",
+    ],
+)
 def test_null_block_rejected(block):
     d = _manifest().to_dict()
     d[block] = None

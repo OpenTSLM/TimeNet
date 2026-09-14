@@ -26,6 +26,7 @@ dependencies = [
     "numpy>=2.1",
     "pint>=0.25",
     "pyarrow>=21",
+    "duckdb>=1.1",
     "pydantic-settings>=2.4",
 ]
 
@@ -36,33 +37,10 @@ Repository = "https://github.com/OpenTSLM/TimeNet"
 Issues = "https://github.com/OpenTSLM/TimeNet/issues"
 
 [project.optional-dependencies]
-# The console CLI (`timenet`) needs Typer + Rich; the SDK and TimeF format do not. `timenet.cli:main`
-# degrades with a clear "install timenet[cli]" message when this extra is absent.
-cli = [
-    "typer>=0.12",
-    "rich>=13",
-]
 # Optional PyTorch loader (timenet.torch / load_torch). Build-agnostic: any torch build (CPU, CUDA,
 # ROCm, MPS) satisfies it, so a user with an existing CUDA torch reuses it and nothing is downgraded.
 # For a small CPU-only torch, install it from the CPU index first:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
-torch = [
-    "torch>=2.2",
-]
-# Building a dataset loads and validates its human-authored card YAML against the packaged JSON Schema,
-# and runs the connector in an environment built from its own requirements. The PyPI `uv` package ships
-# the binary, so nobody installs uv by hand and the build path locates it without relying on PATH.
-build = [
-    "pyyaml>=6",
-    "jsonschema>=4.18",
-    "uv>=0.10.10",
-]
-# The Zarr values backend (an alternative to the default Parquet shard store). The core reader/writer
-# never import zarr; `timenet.writer.zarr_values` imports it lazily and raises a clear
-# "install timenet[zarr]" message when the extra is absent.
-zarr = [
-    "zarr>=3",
-]
 # The S3 registry backend (store/download against an s3:// bucket). boto3 is imported lazily and raises a
 # clear "install timenet[s3]" message when the extra is absent; pyarrow (already a core dep) supplies the
 # S3FileSystem for lazy range reads.
@@ -70,11 +48,8 @@ s3 = [
     "boto3>=1.34",
 ]
 all = [
-    "timenet[cli,torch,build,zarr,s3]",
+    "timenet[s3]",
 ]
-
-[project.scripts]
-timenet = "timenet.cli:main"
 
 [tool.uv.sources]
 # uv-only (never in published metadata): pin this repo's own dev/CI torch to the small CPU build.

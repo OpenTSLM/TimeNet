@@ -18,33 +18,37 @@ whether it holds ECGs, accelerometer traces, or market prices.
 TimeNet hands you the data and stops there. Training, inference, and modeling are up to you.
 
 We're actively growing TimeNet: adding datasets, integrating time-series ML models, and building
-connectors to data processing libraries. Contributions in any of these areas are welcome.
+bridges to data processing libraries. Contributions in any of these areas are welcome.
 
 Full documentation: <https://docs.timenet.ai/>
 
 ## How it fits together
 
-![TimeNet architecture diagram](https://raw.githubusercontent.com/OpenTSLM/TimeNet/main/docs/assets/architecture.svg)
+A dataset version is one directory: a `manifest.json`, one embedded DuckDB database holding the
+control plane, and the values plane beside it as Parquet shards or a Zarr store. A registry serves
+those directories. The client reads the manifest and opens the version; the reader answers questions
+about it in SQL and pulls values through whichever backend wrote them.
 
-A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
-client reads the manifest from the registry and loads the data. Reading never runs connector code,
-so everything a consumer needs to interpret the parquet lives in the manifest.
+```mermaid
+flowchart LR
+    B["builder<br/><i>DeclarativeDataset</i>"]
+    W["TimeFWriter"]
+    R[("registry<br/>org/name/version/")]
+    C["TimeNet client"]
+    D["TimeFReader"]
+    P["timenet.pandas<br/>timenet.torch"]
+    B --> W --> R --> C --> D --> P
+```
 
-- `BaseConnector` is the only contract a new data source must satisfy.
-- `TimeFDataset` is the in-memory model a connector populates during `convert()`.
-- `TimeFWriter` serializes a populated `TimeFDataset` to disk.
-- `TimeFReader` reads a TimeF version directory back into a `TimeFDataset`.
+Nothing on the read path runs producer code. Everything a consumer needs to interpret a version is
+in the version.
 
-## Components
+## The two planes
 
-The project is a [uv](https://docs.astral.sh/uv/) workspace with two packages under `packages/`,
-plus the registry they read from and write to.
-
-| Part | What it is | Ships |
-| --- | --- | --- |
-| `timenet` | the SDK and CLI | the TimeF format, reader/writer, registry client, engine, `BaseConnector` |
-| `timenet-connectors` | the producer package | connector recipes, dataset cards, and the `timenet-build` CLI |
-| registry | a served location | compiled manifests plus parquet; can be public, a private internal one, or a local directory |
+| | What it holds | How it is stored | Why |
+| --- | --- | --- | --- |
+| control plane | records, source trees, signals, tasks, annotations, chunk locators | one `control.duckdb` | small, deeply cross-referenced, read by point lookups, joins, and tree walks |
+| values plane | the sample values of every signal | Parquet shards, or Zarr with the `zarr` extra | bulk numeric data read by random access at a known offset |
 
 See the [architecture guide](https://docs.timenet.ai/architecture.html) for the full map, and the
 [concepts page](https://docs.timenet.ai/concepts.html) for the terminology.
@@ -54,13 +58,19 @@ See the [architecture guide](https://docs.timenet.ai/architecture.html) for the 
 Requires Python 3.11 or newer (tested on 3.11 to 3.13).
 
 ```bash
-uv add timenet            # core: TimeF format, reader/writer, registry client
-uv add 'timenet[cli]'     # add the timenet console command
-uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset); works with any torch build
+uv add timenet             # core: TimeF format, reader/writer, registry client
+uv add 'timenet[torch]'    # timenet.torch; works with any torch build
+uv add 'timenet[zarr]'     # read and write a Zarr values plane
+uv add 'timenet[s3]'       # an s3:// registry
 ```
 
-Once installed, the CLI is available as `timenet`. See [Get started](https://docs.timenet.ai/get-started.html)
-to load your first dataset.
+See [Get started](https://docs.timenet.ai/get-started.html) to write and read your first dataset.
+
+## Working on TimeNet
+
+This is a [uv](https://docs.astral.sh/uv/) workspace. `make sync` installs the dev environment,
+`make check` runs `ruff format`, `ruff check` and `ty check`, `make test` runs the test suite, and
+`make docs` builds the documentation site. `AGENTS.md` has the full contributor workflow.
 
 ## License
 
@@ -69,7 +79,7 @@ TimeNet is released under the [MIT License](https://github.com/OpenTSLM/TimeNet/
 ### Dataset licenses
 
 The MIT License covers TimeNet's own code, not the datasets it fetches. Each dataset keeps its
-upstream license. Check the `license` and `source_url` fields on a dataset's card to see what applies
-and where the data comes from. Some sources, such as PhysioNet, only grant credentialed access, so
-follow their terms when you download. See
+upstream license. Check the `license` and `source_url` fields in a version's manifest to see what
+applies and where the data comes from. Some sources, such as PhysioNet, only grant credentialed
+access, so follow their terms when you download. See
 [Dataset licensing](https://docs.timenet.ai/catalog/licensing/) for the full note.

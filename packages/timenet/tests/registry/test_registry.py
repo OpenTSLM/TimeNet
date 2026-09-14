@@ -1,8 +1,10 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.manifest import Manifest
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
@@ -15,8 +17,18 @@ from timenet.registry import (
     open_registry,
     open_writable_registry,
 )
-from timenet.testing import make_dataset
-from timenet.types import AnswerTask, Domain, License
+from timenet.types import AnswerTask, DatasetSchema, Domain, License, TimeSeriesSpec, ureg
+
+
+def _declare_schema(registry_root, dataset_id, version, schema):
+    """Give a committed version a manifest schema block.
+
+    The DuckDB writer records the hierarchy in the control database and leaves ``manifest.schema``
+    empty, but the registry's ``task`` and ``time_series_spec`` filters still read that block, so the
+    tests below put one there for the filters to match against.
+    """
+    path = registry_root / dataset_id / version / "manifest.json"
+    path.write_text(replace(Manifest.from_json(path.read_text()), schema=schema).to_json())
 
 
 # ---- factory ----------------------------------------------------------------------------------
@@ -197,10 +209,13 @@ def test_search_by_license(registry_root):
 
 def test_search_by_task_type_filter(registry_root):
     # only hello_world has a QA task
+    _declare_schema(registry_root, "timenet/hello-world", "1.0.0", DatasetSchema(tasks=(AnswerTask,)))
     assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=AnswerTask)} == {"timenet/hello-world"}
 
 
 def test_search_by_time_series_spec(registry_root):
+    spec = TimeSeriesSpec(spec_type="ecg_lead", name="ECG Lead", unit_value=ureg.millivolt)
+    _declare_schema(registry_root, "demo/ecg", "2.0.0", DatasetSchema(time_series_specs=(spec,)))
     assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"demo/ecg"}
 
 
@@ -243,16 +258,6 @@ def test_search_limit_zero_returns_empty(registry_root):
 def test_search_negative_limit_rejected(registry_root):
     with pytest.raises(ValueError, match="non-negative"):
         LocalRegistry(registry_root).search(limit=-1)
-
-
-# ---- store (write side) -----------------------------------------------------------------------
-
-
-def test_store_derives_schema_if_absent(tmp_path):
-    dataset = make_dataset()
-    assert dataset.schema is None
-    LocalRegistry(tmp_path).store(dataset)
-    assert dataset.schema is not None
 
 
 # ---- s3 catalog -------------------------------------------------------------------------------

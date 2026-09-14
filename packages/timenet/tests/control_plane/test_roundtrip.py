@@ -1,0 +1,167 @@
+"""Write a hierarchy, read it back, and check every relationship survived the trip."""
+
+import pickle
+
+import numpy as np
+import pytest
+
+from timenet.control_plane import TimeFReader, TimeFWriter
+from timenet.control_plane.reader import render_task
+from timenet.errors import TimeFFormatError
+from timenet.testing import make_dataset
+
+
+@pytest.fixture
+def version(tmp_path):
+    """Write the fixture dataset and return its committed version directory."""
+    dataset = make_dataset(n_records=3, n_values=256)
+    with TimeFWriter(tmp_path, dataset.metadata) as writer:
+        writer.write(dataset)
+    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+@pytest.fixture
+def reader(version):
+    """Open the written version for reading."""
+    with TimeFReader(version) as opened:
+        yield opened
+
+
+def test_every_record_round_trips(reader):
+    assert reader.record_ids() == ["record-000", "record-001", "record-002"]
+
+
+def test_source_tree_keeps_its_shape(reader):
+    record = reader.record("record-000")
+    assert [source.name for source in record.sources] == ["Bedside monitor"]
+    monitor = record.sources[0]
+    assert [child.name for child in monitor.sources] == ["ECG", "Temperature sensor"]
+    assert monitor.depth == 0
+    assert all(child.depth == 1 for child in monitor.sources)
+
+
+def test_signals_hang_off_the_right_source(reader):
+    record = reader.record("record-000")
+    ecg, temperature = record.sources[0].sources
+    assert [signal.name for signal in ecg.signals] == ["I", "II"]
+    assert [signal.name for signal in temperature.signals] == ["Chest temperature"]
+
+
+def test_signal_resolves_its_spec_and_axis(reader):
+    record = reader.record("record-000")
+    lead_i = record.sources[0].sources[0].signals[0]
+    assert lead_i.spec_type == "ecg-voltage"
+    assert lead_i.unit == "millivolt"
+    assert lead_i.dtype == "float32"
+    assert lead_i.axis_type == "regular"
+    assert lead_i.n_values == 256
+
+
+def test_annotations_land_at_every_level(reader):
+    record = reader.record("record-000")
+    assert {a.name for a in record.annotations} == {"patient_sex", "patient_age"}
+    ecg = record.sources[0].sources[0]
+    assert [a.name for a in ecg.annotations] == ["device_model"]
+    assert [a.name for a in ecg.signals[0].annotations] == ["lead_status"]
+
+
+def test_point_annotation_keeps_its_placement(reader):
+    lead_i = reader.record("record-000").sources[0].sources[0].signals[0]
+    (status,) = lead_i.annotations
+    assert status.span_type == "point"
+    assert status.start_us == 6_000_000
+    assert status.to_text() == "lead_status=Lead fell off @6s"
+
+
+def test_shared_annotation_is_stored_once(reader):
+    payloads = reader.connection.execute(
+        "SELECT count(*) FROM annotation_contents WHERE name = 'patient_sex'"
+    ).fetchone()[0]
+    occurrences = reader.connection.execute(
+        "SELECT count(*) FROM annotation_occurrences o JOIN annotation_contents c USING (content_id) "
+        "WHERE c.name = 'patient_sex'"
+    ).fetchone()[0]
+    assert payloads == 1
+    assert occurrences == 3
+
+
+def test_values_round_trip_with_their_dtype(version, reader):
+    values = reader.values("record-000-lead-i")
+    assert values.shape == (256,)
+    assert values.dtype == np.float32
+
+
+def test_irregular_signal_round_trips(reader):
+    chest = reader.record("record-000").sources[0].sources[1].signals[0]
+    assert chest.axis_type == "irregular"
+    assert reader.values("record-000-chest").shape == (10,)
+
+
+def test_task_resolves_its_inputs_and_targets(reader):
+    task = reader.task("diagnosis-000")
+    assert task.prompt == "Diagnose this patient."
+    assert len(task.inputs) == 1
+    assert task.inputs[0].record_id == "record-000"
+    assert task.target == ["The patient is stable."]
+    assert [a.name for a in task.annotations] == ["task_type"]
+
+
+def test_render_task_walks_the_whole_hierarchy(reader):
+    rendered = render_task(reader, "diagnosis-000")
+    assert "PROMPT: Diagnose this patient." in rendered
+    assert "source: Bedside monitor" in rendered
+    assert "signal: I (ecg-voltage" in rendered
+    assert "[signal] lead_status=Lead fell off @6s" in rendered
+    assert "[record] patient_sex=male" in rendered
+    assert "TARGET: The patient is stable." in rendered
+
+
+def test_reverse_lookup_from_annotation_to_records(reader):
+    assert reader.records_with("patient_sex", "male") == ["record-000", "record-001", "record-002"]
+
+
+def test_reverse_lookup_reaches_records_through_signals(reader):
+    # lead_status is attached to a signal, not to the record, so this only resolves if the
+    # occurrence carries the record it sits in.
+    assert reader.records_with("lead_status") == ["record-000", "record-001", "record-002"]
+
+
+def test_reverse_lookup_from_annotation_to_objects(reader):
+    found = reader.objects_with("device_model")
+    assert {kind for kind, _ in found} == {"source"}
+    assert len(found) == 3
+
+
+def test_tasks_for_record_without_a_link_table(reader):
+    assert reader.tasks_for_record("record-001") == ["diagnosis-001"]
+
+
+def test_subtree_returns_the_branch(reader):
+    found = reader.subtree("record-000", "record-000-ecg")
+    assert [name for _, name, _ in found] == ["ECG"]
+    whole = reader.subtree("record-000", "record-000-monitor")
+    assert [name for _, name, _ in whole] == ["Bedside monitor", "ECG", "Temperature sensor"]
+
+
+def test_dataset_level_annotation_is_addressable(reader):
+    assert [a.value for a in reader.annotations_for("dataset", "dataset")] == ["test fixtures"]
+
+
+def test_unknown_record_raises(reader):
+    with pytest.raises(TimeFFormatError, match="no record"):
+        reader.record("nope")
+
+
+def test_unknown_object_type_raises(reader):
+    with pytest.raises(TimeFFormatError, match="not an annotatable object type"):
+        reader.annotations_for("banana", "x")
+
+
+def test_reader_survives_pickling(version):
+    """A torch DataLoader ships its dataset to every worker, so the reader must cross a process."""
+    with TimeFReader(version) as reader:
+        reader.record_ids()
+        revived = pickle.loads(pickle.dumps(reader))
+    assert revived.record_ids() == ["record-000", "record-001", "record-002"]
+    assert revived.values("record-000-lead-i").shape == (256,)
+    revived.close()
