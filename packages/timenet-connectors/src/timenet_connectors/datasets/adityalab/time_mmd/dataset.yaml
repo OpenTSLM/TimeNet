@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the adityalab/time-mmd connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: two of the nine domains of the release, `energy` (weekly, from 1993) and `environment`
+# (daily, from 1980). One record per domain carries the numerical series as its signals and every
+# text of the domain as an annotation over the days it states. The connector pins the release to
+# commit 00281e2 of the GitHub repository and checks every file against its digest.
+#
+# License: the repository ships no LICENSE file. Appendix V of the Time-MMD paper
+# (arXiv:2406.08627) states "We license our dataset by ODC-By v1.0", and adds that the sources are
+# in the public domain and authorized for non-commercial distribution. The CC BY 4.0 shown on the
+# arXiv page is the license of the paper's text, not of the data.
+yaml_schema_version: 1
+dataset_id: adityalab/time-mmd
+dataset_version: 1.0.0
+name: Time-MMD
+description: >-
+  Multi-domain time series paired with dated text: the weekly US retail gasoline price and the
+  daily New York Air Quality Index, each with a language model's summaries of the domain's
+  reports and weekly web search results, as facts and predictions over the days they state.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
+source_url: https://github.com/AdityaLab/Time-MMD
+citation: >-
+  Liu, H., Xu, S., Zhao, Z., Kong, L., Kamarthi, H., Sasanur, A. B., Sharma, M., Cui, J., Wen, Q.,
+  Zhang, C., and Prakash, B. A. (2024). Time-MMD: A New Multi-Domain Multimodal Dataset for Time
+  Series Analysis. arXiv:2406.08627.
+domains:
+  - energy
+  - environment
+tags:
+  - multimodal
+  - text
+  - forecasting
+  - captioning
+  - gasoline-prices
+  - air-quality
+  - time-mmd
+  - github
