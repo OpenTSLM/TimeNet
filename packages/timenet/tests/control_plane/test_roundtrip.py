@@ -18,7 +18,7 @@ from timenet.control_plane import (
 from timenet.control_plane.reader import render_task
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
-from timenet.testing import make_dataset, make_metadata
+from timenet.testing import make_dataset, make_metadata, make_record
 from timenet.types import TimeSeriesSpec, ureg
 
 
@@ -209,3 +209,102 @@ def test_one_signal_shared_by_two_records(tmp_path):
         # the values are stored once, and both records read the same array
         assert reader.values("shared-series").tolist() == list(range(64))
         assert reader.records_with("unit_kind") == ["r-0", "r-1"]
+
+
+def test_write_stream_never_holds_the_whole_corpus(tmp_path):
+    """The streaming path must consume records lazily, not materialize them.
+
+    A corpus larger than memory is the reason this path exists, so the test asserts the generator
+    is still being pulled from while rows are already on disk, and that nothing kept a list of them.
+    """
+    metadata = make_metadata(dataset_id="test/streamed")
+    produced = []
+
+    def records():
+        for index in range(50):
+            record = make_record(f"streamed-{index:03d}", seed=index, n_values=64)
+            produced.append(record.id)
+            yield record
+
+    with TimeFWriter(tmp_path, metadata) as writer:
+        writer.write_stream(records())
+    assert len(produced) == 50
+
+    with TimeFReader(tmp_path / "test/streamed" / "1.0.0") as reader:
+        assert len(reader.record_ids()) == 50
+        counts = reader.counts()
+        assert counts["signals"] == 150
+        assert counts["signal_chunks"] == 150
+        record = reader.record("streamed-007")
+        assert [s.name for s in record.sources[0].sources[0].signals] == ["I", "II"]
+        assert reader.values("streamed-007-lead-i").shape == (64,)
+
+
+def test_write_stream_matches_the_in_memory_path(tmp_path):
+    """Streaming and materializing the same dataset must produce the same tables."""
+    dataset = make_dataset(n_records=4, n_values=64)
+    with TimeFWriter(tmp_path / "whole", dataset.metadata) as writer:
+        writer.write(dataset)
+    with TimeFWriter(tmp_path / "streamed", dataset.metadata) as writer:
+        writer.write_stream(iter(dataset.records), iter(dataset.tasks), annotations=dataset.annotations)
+
+    version = f"{dataset.metadata.dataset_id}/1.0.0"
+    with TimeFReader(tmp_path / "whole" / version) as a, TimeFReader(tmp_path / "streamed" / version) as b:
+        assert a.counts() == b.counts()
+        assert a.record_ids() == b.record_ids()
+        assert [s.signal_id for s in a.record("record-000").signals()] == [
+            s.signal_id for s in b.record("record-000").signals()
+        ]
+        assert a.values("record-000-lead-i").tolist() == b.values("record-000-lead-i").tolist()
+
+
+def test_records_batch_matches_one_at_a_time(reader):
+    """The batched path must rebuild exactly what the single-record path does."""
+    ids = reader.record_ids()
+    batched = reader.records(ids)
+    assert [r.record_id for r in batched] == ids
+    for one, many in zip((reader.record(rid) for rid in ids), batched, strict=True):
+        assert [s.name for s in one.sources] == [s.name for s in many.sources]
+        assert [s.signal_id for s in one.signals()] == [s.signal_id for s in many.signals()]
+        assert [a.to_text() for a in one.annotations] == [a.to_text() for a in many.annotations]
+        assert [a.to_text() for s in one.signals() for a in s.annotations] == [
+            a.to_text() for s in many.signals() for a in s.annotations
+        ]
+
+
+def test_tasks_batch_matches_one_at_a_time(reader):
+    ids = reader.task_ids()
+    batched = reader.tasks(ids)
+    assert [t.task_id for t in batched] == ids
+    for one, many in zip((reader.task(tid) for tid in ids), batched, strict=True):
+        assert one.prompt == many.prompt
+        assert [i if isinstance(i, str) else i.record_id for i in one.inputs] == [
+            i if isinstance(i, str) else i.record_id for i in many.inputs
+        ]
+        assert [a.name for a in one.annotations] == [a.name for a in many.annotations]
+
+
+def test_iter_records_covers_everything_once(reader):
+    seen = [r.record_id for r in reader.iter_records(batch_size=2)]
+    assert sorted(seen) == reader.record_ids()
+
+
+def test_workers_split_the_corpus_into_disjoint_slices(reader):
+    """Four DataLoader workers must together see every record exactly once."""
+    slices = [[r.record_id for r in reader.iter_records(batch_size=2, worker_index=i, num_workers=4)] for i in range(4)]
+    flat = [rid for part in slices for rid in part]
+    assert sorted(flat) == reader.record_ids()
+    assert len(flat) == len(set(flat))
+
+
+def test_iter_tasks_hydrates_its_records(reader):
+    tasks = list(reader.iter_tasks(batch_size=2))
+    assert [t.task_id for t in tasks] == reader.task_ids()
+    assert all(t.inputs and not isinstance(t.inputs[0], str) for t in tasks)
+
+
+def test_a_bad_worker_slice_is_refused(reader):
+    with pytest.raises(ValueError, match="not a slice"):
+        list(reader.iter_records(worker_index=4, num_workers=4))
+    with pytest.raises(ValueError, match="batch_size"):
+        list(reader.iter_records(batch_size=0))

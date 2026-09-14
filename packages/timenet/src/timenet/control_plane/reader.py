@@ -9,7 +9,7 @@ The reader opens the database read-only. A read-only connection does not create 
 file, so a downloaded version stays exactly as it was checksummed in the manifest.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -185,6 +185,56 @@ WHERE src.record_id = ?
 ORDER BY occurrence_id
 """
 
+# The batched forms of the three queries above. Hydrating a record at a time costs 34 ms on a
+# 618,508-record corpus, because each of these scans the whole table; asking for a thousand records
+# at once costs 0.111 ms per record, because the same scan answers all of them.
+_BATCH_RECORDS = """
+SELECT record_id, start_time_us, metadata FROM records WHERE record_id IN (SELECT unnest(?))
+"""
+
+_BATCH_SOURCES = """
+SELECT record_id, source_id, parent_source_id, name, position, metadata, depth
+FROM sources WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id, path
+"""
+
+_BATCH_SIGNALS = """
+SELECT src.record_id, sig.signal_id, ss.source_id, sig.name, ss.position, sig.n_values, sig.metadata,
+       sp.spec_id, sp.unit, sp.dtype, ax.axis_type
+FROM sources src
+JOIN source_signals ss ON ss.source_id = src.source_id
+JOIN signals sig ON sig.signal_id = ss.signal_id
+JOIN specs sp ON sp.spec_id = sig.spec_id
+JOIN axes  ax ON ax.axis_id = sig.axis_id
+WHERE src.record_id IN (SELECT unnest(?))
+ORDER BY src.record_id, ss.source_id, ss.position
+"""
+
+_BATCH_ANNOTATIONS = """
+SELECT o.scope_record_id, o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
+       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
+       o.occurrence_id
+FROM annotation_occurrences o
+JOIN annotation_contents c ON c.content_id = o.content_id
+WHERE o.scope_record_id IN (SELECT unnest(?))
+UNION ALL
+SELECT src.record_id, o.object_type, o.on_signal_id AS object_id,
+       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
+       o.occurrence_id
+FROM annotation_occurrences o
+JOIN annotation_contents c ON c.content_id = o.content_id
+JOIN source_signals ss ON ss.signal_id = o.on_signal_id
+JOIN sources src ON src.source_id = ss.source_id
+WHERE src.record_id IN (SELECT unnest(?))
+ORDER BY 1, occurrence_id
+"""
+
+# Every n-th row, so N workers split a corpus into disjoint slices without coordinating.
+_PARTITIONED_IDS = """
+SELECT {column} FROM (
+    SELECT {column}, row_number() OVER (ORDER BY {column}) - 1 AS ordinal FROM {table}
+) WHERE ordinal % ? = ?
+"""
+
 _ANNOTATIONS_FOR = """
 SELECT c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence
 FROM annotation_occurrences o
@@ -230,7 +280,7 @@ SELECT DISTINCT task_id FROM task_items WHERE record_id = ? ORDER BY task_id
 """
 
 
-class TimeFReader:
+class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hierarchy is
     """Opens a version's control database and answers questions about its hierarchy."""
 
     def __init__(self, root: Path, database: str | Path | None = None) -> None:
@@ -355,6 +405,9 @@ class TimeFReader:
     def record(self, record_id: str) -> RecordView:
         """Rebuild one record: its source tree, its signals, and every annotation in it.
 
+        Reading many records one call at a time is the slow way round; see :meth:`records` and
+        :meth:`iter_records`.
+
         Args:
             record_id: The record to read.
 
@@ -364,61 +417,140 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If no record has this id.
         """
-        row = self.connection.execute(
-            "SELECT record_id, start_time_us, metadata FROM records WHERE record_id = ?", [record_id]
-        ).fetchone()
-        if row is None:
+        found = self.records([record_id])
+        if not found:
             raise TimeFFormatError(f"no record {record_id!r}")
-        record = RecordView(record_id=row[0], start_time_us=row[1], metadata=_metadata(row[2]))
+        return found[0]
 
-        by_id: dict[str, SourceView] = {}
-        for source_id, parent_id, name, _position, metadata, depth in self.connection.execute(
-            _SOURCE_TREE, [record_id]
+    def records(self, record_ids: Sequence[str]) -> list[RecordView]:  # noqa: PLR0914
+        """Rebuild many records with four queries, whatever the batch size.
+
+        Each query scans its table once and answers for the whole batch, so the per-record cost
+        falls with the batch. Measured on a 618,508-record corpus: 34.49 ms per record one at a
+        time, 0.111 ms per record in batches of a thousand.
+
+        Args:
+            record_ids: The records to read. Ids that name no record are skipped.
+
+        Returns:
+            The reconstructed records, in the order the ids were given.
+        """
+        wanted = list(record_ids)
+        if not wanted:
+            return []
+        built = {
+            row[0]: RecordView(record_id=row[0], start_time_us=row[1], metadata=_metadata(row[2]))
+            for row in self.connection.execute(_BATCH_RECORDS, [wanted]).fetchall()
+        }
+
+        sources: dict[str, SourceView] = {}
+        for record_id, source_id, parent_id, name, _position, metadata, depth in self.connection.execute(
+            _BATCH_SOURCES, [wanted]
         ).fetchall():
             view = SourceView(source_id=source_id, name=name, depth=depth, metadata=_metadata(metadata))
-            by_id[source_id] = view
+            sources[source_id] = view
             if parent_id is None:
-                record.sources.append(view)
+                built[record_id].sources.append(view)
             else:
-                by_id[parent_id].sources.append(view)
+                sources[parent_id].sources.append(view)
 
-        for (
-            signal_id,
-            source_id,
-            name,
-            _position,
-            n_values,
-            metadata,
-            spec_id,
-            unit,
-            dtype,
-            axis_type,
-        ) in self.connection.execute(_RECORD_SIGNALS, [record_id]).fetchall():
-            by_id[source_id].signals.append(
-                SignalView(
-                    signal_id=signal_id,
-                    name=name,
-                    spec_type=spec_id,
-                    unit=unit,
-                    dtype=dtype,
-                    axis_type=axis_type,
-                    n_values=n_values,
-                    metadata=_metadata(metadata),
-                )
+        signals: dict[str, SignalView] = {}
+        for row in self.connection.execute(_BATCH_SIGNALS, [wanted]).fetchall():
+            (_record_id, signal_id, source_id, name, _position, n_values, metadata, spec_id, unit, dtype, axis) = row
+            view = SignalView(
+                signal_id=signal_id,
+                name=name,
+                spec_type=spec_id,
+                unit=unit,
+                dtype=dtype,
+                axis_type=axis,
+                n_values=n_values,
+                metadata=_metadata(metadata),
             )
+            signals[signal_id] = view
+            sources[source_id].signals.append(view)
 
-        signals_by_id = {signal.signal_id: signal for signal in record.signals()}
-        for object_type, object_id, *payload in self.connection.execute(
-            _RECORD_ANNOTATIONS, [record_id, record_id]
+        for record_id, object_type, object_id, *payload in self.connection.execute(
+            _BATCH_ANNOTATIONS, [wanted, wanted]
         ).fetchall():
             annotation = _annotation(payload[:-1])
             if object_type == "record":
-                record.annotations.append(annotation)
+                built[record_id].annotations.append(annotation)
             elif object_type == "source":
-                by_id[object_id].annotations.append(annotation)
+                sources[object_id].annotations.append(annotation)
             else:
-                signals_by_id[object_id].annotations.append(annotation)
-        return record
+                signals[object_id].annotations.append(annotation)
+        return [built[record_id] for record_id in wanted if record_id in built]
+
+    def iter_records(
+        self, *, batch_size: int = 512, worker_index: int = 0, num_workers: int = 1
+    ) -> Iterator[RecordView]:
+        """Walk every record, hydrating them in batches.
+
+        Args:
+            batch_size: How many records to hydrate per round of queries.
+            worker_index: Which slice of the corpus this caller wants, from 0.
+            num_workers: How many slices the corpus is split into. Each worker sees a disjoint
+                slice, so a DataLoader's workers together see every record exactly once.
+
+        Yields:
+            Each record in this worker's slice.
+
+        Raises:
+            ValueError: If the worker index and count do not describe a slice.
+        """  # noqa: DOC502 - raised by _id_batches
+        for batch in self._id_batches("records", "record_id", batch_size, worker_index, num_workers):
+            yield from self.records(batch)
+
+    def iter_tasks(self, *, batch_size: int = 512, worker_index: int = 0, num_workers: int = 1) -> Iterator[TaskView]:
+        """Walk every task, hydrating each batch's records together.
+
+        Args:
+            batch_size: How many tasks to hydrate per round of queries.
+            worker_index: Which slice of the corpus this caller wants, from 0.
+            num_workers: How many slices the corpus is split into.
+
+        Yields:
+            Each task in this worker's slice, with its input and target records rebuilt.
+
+        Raises:
+            ValueError: If the worker index and count do not describe a slice.
+        """  # noqa: DOC502 - raised by _id_batches
+        for batch in self._id_batches("tasks", "task_id", batch_size, worker_index, num_workers):
+            yield from self.tasks(batch)
+
+    def _id_batches(
+        self, table: str, column: str, batch_size: int, worker_index: int, num_workers: int
+    ) -> Iterator[list[str]]:
+        """Yield this worker's ids in batches.
+
+        Args:
+            table: The table to draw ids from.
+            column: The id column.
+            batch_size: How many ids per batch.
+            worker_index: Which slice this caller wants.
+            num_workers: How many slices there are.
+
+        Yields:
+            One batch of ids at a time.
+
+        Raises:
+            ValueError: If the worker index and count do not describe a slice, or the batch is empty.
+        """
+        if num_workers < 1 or not 0 <= worker_index < num_workers:
+            raise ValueError(f"worker {worker_index} of {num_workers} is not a slice of the corpus")
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+        query = _PARTITIONED_IDS.format(table=table, column=column)
+        # The ids stream from their own cursor: hydrating a batch runs more queries, and a second
+        # query on the same connection would discard the result this one is still reading.
+        cursor = self.connection.cursor()
+        try:
+            found = cursor.execute(query, [num_workers, worker_index])
+            while rows := found.fetchmany(batch_size):
+                yield [row[0] for row in rows]
+        finally:
+            cursor.close()
 
     def task(self, task_id: str) -> TaskView:
         """Rebuild one task, resolving each input and target in order.
@@ -444,6 +576,47 @@ class TimeFReader:
             item = text_value if item_type == "text" else self.record(record_id)
             (task.inputs if role == "input" else task.target).append(item)
         return task
+
+    def tasks(self, task_ids: Sequence[str]) -> list[TaskView]:
+        """Rebuild many tasks, hydrating every record they refer to in one batch.
+
+        Args:
+            task_ids: The tasks to read. Ids that name no task are skipped.
+
+        Returns:
+            The reconstructed tasks, in the order the ids were given.
+        """
+        wanted = list(task_ids)
+        if not wanted:
+            return []
+        built = {
+            row[0]: TaskView(task_id=row[0], prompt=row[1])
+            for row in self.connection.execute(
+                "SELECT task_id, prompt FROM tasks WHERE task_id IN (SELECT unnest(?))", [wanted]
+            ).fetchall()
+        }
+        items = self.connection.execute(
+            "SELECT task_id, role, position, item_type, text_value, record_id FROM task_items "
+            "WHERE task_id IN (SELECT unnest(?)) ORDER BY task_id, role, position",
+            [wanted],
+        ).fetchall()
+        # Every record any of these tasks names, rebuilt together rather than one task at a time.
+        referenced = {row[5] for row in items if row[3] == "record" and row[5] is not None}
+        records = {record.record_id: record for record in self.records(sorted(referenced))}
+        for task_id, role, _position, item_type, text_value, record_id in items:
+            item = text_value if item_type == "text" else records.get(record_id)
+            if item is None:
+                continue
+            (built[task_id].inputs if role == "input" else built[task_id].target).append(item)
+        for annotation_row in self.connection.execute(
+            "SELECT o.on_task_id, c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, "
+            "o.provenance, o.confidence FROM annotation_occurrences o "
+            "JOIN annotation_contents c ON c.content_id = o.content_id "
+            "WHERE o.on_task_id IN (SELECT unnest(?)) ORDER BY o.occurrence_id",
+            [wanted],
+        ).fetchall():
+            built[annotation_row[0]].annotations.append(_annotation(annotation_row[1:]))
+        return [built[task_id] for task_id in wanted if task_id in built]
 
     def annotations_for(self, object_type: str, object_id: str) -> list[ResolvedAnnotation]:
         """Return every annotation attached to one object.

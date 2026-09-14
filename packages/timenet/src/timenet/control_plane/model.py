@@ -269,15 +269,28 @@ class Record(_Annotatable):
         return [signal for source in self.walk_sources() for signal in source.signals]
 
 
+@dataclass(frozen=True)
+class RecordRef:
+    """A reference to a record by id, for a task built without the record object in hand.
+
+    A streaming build yields its records and drops them, so by the time it builds the tasks the
+    record objects are gone. Naming the id keeps the reference a record reference rather than
+    degrading into a text item, and the write-time validation still rejects an id that names no
+    record.
+    """
+
+    id: str
+
+
 @dataclass
 class Task(_Annotatable):
     """What a model is asked to do with some records, and what the right answer is."""
 
     prompt: str
     """What the model is supposed to do, as text."""
-    inputs: list[Record | str] = field(default_factory=list)
+    inputs: list["Record | RecordRef | str"] = field(default_factory=list)
     """The records and text the task gives the model. Order is preserved."""
-    target: list[Record | str] = field(default_factory=list)
+    target: list["Record | RecordRef | str"] = field(default_factory=list)
     """The desired output, as text and records. Order is preserved."""
     id: str = field(default_factory=new_id)
     """The task's id. It is generated when the caller does not supply one."""

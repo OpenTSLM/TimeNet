@@ -103,7 +103,15 @@ def shard_schema(dtype: str) -> pa.Schema:
 
 
 class ValuesPlaneWriter:
-    """Streams signal values into rotating, byte-budgeted Parquet shards, one stream per modality."""
+    """Streams signal values into rotating, byte-budgeted Parquet shards, one stream per modality.
+
+    Signals arrive one at a time, so a build never holds the whole values plane in memory. Each
+    modality keeps its own open shard stream, opened the first time that modality is seen, and every
+    stream draws from one part counter so the shard numbers stay unique across modalities.
+
+    A modality's encoding is chosen from the first signals that arrive on it, since the choice has to
+    be made before the first row group is written and cannot be revised afterwards.
+    """
 
     def __init__(  # noqa: PLR0913
         self,
@@ -133,6 +141,8 @@ class ValuesPlaneWriter:
         self._compression_level = compression_level
         self._parts: list[str] = []
         self._encodings: dict[str, ValueEncoding] = {}
+        self._streams: dict[str, _ModalityStream] = {}
+        self._next_part = 0
 
     @property
     def parts(self) -> list[str]:
@@ -144,56 +154,94 @@ class ValuesPlaneWriter:
         """The encoding chosen for each modality, for the manifest's provenance block."""
         return {spec_type: str(encoding) for spec_type, encoding in self._encodings.items()}
 
-    def write(self, signals: Sequence[PendingSignal]) -> list[ChunkLocator]:
-        """Write every signal, grouped by modality, and return where each chunk landed.
+    def _claim_part(self) -> str:
+        """Return the next shard path, so every modality's shards share one numbering.
+
+        Returns:
+            The new shard's version-relative path.
+        """
+        path = part_path(SHARD_TEMPLATE, self._next_part)
+        self._next_part += 1
+        self._parts.append(path)
+        return path
+
+    def add(self, signal: PendingSignal) -> list[ChunkLocator]:
+        """Buffer one signal's values, writing a row group if that fills one.
 
         Args:
-            signals: The signals to write. They are grouped by ``spec_type`` so one shard holds one
-                modality, which keeps a shard's values column homogeneous enough to encode well.
+            signal: The signal to write.
+
+        Returns:
+            The locators of any chunks that reached disk because of this signal. Usually empty: a
+            locator is only known once the row group holding it has been written.
+        """
+        stream = self._streams.get(signal.spec_type)
+        if stream is None:
+            stream = _ModalityStream(self, signal.spec_type, signal.dtype)
+            self._streams[signal.spec_type] = stream
+        return stream.add(signal)
+
+    def write(self, signals: Sequence[PendingSignal]) -> list[ChunkLocator]:
+        """Write every signal and return where each chunk landed.
+
+        Args:
+            signals: The signals to write.
 
         Returns:
             One :class:`ChunkLocator` per chunk written.
         """
-        by_modality: dict[str, list[PendingSignal]] = {}
-        for signal in signals:
-            by_modality.setdefault(signal.spec_type, []).append(signal)
-
         locators: list[ChunkLocator] = []
-        part_index = 0
-        for spec_type in sorted(by_modality):
-            modality = by_modality[spec_type]
-            written, part_index = self._write_modality(spec_type, modality, part_index)
-            locators.extend(written)
+        for signal in signals:
+            locators.extend(self.add(signal))
+        locators.extend(self.finish())
         return locators
 
-    def _write_modality(
-        self, spec_type: str, signals: list[PendingSignal], part_index: int
-    ) -> tuple[list[ChunkLocator], int]:
-        """Write one modality's signals into its own rotating shard stream.
+    def finish(self) -> list[ChunkLocator]:
+        """Flush every open modality stream and close its shards.
 
         Returns:
-            Where every chunk landed, and the next free part index.
+            The locators of every chunk still buffered when this was called.
         """
-        dtype = signals[0].dtype
-        sample = [signal.values for signal in signals[:_ENCODING_SAMPLE_ARRAYS]]
-        encoding = select_value_encoding(sample, dtype=dtype)
-        self._encodings[spec_type] = encoding
+        locators: list[ChunkLocator] = []
+        for stream in self._streams.values():
+            locators.extend(stream.finish())
+        self._streams.clear()
+        return locators
 
-        schema = shard_schema(dtype)
-        start = part_index
-        # ParquetEncoding carries the format's compression-level default, so the values plane keeps
-        # exactly the write options the production writer uses.
+
+class _ModalityStream:
+    """One modality's open shard stream: its buffer, its chosen encoding, and its rotating writer."""
+
+    def __init__(self, owner: ValuesPlaneWriter, spec_type: str, dtype: str) -> None:
+        self._owner = owner
+        self._spec_type = spec_type
+        self._dtype = dtype
+        self._schema = shard_schema(dtype)
+        self._writer: RotatingPartWriter | None = None
+        self._sample: list[np.ndarray] = []
+        self._buffer: list[dict] = []
+        self._pending: list[tuple[str, int, int]] = []
+        self._buffered_bytes = 0
+
+    def _open(self) -> RotatingPartWriter:
+        """Choose this modality's encoding from what has arrived, and open its shard stream.
+
+        Returns:
+            The rotating writer this modality's row groups go through.
+        """
+        encoding = select_value_encoding(self._sample, dtype=self._dtype)
+        self._owner._encodings[self._spec_type] = encoding
         options = encodings.ParquetEncoding(
             dictionary_columns=encodings.shard_dictionary(encoding),
             column_encoding=encodings.shard_encoding(encoding),
-            compression=self._compression,
-            **({} if self._compression_level is None else {"compression_level": self._compression_level}),
+            compression=self._owner._compression,
+            **({} if self._owner._compression_level is None else {"compression_level": self._owner._compression_level}),
         )
-        writer = RotatingPartWriter(
-            self._staging_dir,
-            schema,
-            lambda index, start=start: part_path(SHARD_TEMPLATE, start + index),
-            part_target_bytes=self._shard_target_bytes,
+        self._writer = RotatingPartWriter(
+            self._owner._staging_dir,
+            self._schema,
+            lambda _index: self._owner._claim_part(),
+            part_target_bytes=self._owner._shard_target_bytes,
             parquet_kwargs=encodings.parquet_kwargs(
                 dictionary_columns=options.dictionary_columns,
                 column_encoding=options.column_encoding,
@@ -201,78 +249,82 @@ class ValuesPlaneWriter:
                 compression_level=options.compression_level,
             ),
         )
+        return self._writer
 
-        locators: list[ChunkLocator] = []
-        buffer: list[dict] = []
-        buffered_bytes = 0
-        pending: list[tuple[str, int, int]] = []  # signal_id, chunk_idx, n_values
+    def add(self, signal: PendingSignal) -> list[ChunkLocator]:
+        """Buffer one signal, flushing a row group when it fills.
 
-        def flush() -> None:
-            nonlocal buffer, buffered_bytes, pending
-            if not buffer:
-                return
-            table = pa.Table.from_pylist(buffer, schema=schema)
-            chunk_file, row_group = writer.write(table, table.nbytes)
-            for row_offset, (signal_id, chunk_idx, n_values) in enumerate(pending):
-                locators.append(
-                    ChunkLocator(
-                        signal_id=signal_id,
-                        chunk_idx=chunk_idx,
-                        chunk_file=chunk_file,
-                        row_group=row_group,
-                        row_offset=row_offset,
-                        n_values=n_values,
-                    )
-                )
-            buffer = []
-            buffered_bytes = 0
-            pending = []
+        Returns:
+            The locators of any chunks this call pushed to disk.
+        """
+        if self._writer is None and len(self._sample) < _ENCODING_SAMPLE_ARRAYS:
+            self._sample.append(signal.values)
+        for chunk_idx, (begin, end) in enumerate(
+            plan_chunks(len(signal.values), signal.values.dtype.itemsize, self._owner._chunk_max_bytes)
+        ):
+            piece = signal.values[begin:end]
+            offsets = None if signal.time_offsets_us is None else signal.time_offsets_us[begin:end].tolist()
+            self._buffer.append(
+                {
+                    "signal_id": signal.signal_id,
+                    "chunk_idx": chunk_idx,
+                    "spec_type": signal.spec_type,
+                    "signal": signal.name,
+                    "values": piece.tolist(),
+                    "time_offsets_us": offsets,
+                }
+            )
+            self._pending.append((signal.signal_id, chunk_idx, len(piece)))
+            self._buffered_bytes += piece.nbytes
+        if self._buffered_bytes >= self._owner._row_group_target_bytes:
+            return self._flush()
+        return []
 
-        for signal in signals:
-            for chunk_idx, (begin, end) in enumerate(
-                plan_chunks(len(signal.values), signal.values.dtype.itemsize, self._chunk_max_bytes)
-            ):
-                piece = signal.values[begin:end]
-                offsets = None if signal.time_offsets_us is None else signal.time_offsets_us[begin:end].tolist()
-                buffer.append(
-                    {
-                        "signal_id": signal.signal_id,
-                        "chunk_idx": chunk_idx,
-                        "spec_type": signal.spec_type,
-                        "signal": signal.name,
-                        "values": piece.tolist(),
-                        "time_offsets_us": offsets,
-                    }
-                )
-                pending.append((signal.signal_id, chunk_idx, len(piece)))
-                buffered_bytes += piece.nbytes
-                if buffered_bytes >= self._row_group_target_bytes:
-                    flush()
-        flush()
+    def _flush(self) -> list[ChunkLocator]:
+        """Write the buffered chunks as one row group and return where they landed.
 
-        parts = writer.finish()
-        self._parts.extend(parts)
-        for part in parts:
-            self._verify_encoding(part, encoding)
-        return locators, start + len(parts)
+        Returns:
+            One locator per chunk in the row group.
+        """
+        if not self._buffer:
+            return []
+        writer = self._writer if self._writer is not None else self._open()
+        table = pa.Table.from_pylist(self._buffer, schema=self._schema)
+        chunk_file, row_group = writer.write(table, table.nbytes)
+        locators = [
+            ChunkLocator(
+                signal_id=signal_id,
+                chunk_idx=chunk_idx,
+                chunk_file=chunk_file,
+                row_group=row_group,
+                row_offset=row_offset,
+                n_values=n_values,
+            )
+            for row_offset, (signal_id, chunk_idx, n_values) in enumerate(self._pending)
+        ]
+        self._buffer = []
+        self._pending = []
+        self._buffered_bytes = 0
+        return locators
 
-    def _verify_encoding(self, part: str, encoding: ValueEncoding) -> None:
-        """Confirm Parquet applied the encoding that was asked for.
+    def finish(self) -> list[ChunkLocator]:
+        """Flush what is left, close the shards, and check the encoding Parquet actually applied.
 
-        A wrong column path makes pyarrow drop an encoding request silently, which costs the whole
-        benefit with nothing to show for it. The production writer checks this on every shard, so
-        this one does too.
-
-        Args:
-            part: The shard's version-relative path.
-            encoding: The encoding the writer selected for this modality.
+        Returns:
+            The locators of the chunks still buffered when this was called.
 
         Raises:
-            TimeFValidationError: If the finished shard does not carry the requested encoding.
+            TimeFValidationError: If a finished shard does not carry the requested encoding.
         """
-        applied = encodings.values_encoding_of(str(self._staging_dir / part))
-        if not encodings.applied_matches(encoding, applied):
-            raise TimeFValidationError(f"{part}: asked for {encoding}, Parquet applied {sorted(applied)}")
+        locators = self._flush()
+        if self._writer is None:
+            return locators
+        for part in self._writer.finish():
+            applied = encodings.values_encoding_of(str(self._owner._staging_dir / part))
+            encoding = self._owner._encodings[self._spec_type]
+            if not encodings.applied_matches(encoding, applied):
+                raise TimeFValidationError(f"{part}: asked for {encoding}, Parquet applied {sorted(applied)}")
+        return locators
 
 
 def read_chunks(root: Path, locators: Sequence[ChunkLocator]) -> np.ndarray:

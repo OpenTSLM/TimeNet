@@ -210,7 +210,7 @@ def test_staging_is_removed_when_the_write_itself_fails(tmp_path, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("values plane failed")
 
-    monkeypatch.setattr(writer_module.ValuesPlaneWriter, "write", explode)
+    monkeypatch.setattr(writer_module.ValuesPlaneWriter, "add", explode)
     with pytest.raises(RuntimeError, match="values plane failed"), TimeFWriter(tmp_path, dataset.metadata) as writer:
         writer.write(dataset)
     assert not list(tmp_path.glob("**/*.tmp-*"))

@@ -22,7 +22,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.control_plane import schema as ddl
-from timenet.control_plane.model import Annotation, DeclarativeDataset, Record, Signal, Source, Task
+from timenet.control_plane.model import Annotation, DeclarativeDataset, Record, RecordRef, Signal, Source, Task
 from timenet.control_plane.values import ChunkLocator, PendingSignal, ValuesPlaneWriter, axis_columns
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
@@ -222,7 +222,7 @@ class TimeFWriter:
         return self._manifest
 
     def write(self, dataset: DeclarativeDataset) -> Manifest:
-        """Write the whole dataset and commit it atomically.
+        """Write a whole in-memory dataset and commit it atomically.
 
         Args:
             dataset: The declarative hierarchy to compile.
@@ -230,23 +230,36 @@ class TimeFWriter:
         Returns:
             The manifest of the committed version.
         """
-        pending = _collect_signals(dataset)
-        values = ValuesPlaneWriter(self._staging_dir, **self._values_options)
-        locators = values.write(pending)
+        return self.write_stream(dataset.records, dataset.tasks, annotations=dataset.annotations)
 
-        db_path = self._staging_dir / CONTROL_DB_FILE
-        counts = self._build_database(db_path, dataset, locators)
+    def write_stream(
+        self,
+        records: Iterable[Record],
+        tasks: Iterable[Task] = (),
+        *,
+        annotations: Iterable[Annotation] = (),
+    ) -> Manifest:
+        """Write a dataset from iterators, without ever holding the whole hierarchy in memory.
 
-        self._manifest = self._commit(db_path, values, counts)
-        return self._manifest
+        Records are consumed one at a time: each one's control rows go into the batch inserters and
+        its values into the shard streams, and both flush as they fill. A corpus larger than memory
+        can therefore be written, which the in-memory path cannot do -- 618,508 records do not fit on
+        a 16 GB machine.
 
-    @staticmethod
-    def _build_database(db_path: Path, dataset: DeclarativeDataset, locators: list[ChunkLocator]) -> dict[str, int]:
-        """Create the control database and load the hierarchy into it.
+        A record must be yielded before any task that refers to it, and every record a task names
+        must be yielded at some point, or the write-time validation will reject the dangling
+        reference.
+
+        Args:
+            records: The records to write, in any order.
+            tasks: The tasks to write.
+            annotations: Annotations that apply to the dataset as a whole.
 
         Returns:
-            The row count of each loaded table.
+            The manifest of the committed version.
         """
+        db_path = self._staging_dir / CONTROL_DB_FILE
+        values = ValuesPlaneWriter(self._staging_dir, **self._values_options)
         # The block size can only be set when the database is created, so the file is attached
         # rather than opened directly.
         connection = duckdb.connect()
@@ -256,7 +269,7 @@ class TimeFWriter:
             connection.execute("BEGIN TRANSACTION")
             for statement in _statements(ddl.DDL):
                 connection.execute(statement)
-            counts = _load(connection, dataset, locators)
+            counts = _stream_into(connection, values, records, tasks, annotations)
             _validate(connection)
             connection.execute("COMMIT")
             for statement in _statements(ddl.INDEXES):
@@ -264,7 +277,9 @@ class TimeFWriter:
             connection.execute("CHECKPOINT control")
         finally:
             connection.close()
-        return counts
+
+        self._manifest = self._commit(db_path, values, counts)
+        return self._manifest
 
     def _commit(self, db_path: Path, values: ValuesPlaneWriter, counts: dict[str, int]) -> Manifest:
         """Write the manifest, then move the staging directory into place atomically.
@@ -339,6 +354,99 @@ def _statements(script: str) -> Iterable[str]:
         Each non-empty statement, stripped.
     """
     return [statement.strip() for statement in script.split(";") if statement.strip()]
+
+
+def _stream_into(
+    connection: duckdb.DuckDBPyConnection,
+    values: ValuesPlaneWriter,
+    records: Iterable[Record],
+    tasks: Iterable[Task],
+    annotations: Iterable[Annotation],
+) -> dict[str, int]:
+    """Walk the records and tasks once, feeding both planes as it goes.
+
+    Args:
+        connection: The open connection to the database being built.
+        values: The values-plane writer to stream signal values into.
+        records: The records to write.
+        tasks: The tasks to write.
+        annotations: Dataset-level annotations.
+
+    Returns:
+        The row count of each loaded table.
+    """
+    loader = _Loader(connection)
+    dataset_id = "dataset"
+    loader.meta.add(("schema_version", str(ddl.SCHEMA_VERSION)))
+    loader.meta.add(("dataset_id", dataset_id))
+    loader.datasets.add((dataset_id, None))
+    loader.annotate(list(annotations), "dataset", dataset_id)
+
+    written_values: set[str] = set()
+    for record in records:
+        _load_record(loader, record)
+        for signal in record.signals():
+            # A series shared by several records is written once.
+            if signal.id in written_values:
+                continue
+            written_values.add(signal.id)
+            for locator in values.add(_pending(signal)):
+                _add_chunk(loader, locator)
+    for task in tasks:
+        _load_task(loader, task)
+    for locator in values.finish():
+        _add_chunk(loader, locator)
+
+    for inserter in loader.all():
+        inserter.flush()
+    return {
+        "records": loader.records.count,
+        "sources": loader.sources.count,
+        "signals": loader.signals.count,
+        "source_signals": loader.source_signals.count,
+        "signal_chunks": loader.chunks.count,
+        "tasks": loader.tasks.count,
+        "annotation_contents": loader.contents.count,
+        "annotation_occurrences": loader.occurrences.count,
+    }
+
+
+def _pending(signal: Signal) -> PendingSignal:
+    """Describe one signal for the values plane.
+
+    Args:
+        signal: The signal to describe.
+
+    Returns:
+        What the values plane needs to write it.
+    """
+    return PendingSignal(
+        signal_id=signal.id,
+        name=signal.name,
+        spec_type=signal.spec.spec_type,
+        dtype=signal.spec.dtype,
+        values=signal.values,
+        time_offsets_us=signal.time_offsets_us,
+    )
+
+
+def _add_chunk(loader: "_Loader", locator: ChunkLocator) -> None:
+    """Record where one chunk of values landed.
+
+    Args:
+        loader: The loader feeding the tables.
+        locator: The chunk's location in the values plane.
+    """
+    loader.chunks.add(
+        (
+            locator.signal_id,
+            locator.chunk_idx,
+            locator.chunk_file,
+            locator.row_group,
+            locator.row_offset,
+            locator.n_values,
+        )
+    )
 
 
 def _collect_signals(dataset: DeclarativeDataset) -> list[PendingSignal]:
@@ -657,7 +765,7 @@ def _load_task(loader: _Loader, task: Task) -> None:
     loader.annotate(task.annotations, "task", task.id)
     for role, items in (("input", task.inputs), ("target", task.target)):
         for position, item in enumerate(items):
-            if isinstance(item, Record):
+            if isinstance(item, Record | RecordRef):
                 loader.items.add((task.id, role, position, "record", None, item.id))
             else:
                 loader.items.add((task.id, role, position, "text", item, None))
