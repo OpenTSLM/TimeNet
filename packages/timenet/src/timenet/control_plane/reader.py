@@ -146,27 +146,43 @@ WHERE record_id = ? AND (path = ? OR starts_with(path, ? || '.'))
 ORDER BY path
 """
 
+# Signals hang off sources through a link table, because one series can be used by several records.
 _RECORD_SIGNALS = """
-SELECT sig.signal_id, sig.source_id, sig.name, sig.position, sig.n_values, sig.metadata,
+SELECT sig.signal_id, ss.source_id, sig.name, ss.position, sig.n_values, sig.metadata,
        sp.spec_id, sp.unit, sp.dtype, ax.axis_type
-FROM signals sig
+FROM sources src
+JOIN source_signals ss ON ss.source_id = src.source_id
+JOIN signals sig ON sig.signal_id = ss.signal_id
 JOIN specs sp ON sp.spec_id = sig.spec_id
 JOIN axes  ax ON ax.axis_id = sig.axis_id
-WHERE sig.record_id = ?
-ORDER BY sig.source_id, sig.position
+WHERE src.record_id = ?
+ORDER BY ss.source_id, ss.position
 """
 
 # Every annotation anywhere in one record: on the record, on any source in its tree, on any signal
 # under those sources. The denormalized scope makes this one indexed equality. Against the draft's
 # polymorphic object_type/object_id it takes a recursive walk of the source tree unioned with two
 # more id lookups, which is what the first version of this query had to do.
+# Annotations on the record and on its sources are record-scoped, so they come back on one indexed
+# equality. Annotations on a signal are not: a shared series carries the same statement in every
+# record that uses it, so those are reached through the link table.
 _RECORD_ANNOTATIONS = """
-SELECT o.object_type, coalesce(o.on_record_id, o.on_source_id, o.on_signal_id) AS object_id,
-       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence
+SELECT o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
+       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
+       o.occurrence_id
 FROM annotation_occurrences o
 JOIN annotation_contents c ON c.content_id = o.content_id
 WHERE o.scope_record_id = ?
-ORDER BY o.occurrence_id
+UNION ALL
+SELECT o.object_type, o.on_signal_id AS object_id,
+       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
+       o.occurrence_id
+FROM annotation_occurrences o
+JOIN annotation_contents c ON c.content_id = o.content_id
+JOIN source_signals ss ON ss.signal_id = o.on_signal_id
+JOIN sources src ON src.source_id = ss.source_id
+WHERE src.record_id = ?
+ORDER BY occurrence_id
 """
 
 _ANNOTATIONS_FOR = """
@@ -191,11 +207,20 @@ ORDER BY o.object_type, object_id
 # Reverse lookup all the way back to records. The scope column collapses what the draft needs three
 # joins for: an annotation on a signal already knows which record it belongs to.
 _RECORDS_WITH = """
-SELECT DISTINCT o.scope_record_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
-WHERE c.name = ? AND (? IS NULL OR c.value = ?) AND o.scope_record_id IS NOT NULL
-ORDER BY o.scope_record_id
+SELECT DISTINCT record_id FROM (
+    SELECT o.scope_record_id AS record_id
+    FROM annotation_occurrences o
+    JOIN annotation_contents c ON c.content_id = o.content_id
+    WHERE c.name = ? AND (? IS NULL OR c.value = ?) AND o.scope_record_id IS NOT NULL
+    UNION ALL
+    SELECT src.record_id
+    FROM annotation_occurrences o
+    JOIN annotation_contents c ON c.content_id = o.content_id
+    JOIN source_signals ss ON ss.signal_id = o.on_signal_id
+    JOIN sources src ON src.source_id = ss.source_id
+    WHERE c.name = ? AND (? IS NULL OR c.value = ?)
+)
+ORDER BY record_id
 """
 
 # The tasks a record answers. The proposal keeps a record_tasks table for this; the index on
@@ -383,8 +408,10 @@ class TimeFReader:
             )
 
         signals_by_id = {signal.signal_id: signal for signal in record.signals()}
-        for object_type, object_id, *payload in self.connection.execute(_RECORD_ANNOTATIONS, [record_id]).fetchall():
-            annotation = _annotation(payload)
+        for object_type, object_id, *payload in self.connection.execute(
+            _RECORD_ANNOTATIONS, [record_id, record_id]
+        ).fetchall():
+            annotation = _annotation(payload[:-1])
             if object_type == "record":
                 record.annotations.append(annotation)
             elif object_type == "source":
@@ -480,7 +507,10 @@ class TimeFReader:
         Returns:
             The matching record ids, sorted.
         """
-        return [row[0] for row in self.connection.execute(_RECORDS_WITH, [name, value, value]).fetchall()]
+        return [
+            row[0]
+            for row in self.connection.execute(_RECORDS_WITH, [name, value, value, name, value, value]).fetchall()
+        ]
 
     def tasks_for_record(self, record_id: str) -> list[str]:
         """Return every task that refers to a record.
@@ -545,6 +575,11 @@ def _connect(target: str) -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect()
     connection.execute("INSTALL httpfs")
     connection.execute("LOAD httpfs")
+    if target.startswith(("s3://", "gs://", "az://")):
+        # Let DuckDB resolve credentials the way every other AWS tool does: environment, shared
+        # config, SSO. Without a secret an object store answers 403 and DuckDB reports it as a
+        # database that does not exist, which is a confusing way to learn you are not signed in.
+        connection.execute("CREATE SECRET IF NOT EXISTS (TYPE s3, PROVIDER credential_chain)")
     connection.execute(f"ATTACH '{target}' AS control (READ_ONLY)")
     connection.execute("USE control")
     return connection

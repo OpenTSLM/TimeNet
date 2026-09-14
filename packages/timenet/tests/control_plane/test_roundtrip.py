@@ -1,14 +1,25 @@
 """Write a hierarchy, read it back, and check every relationship survived the trip."""
 
+from fractions import Fraction
 import pickle
 
 import numpy as np
 import pytest
 
-from timenet.control_plane import TimeFReader, TimeFWriter
+from timenet.control_plane import (
+    Annotation,
+    DeclarativeDataset,
+    Record,
+    Signal,
+    Source,
+    TimeFReader,
+    TimeFWriter,
+)
 from timenet.control_plane.reader import render_task
+from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
-from timenet.testing import make_dataset
+from timenet.testing import make_dataset, make_metadata
+from timenet.types import TimeSeriesSpec, ureg
 
 
 @pytest.fixture
@@ -165,3 +176,36 @@ def test_reader_survives_pickling(version):
     assert revived.record_ids() == ["record-000", "record-001", "record-002"]
     assert revived.values("record-000-lead-i").shape == (256,)
     revived.close()
+
+
+def test_one_signal_shared_by_two_records(tmp_path):
+    """Real corpora reuse a series across records, so a signal is stored once and linked twice.
+
+    In ARFBench 7,013 of 9,187 series are referenced by more than one record, because several
+    questions ask about the same underlying metric.
+    """
+    shared = Signal(
+        id="shared-series",
+        name="cpu",
+        values=np.arange(64, dtype=np.float32),
+        time_axis=RegularAxis(period_us=Fraction(1_000_000, 1)),
+        spec=TimeSeriesSpec(spec_type="metric", name="metric", unit_value=ureg.Unit(""), dtype="float32"),
+    )
+    shared.annotate(Annotation.static(name="unit_kind", value="ratio"))
+    dataset = DeclarativeDataset(metadata=make_metadata())
+    for index in (0, 1):
+        dataset.add_record(Record(id=f"r-{index}", sources=[Source(id=f"src-{index}", name="host", signals=[shared])]))
+
+    with TimeFWriter(tmp_path, dataset.metadata) as writer:
+        writer.write(dataset)
+    with TimeFReader(tmp_path / dataset.metadata.dataset_id / "1.0.0") as reader:
+        counts = reader.counts()
+        assert counts["signals"] == 1
+        assert counts["source_signals"] == 2
+        for index in (0, 1):
+            signals = reader.record(f"r-{index}").signals()
+            assert [s.signal_id for s in signals] == ["shared-series"]
+            assert [a.name for a in signals[0].annotations] == ["unit_kind"]
+        # the values are stored once, and both records read the same array
+        assert reader.values("shared-series").tolist() == list(range(64))
+        assert reader.records_with("unit_kind") == ["r-0", "r-1"]

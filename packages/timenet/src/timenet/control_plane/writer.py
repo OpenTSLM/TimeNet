@@ -285,14 +285,21 @@ def _statements(script: str) -> Iterable[str]:
 
 
 def _collect_signals(dataset: DeclarativeDataset) -> list[PendingSignal]:
-    """Gather every signal in the dataset, with the facts the values plane needs.
+    """Gather every distinct signal in the dataset, with the facts the values plane needs.
+
+    A series used by several records is written once. Without this the values plane would store the
+    same waveform once per referencing record.
 
     Returns:
-        One entry per signal, in record then source then signal order.
+        One entry per distinct signal id, in record then source then signal order.
     """
     pending: list[PendingSignal] = []
+    seen: set[str] = set()
     for record in dataset.records:
         for signal in record.signals():
+            if signal.id in seen:
+                continue
+            seen.add(signal.id)
             pending.append(
                 PendingSignal(
                     signal_id=signal.id,
@@ -332,10 +339,9 @@ class _Loader:
             ("source_id", "record_id", "parent_source_id", "path", "depth", "name", "position", "metadata"),
         )
         self.signals = _BatchInserter(
-            connection,
-            "signals",
-            ("signal_id", "source_id", "record_id", "name", "position", "axis_id", "spec_id", "n_values", "metadata"),
+            connection, "signals", ("signal_id", "name", "axis_id", "spec_id", "n_values", "metadata")
         )
+        self.source_signals = _BatchInserter(connection, "source_signals", ("source_id", "signal_id", "position"))
         self.chunks = _BatchInserter(
             connection, "signal_chunks", ("signal_id", "chunk_idx", "chunk_file", "row_group", "row_offset", "n_values")
         )
@@ -369,13 +375,15 @@ class _Loader:
         )
         self.datasets = _BatchInserter(connection, "datasets", ("dataset_id", "metadata"))
         self.meta = _BatchInserter(connection, "meta", ("key", "value"))
+        self.seen_signals: set[str] = set()
         self._seen_contents: set[str] = set()
         self._seen_axes: set[str] = set()
         self._seen_specs: set[str] = set()
         self._occurrence_count = 0
 
         self.sources.depends_on(self.records)
-        self.signals.depends_on(self.sources, self.records, self.axes, self.specs)
+        self.signals.depends_on(self.axes, self.specs)
+        self.source_signals.depends_on(self.sources, self.signals)
         self.chunks.depends_on(self.signals)
         self.items.depends_on(self.tasks, self.records)
         self.occurrences.depends_on(self.contents, self.datasets, self.tasks, self.records, self.sources, self.signals)
@@ -394,6 +402,7 @@ class _Loader:
             self.specs,
             self.sources,
             self.signals,
+            self.source_signals,
             self.chunks,
             self.tasks,
             self.items,
@@ -522,6 +531,7 @@ def _load(
         "records": loader.records.count,
         "sources": loader.sources.count,
         "signals": loader.signals.count,
+        "source_signals": loader.source_signals.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
         "annotation_contents": loader.contents.count,
@@ -562,28 +572,32 @@ def _load_record(loader: _Loader, record: Record) -> None:
         )
         loader.annotate(source.annotations, "source", source.id, scope_record_id=record.id)
         for index, signal in enumerate(source.signals):
-            _load_signal(loader, signal, source_id=source.id, record_id=record.id, position=index)
+            _load_signal(loader, signal, source_id=source.id, position=index)
         queue.extend((child, source.id, path, index) for index, child in enumerate(source.sources))
 
 
-def _load_signal(loader: _Loader, signal: Signal, *, source_id: str, record_id: str, position: int) -> None:
-    """Insert one signal, with its axis and spec recorded once each."""
-    axis = loader.axis(signal)
-    spec = loader.spec(signal)
-    loader.signals.add(
-        (
-            signal.id,
-            source_id,
-            record_id,
-            signal.name,
-            position,
-            axis,
-            spec,
-            len(signal.values),
-            _json_or_none(signal.metadata),
+def _load_signal(loader: _Loader, signal: Signal, *, source_id: str, position: int) -> None:
+    """Link one signal to a source, inserting the signal itself the first time it is seen.
+
+    The same series can hang off sources in several records, so the signal row and its annotations
+    are written once and the link table records each use.
+    """
+    if signal.id not in loader.seen_signals:
+        loader.seen_signals.add(signal.id)
+        loader.signals.add(
+            (
+                signal.id,
+                signal.name,
+                loader.axis(signal),
+                loader.spec(signal),
+                len(signal.values),
+                _json_or_none(signal.metadata),
+            )
         )
-    )
-    loader.annotate(signal.annotations, "signal", signal.id, scope_record_id=record_id)
+        # A shared signal belongs to no single record, so its annotations carry no record scope;
+        # the reader reaches them through source_signals instead.
+        loader.annotate(signal.annotations, "signal", signal.id)
+    loader.source_signals.add((source_id, signal.id, position))
 
 
 def _load_task(loader: _Loader, task: Task) -> None:

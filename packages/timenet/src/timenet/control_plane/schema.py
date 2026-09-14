@@ -22,6 +22,14 @@ occurrence whose target is a record, a source, or a signal. The renderer's hot q
 annotation anywhere in one record, is then a single indexed equality instead of a recursive walk of
 the source tree unioned with two more lookups.
 
+**A signal belongs to many sources, not one.** The draft gives ``signals`` a ``source_id``, so one
+series belongs to exactly one source in one record. Real data disagrees: in ARFBench 7,013 of 9,187
+series are referenced by more than one record, up to ten each, because several questions ask about
+the same underlying metric. Forcing a tree there would either duplicate the series or invent a
+distinct id per use, and both throw away the fact that it is the same series. ``source_signals`` is
+therefore a link table, which is the same shape the draft already chose for annotations: the payload
+is stored once and the links say where it is used.
+
 **A source stores its path, not just its parent.** ``parent_source_id`` stays for the edge itself,
 and ``path`` records the whole ancestry as zero-padded positions (``0000.0001``). A subtree is then
 a prefix match and depth-first display order is ``ORDER BY path``, neither of which needs recursion.
@@ -107,14 +115,18 @@ CREATE TABLE sources (
 
 CREATE TABLE signals (
     signal_id VARCHAR PRIMARY KEY,
-    source_id VARCHAR NOT NULL REFERENCES sources(source_id),
-    record_id VARCHAR NOT NULL REFERENCES records(record_id),
     name      VARCHAR NOT NULL,
-    position  INTEGER NOT NULL,
     axis_id   VARCHAR NOT NULL REFERENCES axes(axis_id),
     spec_id   VARCHAR NOT NULL REFERENCES specs(spec_id),
     n_values  BIGINT  NOT NULL,
     metadata  VARCHAR
+);
+
+CREATE TABLE source_signals (
+    source_id VARCHAR NOT NULL REFERENCES sources(source_id),
+    signal_id VARCHAR NOT NULL REFERENCES signals(signal_id),
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (source_id, signal_id)
 );
 
 CREATE TABLE signal_chunks (
@@ -182,8 +194,8 @@ INDEXES: Final = """
 CREATE INDEX sources_by_record      ON sources (record_id);
 CREATE INDEX sources_by_parent      ON sources (parent_source_id);
 CREATE INDEX sources_by_path        ON sources (path);
-CREATE INDEX signals_by_source      ON signals (source_id);
-CREATE INDEX signals_by_record      ON signals (record_id);
+CREATE INDEX source_signals_by_source ON source_signals (source_id);
+CREATE INDEX source_signals_by_signal ON source_signals (signal_id);
 CREATE INDEX task_items_by_record   ON task_items (record_id);
 CREATE INDEX occurrences_by_scope   ON annotation_occurrences (scope_record_id);
 CREATE INDEX occurrences_by_content ON annotation_occurrences (content_id);
@@ -205,6 +217,7 @@ TABLES: Final = (
     "specs",
     "sources",
     "signals",
+    "source_signals",
     "signal_chunks",
     "tasks",
     "task_items",

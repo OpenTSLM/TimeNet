@@ -85,9 +85,27 @@ def test_unknown_object_type_is_refused(connection):
         )
 
 
-def test_signal_under_a_missing_source_is_refused(connection):
+def test_linking_a_signal_to_a_missing_source_is_refused(connection):
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
     with pytest.raises(duckdb.ConstraintException, match="foreign key"):
-        connection.execute("INSERT INTO signals VALUES ('sig1', 'missing-source', 'r1', 'I', 0, 'a1', 'sp1', 10, NULL)")
+        connection.execute("INSERT INTO source_signals VALUES ('missing-source', 'sig1', 0)")
+
+
+def test_linking_a_missing_signal_to_a_source_is_refused(connection):
+    with pytest.raises(duckdb.ConstraintException, match="foreign key"):
+        connection.execute("INSERT INTO source_signals VALUES ('s1', 'missing-signal', 0)")
+
+
+def test_one_signal_can_hang_off_several_sources(connection):
+    """A series used by several records is stored once and linked many times."""
+    connection.execute("INSERT INTO records VALUES ('r2', NULL, NULL)")
+    connection.execute("INSERT INTO sources VALUES ('s2', 'r2', NULL, '0000', 0, 'Monitor', 0, NULL)")
+    connection.execute("INSERT INTO signals VALUES ('shared', 'I', 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO source_signals VALUES ('s1', 'shared', 0)")
+    connection.execute("INSERT INTO source_signals VALUES ('s2', 'shared', 0)")
+    rows = connection.execute("SELECT count(*) FROM source_signals WHERE signal_id = 'shared'").fetchone()
+    assert rows is not None
+    assert rows[0] == 2
 
 
 def test_source_under_a_missing_record_is_refused(connection):
@@ -107,9 +125,9 @@ def test_task_item_with_a_bad_role_is_refused(connection):
 
 
 def test_duplicate_signal_id_is_refused(connection):
-    connection.execute("INSERT INTO signals VALUES ('sig1', 's1', 'r1', 'I', 0, 'a1', 'sp1', 10, NULL)")
+    connection.execute("INSERT INTO signals VALUES ('sig1', 'I', 'a1', 'sp1', 10, NULL)")
     with pytest.raises(duckdb.ConstraintException):
-        connection.execute("INSERT INTO signals VALUES ('sig1', 's1', 'r1', 'II', 1, 'a1', 'sp1', 10, NULL)")
+        connection.execute("INSERT INTO signals VALUES ('sig1', 'II', 'a1', 'sp1', 10, NULL)")
 
 
 def test_writer_refuses_to_overwrite_a_committed_version(tmp_path):
