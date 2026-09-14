@@ -152,7 +152,7 @@ CREATE TABLE task_items (
     record_id  VARCHAR
 );
 
-CREATE TABLE annotation_contents (
+CREATE TABLE annotations (
     content_id VARCHAR NOT NULL,
     name       VARCHAR NOT NULL,
     value      VARCHAR NOT NULL,
@@ -160,7 +160,7 @@ CREATE TABLE annotation_contents (
     metadata   VARCHAR
 );
 
-CREATE TABLE annotation_occurrences (
+CREATE TABLE entities_to_annotations (
     occurrence_id   BIGINT  NOT NULL,
     content_id      VARCHAR NOT NULL,
     object_type     VARCHAR NOT NULL CHECK (object_type IN ('dataset', 'task', 'record', 'source', 'signal')),
@@ -217,8 +217,8 @@ TABLES: Final = (
     "signal_chunks",
     "tasks",
     "task_items",
-    "annotation_contents",
-    "annotation_occurrences",
+    "annotations",
+    "entities_to_annotations",
 )
 """Every table the control plane defines, for a reader that wants to check what it opened."""
 
@@ -247,11 +247,11 @@ VALIDATIONS: Final = (
     ("duplicate spec_id", "SELECT spec_id FROM specs GROUP BY spec_id HAVING count(*) > 1"),
     (
         "duplicate content_id",
-        "SELECT content_id FROM annotation_contents GROUP BY content_id HAVING count(*) > 1",
+        "SELECT content_id FROM annotations GROUP BY content_id HAVING count(*) > 1",
     ),
     (
         "duplicate occurrence_id",
-        "SELECT occurrence_id FROM annotation_occurrences GROUP BY occurrence_id HAVING count(*) > 1",
+        "SELECT occurrence_id FROM entities_to_annotations GROUP BY occurrence_id HAVING count(*) > 1",
     ),
     (
         "duplicate (source_id, signal_id) link",
@@ -311,32 +311,31 @@ VALIDATIONS: Final = (
     ),
     (
         "occurrence names content that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o "
-        "ANTI JOIN annotation_contents c ON c.content_id = o.content_id",
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN annotations c ON c.content_id = o.content_id",
     ),
     (
         "occurrence names a record that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN records r ON r.record_id = o.on_record_id "
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN records r ON r.record_id = o.on_record_id "
         "WHERE o.on_record_id IS NOT NULL",
     ),
     (
         "occurrence names a source that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN sources s ON s.source_id = o.on_source_id "
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN sources s ON s.source_id = o.on_source_id "
         "WHERE o.on_source_id IS NOT NULL",
     ),
     (
         "occurrence names a signal that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN signals g ON g.signal_id = o.on_signal_id "
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN signals g ON g.signal_id = o.on_signal_id "
         "WHERE o.on_signal_id IS NOT NULL",
     ),
     (
         "occurrence names a task that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN tasks t ON t.task_id = o.on_task_id "
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN tasks t ON t.task_id = o.on_task_id "
         "WHERE o.on_task_id IS NOT NULL",
     ),
     (
         "occurrence scope names a record that does not exist",
-        "SELECT o.occurrence_id FROM annotation_occurrences o ANTI JOIN records r ON r.record_id = o.scope_record_id "
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN records r ON r.record_id = o.scope_record_id "
         "WHERE o.scope_record_id IS NOT NULL",
     ),
     (

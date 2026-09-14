@@ -32,7 +32,7 @@ def connection(tmp_path):
     connection.execute("INSERT INTO sources VALUES ('s1', 'r1', NULL, '0000', 0, 'Monitor', 0, NULL)")
     connection.execute("INSERT INTO axes VALUES ('a1', 'regular', 2000, 1, 0, NULL, NULL)")
     connection.execute("INSERT INTO specs VALUES ('sp1', 'ECG', 'mV', 'float32', false)")
-    connection.execute("INSERT INTO annotation_contents VALUES ('c1', 'patient_sex', 'male', NULL, NULL)")
+    connection.execute("INSERT INTO annotations VALUES ('c1', 'patient_sex', 'male', NULL, NULL)")
     yield connection
     connection.close()
 
@@ -61,7 +61,7 @@ def _occurrence(**overrides):
 
 def _insert_occurrence(connection, **overrides):
     connection.execute(
-        "INSERT INTO annotation_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _occurrence(**overrides)
+        "INSERT INTO entities_to_annotations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _occurrence(**overrides)
     )
 
 

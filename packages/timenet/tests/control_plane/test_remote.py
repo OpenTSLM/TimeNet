@@ -117,8 +117,8 @@ def test_reading_the_control_database_over_http_without_downloading_it(server):
     connection.execute("LOAD httpfs")
     connection.execute(f"ATTACH '{server}/test/bedside/1.0.0/control.duckdb' AS remote (READ_ONLY)")
     found = connection.execute(
-        "SELECT DISTINCT o.scope_record_id FROM remote.annotation_occurrences o "
-        "JOIN remote.annotation_contents c USING (content_id) "
+        "SELECT DISTINCT o.scope_record_id FROM remote.entities_to_annotations o "
+        "JOIN remote.annotations c USING (content_id) "
         "WHERE c.name = 'patient_sex' AND o.scope_record_id IS NOT NULL ORDER BY 1"
     ).fetchall()
     connection.close()

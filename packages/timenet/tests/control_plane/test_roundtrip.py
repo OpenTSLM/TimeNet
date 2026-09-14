@@ -85,11 +85,9 @@ def test_point_annotation_keeps_its_placement(reader):
 
 
 def test_shared_annotation_is_stored_once(reader):
-    payloads = reader.connection.execute(
-        "SELECT count(*) FROM annotation_contents WHERE name = 'patient_sex'"
-    ).fetchone()[0]
+    payloads = reader.connection.execute("SELECT count(*) FROM annotations WHERE name = 'patient_sex'").fetchone()[0]
     occurrences = reader.connection.execute(
-        "SELECT count(*) FROM annotation_occurrences o JOIN annotation_contents c USING (content_id) "
+        "SELECT count(*) FROM entities_to_annotations o JOIN annotations c USING (content_id) "
         "WHERE c.name = 'patient_sex'"
     ).fetchone()[0]
     assert payloads == 1

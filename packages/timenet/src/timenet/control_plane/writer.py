@@ -139,7 +139,7 @@ class _BatchInserter:
             self._connection.unregister(_STAGED)
 
 
-def content_id(annotation: Annotation) -> str:
+def annotation_id(annotation: Annotation) -> str:
     """Return the id of an annotation's reusable payload.
 
     The id is derived from the payload itself, so the same statement made about ten thousand records
@@ -299,8 +299,8 @@ class TimeFWriter:
             ),
             counts=ManifestCounts(
                 records=counts["records"],
-                annotations=counts["annotation_contents"],
-                registered_annotations=counts["annotation_occurrences"],
+                annotations=counts["annotations"],
+                registered_annotations=counts["entities_to_annotations"],
                 time_series_chunks=counts["signal_chunks"],
                 time_series_index_rows=counts["signal_chunks"],
             ),
@@ -406,8 +406,8 @@ def _stream_into(
         "source_signals": loader.source_signals.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
-        "annotation_contents": loader.contents.count,
-        "annotation_occurrences": loader.occurrences.count,
+        "annotations": loader.contents.count,
+        "entities_to_annotations": loader.occurrences.count,
     }
 
 
@@ -514,12 +514,10 @@ class _Loader:
         self.items = _BatchInserter(
             connection, "task_items", ("task_id", "role", "position", "item_type", "text_value", "record_id")
         )
-        self.contents = _BatchInserter(
-            connection, "annotation_contents", ("content_id", "name", "value", "unit", "metadata")
-        )
+        self.contents = _BatchInserter(connection, "annotations", ("content_id", "name", "value", "unit", "metadata"))
         self.occurrences = _BatchInserter(
             connection,
-            "annotation_occurrences",
+            "entities_to_annotations",
             (
                 "occurrence_id",
                 "content_id",
@@ -580,7 +578,7 @@ class _Loader:
         """
         column = ddl.TARGET_COLUMNS[object_type]
         for annotation in annotations:
-            identifier = content_id(annotation)
+            identifier = annotation_id(annotation)
             if identifier not in self._seen_contents:
                 self._seen_contents.add(identifier)
                 self.contents.add(
@@ -693,8 +691,8 @@ def _load(
         "source_signals": loader.source_signals.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
-        "annotation_contents": loader.contents.count,
-        "annotation_occurrences": loader.occurrences.count,
+        "annotations": loader.contents.count,
+        "entities_to_annotations": loader.occurrences.count,
     }
 
 

@@ -170,15 +170,15 @@ _RECORD_ANNOTATIONS = """
 SELECT o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
        c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
        o.occurrence_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 WHERE o.scope_record_id = ?
 UNION ALL
 SELECT o.object_type, o.on_signal_id AS object_id,
        c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
        o.occurrence_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 JOIN source_signals ss ON ss.signal_id = o.on_signal_id
 JOIN sources src ON src.source_id = ss.source_id
 WHERE src.record_id = ?
@@ -213,15 +213,15 @@ _BATCH_ANNOTATIONS = """
 SELECT o.scope_record_id, o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
        c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
        o.occurrence_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 WHERE o.scope_record_id IN (SELECT unnest(?))
 UNION ALL
 SELECT src.record_id, o.object_type, o.on_signal_id AS object_id,
        c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
        o.occurrence_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 JOIN source_signals ss ON ss.signal_id = o.on_signal_id
 JOIN sources src ON src.source_id = ss.source_id
 WHERE src.record_id IN (SELECT unnest(?))
@@ -237,8 +237,8 @@ SELECT {column} FROM (
 
 _ANNOTATIONS_FOR = """
 SELECT c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 WHERE o.{column} = ?
 ORDER BY o.occurrence_id
 """
@@ -248,8 +248,8 @@ ORDER BY o.occurrence_id
 _OBJECTS_WITH = """
 SELECT o.object_type,
        coalesce(o.on_dataset_id, o.on_task_id, o.on_record_id, o.on_source_id, o.on_signal_id) AS object_id
-FROM annotation_occurrences o
-JOIN annotation_contents c ON c.content_id = o.content_id
+FROM entities_to_annotations o
+JOIN annotations c ON c.content_id = o.content_id
 WHERE c.name = ? AND (? IS NULL OR c.value = ?)
 ORDER BY o.object_type, object_id
 """
@@ -259,13 +259,13 @@ ORDER BY o.object_type, object_id
 _RECORDS_WITH = """
 SELECT DISTINCT record_id FROM (
     SELECT o.scope_record_id AS record_id
-    FROM annotation_occurrences o
-    JOIN annotation_contents c ON c.content_id = o.content_id
+    FROM entities_to_annotations o
+    JOIN annotations c ON c.content_id = o.content_id
     WHERE c.name = ? AND (? IS NULL OR c.value = ?) AND o.scope_record_id IS NOT NULL
     UNION ALL
     SELECT src.record_id
-    FROM annotation_occurrences o
-    JOIN annotation_contents c ON c.content_id = o.content_id
+    FROM entities_to_annotations o
+    JOIN annotations c ON c.content_id = o.content_id
     JOIN source_signals ss ON ss.signal_id = o.on_signal_id
     JOIN sources src ON src.source_id = ss.source_id
     WHERE c.name = ? AND (? IS NULL OR c.value = ?)
@@ -610,8 +610,8 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             (built[task_id].inputs if role == "input" else built[task_id].target).append(item)
         for annotation_row in self.connection.execute(
             "SELECT o.on_task_id, c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, "
-            "o.provenance, o.confidence FROM annotation_occurrences o "
-            "JOIN annotation_contents c ON c.content_id = o.content_id "
+            "o.provenance, o.confidence FROM entities_to_annotations o "
+            "JOIN annotations c ON c.content_id = o.content_id "
             "WHERE o.on_task_id IN (SELECT unnest(?)) ORDER BY o.occurrence_id",
             [wanted],
         ).fetchall():
