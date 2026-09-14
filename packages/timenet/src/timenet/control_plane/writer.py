@@ -1,8 +1,8 @@
 """Compile a declarative hierarchy into a dataset version: one control database plus Parquet shards.
 
-The writer walks ``Task -> Record -> Source -> Signal``, hands every entity the dense ``INTEGER`` id
-the control plane joins on, streams the values into the values plane, and inserts the structure into
-an embedded DuckDB database. The caller's own string id rides along as ``external_id`` on the entity
+The writer walks ``Task -> Record -> Source -> Signal``, hands every entity the dense integer id the
+control plane joins on, streams the values into the values plane, and inserts the structure into an
+embedded DuckDB database. The caller's own string id rides along as ``external_id`` on the entity
 that owns it, so a record stays addressable by the name it has outside the dataset.
 
 Commit works the way the current writer's does: everything is built in a ``<version>.tmp-<uuid>``
@@ -11,6 +11,7 @@ either sees a complete version or sees nothing.
 """
 
 from collections.abc import Iterable
+import hashlib
 from pathlib import Path
 import shutil
 from types import TracebackType
@@ -18,6 +19,7 @@ from typing import Any, Self
 import uuid
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 
 from timenet.control_plane import schema as ddl
@@ -65,16 +67,32 @@ _ARROW_TYPES = {
     "BOOLEAN": pa.bool_(),
 }
 
-# DuckDB allocates storage a block at a time, and every table and index segment claims at least one
-# block, so the default 256 KiB block sets a floor of a few megabytes on a database that holds a few
-# hundred rows. A dataset's control plane is small and is downloaded before it is read, so the floor
-# matters more than the throughput a larger block buys. Measured on the demo dataset: 12.9 MB at the
-# default, 815 KB at 16 KiB. 16 KiB is DuckDB's minimum.
-_BLOCK_SIZE = 16_384
+# The block size is the single largest lever on how big a control plane ships, and the right choice
+# flips with the corpus. DuckDB allocates a block at a time and every table claims at least one, so
+# a large block sets a floor of a few megabytes on a database holding a few hundred rows. But at
+# 16 KiB, DuckDB's minimum, it refuses to bitpack the id columns at all, so a large corpus pays
+# roughly double for them. Measured on the real schema at SLIP ratios, control database size:
+#
+#     records     16 KiB     64 KiB    256 KiB
+#         100     0.47 MB    0.73 MB    2.11 MB
+#       1,000     0.65 MB    0.80 MB    2.11 MB
+#       5,000     1.47 MB    1.13 MB    2.37 MB
+#      20,000     4.73 MB    3.16 MB    3.94 MB
+#     100,000    21.97 MB   13.25 MB   14.43 MB
+#     400,000    87.31 MB   54.34 MB   54.80 MB
+#
+# 64 KiB wins everywhere above a few thousand records and 256 KiB never wins at all. Below the
+# crossover 16 KiB is better, but only by 0.26 MB at 100 records and 0.15 MB at 1,000, which is not
+# worth choosing a block size per corpus. One size, and it is 64 KiB.
+_BLOCK_SIZE = 65_536
 
 # Only a source attachment records the record it sits in. A record attachment already names one, and
 # a signal shared by several records belongs to no single one.
 _SCOPED_ATTACHMENTS = frozenset({"source"})
+
+# How wide a signal fingerprint is, and how far it is shifted to sit beside the signal id in one int.
+_FINGERPRINT_BYTES = 8
+_ID_BITS = ddl.MAX_ID.bit_length()
 
 
 class _Ids:
@@ -96,10 +114,10 @@ class _Ids:
             The id.
 
         Raises:
-            TimeFValidationError: If the id would not fit the ``INTEGER`` column that stores it.
+            TimeFValidationError: If the id would not fit the column that stores it.
         """
         if self._next > ddl.MAX_ID:
-            raise TimeFValidationError(f"too many {self._kind} for an INTEGER id: the limit is {ddl.MAX_ID + 1}")
+            raise TimeFValidationError(f"too many {self._kind} for a {ddl.ID_TYPE} id: the limit is {ddl.MAX_ID + 1}")
         claimed = self._next
         self._next += 1
         return claimed
@@ -337,7 +355,7 @@ class TimeFWriter:
         # rather than opened directly.
         connection = duckdb.connect()
         try:
-            connection.execute(f"ATTACH '{db_path}' AS control (BLOCK_SIZE {_BLOCK_SIZE})")
+            connection.execute(f"ATTACH '{_sql_literal(db_path)}' AS control (BLOCK_SIZE {_BLOCK_SIZE})")
             connection.execute("USE control")
             connection.execute("BEGIN TRANSACTION")
             for statement in _statements(ddl.DDL):
@@ -396,6 +414,11 @@ def _validate(connection: duckdb.DuckDBPyConnection) -> None:
     hold here. Each check is one bulk anti-join, and a failure aborts the build before anything is
     published.
 
+    The database counts the offending rows and hands back three of them. Fetching them all would put
+    one Python tuple per bad row in memory just to print three and a number, so a corrupt build of a
+    multi-million-row corpus would die with ``MemoryError`` on the path that exists to explain what
+    went wrong.
+
     Args:
         connection: The connection holding the freshly loaded, not yet committed database.
 
@@ -403,11 +426,14 @@ def _validate(connection: duckdb.DuckDBPyConnection) -> None:
         TimeFValidationError: If any check finds a row.
     """
     for description, query in ddl.VALIDATIONS:
-        offending = connection.execute(query).fetchall()
-        if offending:
-            sample = ", ".join(str(row[0]) for row in offending[:3])
+        # Every query comes from this module's own schema, never from input.
+        counted = connection.execute(f"SELECT count(*) FROM ({query}) offending").fetchone()  # noqa: S608
+        total = 0 if counted is None else counted[0]
+        if total:
+            offending = connection.execute(f"SELECT * FROM ({query}) offending LIMIT 3").fetchall()  # noqa: S608
+            sample = ", ".join(str(row[0]) for row in offending)
             raise TimeFValidationError(
-                f"{description}: {len(offending)} row(s), for example {sample}. The version was not published."
+                f"{description}: {total} row(s), for example {sample}. The version was not published."
             )
 
 
@@ -419,6 +445,22 @@ def _file_part(root: Path, relpath: str) -> FilePart:
     """
     path = root / relpath
     return FilePart(path=relpath, checksum=file_checksum(path), size=path.stat().st_size)
+
+
+def _sql_literal(path: Path) -> str:
+    """Return a path as the body of a single-quoted SQL string.
+
+    ``ATTACH`` takes its path as a literal and not as a parameter, so a home directory such as
+    ``/Users/o'brien`` would otherwise end the string early and fail the whole build on a parse
+    error.
+
+    Args:
+        path: The path to quote.
+
+    Returns:
+        The path with every single quote doubled.
+    """
+    return str(path).replace("'", "''")
 
 
 def _statements(script: str) -> Iterable[str]:
@@ -555,6 +597,7 @@ class _Loader:
     """Walks the hierarchy once, assigns every id, and feeds every table's inserter."""
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
+        self._connection = connection
         self.records = _BatchInserter(connection, "records", ("record_id", "external_id", "start_time_us"))
         self.axes = _BatchInserter(
             connection,
@@ -601,6 +644,9 @@ class _Loader:
 
         # A signal object can hang off sources in several records, and the second source still needs
         # its id for the link row, so the map keeps the id rather than just the fact it was seen.
+        # Each entry packs the signal's fingerprint above its id in one int. A tuple beside the id
+        # would be clearer and costs about 100 bytes a signal against 4 for the shift: 161 MB
+        # against 6.7 MB on the 1.66 million signals of the largest corpus built so far.
         self._signal_id_of: dict[str, int] = {}
         self._annotation_id_of: dict[tuple[str, str, str | None], int] = {}
         self._axis_id_of: dict[tuple[Any, ...], int] = {}
@@ -696,21 +742,93 @@ class _Loader:
     def signal(self, signal: Signal) -> tuple[int, bool]:
         """Store a signal's own row the first time it is seen, and return its id.
 
+        A series shared by several records is stored once, so every use of an id has to be the same
+        series. Each use is checked against a fingerprint of everything the first use wrote: the
+        name, the spec and axis keys, the dtype, the length, the values, the time offsets, and the
+        annotations. Hashing the values is the whole cost, and it runs at 1.03 GB/s against the
+        47 MB/s the rest of the build sustains. Measured on a shared corpus of 6,000 references over
+        98 MB of values: 2.20 s with the check and 2.09 s without, a difference smaller than the
+        spread between runs. Two signals that are the same series hash the same, so a corpus that
+        shares series on purpose, as ARFBench does for 7,013 of its 9,187, is never refused.
+
         Args:
             signal: The signal.
 
         Returns:
             The signal's id, and whether this call was the one that stored it.
+
+        Raises:
+            TimeFValidationError: If a signal id is reused for a different series.
         """
-        signal_id = self._signal_id_of.get(signal.id)
-        if signal_id is not None:
+        fingerprint = _fingerprint(signal)
+        packed = self._signal_id_of.get(signal.id)
+        if packed is not None:
+            signal_id = packed & ddl.MAX_ID
+            if packed >> _ID_BITS != fingerprint:
+                raise TimeFValidationError(
+                    f"signal id {signal.id!r} is used for two different series: {self._mismatch(signal, signal_id)}. "
+                    "A series shared by several records must be the same series everywhere."
+                )
             return signal_id, False
-        signal_id = self._signal_id_of[signal.id] = self._signal_ids.claim()
+        signal_id = self._signal_ids.claim()
+        self._signal_id_of[signal.id] = fingerprint << _ID_BITS | signal_id
         self.signals.add((signal_id, signal.id, signal.name, self.axis(signal), self.spec(signal), len(signal.values)))
         # A shared signal belongs to no single record, so its annotations carry no record scope;
         # the reader reaches them through source_signals instead.
         self.annotate(signal.annotations, "signal", signal_id)
         return signal_id, True
+
+    def _mismatch(self, signal: Signal, signal_id: int) -> str:
+        """Say how a repeated signal differs from the one already stored under its id.
+
+        The stored signal's own columns are read back from the database rather than kept in memory,
+        since this runs once and then the build dies. An axis or spec the walk has never seen cannot
+        be the stored one, so a missing memo entry is itself the difference.
+
+        Args:
+            signal: The signal that arrived second.
+            signal_id: The id the first one was given.
+
+        Returns:
+            What the two disagree about.
+        """
+        self.signals.flush()
+        stored = self._connection.execute(
+            "SELECT name, axis_id, spec_id, n_values FROM signals WHERE signal_id = ?", [signal_id]
+        ).fetchone()
+        if stored is None:
+            return "they are not the same series"
+        name, axis_id, spec_id, n_values = stored
+        differences = []
+        if name != signal.name:
+            differences.append(f"name {name!r} then {signal.name!r}")
+        if n_values != len(signal.values):
+            differences.append(f"{n_values} values then {len(signal.values)}")
+        if spec_id != self._spec_id_of.get(_spec_key(signal)):
+            differences.append("a different spec")
+        if axis_id != self._axis_id_of.get(_axis_key(signal)):
+            differences.append("a different time axis")
+        if self._stored_annotations(signal_id) != [_annotation_key(annotation) for annotation in signal.annotations]:
+            differences.append("different annotations")
+        return ", ".join(differences) if differences else "the same shape, different values"
+
+    def _stored_annotations(self, signal_id: int) -> list[tuple[Any, ...]]:
+        """Read back the annotations already attached to one signal, in the order they were added.
+
+        Args:
+            signal_id: The id of the signal whose annotations to read.
+
+        Returns:
+            One :func:`_annotation_key` per attachment.
+        """
+        self.contents.flush()
+        self._attachments["signal"].inserter.flush()
+        return self._connection.execute(
+            "SELECT name, value, unit, span_type, start_us, end_us, provenance, confidence "
+            "FROM signal_annotations JOIN annotations USING (annotation_id) "
+            "WHERE signal_id = ? ORDER BY attachment_id",
+            [signal_id],
+        ).fetchall()
 
     def axis(self, signal: Signal) -> int:
         """Record a signal's axis if this is the first signal to use it, and return its id.
@@ -721,15 +839,7 @@ class _Loader:
         Returns:
             The axis id.
         """
-        columns = axis_columns(signal.time_axis)
-        key: tuple[Any, ...] = (
-            str(signal.time_axis.axis_type),
-            columns["period_numerator_us"],
-            columns["period_denominator"],
-            columns["start_index"],
-            columns["first_us"],
-            columns["last_us"],
-        )
+        key = _axis_key(signal)
         axis_id = self._axis_id_of.get(key)
         if axis_id is None:
             axis_id = self._axis_id_of[key] = self._axis_ids.claim()
@@ -745,13 +855,93 @@ class _Loader:
         Returns:
             The spec id.
         """
-        spec = signal.spec
-        key: tuple[Any, ...] = (spec.spec_type, spec.name, str(spec.unit_value), spec.dtype, spec.nullable)
+        key = _spec_key(signal)
         spec_id = self._spec_id_of.get(key)
         if spec_id is None:
             spec_id = self._spec_id_of[key] = self._spec_ids.claim()
             self.specs.add((spec_id, *key))
         return spec_id
+
+
+def _axis_key(signal: Signal) -> tuple[Any, ...]:
+    """Return the ``axes`` row a signal's time axis needs.
+
+    Args:
+        signal: The signal whose axis to describe.
+
+    Returns:
+        The axis columns, in the order the table declares them.
+    """
+    columns = axis_columns(signal.time_axis)
+    return (
+        str(signal.time_axis.axis_type),
+        columns["period_numerator_us"],
+        columns["period_denominator"],
+        columns["start_index"],
+        columns["first_us"],
+        columns["last_us"],
+    )
+
+
+def _spec_key(signal: Signal) -> tuple[Any, ...]:
+    """Return the ``specs`` row a signal's spec needs.
+
+    Args:
+        signal: The signal whose spec to describe.
+
+    Returns:
+        The spec columns, in the order the table declares them.
+    """
+    spec = signal.spec
+    return (spec.spec_type, spec.name, str(spec.unit_value), spec.dtype, spec.nullable)
+
+
+def _annotation_key(annotation: Annotation) -> tuple[Any, ...]:
+    """Return every column one annotation writes, payload and attachment together.
+
+    Args:
+        annotation: The annotation to describe.
+
+    Returns:
+        The payload columns followed by the attachment's own span and provenance columns.
+    """
+    return (
+        *annotation.content_key(),
+        annotation.span_type,
+        annotation.start_us,
+        annotation.end_us,
+        annotation.provenance,
+        annotation.confidence,
+    )
+
+
+def _fingerprint(signal: Signal) -> int:
+    """Return a fingerprint of everything two signals sharing an id have to agree on.
+
+    The lengths go in beside the buffers so a shorter values array cannot be made to hash like a
+    longer one by what follows it.
+
+    The annotations go in too, in list order. They hang off the signal rather than off one use of
+    it, so only the first use's are written and the reader serves them to every use; a second use
+    carrying different ones would otherwise lose them with nothing on disk saying so.
+
+    Args:
+        signal: The signal to fingerprint.
+
+    Returns:
+        The fingerprint, as a :data:`_FINGERPRINT_BYTES`-byte digest read as an integer.
+    """
+    offsets = signal.time_offsets_us
+    digest = hashlib.blake2b(digest_size=_FINGERPRINT_BYTES)
+    digest.update(
+        f"{signal.name}|{_spec_key(signal)}|{_axis_key(signal)}|{signal.values.dtype.str}"
+        f"|{signal.values.shape}|{None if offsets is None else offsets.shape}"
+        f"|{[_annotation_key(annotation) for annotation in signal.annotations]}".encode()
+    )
+    digest.update(np.ascontiguousarray(signal.values))
+    if offsets is not None:
+        digest.update(np.ascontiguousarray(offsets))
+    return int.from_bytes(digest.digest(), "big")
 
 
 def _load_record(loader: _Loader, record: Record) -> list[tuple[Signal, int]]:

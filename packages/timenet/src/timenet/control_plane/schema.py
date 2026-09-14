@@ -71,13 +71,12 @@ reader can pick the right backend without a per-chunk tag.
 concatenated array, which passes two billion long before the dataset is unreasonable.
 ``chunk_minor_idx`` and ``n_values`` are ``INTEGER``: both are bounded by the writer's byte budgets,
 1 MiB per chunk and 4 MiB per row group, so neither can reach two billion unless a caller configures
-a chunk larger than that, and then the insert raises rather than wrapping. Width is worth this care.
-Measured at SLIP scale, declaring the id columns ``BIGINT`` instead of ``INTEGER`` grew the file from
-94.0 MB to 162.6 MB and made the signals join 19% slower; DuckDB does not compress the extra width
-away.
+a chunk larger than that, and then the insert raises rather than wrapping.
 """
 
 from typing import Final
+
+from timenet.errors import TimeFValidationError
 
 
 SCHEMA_VERSION: Final = 2
@@ -86,24 +85,27 @@ SCHEMA_VERSION: Final = 2
 ID_TYPE: Final = "UINTEGER"
 """The DuckDB type of every surrogate id column.
 
-Measured on DuckDB 1.5.5 at SLIP attachment scale, 3.09M rows across three id columns:
+``UINTEGER`` ties ``INTEGER`` on every measurement through the real schema, storage and all four hot
+queries alike, and doubles the ceiling for nothing. That is the whole case for it.
 
-===============  =========================  =======  ==========  =======
-type             ceiling                    file     lookup      write
-===============  =========================  =======  ==========  =======
-``INTEGER``      2.15e9                     37.3 MB    7.96 ms   0.29 s
-``UINTEGER``     4.29e9                     37.3 MB    7.20 ms   0.26 s
-``BIGINT``       9.22e18                    74.6 MB   12.29 ms   0.46 s
-``HUGEINT``      1.70e38                   149.2 MB   11.07 ms   1.73 s
-``BIGNUM``       unbounded                  41.6 MB   97.81 ms   6.73 s
-===============  =========================  =======  ==========  =======
+Width costs less than it first appears, and the reason is worth recording because it is easy to
+measure backwards. At ``BLOCK_SIZE`` 16384 DuckDB refuses to bitpack these columns, so 64-bit looks
+like a flat 2x. Raise the block size and the premium disappears: on the real schema at SLIP shape,
+``UINTEGER`` against ``UBIGINT`` is 147.6 MB against 228.4 MB at 16 KiB, but 48.6 MB against 48.6 MB
+at 64 KiB. The block size is worth 3x and the id width is worth nothing, so a measurement that pins
+the block size to DuckDB's minimum and then compares widths is measuring the pin.
 
-``UINTEGER`` is free next to ``INTEGER``: identical storage, identical speed, double the ceiling.
-Going 64-bit is a flat 2.00x on every id column, and no compression setting avoids it; DuckDB stores
-these columns uncompressed and ignores ``force_compression`` on them, even for the dense counters.
-``BIGNUM`` removes the ceiling for only 1.12x storage, but it is a variable-length byte string
-underneath, so it reads 12x slower and writes 23x slower. That is the wrong trade for a join key:
-moving these columns off strings is what bought the 29-46x lookup speedup in the first place.
+64-bit still costs on the hot joins, around 9 to 12%, which is why the declared type stays 32-bit.
+The ceiling is not the constraint it looks like either: exhausting ``UINTEGER`` means a corpus of
+1.43 billion records, a 7.4 TB values plane, and a 112 GB single-file control database that a client
+downloads whole. The format needs a sharded control plane a hundredfold before it needs a wider id,
+and if one were ever needed, ``ALTER TABLE ... ALTER COLUMN TYPE UBIGINT`` across all 33 id columns
+of a finished SLIP-shape database takes 0.18 s.
+
+``BIGNUM`` looks tempting because it is arbitrary precision at close to integer storage cost, but it
+is disqualified: ``id % ?`` on a ``BIGNUM`` column evaluates in ``DOUBLE``, so the reader's worker
+partition silently mis-splits above 2^53 and throws outright past ``DOUBLE`` range. Its one selling
+point is the unbounded ceiling and the one query that would need it cannot use it.
 """
 
 MAX_ID: Final = 2**32 - 1
@@ -130,10 +132,10 @@ def source_path(parent_path: str | None, position: int) -> str:
         The path, as dot-separated zero-padded positions.
 
     Raises:
-        ValueError: If ``position`` needs more than :data:`PATH_DIGITS` digits.
+        TimeFValidationError: If ``position`` needs more than :data:`PATH_DIGITS` digits.
     """
     if not 0 <= position < 10**PATH_DIGITS:
-        raise ValueError(f"source position {position} does not fit {PATH_DIGITS} digits")
+        raise TimeFValidationError(f"source position {position} does not fit {PATH_DIGITS} digits")
     segment = f"{position:0{PATH_DIGITS}d}"
     return segment if parent_path is None else f"{parent_path}.{segment}"
 
@@ -541,9 +543,12 @@ VALIDATIONS: Final = (
             for table, _ in ANNOTATION_TABLES.values()
         ),
     ),
+    # Left-joined, not joined: a signal with no chunk row at all is the mismatch a writer bug
+    # produces, and an inner join drops exactly that signal instead of reporting it. The consumer
+    # would then read an empty array for a signal that declares 5,000 values.
     (
         "signal length disagrees with its chunks",
-        "SELECT g.signal_id FROM signals g JOIN (SELECT signal_id, sum(n_values) AS total FROM signal_chunks "
-        "GROUP BY signal_id) c ON c.signal_id = g.signal_id WHERE c.total <> g.n_values",
+        "SELECT g.signal_id FROM signals g LEFT JOIN (SELECT signal_id, sum(n_values) AS total FROM signal_chunks "
+        "GROUP BY signal_id) c ON c.signal_id = g.signal_id WHERE coalesce(c.total, 0) <> g.n_values",
     ),
 )
