@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import shutil
 import threading
 
 import duckdb
@@ -23,8 +24,16 @@ import pytest
 
 from timenet.control_plane import TimeFReader, TimeFWriter
 from timenet.format.checksums import file_checksum
+from timenet.format.constants import CONTROL_DB_FILE
 from timenet.registry.local import LocalRegistry
 from timenet.testing import make_dataset
+
+
+def _values(reader, record_external_id, signal_external_id):
+    """Read one signal's values, reaching its surrogate id the way a caller does."""
+    signals = reader.record(record_external_id).signals()
+    (signal,) = [found for found in signals if found.external_id == signal_external_id]
+    return reader.values(signal.signal_id)
 
 
 @pytest.fixture
@@ -77,7 +86,7 @@ def test_download_then_read(published, tmp_path):
     assert (destination / "manifest.json").exists()
     with TimeFReader(destination) as reader:
         assert reader.record_ids() == ["record-000", "record-001", "record-002"]
-        assert reader.values("record-000-lead-i").shape == (128,)
+        assert _values(reader, "record-000", "record-000-lead-i").shape == (128,)
 
 
 def test_a_read_leaves_the_downloaded_copy_byte_identical(published, tmp_path):
@@ -117,9 +126,10 @@ def test_reading_the_control_database_over_http_without_downloading_it(server):
     connection.execute("LOAD httpfs")
     connection.execute(f"ATTACH '{server}/test/bedside/1.0.0/control.duckdb' AS remote (READ_ONLY)")
     found = connection.execute(
-        "SELECT DISTINCT o.scope_record_id FROM remote.entities_to_annotations o "
-        "JOIN remote.annotations c USING (annotation_id) "
-        "WHERE c.name = 'patient_sex' AND o.scope_record_id IS NOT NULL ORDER BY 1"
+        "SELECT DISTINCT r.external_id FROM remote.record_annotations a "
+        "JOIN remote.annotations n USING (annotation_id) "
+        "JOIN remote.records r USING (record_id) "
+        "WHERE n.name = 'patient_sex' ORDER BY 1"
     ).fetchall()
     connection.close()
     assert [row[0] for row in found] == ["record-000", "record-001", "record-002"]
@@ -132,3 +142,42 @@ def test_remote_reader_reads_a_version_it_never_downloaded(server, tmp_path):
         record = reader.record("record-000")
         assert [source.name for source in record.sources] == ["Bedside monitor"]
         assert reader.records_with("patient_sex", "male") == ["record-000", "record-001", "record-002"]
+
+
+def test_a_remote_walk_finds_the_attached_catalog(server, tmp_path):
+    """A walk streams its ids from a second cursor, which starts on the instance's own catalog.
+
+    Over a URL the control plane is attached beside an empty in-memory database, so a cursor that
+    keeps that default answers an unqualified ``FROM records`` with a catalog error. A local file is
+    the whole database, which is why only a remote open ever showed this.
+    """
+    with TimeFReader(tmp_path, database=f"{server}/test/bedside/1.0.0/control.duckdb") as reader:
+        assert [record.external_id for record in reader.iter_records(batch_size=2)] == [
+            "record-000",
+            "record-001",
+            "record-002",
+        ]
+        assert [task.external_id for task in reader.iter_tasks(batch_size=2)] == [
+            "diagnosis-000",
+            "diagnosis-001",
+            "diagnosis-002",
+        ]
+
+
+def test_a_quote_in_a_remote_path_is_not_the_end_of_the_sql_literal(published, tmp_path):
+    """DuckDB takes no parameter for an ATTACH target, so a path with a quote has to be escaped."""
+    root, _, _ = published
+    served = tmp_path / "served"
+    (served / "o'brien").mkdir(parents=True)
+    shutil.copy(root / "test/bedside/1.0.0" / CONTROL_DB_FILE, served / "o'brien" / CONTROL_DB_FILE)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(served))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/o'brien/{CONTROL_DB_FILE}"
+        with TimeFReader(tmp_path, database=url) as reader:
+            assert reader.record_ids() == ["record-000", "record-001", "record-002"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

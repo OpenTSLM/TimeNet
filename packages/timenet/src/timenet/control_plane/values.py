@@ -57,12 +57,16 @@ VALUES_BACKENDS: Final = (PARQUET, ZARR)
 class ChunkLocator:
     """Where one chunk of a signal's values landed, in terms its backend interprets.
 
-    ``chunk_file`` names an artifact: a Parquet shard, or a Zarr array inside the store. The two
-    indexes address a run of values inside it. Parquet uses both (row group, then row). Zarr uses
-    only the major one (the element offset along the array) and leaves ``chunk_minor_idx`` ``None``.
+    ``signal_id`` is the integer surrogate the control-plane writer assigned to the signal.
+
+    ``chunk_file`` names an artifact: a Parquet shard, or a Zarr array inside the store. It stays a
+    path here. The values plane knows nothing about ``values_artifacts``, so the control-plane
+    writer is what turns the path into an ``artifact_id``. The two indexes address a run of values
+    inside the artifact. Parquet uses both (row group, then row). Zarr uses only the major one (the
+    element offset along the array) and leaves ``chunk_minor_idx`` ``None``.
     """
 
-    signal_id: str
+    signal_id: int
     chunk_idx: int
     chunk_file: str
     chunk_major_idx: int
@@ -72,9 +76,13 @@ class ChunkLocator:
 
 @dataclass(frozen=True)
 class PendingSignal:
-    """One signal's values, waiting to be written, with the facts the shard row needs."""
+    """One signal's values, waiting to be written, with the facts the shard row needs.
 
-    signal_id: str
+    ``signal_id`` is the integer surrogate the control-plane writer assigned to the signal, not the
+    caller's own id. It is what a shard row carries and what a locator comes back with.
+    """
+
+    signal_id: int
     name: str
     spec_type: str
     dtype: str
@@ -214,12 +222,15 @@ def shard_schema(dtype: str) -> pa.Schema:
         dtype: The modality's value dtype, as its string name.
 
     Returns:
-        The shard schema. ``values`` is a list of the modality's dtype; ``time_offsets_us`` is null
-        for every row of a regular or ordinal series.
+        The shard schema. ``signal_id`` is the control plane's integer surrogate; ``values`` is a
+        list of the modality's dtype; ``time_offsets_us`` is null for every row of a regular or
+        ordinal series.
     """
     return pa.schema(
         [
-            ("signal_id", pa.string()),
+            # Matches the control plane's surrogate id width, so a corpus the control plane can
+            # address cannot overflow the column naming its values.
+            ("signal_id", pa.uint32()),
             ("chunk_idx", pa.int32()),
             ("spec_type", pa.string()),
             ("signal", pa.string()),
@@ -357,7 +368,7 @@ class _ModalityStream:
         self._writer: RotatingPartWriter | None = None
         self._sample: list[np.ndarray] = []
         self._buffer: list[dict] = []
-        self._pending: list[tuple[str, int, int]] = []
+        self._pending: list[tuple[int, int, int]] = []
         self._buffered_bytes = 0
 
     def _open(self) -> RotatingPartWriter:

@@ -49,8 +49,6 @@ class Annotation:
     """Who or what made this statement."""
     confidence: float | None = None
     """How sure the source of the statement is, between 0 and 1."""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    """Anything else the occurrence carries."""
 
     @classmethod
     def static(cls, *, name: str, value: Any, unit: str | None = None, **kwargs: Any) -> Self:
@@ -151,11 +149,27 @@ class Signal(_Annotatable):
     time_offsets_us: np.ndarray | None = None
     """One time offset per value, for an irregular axis. It rides the values plane beside the values."""
     id: str = field(default_factory=new_id)
-    """The signal's id. It is generated when the caller does not supply one."""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    """Anything else about the signal, such as calibration or sensor orientation."""
+    """The signal's own id, stored as ``external_id``. It is generated when the caller does not
+    supply one. The writer assigns the dense integer id that the database joins on."""
     annotations: list[Annotation] = field(default_factory=list)
     """Annotations that apply to this signal."""
+
+    def __post_init__(self) -> None:
+        """Reject time offsets that do not line up with the values.
+
+        The values plane appends the two arrays to separate stores and addresses both with the
+        values offset, so a pair of unequal length would shift every signal written after it. One
+        length comparison here refuses it before anything reaches disk.
+
+        Raises:
+            TimeFValidationError: If ``time_offsets_us`` is set and is not one offset per value.
+        """
+        if self.time_offsets_us is not None and len(self.time_offsets_us) != len(self.values):
+            raise TimeFValidationError(
+                f"signal {self.name!r} has {len(self.values)} values and "
+                f"{len(self.time_offsets_us)} time offsets; an irregular signal needs one offset "
+                f"per value"
+            )
 
 
 @dataclass
@@ -173,9 +187,8 @@ class Source(_Annotatable):
     signals: list[Signal] = field(default_factory=list)
     """Signals this source produces directly."""
     id: str = field(default_factory=new_id)
-    """The source's id. It is generated when the caller does not supply one."""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    """Anything else about the source, such as manufacturer, model, or location."""
+    """The source's own id, stored as ``external_id``. It is generated when the caller does not
+    supply one. The writer assigns the dense integer id that the database joins on."""
     annotations: list[Annotation] = field(default_factory=list)
     """Annotations that apply to this source."""
 
@@ -244,11 +257,10 @@ class Record(_Annotatable):
     sources: list[Source] = field(default_factory=list)
     """The root sources of this session. Each one can hold further sources and signals."""
     id: str = field(default_factory=new_id)
-    """The record's id. It is generated when the caller does not supply one."""
+    """The record's own id, stored as ``external_id``. It is generated when the caller does not
+    supply one. The writer assigns the dense integer id that the database joins on."""
     start_time_us: int | None = None
     """The wall-clock time the session started, in Unix microseconds, when it is known."""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    """Anything else about the session."""
     annotations: list[Annotation] = field(default_factory=list)
     """Annotations that apply to the whole session, such as the subject's sex or age."""
 
@@ -293,9 +305,8 @@ class Task(_Annotatable):
     target: list["Record | RecordRef | str"] = field(default_factory=list)
     """The desired output, as text and records. Order is preserved."""
     id: str = field(default_factory=new_id)
-    """The task's id. It is generated when the caller does not supply one."""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    """Anything else about the task, such as its type."""
+    """The task's own id, stored as ``external_id``. It is generated when the caller does not
+    supply one. The writer assigns the dense integer id that the database joins on."""
     annotations: list[Annotation] = field(default_factory=list)
     """Annotations that apply to the task."""
 

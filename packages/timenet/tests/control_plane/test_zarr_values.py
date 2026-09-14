@@ -24,6 +24,13 @@ def _write(root, backend, **options):
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
+def _signal(reader, record_external_id, signal_external_id):
+    """Return one signal's view, found by the id it was built under."""
+    signals = reader.record(record_external_id).signals()
+    (found,) = [signal for signal in signals if signal.external_id == signal_external_id]
+    return found
+
+
 @pytest.fixture
 def zarr_version(tmp_path):
     """A version whose values live in a Zarr store."""
@@ -39,20 +46,24 @@ def parquet_version(tmp_path):
 def test_values_round_trip_with_their_dtype(zarr_version):
     """float32 in, float32 out. A backend that widens to float64 doubles every tensor downstream."""
     with TimeFReader(zarr_version) as reader:
-        values = reader.values("record-000-lead-i")
+        values = reader.values(_signal(reader, "record-000", "record-000-lead-i").signal_id)
     assert values.shape == (256,)
     assert values.dtype == np.float32
 
 
 def test_every_signal_matches_the_parquet_version_exactly(zarr_version, parquet_version):
+    """Signals are matched by the name they were built under, not by the surrogate id."""
     with TimeFReader(zarr_version) as zarred, TimeFReader(parquet_version) as parqueted:
-        signal_ids = [signal.signal_id for record in parqueted.iter_records() for signal in record.signals()]
-        assert signal_ids
-        for signal_id in signal_ids:
-            from_zarr = zarred.values(signal_id)
-            from_parquet = parqueted.values(signal_id)
-            assert from_zarr.dtype == from_parquet.dtype
-            np.testing.assert_array_equal(from_zarr, from_parquet)
+        assert zarred.record_ids() == parqueted.record_ids()
+        for record_id in parqueted.record_ids():
+            here = zarred.record(record_id).signals()
+            there = parqueted.record(record_id).signals()
+            assert [signal.external_id for signal in here] == [signal.external_id for signal in there]
+            for from_store, from_shard in zip(here, there, strict=True):
+                from_zarr = zarred.values(from_store.signal_id)
+                from_parquet = parqueted.values(from_shard.signal_id)
+                assert from_zarr.dtype == from_parquet.dtype
+                np.testing.assert_array_equal(from_zarr, from_parquet)
 
 
 def test_the_hierarchy_is_unchanged(zarr_version, parquet_version):
@@ -62,10 +73,13 @@ def test_the_hierarchy_is_unchanged(zarr_version, parquet_version):
         assert zarred.task_ids() == parqueted.task_ids()
         for record_id in parqueted.record_ids():
             here, there = zarred.record(record_id), parqueted.record(record_id)
-            assert [(s.name, s.depth) for s in here.walk_sources()] == [(s.name, s.depth) for s in there.walk_sources()]
-            assert [(s.signal_id, s.spec_type, s.dtype, s.axis_type, s.n_values) for s in here.signals()] == [
-                (s.signal_id, s.spec_type, s.dtype, s.axis_type, s.n_values) for s in there.signals()
+            assert here.record_id == there.record_id
+            assert [(s.source_id, s.external_id, s.name, s.depth) for s in here.walk_sources()] == [
+                (s.source_id, s.external_id, s.name, s.depth) for s in there.walk_sources()
             ]
+            assert [
+                (s.signal_id, s.external_id, s.spec_type, s.dtype, s.axis_type, s.n_values) for s in here.signals()
+            ] == [(s.signal_id, s.external_id, s.spec_type, s.dtype, s.axis_type, s.n_values) for s in there.signals()]
             assert [a.to_text() for a in here.annotations] == [a.to_text() for a in there.annotations]
             assert [a.to_text() for s in here.signals() for a in s.annotations] == [
                 a.to_text() for s in there.signals() for a in s.annotations
@@ -75,9 +89,9 @@ def test_the_hierarchy_is_unchanged(zarr_version, parquet_version):
 def test_an_irregular_signal_keeps_its_time_offsets_beside_its_values(zarr_version):
     """Irregular series write two parallel arrays, so both must exist and share a length."""
     with TimeFReader(zarr_version) as reader:
-        chest = reader.record("record-000").sources[0].sources[1].signals[0]
+        chest = _signal(reader, "record-000", "record-000-chest")
         assert chest.axis_type == "irregular"
-        assert reader.values("record-000-chest").shape == (10,)
+        assert reader.values(chest.signal_id).shape == (10,)
         artifacts = reader.values_backends()
     irregular = [path for path in artifacts if "/_irregular/" in path]
     offsets = [path for path in artifacts if "/_time_offsets/" in path]
@@ -87,10 +101,12 @@ def test_an_irregular_signal_keeps_its_time_offsets_beside_its_values(zarr_versi
 def test_a_locator_addresses_an_element_offset_not_a_row_group(zarr_version):
     """The whole point of the neutral locator: no row group, and still one addressed read."""
     with TimeFReader(zarr_version) as reader:
-        locators = reader.chunk_locators("record-000-lead-i")
+        lead_i = _signal(reader, "record-000", "record-000-lead-i")
+        locators = reader.chunk_locators(lead_i.signal_id)
         declared = reader.values_backends()
     assert len(locators) == 1
     (locator,) = locators
+    assert locator.signal_id == lead_i.signal_id
     assert locator.chunk_minor_idx is None
     assert locator.chunk_file.startswith(f"{STORE_DIR}/")
     assert declared[locator.chunk_file] == "zarr"
@@ -136,5 +152,7 @@ def test_a_small_chunk_budget_does_not_change_what_comes_back(tmp_path):
     whole = _write(tmp_path / "whole", "zarr", chunk_max_bytes=1024 * 1024)
     split = _write(tmp_path / "split", "zarr", chunk_max_bytes=256)
     with TimeFReader(whole) as one, TimeFReader(split) as other:
-        np.testing.assert_array_equal(one.values("record-000-lead-i"), other.values("record-000-lead-i"))
-        assert one.values("record-000-lead-i").dtype == other.values("record-000-lead-i").dtype
+        here = one.values(_signal(one, "record-000", "record-000-lead-i").signal_id)
+        there = other.values(_signal(other, "record-000", "record-000-lead-i").signal_id)
+        np.testing.assert_array_equal(here, there)
+        assert here.dtype == there.dtype

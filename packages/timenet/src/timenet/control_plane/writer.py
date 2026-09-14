@@ -1,8 +1,9 @@
 """Compile a declarative hierarchy into a dataset version: one control database plus Parquet shards.
 
-The writer walks ``Task -> Record -> Source -> Signal``, derives every id the storage layer needs
-(annotation content ids, occurrence ids, axis ids), streams the values into the Parquet values
-plane, and inserts the structure into an embedded DuckDB database.
+The writer walks ``Task -> Record -> Source -> Signal``, hands every entity the dense ``INTEGER`` id
+the control plane joins on, streams the values into the values plane, and inserts the structure into
+an embedded DuckDB database. The caller's own string id rides along as ``external_id`` on the entity
+that owns it, so a record stays addressable by the name it has outside the dataset.
 
 Commit works the way the current writer's does: everything is built in a ``<version>.tmp-<uuid>``
 staging directory, and the finished directory is moved into place with one atomic rename. A reader
@@ -10,8 +11,6 @@ either sees a complete version or sees nothing.
 """
 
 from collections.abc import Iterable
-import hashlib
-import json
 from pathlib import Path
 import shutil
 from types import TracebackType
@@ -40,11 +39,28 @@ _INSERT_BATCH = 50_000
 # The name each batch is registered under while its INSERT runs.
 _STAGED = "_timef_staged_batch"
 
+# Where task items wait until every record has been loaded, so their caller-supplied record names
+# can be resolved in one join.
+_STAGED_ITEMS = "_timef_staged_task_items"
+
+_STAGED_ITEMS_DDL = f"""
+CREATE TEMP TABLE {_STAGED_ITEMS} (
+    task_id            {ddl.ID_TYPE} NOT NULL,
+    role               VARCHAR NOT NULL,
+    position           INTEGER NOT NULL,
+    item_type          VARCHAR NOT NULL,
+    text_value         VARCHAR,
+    record_external_id VARCHAR
+)
+"""
+
 # DuckDB's declared column types, mapped to the Arrow types a batch is built with.
 _ARROW_TYPES = {
     "VARCHAR": pa.string(),
     "BIGINT": pa.int64(),
+    "UBIGINT": pa.uint64(),
     "INTEGER": pa.int32(),
+    "UINTEGER": pa.uint32(),
     "DOUBLE": pa.float64(),
     "BOOLEAN": pa.bool_(),
 }
@@ -55,6 +71,38 @@ _ARROW_TYPES = {
 # matters more than the throughput a larger block buys. Measured on the demo dataset: 12.9 MB at the
 # default, 815 KB at 16 KiB. 16 KiB is DuckDB's minimum.
 _BLOCK_SIZE = 16_384
+
+# Only a source attachment records the record it sits in. A record attachment already names one, and
+# a signal shared by several records belongs to no single one.
+_SCOPED_ATTACHMENTS = frozenset({"source"})
+
+
+class _Ids:
+    """Hands out one entity kind's ids: 0, 1, 2, with no gap and no repeat."""
+
+    def __init__(self, kind: str) -> None:
+        """Start the counter for one kind of entity.
+
+        Args:
+            kind: What is being counted, named in the plural for the error message.
+        """
+        self._kind = kind
+        self._next = 0
+
+    def claim(self) -> int:
+        """Take the next id.
+
+        Returns:
+            The id.
+
+        Raises:
+            TimeFValidationError: If the id would not fit the ``INTEGER`` column that stores it.
+        """
+        if self._next > ddl.MAX_ID:
+            raise TimeFValidationError(f"too many {self._kind} for an INTEGER id: the limit is {ddl.MAX_ID + 1}")
+        claimed = self._next
+        self._next += 1
+        return claimed
 
 
 class _BatchInserter:
@@ -139,37 +187,57 @@ class _BatchInserter:
             self._connection.unregister(_STAGED)
 
 
-def annotation_id(annotation: Annotation) -> str:
-    """Return the id of an annotation's reusable payload.
+class _AttachmentTable:
+    """One annotation target kind: its table's inserter and its own dense attachment counter.
 
-    The id is derived from the payload itself, so the same statement made about ten thousand records
-    resolves to one stored row without the writer keeping a lookup table.
-
-    Args:
-        annotation: The annotation whose payload to identify.
-
-    Returns:
-        The content id.
+    Each kind counts from 0, so ``record_annotations`` and ``signal_annotations`` both start at zero
+    and neither has to know how many rows the other holds.
     """
-    name, value, unit = annotation.content_key()
-    digest = hashlib.sha256("\x00".join([name, value, unit or ""]).encode()).hexdigest()
-    return f"ac-{digest[:24]}"
 
+    def __init__(self, connection: duckdb.DuckDBPyConnection, kind: str, table: str, target: str | None) -> None:
+        """Bind the table to its target column and start its counter.
 
-def axis_id(axis: Any) -> str:
-    """Return the id of a time axis, derived from the axis itself so equal axes share one row.
+        Args:
+            connection: The open database connection.
+            kind: The object kind, a key of :data:`~timenet.control_plane.schema.ANNOTATION_TABLES`.
+            table: The table holding this kind's attachments.
+            target: The column naming the target, or ``None`` for the dataset's own table.
+        """
+        columns = ["attachment_id", "annotation_id"]
+        if target is not None:
+            columns.append(target)
+        if kind in _SCOPED_ATTACHMENTS:
+            columns.append("scope_record_id")
+        columns += ["span_type", "start_us", "end_us", "provenance", "confidence"]
+        self.inserter = _BatchInserter(connection, table, tuple(columns))
+        self._ids = _Ids(f"{table} rows")
+        self._targeted = target is not None
+        self._scoped = kind in _SCOPED_ATTACHMENTS
 
-    Args:
-        axis: The axis object.
+    def add(self, annotation_id: int, annotation: Annotation, target: int | None, scope_record_id: int | None) -> None:
+        """Attach one annotation to one object.
 
-    Returns:
-        The axis id.
-    """
-    axis_type = axis.axis_type
-    columns = axis_columns(axis)
-    parts = [str(axis_type), *(str(columns[key]) for key in sorted(columns))]
-    digest = hashlib.sha256("\x00".join(parts).encode()).hexdigest()
-    return f"ax-{digest[:20]}"
+        Args:
+            annotation_id: The id of the stored payload.
+            annotation: The annotation, for its span and provenance columns.
+            target: The target object's id, ignored by the dataset's table.
+            scope_record_id: The record the target sits in, used by ``source_annotations`` only.
+        """
+        row: tuple[Any, ...] = (self._ids.claim(), annotation_id)
+        if self._targeted:
+            row += (target,)
+        if self._scoped:
+            row += (scope_record_id,)
+        self.inserter.add(
+            (
+                *row,
+                annotation.span_type,
+                annotation.start_us,
+                annotation.end_us,
+                annotation.provenance,
+                annotation.confidence,
+            )
+        )
 
 
 class TimeFWriter:
@@ -251,9 +319,9 @@ class TimeFWriter:
         can therefore be written, which the in-memory path cannot do -- 618,508 records do not fit on
         a 16 GB machine.
 
-        A record must be yielded before any task that refers to it, and every record a task names
-        must be yielded at some point, or the write-time validation will reject the dangling
-        reference.
+        Tasks may be yielded in any order relative to the records they name, since a task item's
+        record is resolved by a join once every record is loaded. An id naming no record is still
+        rejected by the write-time validation.
 
         Args:
             records: The records to write, in any order.
@@ -274,7 +342,7 @@ class TimeFWriter:
             connection.execute("BEGIN TRANSACTION")
             for statement in _statements(ddl.DDL):
                 connection.execute(statement)
-            counts = _stream_into(connection, values, records, tasks, annotations)
+            counts = _stream_into(connection, values, records, tasks, annotations, metadata=self._metadata)
             _validate(connection)
             connection.execute("COMMIT")
             for statement in _statements(ddl.INDEXES):
@@ -305,7 +373,7 @@ class TimeFWriter:
             counts=ManifestCounts(
                 records=counts["records"],
                 annotations=counts["annotations"],
-                registered_annotations=counts["entities_to_annotations"],
+                registered_annotations=counts["attachments"],
                 time_series_chunks=counts["signal_chunks"],
                 time_series_index_rows=counts["signal_chunks"],
             ),
@@ -362,12 +430,14 @@ def _statements(script: str) -> Iterable[str]:
     return [statement.strip() for statement in script.split(";") if statement.strip()]
 
 
-def _stream_into(
+def _stream_into(  # noqa: PLR0913
     connection: duckdb.DuckDBPyConnection,
     values: ValuesWriter,
     records: Iterable[Record],
     tasks: Iterable[Task],
     annotations: Iterable[Annotation],
+    *,
+    metadata: DatasetMetadata,
 ) -> dict[str, int]:
     """Walk the records and tasks once, feeding both planes as it goes.
 
@@ -377,38 +447,37 @@ def _stream_into(
         records: The records to write.
         tasks: The tasks to write.
         annotations: Dataset-level annotations.
+        metadata: The dataset's metadata, whose id goes into ``meta``.
 
     Returns:
         The row count of each loaded table.
     """
+    connection.execute(_STAGED_ITEMS_DDL)
     loader = _Loader(connection)
-    dataset_id = "dataset"
     loader.meta.add(("schema_version", str(ddl.SCHEMA_VERSION)))
-    loader.meta.add(("dataset_id", dataset_id))
-    loader.datasets.add((dataset_id, None))
-    loader.annotate(list(annotations), "dataset", dataset_id)
+    loader.meta.add(("dataset_id", metadata.dataset_id))
+    loader.annotate(list(annotations), "dataset", None)
 
-    written_values: set[str] = set()
+    # A series shared by several records is written once. _load_record already knows which signals it
+    # inserted for the first time, so it hands them back and the walk needs no set of every signal id
+    # it has seen: 1.66 million strings on the largest corpus built so far.
     for record in records:
-        _load_record(loader, record)
-        for signal in record.signals():
-            # A series shared by several records is written once.
-            if signal.id in written_values:
-                continue
-            written_values.add(signal.id)
-            for locator in values.add(_pending(signal)):
+        for signal, signal_id in _load_record(loader, record):
+            for locator in values.add(_pending(signal, signal_id)):
                 _add_chunk(loader, locator)
     for task in tasks:
         _load_task(loader, task)
     for locator in values.finish():
         _add_chunk(loader, locator)
     # Declared after the values plane closes, so a chunk row can be anti-joined against the
-    # artifacts that really exist rather than against the ones the writer meant to create.
+    # artifacts that really exist rather than against the ones the writer meant to create. An
+    # artifact no chunk names is given an id here, which keeps the ids dense.
     for chunk_file, backend in values.artifacts:
-        loader.artifacts.add((chunk_file, backend))
+        loader.artifacts.add((loader.artifact(chunk_file), chunk_file, backend))
 
     for inserter in loader.all():
         inserter.flush()
+    _resolve_task_items(connection)
     return {
         "records": loader.records.count,
         "sources": loader.sources.count,
@@ -417,22 +486,44 @@ def _stream_into(
         "values_artifacts": loader.artifacts.count,
         "signal_chunks": loader.chunks.count,
         "tasks": loader.tasks.count,
+        "task_items": loader.staged_items.count,
         "annotations": loader.contents.count,
-        "entities_to_annotations": loader.occurrences.count,
+        "attachments": loader.attachment_count,
     }
 
 
-def _pending(signal: Signal) -> PendingSignal:
+def _resolve_task_items(connection: duckdb.DuckDBPyConnection) -> None:
+    """Turn every staged task item's record name into a record id, then drop the staging table.
+
+    A task names its records by the id the caller gave them, so the writer would otherwise have to
+    hold every record's name in a dict until the tasks arrive: 618,508 entries on SLIP, kept alive
+    for the whole build. One join against the loaded ``records`` table does the same work in bulk.
+    A name that matches nothing lands as a record item with a null ``record_id``, which
+    ``schema.VALIDATIONS`` rejects.
+
+    Args:
+        connection: The connection holding the loaded, not yet committed database.
+    """
+    connection.execute(
+        "INSERT INTO task_items (task_id, role, position, item_type, text_value, record_id) "  # noqa: S608
+        "SELECT s.task_id, s.role, s.position, s.item_type, s.text_value, r.record_id "
+        f"FROM {_STAGED_ITEMS} s LEFT JOIN records r ON r.external_id = s.record_external_id"
+    )
+    connection.execute(f"DROP TABLE {_STAGED_ITEMS}")
+
+
+def _pending(signal: Signal, signal_id: int) -> PendingSignal:
     """Describe one signal for the values plane.
 
     Args:
         signal: The signal to describe.
+        signal_id: The id the control plane assigned it.
 
     Returns:
         What the values plane needs to write it.
     """
     return PendingSignal(
-        signal_id=signal.id,
+        signal_id=signal_id,
         name=signal.name,
         spec_type=signal.spec.spec_type,
         dtype=signal.spec.dtype,
@@ -452,7 +543,7 @@ def _add_chunk(loader: "_Loader", locator: ChunkLocator) -> None:
         (
             locator.signal_id,
             locator.chunk_idx,
-            locator.chunk_file,
+            loader.artifact(locator.chunk_file),
             locator.chunk_major_idx,
             locator.chunk_minor_idx,
             locator.n_values,
@@ -460,105 +551,61 @@ def _add_chunk(loader: "_Loader", locator: ChunkLocator) -> None:
     )
 
 
-def _collect_signals(dataset: DeclarativeDataset) -> list[PendingSignal]:
-    """Gather every distinct signal in the dataset, with the facts the values plane needs.
-
-    A series used by several records is written once. Without this the values plane would store the
-    same waveform once per referencing record.
-
-    Returns:
-        One entry per distinct signal id, in record then source then signal order.
-    """
-    pending: list[PendingSignal] = []
-    seen: set[str] = set()
-    for record in dataset.records:
-        for signal in record.signals():
-            if signal.id in seen:
-                continue
-            seen.add(signal.id)
-            pending.append(
-                PendingSignal(
-                    signal_id=signal.id,
-                    name=signal.name,
-                    spec_type=signal.spec.spec_type,
-                    dtype=signal.spec.dtype,
-                    values=signal.values,
-                    time_offsets_us=signal.time_offsets_us,
-                )
-            )
-    return pending
-
-
-def _json_or_none(value: dict[str, Any]) -> str | None:
-    """Serialize a metadata dict, or return ``None`` when it is empty.
-
-    Returns:
-        The JSON text, or ``None`` for an empty dict.
-    """
-    return json.dumps(value, sort_keys=True) if value else None
-
-
 class _Loader:
-    """Walks the hierarchy once and feeds every table's inserter."""
+    """Walks the hierarchy once, assigns every id, and feeds every table's inserter."""
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
-        self.records = _BatchInserter(connection, "records", ("record_id", "start_time_us", "metadata"))
+        self.records = _BatchInserter(connection, "records", ("record_id", "external_id", "start_time_us"))
         self.axes = _BatchInserter(
             connection,
             "axes",
             ("axis_id", "axis_type", "period_numerator_us", "period_denominator", "start_index", "first_us", "last_us"),
         )
-        self.specs = _BatchInserter(connection, "specs", ("spec_id", "name", "unit", "dtype", "nullable"))
+        self.specs = _BatchInserter(connection, "specs", ("spec_id", "spec_type", "name", "unit", "dtype", "nullable"))
         self.sources = _BatchInserter(
             connection,
             "sources",
-            ("source_id", "record_id", "parent_source_id", "path", "depth", "name", "position", "metadata"),
+            ("source_id", "external_id", "record_id", "parent_source_id", "path", "depth", "name", "position"),
         )
         self.signals = _BatchInserter(
-            connection, "signals", ("signal_id", "name", "axis_id", "spec_id", "n_values", "metadata")
+            connection, "signals", ("signal_id", "external_id", "name", "axis_id", "spec_id", "n_values")
         )
         self.source_signals = _BatchInserter(connection, "source_signals", ("source_id", "signal_id", "position"))
-        self.artifacts = _BatchInserter(connection, "values_artifacts", ("chunk_file", "backend"))
+        self.artifacts = _BatchInserter(connection, "values_artifacts", ("artifact_id", "chunk_file", "backend"))
         self.chunks = _BatchInserter(
             connection,
             "signal_chunks",
-            ("signal_id", "chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_idx", "n_values"),
+            ("signal_id", "chunk_idx", "artifact_id", "chunk_major_idx", "chunk_minor_idx", "n_values"),
         )
-        self.tasks = _BatchInserter(connection, "tasks", ("task_id", "prompt", "metadata"))
-        self.items = _BatchInserter(
-            connection, "task_items", ("task_id", "role", "position", "item_type", "text_value", "record_id")
-        )
-        self.contents = _BatchInserter(
-            connection, "annotations", ("annotation_id", "name", "value", "unit", "metadata")
-        )
-        self.occurrences = _BatchInserter(
+        self.tasks = _BatchInserter(connection, "tasks", ("task_id", "external_id", "prompt"))
+        self.staged_items = _BatchInserter(
             connection,
-            "entities_to_annotations",
-            (
-                "occurrence_id",
-                "annotation_id",
-                "object_type",
-                "on_dataset_id",
-                "on_task_id",
-                "on_record_id",
-                "on_source_id",
-                "on_signal_id",
-                "scope_record_id",
-                "span_type",
-                "start_us",
-                "end_us",
-                "provenance",
-                "confidence",
-                "metadata",
-            ),
+            _STAGED_ITEMS,
+            ("task_id", "role", "position", "item_type", "text_value", "record_external_id"),
         )
-        self.datasets = _BatchInserter(connection, "datasets", ("dataset_id", "metadata"))
+        self.contents = _BatchInserter(connection, "annotations", ("annotation_id", "name", "value", "unit"))
         self.meta = _BatchInserter(connection, "meta", ("key", "value"))
-        self.seen_signals: set[str] = set()
-        self._seen_contents: set[str] = set()
-        self._seen_axes: set[str] = set()
-        self._seen_specs: set[str] = set()
-        self._occurrence_count = 0
+        self._attachments = {
+            kind: _AttachmentTable(connection, kind, table, target)
+            for kind, (table, target) in ddl.ANNOTATION_TABLES.items()
+        }
+
+        self.record_ids = _Ids("records")
+        self.source_ids = _Ids("sources")
+        self.task_ids = _Ids("tasks")
+        self._signal_ids = _Ids("signals")
+        self._axis_ids = _Ids("axes")
+        self._spec_ids = _Ids("specs")
+        self._annotation_ids = _Ids("annotations")
+        self._artifact_ids = _Ids("values artifacts")
+
+        # A signal object can hang off sources in several records, and the second source still needs
+        # its id for the link row, so the map keeps the id rather than just the fact it was seen.
+        self._signal_id_of: dict[str, int] = {}
+        self._annotation_id_of: dict[tuple[str, str, str | None], int] = {}
+        self._axis_id_of: dict[tuple[Any, ...], int] = {}
+        self._spec_id_of: dict[tuple[Any, ...], int] = {}
+        self._artifact_id_of: dict[str, int] = {}
 
     def all(self) -> tuple[_BatchInserter, ...]:
         """Every inserter, so the caller can flush them all at the end.
@@ -569,7 +616,6 @@ class _Loader:
         """
         return (
             self.meta,
-            self.datasets,
             self.records,
             self.axes,
             self.specs,
@@ -579,209 +625,207 @@ class _Loader:
             self.artifacts,
             self.chunks,
             self.tasks,
-            self.items,
+            self.staged_items,
             self.contents,
-            self.occurrences,
+            *(table.inserter for table in self._attachments.values()),
         )
 
-    def annotate(
-        self, annotations: list[Annotation], object_type: str, object_id: str, *, scope_record_id: str | None = None
-    ) -> None:
-        """Record one object's annotations: the payload once, the occurrence every time.
+    @property
+    def attachment_count(self) -> int:
+        """How many annotations were attached to something, summed over the five target tables."""
+        return sum(table.inserter.count for table in self._attachments.values())
 
-        The occurrence carries the target in the one foreign key column that matches its kind, and
-        carries ``scope_record_id`` when the target sits inside a record, so the renderer can pull
-        every annotation in a record with one equality.
+    def artifact(self, chunk_file: str) -> int:
+        """Return the id of one values artifact, assigning it the first time the file is named.
+
+        The values plane keeps emitting path strings and knows nothing about this id. One dict
+        entry per shard is small enough to hold for the whole build.
+
+        Args:
+            chunk_file: The artifact's version-relative path.
+
+        Returns:
+            The artifact id.
         """
-        column = ddl.TARGET_COLUMNS[object_type]
-        for annotation in annotations:
-            identifier = annotation_id(annotation)
-            if identifier not in self._seen_contents:
-                self._seen_contents.add(identifier)
-                self.contents.add(
-                    (
-                        identifier,
-                        annotation.name,
-                        annotation.value,
-                        annotation.unit,
-                        _json_or_none(annotation.metadata),
-                    )
-                )
-            targets = dict.fromkeys(ddl.TARGET_COLUMNS.values())
-            targets[column] = object_id
-            self._occurrence_count += 1
-            self.occurrences.add(
-                (
-                    self._occurrence_count,
-                    identifier,
-                    object_type,
-                    targets["on_dataset_id"],
-                    targets["on_task_id"],
-                    targets["on_record_id"],
-                    targets["on_source_id"],
-                    targets["on_signal_id"],
-                    scope_record_id,
-                    annotation.span_type,
-                    annotation.start_us,
-                    annotation.end_us,
-                    annotation.provenance,
-                    annotation.confidence,
-                    _json_or_none(annotation.metadata),
-                )
-            )
+        artifact_id = self._artifact_id_of.get(chunk_file)
+        if artifact_id is None:
+            artifact_id = self._artifact_id_of[chunk_file] = self._artifact_ids.claim()
+        return artifact_id
 
-    def axis(self, signal: Signal) -> str:
+    def annotate(
+        self,
+        annotations: list[Annotation],
+        object_type: str,
+        object_id: int | None,
+        *,
+        scope_record_id: int | None = None,
+    ) -> None:
+        """Record one object's annotations: the payload once, an attachment every time.
+
+        The attachment goes into the table that holds this kind of target, so nothing stores a
+        discriminator column. A source's attachment also carries the record it sits in, so the
+        renderer can pull every annotation in a record with one equality.
+
+        Args:
+            annotations: The annotations attached to the object.
+            object_type: The object's kind, a key of
+                :data:`~timenet.control_plane.schema.ANNOTATION_TABLES`.
+            object_id: The object's id, or ``None`` for the dataset itself.
+            scope_record_id: The record the object sits in, for a source.
+        """
+        table = self._attachments[object_type]
+        for annotation in annotations:
+            table.add(self._annotation(annotation), annotation, object_id, scope_record_id)
+
+    def _annotation(self, annotation: Annotation) -> int:
+        """Store an annotation's payload the first time this statement is made, and return its id.
+
+        Args:
+            annotation: The annotation whose payload to store.
+
+        Returns:
+            The annotation id.
+        """
+        key = annotation.content_key()
+        annotation_id = self._annotation_id_of.get(key)
+        if annotation_id is None:
+            annotation_id = self._annotation_id_of[key] = self._annotation_ids.claim()
+            self.contents.add((annotation_id, *key))
+        return annotation_id
+
+    def signal(self, signal: Signal) -> tuple[int, bool]:
+        """Store a signal's own row the first time it is seen, and return its id.
+
+        Args:
+            signal: The signal.
+
+        Returns:
+            The signal's id, and whether this call was the one that stored it.
+        """
+        signal_id = self._signal_id_of.get(signal.id)
+        if signal_id is not None:
+            return signal_id, False
+        signal_id = self._signal_id_of[signal.id] = self._signal_ids.claim()
+        self.signals.add((signal_id, signal.id, signal.name, self.axis(signal), self.spec(signal), len(signal.values)))
+        # A shared signal belongs to no single record, so its annotations carry no record scope;
+        # the reader reaches them through source_signals instead.
+        self.annotate(signal.annotations, "signal", signal_id)
+        return signal_id, True
+
+    def axis(self, signal: Signal) -> int:
         """Record a signal's axis if this is the first signal to use it, and return its id.
+
+        Args:
+            signal: The signal whose axis to record.
 
         Returns:
             The axis id.
         """
-        identifier = axis_id(signal.time_axis)
-        if identifier not in self._seen_axes:
-            self._seen_axes.add(identifier)
-            columns = axis_columns(signal.time_axis)
-            self.axes.add(
-                (
-                    identifier,
-                    str(signal.time_axis.axis_type),
-                    columns["period_numerator_us"],
-                    columns["period_denominator"],
-                    columns["start_index"],
-                    columns["first_us"],
-                    columns["last_us"],
-                )
-            )
-        return identifier
+        columns = axis_columns(signal.time_axis)
+        key: tuple[Any, ...] = (
+            str(signal.time_axis.axis_type),
+            columns["period_numerator_us"],
+            columns["period_denominator"],
+            columns["start_index"],
+            columns["first_us"],
+            columns["last_us"],
+        )
+        axis_id = self._axis_id_of.get(key)
+        if axis_id is None:
+            axis_id = self._axis_id_of[key] = self._axis_ids.claim()
+            self.axes.add((axis_id, *key))
+        return axis_id
 
-    def spec(self, signal: Signal) -> str:
+    def spec(self, signal: Signal) -> int:
         """Record a signal's spec if this is the first signal to use it, and return its id.
+
+        Args:
+            signal: The signal whose spec to record.
 
         Returns:
             The spec id.
         """
         spec = signal.spec
-        if spec.spec_type not in self._seen_specs:
-            self._seen_specs.add(spec.spec_type)
-            self.specs.add((spec.spec_type, spec.name, str(spec.unit_value), spec.dtype, spec.nullable))
-        return spec.spec_type
+        key: tuple[Any, ...] = (spec.spec_type, spec.name, str(spec.unit_value), spec.dtype, spec.nullable)
+        spec_id = self._spec_id_of.get(key)
+        if spec_id is None:
+            spec_id = self._spec_id_of[key] = self._spec_ids.claim()
+            self.specs.add((spec_id, *key))
+        return spec_id
 
 
-def _load(
-    connection: duckdb.DuckDBPyConnection, dataset: DeclarativeDataset, locators: list[ChunkLocator]
-) -> dict[str, int]:
-    """Insert the whole hierarchy, parents before children so every foreign key resolves.
-
-    Returns:
-        The row count of each loaded table.
-    """
-    loader = _Loader(connection)
-    dataset_id = dataset_id_of(dataset)
-    loader.meta.add(("schema_version", str(ddl.SCHEMA_VERSION)))
-    loader.meta.add(("dataset_id", dataset_id))
-    loader.datasets.add((dataset_id, None))
-    loader.datasets.flush()
-
-    loader.annotate(dataset.annotations, "dataset", dataset_id)
-
-    for record in dataset.records:
-        _load_record(loader, record)
-    for task in dataset.tasks:
-        _load_task(loader, task)
-    for locator in locators:
-        loader.chunks.add(
-            (
-                locator.signal_id,
-                locator.chunk_idx,
-                locator.chunk_file,
-                locator.chunk_major_idx,
-                locator.chunk_minor_idx,
-                locator.n_values,
-            )
-        )
-
-    for inserter in loader.all():
-        inserter.flush()
-    return {
-        "records": loader.records.count,
-        "sources": loader.sources.count,
-        "signals": loader.signals.count,
-        "source_signals": loader.source_signals.count,
-        "values_artifacts": loader.artifacts.count,
-        "signal_chunks": loader.chunks.count,
-        "tasks": loader.tasks.count,
-        "annotations": loader.contents.count,
-        "entities_to_annotations": loader.occurrences.count,
-    }
-
-
-def dataset_id_of(dataset: DeclarativeDataset) -> str:
-    """Return a stable id for the dataset object itself, for dataset-level annotations.
+def _load_record(loader: _Loader, record: Record) -> list[tuple[Signal, int]]:
+    """Insert one record, its source tree, and its signals.
 
     Args:
-        dataset: The dataset.
+        loader: The loader feeding the tables.
+        record: The record to insert.
 
     Returns:
-        The literal ``dataset``. A version holds exactly one dataset, so it needs no further
-        qualification inside its own database.
+        Every signal this record stored for the first time, with the id it was given. A signal
+        already stored under another record is left out, so the caller writes its values once.
     """
-    del dataset
-    return "dataset"
-
-
-def _load_record(loader: _Loader, record: Record) -> None:
-    """Insert one record, its source tree, and its signals."""
-    loader.records.add((record.id, record.start_time_us, _json_or_none(record.metadata)))
-    loader.annotate(record.annotations, "record", record.id, scope_record_id=record.id)
+    record_id = loader.record_ids.claim()
+    loader.records.add((record_id, record.id, record.start_time_us))
+    loader.annotate(record.annotations, "record", record_id, scope_record_id=record_id)
+    fresh: list[tuple[Signal, int]] = []
     # Breadth-first, so a parent row is always inserted before the child that references it. Each
     # source's path is its parent's path plus its own position, which makes the whole ancestry a
     # prefix and display order a plain sort.
-    queue: list[tuple[Source, str | None, str | None, int]] = [
+    queue: list[tuple[Source, int | None, str | None, int]] = [
         (root, None, None, index) for index, root in enumerate(record.sources)
     ]
     while queue:
         source, parent_id, parent_path, position = queue.pop(0)
+        source_id = loader.source_ids.claim()
         path = ddl.source_path(parent_path, position)
         depth = path.count(".")
-        loader.sources.add(
-            (source.id, record.id, parent_id, path, depth, source.name, position, _json_or_none(source.metadata))
-        )
-        loader.annotate(source.annotations, "source", source.id, scope_record_id=record.id)
+        loader.sources.add((source_id, source.id, record_id, parent_id, path, depth, source.name, position))
+        loader.annotate(source.annotations, "source", source_id, scope_record_id=record_id)
         for index, signal in enumerate(source.signals):
-            _load_signal(loader, signal, source_id=source.id, position=index)
-        queue.extend((child, source.id, path, index) for index, child in enumerate(source.sources))
+            stored = _load_signal(loader, signal, source_id=source_id, position=index)
+            if stored is not None:
+                fresh.append(stored)
+        queue.extend((child, source_id, path, index) for index, child in enumerate(source.sources))
+    return fresh
 
 
-def _load_signal(loader: _Loader, signal: Signal, *, source_id: str, position: int) -> None:
+def _load_signal(loader: _Loader, signal: Signal, *, source_id: int, position: int) -> tuple[Signal, int] | None:
     """Link one signal to a source, inserting the signal itself the first time it is seen.
 
     The same series can hang off sources in several records, so the signal row and its annotations
     are written once and the link table records each use.
+
+    Args:
+        loader: The loader feeding the tables.
+        signal: The signal to link.
+        source_id: The source the signal hangs off.
+        position: The signal's position among that source's signals.
+
+    Returns:
+        The signal and its id when this call stored it, and ``None`` when it was already stored.
     """
-    if signal.id not in loader.seen_signals:
-        loader.seen_signals.add(signal.id)
-        loader.signals.add(
-            (
-                signal.id,
-                signal.name,
-                loader.axis(signal),
-                loader.spec(signal),
-                len(signal.values),
-                _json_or_none(signal.metadata),
-            )
-        )
-        # A shared signal belongs to no single record, so its annotations carry no record scope;
-        # the reader reaches them through source_signals instead.
-        loader.annotate(signal.annotations, "signal", signal.id)
-    loader.source_signals.add((source_id, signal.id, position))
+    signal_id, stored = loader.signal(signal)
+    loader.source_signals.add((source_id, signal_id, position))
+    return (signal, signal_id) if stored else None
 
 
 def _load_task(loader: _Loader, task: Task) -> None:
-    """Insert one task and its ordered inputs and targets."""
-    loader.tasks.add((task.id, task.prompt, _json_or_none(task.metadata)))
-    loader.annotate(task.annotations, "task", task.id)
+    """Insert one task and its ordered inputs and targets.
+
+    A record item is staged under the caller's own record id and resolved to a record id by one
+    join once the load finishes.
+
+    Args:
+        loader: The loader feeding the tables.
+        task: The task to insert.
+    """
+    task_id = loader.task_ids.claim()
+    loader.tasks.add((task_id, task.id, task.prompt))
+    loader.annotate(task.annotations, "task", task_id)
     for role, items in (("input", task.inputs), ("target", task.target)):
         for position, item in enumerate(items):
             if isinstance(item, Record | RecordRef):
-                loader.items.add((task.id, role, position, "record", None, item.id))
+                loader.staged_items.add((task_id, role, position, "record", None, item.id))
             else:
-                loader.items.add((task.id, role, position, "text", item, None))
+                loader.staged_items.add((task_id, role, position, "text", item, None))

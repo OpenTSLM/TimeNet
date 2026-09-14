@@ -5,13 +5,18 @@ The queries here are the reason for the whole exercise. Reconstructing one task 
 Against normalized tables that is a recursive traversal plus several joins. In SQL it is one
 statement the engine plans; in Python it is an index-building pass and a hand-written walk.
 
+Every join runs on the dense ``INTEGER`` surrogate the writer assigned, so a lookup compares four
+bytes instead of a 27-character string. The caller's own id survives as ``external_id``, and the
+calls a caller reaches for first, :meth:`TimeFReader.record`, :meth:`TimeFReader.records`,
+:meth:`TimeFReader.task` and :meth:`TimeFReader.tasks`, still take it. Everything that starts from a
+view already holds the surrogate, so those calls take the integer and skip the resolution.
+
 The reader opens the database read-only. A read-only connection does not create a WAL beside the
 file, so a downloaded version stays exactly as it was checksummed in the manifest.
 """
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
@@ -60,16 +65,21 @@ class ResolvedAnnotation:
 
 @dataclass
 class SignalView:
-    """One signal, with its axis and spec resolved and its annotations attached."""
+    """One signal, with its axis and spec resolved and its annotations attached.
 
-    signal_id: str
+    ``signal_id`` is the surrogate the writer assigned. It is what :meth:`TimeFReader.values` and
+    :meth:`TimeFReader.chunk_locators` take. ``external_id`` is the name the builder gave the signal,
+    which is what survives a rebuild.
+    """
+
+    signal_id: int
+    external_id: str | None
     name: str
     spec_type: str
     unit: str
     dtype: str
     axis_type: str
     n_values: int
-    metadata: dict[str, Any] = field(default_factory=dict)
     annotations: list[ResolvedAnnotation] = field(default_factory=list)
 
 
@@ -77,10 +87,10 @@ class SignalView:
 class SourceView:
     """One source, its child sources, and the signals it produces."""
 
-    source_id: str
+    source_id: int
+    external_id: str | None
     name: str
     depth: int
-    metadata: dict[str, Any] = field(default_factory=dict)
     sources: list["SourceView"] = field(default_factory=list)
     signals: list[SignalView] = field(default_factory=list)
     annotations: list[ResolvedAnnotation] = field(default_factory=list)
@@ -90,9 +100,9 @@ class SourceView:
 class RecordView:
     """One recording session, rebuilt from the tables into the shape a caller thinks in."""
 
-    record_id: str
+    record_id: int
+    external_id: str | None
     start_time_us: int | None
-    metadata: dict[str, Any] = field(default_factory=dict)
     sources: list[SourceView] = field(default_factory=list)
     annotations: list[ResolvedAnnotation] = field(default_factory=list)
 
@@ -123,83 +133,46 @@ class RecordView:
 class TaskView:
     """One task with its inputs and targets resolved in order."""
 
-    task_id: str
+    task_id: int
+    external_id: str | None
     prompt: str
     inputs: list[RecordView | str] = field(default_factory=list)
     target: list[RecordView | str] = field(default_factory=list)
     annotations: list[ResolvedAnnotation] = field(default_factory=list)
 
 
-# The materialized path makes this a plain sorted scan: ORDER BY path is already depth-first
-# display order, and a parent always sorts before its children, so the tree can be rebuilt in one
-# pass. The draft's parent pointer alone needs a recursive CTE to get the same thing.
-_SOURCE_TREE = """
-SELECT source_id, parent_source_id, name, position, metadata, depth
-FROM sources WHERE record_id = ? ORDER BY path
-"""
-
 # A whole subtree, without recursion: every descendant's path starts with the ancestor's.
 _SUBTREE = """
-SELECT source_id, parent_source_id, name, position, metadata, depth
+SELECT source_id, name, depth
 FROM sources
 WHERE record_id = ? AND (path = ? OR starts_with(path, ? || '.'))
 ORDER BY path
 """
 
-# Signals hang off sources through a link table, because one series can be used by several records.
-_RECORD_SIGNALS = """
-SELECT sig.signal_id, ss.source_id, sig.name, ss.position, sig.n_values, sig.metadata,
-       sp.spec_id, sp.unit, sp.dtype, ax.axis_type
-FROM sources src
-JOIN source_signals ss ON ss.source_id = src.source_id
-JOIN signals sig ON sig.signal_id = ss.signal_id
-JOIN specs sp ON sp.spec_id = sig.spec_id
-JOIN axes  ax ON ax.axis_id = sig.axis_id
-WHERE src.record_id = ?
-ORDER BY ss.source_id, ss.position
+# The caller's own ids, turned into surrogates in one query rather than one lookup per id.
+_RESOLVE_IDS = """
+SELECT external_id, {column} FROM {table} WHERE external_id IN (SELECT unnest(?))
 """
 
-# Every annotation anywhere in one record: on the record, on any source in its tree, on any signal
-# under those sources. The denormalized scope makes this one indexed equality. Against the draft's
-# polymorphic object_type/object_id it takes a recursive walk of the source tree unioned with two
-# more id lookups, which is what the first version of this query had to do.
-# Annotations on the record and on its sources are record-scoped, so they come back on one indexed
-# equality. Annotations on a signal are not: a shared series carries the same statement in every
-# record that uses it, so those are reached through the link table.
-_RECORD_ANNOTATIONS = """
-SELECT o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
-       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
-       o.occurrence_id
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-WHERE o.scope_record_id = ?
-UNION ALL
-SELECT o.object_type, o.on_signal_id AS object_id,
-       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
-       o.occurrence_id
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-JOIN source_signals ss ON ss.signal_id = o.on_signal_id
-JOIN sources src ON src.source_id = ss.source_id
-WHERE src.record_id = ?
-ORDER BY occurrence_id
-"""
-
-# The batched forms of the three queries above. Hydrating a record at a time costs 34 ms on a
-# 618,508-record corpus, because each of these scans the whole table; asking for a thousand records
-# at once costs 0.111 ms per record, because the same scan answers all of them.
+# Hydrating a record at a time costs 34 ms on a 618,508-record corpus, because each of these scans
+# the whole table; asking for a thousand records at once costs 0.111 ms per record, because the same
+# scan answers all of them.
 _BATCH_RECORDS = """
-SELECT record_id, start_time_us, metadata FROM records WHERE record_id IN (SELECT unnest(?))
+SELECT record_id, external_id, start_time_us FROM records WHERE record_id IN (SELECT unnest(?))
 """
 
+# The materialized path makes this a plain sorted scan: ORDER BY path is already depth-first display
+# order, and a parent always sorts before its children, so the tree can be rebuilt in one pass. The
+# draft's parent pointer alone needs a recursive CTE to get the same thing.
 _BATCH_SOURCES = """
-SELECT record_id, source_id, parent_source_id, name, position, metadata, depth
+SELECT record_id, source_id, external_id, parent_source_id, name, depth
 FROM sources WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id, path
 """
 
+# Signals hang off sources through a link table, because one series can be used by several records.
 _BATCH_SIGNALS = """
-SELECT src.record_id, sig.signal_id, ss.source_id, sig.name, ss.position, sig.n_values, sig.metadata,
-       sp.spec_id, sp.unit, sp.dtype, ax.axis_type
+SELECT src.record_id, sig.signal_id, ss.source_id, sig.external_id, sig.name, sig.n_values,
+       sp.spec_type, sp.unit, sp.dtype, ax.axis_type
 FROM sources src
 JOIN source_signals ss ON ss.source_id = src.source_id
 JOIN signals sig ON sig.signal_id = ss.signal_id
@@ -209,74 +182,154 @@ WHERE src.record_id IN (SELECT unnest(?))
 ORDER BY src.record_id, ss.source_id, ss.position
 """
 
+# Every annotation anywhere in a batch of records: on the record, on any source in its tree, on any
+# signal under those sources. One arm per attachment table, because the table is what says which kind
+# of object the row is about. The record and source arms are equality lookups, the source one on the
+# denormalized scope column, so neither walks the source tree. The signal arm cannot be: a series
+# shared by several records belongs to no single one, so it is reached through the link table. That
+# arm filters with a subquery rather than joining through it, so a series used by twenty records in
+# the batch still yields each of its annotations once.
 _BATCH_ANNOTATIONS = """
-SELECT o.scope_record_id, o.object_type, coalesce(o.on_record_id, o.on_source_id) AS object_id,
-       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
-       o.occurrence_id
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-WHERE o.scope_record_id IN (SELECT unnest(?))
+SELECT 'record' AS object_type, a.record_id AS object_id,
+       n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance, a.confidence,
+       a.attachment_id
+FROM record_annotations a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+WHERE a.record_id IN (SELECT unnest(?))
 UNION ALL
-SELECT src.record_id, o.object_type, o.on_signal_id AS object_id,
-       c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence,
-       o.occurrence_id
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-JOIN source_signals ss ON ss.signal_id = o.on_signal_id
-JOIN sources src ON src.source_id = ss.source_id
-WHERE src.record_id IN (SELECT unnest(?))
-ORDER BY 1, occurrence_id
+SELECT 'source', a.source_id,
+       n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance, a.confidence,
+       a.attachment_id
+FROM source_annotations a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+WHERE a.scope_record_id IN (SELECT unnest(?))
+UNION ALL
+SELECT 'signal', a.signal_id,
+       n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance, a.confidence,
+       a.attachment_id
+FROM signal_annotations a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+WHERE a.signal_id IN (
+    SELECT ss.signal_id FROM source_signals ss
+    JOIN sources src ON src.source_id = ss.source_id
+    WHERE src.record_id IN (SELECT unnest(?))
+)
+ORDER BY 1, 2, 11
 """
 
-# Every n-th row, so N workers split a corpus into disjoint slices without coordinating.
+_BATCH_TASKS = """
+SELECT task_id, external_id, prompt FROM tasks WHERE task_id IN (SELECT unnest(?))
+"""
+
+_BATCH_TASK_ITEMS = """
+SELECT task_id, role, position, item_type, text_value, record_id FROM task_items
+WHERE task_id IN (SELECT unnest(?)) ORDER BY task_id, role, position
+"""
+
+_BATCH_TASK_ANNOTATIONS = """
+SELECT a.task_id, n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance,
+       a.confidence
+FROM task_annotations a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+WHERE a.task_id IN (SELECT unnest(?))
+ORDER BY a.task_id, a.attachment_id
+"""
+
+# Every n-th row, so N workers split a corpus into disjoint slices without coordinating. The
+# surrogate ids run 0, 1, 2, ... with no gap and no repeat, which schema.VALIDATIONS checks before a
+# version is published, so the modulo covers every row exactly once. The query this replaced ranked
+# the whole table with row_number() to learn the same thing.
 _PARTITIONED_IDS = """
-SELECT {column} FROM (
-    SELECT {column}, row_number() OVER (ORDER BY {column}) - 1 AS ordinal FROM {table}
-) WHERE ordinal % ? = ?
+SELECT {column} FROM {table} WHERE {column} % ? = ?
 """
 
 _ANNOTATIONS_FOR = """
-SELECT c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, o.provenance, o.confidence
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-WHERE o.{column} = ?
-ORDER BY o.occurrence_id
+SELECT n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance, a.confidence
+FROM {table} a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+WHERE a.{column} = ?
+ORDER BY a.attachment_id
 """
 
-# The reverse direction: start from a statement, find every object that carries it. This is what the
-# draft's derived annotation_objects_index table exists for; the index on annotation_id serves it.
+# A control database holds one dataset, so dataset_annotations has no target column and the whole
+# table is the answer. It is the smallest of the five by a wide margin.
+_DATASET_ANNOTATIONS = """
+SELECT n.name, n.value, n.unit, a.span_type, a.start_us, a.end_us, a.provenance, a.confidence
+FROM dataset_annotations a
+JOIN annotations n ON n.annotation_id = a.annotation_id
+ORDER BY a.attachment_id
+"""
+
+# The reverse direction: start from a statement, find every object that carries it. The payload
+# filter runs once in the CTE, and each arm names its own kind, because the table it reads is what
+# makes the row that kind.
 _OBJECTS_WITH = """
-SELECT o.object_type,
-       coalesce(o.on_dataset_id, o.on_task_id, o.on_record_id, o.on_source_id, o.on_signal_id) AS object_id
-FROM entities_to_annotations o
-JOIN annotations c ON c.annotation_id = o.annotation_id
-WHERE c.name = ? AND (? IS NULL OR c.value = ?)
-ORDER BY o.object_type, object_id
+WITH matched AS (
+    SELECT annotation_id FROM annotations WHERE name = ? AND (? IS NULL OR value = ?)
+)
+SELECT 'dataset' AS object_type, 0 AS object_id
+FROM dataset_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+UNION ALL
+SELECT 'task', a.task_id
+FROM task_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+UNION ALL
+SELECT 'record', a.record_id
+FROM record_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+UNION ALL
+SELECT 'source', a.source_id
+FROM source_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+UNION ALL
+SELECT 'signal', a.signal_id
+FROM signal_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+ORDER BY 1, 2
 """
 
-# Reverse lookup all the way back to records. The scope column collapses what the draft needs three
-# joins for: an annotation on a signal already knows which record it belongs to.
+# Reverse lookup all the way back to records. A record carries a statement itself, through a source
+# in its tree, or through a signal one of those sources produces. The scope column collapses the
+# middle case into an equality; only the signal case has to walk the link table, because a shared
+# series has no one record.
 _RECORDS_WITH = """
-SELECT DISTINCT record_id FROM (
-    SELECT o.scope_record_id AS record_id
-    FROM entities_to_annotations o
-    JOIN annotations c ON c.annotation_id = o.annotation_id
-    WHERE c.name = ? AND (? IS NULL OR c.value = ?) AND o.scope_record_id IS NOT NULL
+WITH matched AS (
+    SELECT annotation_id FROM annotations WHERE name = ? AND (? IS NULL OR value = ?)
+),
+carriers AS (
+    SELECT a.record_id AS record_id
+    FROM record_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
+    UNION ALL
+    SELECT a.scope_record_id
+    FROM source_annotations a WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
     UNION ALL
     SELECT src.record_id
-    FROM entities_to_annotations o
-    JOIN annotations c ON c.annotation_id = o.annotation_id
-    JOIN source_signals ss ON ss.signal_id = o.on_signal_id
+    FROM signal_annotations a
+    JOIN source_signals ss ON ss.signal_id = a.signal_id
     JOIN sources src ON src.source_id = ss.source_id
-    WHERE c.name = ? AND (? IS NULL OR c.value = ?)
+    WHERE a.annotation_id IN (SELECT annotation_id FROM matched)
 )
-ORDER BY record_id
+SELECT DISTINCT r.external_id
+FROM records r
+WHERE r.record_id IN (SELECT record_id FROM carriers) AND r.external_id IS NOT NULL
+ORDER BY r.external_id
 """
 
-# The tasks a record answers. The proposal keeps a record_tasks table for this; the index on
-# task_items.record_id gives the same lookup without a second copy of the links.
+# The tasks a record answers. The proposal keeps a record_tasks table for this; the link already in
+# task_items gives the same lookup without a second copy of it.
 _TASKS_FOR_RECORD = """
-SELECT DISTINCT task_id FROM task_items WHERE record_id = ? ORDER BY task_id
+SELECT DISTINCT t.external_id
+FROM task_items ti
+JOIN tasks t ON t.task_id = ti.task_id
+JOIN records r ON r.record_id = ti.record_id
+WHERE r.external_id = ? AND t.external_id IS NOT NULL
+ORDER BY t.external_id
+"""
+
+# A chunk row names an artifact by id; the values plane knows artifacts by path, so the join turns
+# the id back into the path the locator carries.
+_CHUNK_LOCATORS = """
+SELECT c.signal_id, c.chunk_idx, va.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values
+FROM signal_chunks c
+JOIN values_artifacts va ON va.artifact_id = c.artifact_id
+WHERE c.signal_id = ?
+ORDER BY c.chunk_idx
 """
 
 
@@ -373,22 +426,31 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         return self._opened
 
     def record_ids(self) -> list[str]:
-        """Return every record id in the dataset.
+        """Return the id every record was built under.
 
         Returns:
-            The record ids, sorted.
+            The records' external ids, sorted. A record written without one is not listed, because
+            it has no name to return.
         """
         return [
-            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
+            row[0]
+            for row in self.connection.execute(
+                "SELECT external_id FROM records WHERE external_id IS NOT NULL ORDER BY external_id"
+            ).fetchall()
         ]
 
     def task_ids(self) -> list[str]:
-        """Return every task id in the dataset.
+        """Return the id every task was built under.
 
         Returns:
-            The task ids, sorted.
+            The tasks' external ids, sorted.
         """
-        return [row[0] for row in self.connection.execute("SELECT task_id FROM tasks ORDER BY task_id").fetchall()]
+        return [
+            row[0]
+            for row in self.connection.execute(
+                "SELECT external_id FROM tasks WHERE external_id IS NOT NULL ORDER BY external_id"
+            ).fetchall()
+        ]
 
     def counts(self) -> dict[str, int]:
         """Return the row count of every control-plane table.
@@ -403,27 +465,41 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             counted[table] = 0 if row is None else row[0]
         return counted
 
-    def record(self, record_id: str) -> RecordView:
+    def record(self, external_id: str) -> RecordView:
         """Rebuild one record: its source tree, its signals, and every annotation in it.
 
         Reading many records one call at a time is the slow way round; see :meth:`records` and
         :meth:`iter_records`.
 
         Args:
-            record_id: The record to read.
+            external_id: The id the record was built under.
 
         Returns:
             The reconstructed record.
 
         Raises:
-            TimeFFormatError: If no record has this id.
+            TimeFFormatError: If no record carries this id.
         """
-        found = self.records([record_id])
+        found = self.records([external_id])
         if not found:
-            raise TimeFFormatError(f"no record {record_id!r}")
+            raise TimeFFormatError(f"no record {external_id!r}")
         return found[0]
 
-    def records(self, record_ids: Sequence[str]) -> list[RecordView]:  # noqa: PLR0914
+    def records(self, external_ids: Sequence[str]) -> list[RecordView]:
+        """Rebuild many records, addressed by the ids they were built under.
+
+        Args:
+            external_ids: The records to read. Ids that name no record are skipped.
+
+        Returns:
+            The reconstructed records, in the order the ids were given.
+        """
+        wanted = list(external_ids)
+        if not wanted:
+            return []
+        return self._records_by_id(self._resolve_ids("records", "record_id", wanted))
+
+    def _records_by_id(self, record_ids: Sequence[int]) -> list[RecordView]:  # noqa: PLR0914
         """Rebuild many records with four queries, whatever the batch size.
 
         Each query scans its table once and answers for the whole batch, so the per-record cost
@@ -431,7 +507,8 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         time, 0.111 ms per record in batches of a thousand.
 
         Args:
-            record_ids: The records to read. Ids that name no record are skipped.
+            record_ids: The surrogate ids of the records to read. Ids that name no record are
+                skipped.
 
         Returns:
             The reconstructed records, in the order the ids were given.
@@ -440,53 +517,59 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         if not wanted:
             return []
         built = {
-            row[0]: RecordView(record_id=row[0], start_time_us=row[1], metadata=_metadata(row[2]))
+            row[0]: RecordView(record_id=row[0], external_id=row[1], start_time_us=row[2])
             for row in self.connection.execute(_BATCH_RECORDS, [wanted]).fetchall()
         }
 
-        sources: dict[str, SourceView] = {}
-        for record_id, source_id, parent_id, name, _position, metadata, depth in self.connection.execute(
+        sources: dict[int, SourceView] = {}
+        for record_id, source_id, source_external, parent_id, name, depth in self.connection.execute(
             _BATCH_SOURCES, [wanted]
         ).fetchall():
-            view = SourceView(source_id=source_id, name=name, depth=depth, metadata=_metadata(metadata))
+            view = SourceView(source_id=source_id, external_id=source_external, name=name, depth=depth)
             sources[source_id] = view
             if parent_id is None:
                 built[record_id].sources.append(view)
             else:
                 sources[parent_id].sources.append(view)
 
-        signals: dict[str, SignalView] = {}
+        # One series can be used by several records, so a batch can hold more than one view of it.
+        signals: dict[int, list[SignalView]] = {}
         for row in self.connection.execute(_BATCH_SIGNALS, [wanted]).fetchall():
-            (_record_id, signal_id, source_id, name, _position, n_values, metadata, spec_id, unit, dtype, axis) = row
-            view = SignalView(
+            (_record_id, signal_id, source_id, signal_external, name, n_values, spec_type, unit, dtype, axis) = row
+            signal = SignalView(
                 signal_id=signal_id,
+                external_id=signal_external,
                 name=name,
-                spec_type=spec_id,
+                spec_type=spec_type,
                 unit=unit,
                 dtype=dtype,
                 axis_type=axis,
                 n_values=n_values,
-                metadata=_metadata(metadata),
             )
-            signals[signal_id] = view
-            sources[source_id].signals.append(view)
+            signals.setdefault(signal_id, []).append(signal)
+            sources[source_id].signals.append(signal)
 
-        for record_id, object_type, object_id, *payload in self.connection.execute(
-            _BATCH_ANNOTATIONS, [wanted, wanted]
+        for object_type, object_id, *payload in self.connection.execute(
+            _BATCH_ANNOTATIONS, [wanted, wanted, wanted]
         ).fetchall():
             annotation = _annotation(payload[:-1])
             if object_type == "record":
-                built[record_id].annotations.append(annotation)
+                built[object_id].annotations.append(annotation)
             elif object_type == "source":
                 sources[object_id].annotations.append(annotation)
             else:
-                signals[object_id].annotations.append(annotation)
+                # The statement is about the series, so every view of it in this batch carries it.
+                for shared in signals[object_id]:
+                    shared.annotations.append(annotation)
         return [built[record_id] for record_id in wanted if record_id in built]
 
     def iter_records(
         self, *, batch_size: int = 512, worker_index: int = 0, num_workers: int = 1
     ) -> Iterator[RecordView]:
         """Walk every record, hydrating them in batches.
+
+        The ids come back as surrogates and are used as they are, so a walk never pays to translate
+        the caller's ids into them.
 
         Args:
             batch_size: How many records to hydrate per round of queries.
@@ -501,7 +584,7 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             ValueError: If the worker index and count do not describe a slice.
         """  # noqa: DOC502 - raised by _id_batches
         for batch in self._id_batches("records", "record_id", batch_size, worker_index, num_workers):
-            yield from self.records(batch)
+            yield from self._records_by_id(batch)
 
     def iter_tasks(self, *, batch_size: int = 512, worker_index: int = 0, num_workers: int = 1) -> Iterator[TaskView]:
         """Walk every task, hydrating each batch's records together.
@@ -518,11 +601,27 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             ValueError: If the worker index and count do not describe a slice.
         """  # noqa: DOC502 - raised by _id_batches
         for batch in self._id_batches("tasks", "task_id", batch_size, worker_index, num_workers):
-            yield from self.tasks(batch)
+            yield from self._tasks_by_id(batch)
+
+    def _resolve_ids(self, table: str, column: str, external_ids: Sequence[str]) -> list[int]:
+        """Turn the caller's own ids into surrogates with one query.
+
+        Args:
+            table: The table holding the entity.
+            column: Its surrogate id column.
+            external_ids: The ids the caller asked for.
+
+        Returns:
+            The surrogate ids, in the order the caller's ids were given. An id that names nothing is
+            dropped, so the caller's ``records`` and ``tasks`` skip it the way they always have.
+        """
+        query = _RESOLVE_IDS.format(table=table, column=column)
+        found: dict[str, int] = dict(self.connection.execute(query, [list(external_ids)]).fetchall())
+        return [found[external_id] for external_id in external_ids if external_id in found]
 
     def _id_batches(
         self, table: str, column: str, batch_size: int, worker_index: int, num_workers: int
-    ) -> Iterator[list[str]]:
+    ) -> Iterator[list[int]]:
         """Yield this worker's ids in batches.
 
         Args:
@@ -553,36 +652,42 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         finally:
             cursor.close()
 
-    def task(self, task_id: str) -> TaskView:
+    def task(self, external_id: str) -> TaskView:
         """Rebuild one task, resolving each input and target in order.
 
         Args:
-            task_id: The task to read.
+            external_id: The id the task was built under.
 
         Returns:
             The reconstructed task, with every referenced record rebuilt in full.
 
         Raises:
-            TimeFFormatError: If no task has this id.
+            TimeFFormatError: If no task carries this id.
         """
-        row = self.connection.execute("SELECT task_id, prompt FROM tasks WHERE task_id = ?", [task_id]).fetchone()
-        if row is None:
-            raise TimeFFormatError(f"no task {task_id!r}")
-        task = TaskView(task_id=row[0], prompt=row[1], annotations=self.annotations_for("task", task_id))
-        for role, _position, item_type, text_value, record_id in self.connection.execute(
-            "SELECT role, position, item_type, text_value, record_id FROM task_items "
-            "WHERE task_id = ? ORDER BY role, position",
-            [task_id],
-        ).fetchall():
-            item = text_value if item_type == "text" else self.record(record_id)
-            (task.inputs if role == "input" else task.target).append(item)
-        return task
+        found = self.tasks([external_id])
+        if not found:
+            raise TimeFFormatError(f"no task {external_id!r}")
+        return found[0]
 
-    def tasks(self, task_ids: Sequence[str]) -> list[TaskView]:
+    def tasks(self, external_ids: Sequence[str]) -> list[TaskView]:
+        """Rebuild many tasks, addressed by the ids they were built under.
+
+        Args:
+            external_ids: The tasks to read. Ids that name no task are skipped.
+
+        Returns:
+            The reconstructed tasks, in the order the ids were given.
+        """
+        wanted = list(external_ids)
+        if not wanted:
+            return []
+        return self._tasks_by_id(self._resolve_ids("tasks", "task_id", wanted))
+
+    def _tasks_by_id(self, task_ids: Sequence[int]) -> list[TaskView]:
         """Rebuild many tasks, hydrating every record they refer to in one batch.
 
         Args:
-            task_ids: The tasks to read. Ids that name no task are skipped.
+            task_ids: The surrogate ids of the tasks to read. Ids that name no task are skipped.
 
         Returns:
             The reconstructed tasks, in the order the ids were given.
@@ -591,59 +696,53 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         if not wanted:
             return []
         built = {
-            row[0]: TaskView(task_id=row[0], prompt=row[1])
-            for row in self.connection.execute(
-                "SELECT task_id, prompt FROM tasks WHERE task_id IN (SELECT unnest(?))", [wanted]
-            ).fetchall()
+            row[0]: TaskView(task_id=row[0], external_id=row[1], prompt=row[2])
+            for row in self.connection.execute(_BATCH_TASKS, [wanted]).fetchall()
         }
-        items = self.connection.execute(
-            "SELECT task_id, role, position, item_type, text_value, record_id FROM task_items "
-            "WHERE task_id IN (SELECT unnest(?)) ORDER BY task_id, role, position",
-            [wanted],
-        ).fetchall()
-        # Every record any of these tasks names, rebuilt together rather than one task at a time.
+        items = self.connection.execute(_BATCH_TASK_ITEMS, [wanted]).fetchall()
+        # Every record any of these tasks names, rebuilt together rather than one task at a time. A
+        # task item already carries the surrogate, so nothing has to be resolved first.
         referenced = {row[5] for row in items if row[3] == "record" and row[5] is not None}
-        records = {record.record_id: record for record in self.records(sorted(referenced))}
+        records = {record.record_id: record for record in self._records_by_id(sorted(referenced))}
         for task_id, role, _position, item_type, text_value, record_id in items:
             item = text_value if item_type == "text" else records.get(record_id)
             if item is None:
                 continue
             (built[task_id].inputs if role == "input" else built[task_id].target).append(item)
-        for annotation_row in self.connection.execute(
-            "SELECT o.on_task_id, c.name, c.value, c.unit, o.span_type, o.start_us, o.end_us, "
-            "o.provenance, o.confidence FROM entities_to_annotations o "
-            "JOIN annotations c ON c.annotation_id = o.annotation_id "
-            "WHERE o.on_task_id IN (SELECT unnest(?)) ORDER BY o.occurrence_id",
-            [wanted],
-        ).fetchall():
-            built[annotation_row[0]].annotations.append(_annotation(annotation_row[1:]))
+        for row in self.connection.execute(_BATCH_TASK_ANNOTATIONS, [wanted]).fetchall():
+            built[row[0]].annotations.append(_annotation(row[1:]))
         return [built[task_id] for task_id in wanted if task_id in built]
 
-    def annotations_for(self, object_type: str, object_id: str) -> list[ResolvedAnnotation]:
+    def annotations_for(self, object_type: str, object_id: int = 0) -> list[ResolvedAnnotation]:
         """Return every annotation attached to one object.
 
         Args:
             object_type: One of ``dataset``, ``task``, ``record``, ``source``, ``signal``.
-            object_id: The object's id.
+            object_id: The object's surrogate id. A control database holds one dataset, so this is
+                ignored when ``object_type`` is ``dataset``.
 
         Returns:
-            The annotations, payload and placement resolved together.
+            The annotations, payload and placement resolved together, in attachment order.
 
         Raises:
             TimeFFormatError: If ``object_type`` is not one of the five annotatable kinds.
         """
-        column = ddl.TARGET_COLUMNS.get(object_type)
-        if column is None:
+        target = ddl.ANNOTATION_TABLES.get(object_type)
+        if target is None:
             raise TimeFFormatError(f"{object_type!r} is not an annotatable object type")
-        query = _ANNOTATIONS_FOR.format(column=column)
-        return [_annotation(row) for row in self.connection.execute(query, [object_id]).fetchall()]
+        table, column = target
+        if column is None:
+            rows = self.connection.execute(_DATASET_ANNOTATIONS).fetchall()
+        else:
+            rows = self.connection.execute(_ANNOTATIONS_FOR.format(table=table, column=column), [object_id]).fetchall()
+        return [_annotation(row) for row in rows]
 
-    def subtree(self, record_id: str, source_id: str) -> list[tuple[str, str, int]]:
+    def subtree(self, record_id: int, source_id: int) -> list[tuple[int, str, int]]:
         """Return one source and everything beneath it, without walking the tree edge by edge.
 
         Args:
-            record_id: The record the source belongs to.
-            source_id: The source at the top of the subtree.
+            record_id: The surrogate id of the record the source belongs to.
+            source_id: The surrogate id of the source at the top of the subtree.
 
         Returns:
             One ``(source_id, name, depth)`` tuple per source, in depth-first order.
@@ -655,11 +754,11 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             "SELECT path FROM sources WHERE record_id = ? AND source_id = ?", [record_id, source_id]
         ).fetchone()
         if row is None:
-            raise TimeFFormatError(f"record {record_id!r} has no source {source_id!r}")
+            raise TimeFFormatError(f"record {record_id} has no source {source_id}")
         found = self.connection.execute(_SUBTREE, [record_id, row[0], row[0]]).fetchall()
-        return [(item[0], item[2], item[5]) for item in found]
+        return [(item[0], item[1], item[2]) for item in found]
 
-    def objects_with(self, name: str, value: str | None = None) -> list[tuple[str, str]]:
+    def objects_with(self, name: str, value: str | None = None) -> list[tuple[str, int]]:
         """Find every object carrying an annotation, starting from the annotation.
 
         Args:
@@ -667,9 +766,10 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             value: The annotation's value, or ``None`` to match any value.
 
         Returns:
-            One ``(object_type, object_id)`` pair per occurrence.
+            One ``(object_type, object_id)`` pair per attachment. A dataset attachment has no target
+            of its own, so it reports 0.
         """
-        return [tuple(row) for row in self.connection.execute(_OBJECTS_WITH, [name, value, value]).fetchall()]
+        return [(row[0], row[1]) for row in self.connection.execute(_OBJECTS_WITH, [name, value, value]).fetchall()]
 
     def records_with(self, name: str, value: str | None = None) -> list[str]:
         """Find every record carrying an annotation, directly or on one of its sources or signals.
@@ -679,41 +779,31 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             value: The annotation's value, or ``None`` to match any value.
 
         Returns:
-            The matching record ids, sorted.
+            The matching records' external ids, sorted.
         """
-        return [
-            row[0]
-            for row in self.connection.execute(_RECORDS_WITH, [name, value, value, name, value, value]).fetchall()
-        ]
+        return [row[0] for row in self.connection.execute(_RECORDS_WITH, [name, value, value]).fetchall()]
 
-    def tasks_for_record(self, record_id: str) -> list[str]:
+    def tasks_for_record(self, external_id: str) -> list[str]:
         """Return every task that refers to a record.
 
         Args:
-            record_id: The record.
+            external_id: The id the record was built under.
 
         Returns:
-            The task ids, sorted.
+            The matching tasks' external ids, sorted.
         """
-        return [row[0] for row in self.connection.execute(_TASKS_FOR_RECORD, [record_id]).fetchall()]
+        return [row[0] for row in self.connection.execute(_TASKS_FOR_RECORD, [external_id]).fetchall()]
 
-    def chunk_locators(self, signal_id: str) -> list[ChunkLocator]:
+    def chunk_locators(self, signal_id: int) -> list[ChunkLocator]:
         """Return where a signal's values live in the values plane.
 
         Args:
-            signal_id: The signal.
+            signal_id: The signal's surrogate id, as :class:`SignalView` carries it.
 
         Returns:
             The signal's chunk locators, in chunk order.
         """
-        return [
-            ChunkLocator(*row)
-            for row in self.connection.execute(
-                "SELECT signal_id, chunk_idx, chunk_file, chunk_major_idx, chunk_minor_idx, n_values "
-                "FROM signal_chunks WHERE signal_id = ? ORDER BY chunk_idx",
-                [signal_id],
-            ).fetchall()
-        ]
+        return [ChunkLocator(*row) for row in self.connection.execute(_CHUNK_LOCATORS, [signal_id]).fetchall()]
 
     def values_backends(self) -> dict[str, str]:
         """Return which backend wrote each values artifact.
@@ -731,11 +821,11 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             )
         return self._backends
 
-    def values(self, signal_id: str) -> np.ndarray:
+    def values(self, signal_id: int) -> np.ndarray:
         """Read one signal's values out of the values plane, whichever backend wrote it.
 
         Args:
-            signal_id: The signal.
+            signal_id: The signal's surrogate id, as :class:`SignalView` carries it.
 
         Returns:
             The signal's values.
@@ -775,15 +865,6 @@ def _connect(target: str) -> duckdb.DuckDBPyConnection:
     return connection
 
 
-def _metadata(raw: str | None) -> dict[str, Any]:
-    """Parse a stored metadata blob.
-
-    Returns:
-        The parsed mapping, empty when the blob is absent.
-    """
-    return json.loads(raw) if raw else {}
-
-
 def _annotation(row: Sequence[Any]) -> ResolvedAnnotation:
     """Build a resolved annotation from a query row.
 
@@ -803,7 +884,19 @@ def _annotation(row: Sequence[Any]) -> ResolvedAnnotation:
     )
 
 
-def render_task(reader: TimeFReader, task_id: str, *, include_values: bool = False) -> str:
+def _record_label(record: RecordView) -> str:
+    """Return the name to print a record under.
+
+    Args:
+        record: The record being rendered.
+
+    Returns:
+        The id the record was built under, or its surrogate id when it was built without one.
+    """
+    return record.external_id if record.external_id is not None else str(record.record_id)
+
+
+def render_task(reader: TimeFReader, external_id: str, *, include_values: bool = False) -> str:
     """Render one task as the text a training example starts from.
 
     This is the proposal's renderer: it walks the task's inputs, each record's source tree, each
@@ -811,13 +904,13 @@ def render_task(reader: TimeFReader, task_id: str, *, include_values: bool = Fal
 
     Args:
         reader: The reader to pull from.
-        task_id: The task to render.
+        external_id: The id the task was built under.
         include_values: Also summarize each signal's values.
 
     Returns:
         The rendered example.
     """
-    task = reader.task(task_id)
+    task = reader.task(external_id)
     lines = [f"PROMPT: {task.prompt}"]
     for annotation in task.annotations:
         lines.append(f"  [task] {annotation.to_text()}")
@@ -825,7 +918,7 @@ def render_task(reader: TimeFReader, task_id: str, *, include_values: bool = Fal
         if isinstance(item, str):
             lines.append(f"INPUT text: {item}")
             continue
-        lines.append(f"INPUT record {item.record_id}")
+        lines.append(f"INPUT record {_record_label(item)}")
         for annotation in item.annotations:
             lines.append(f"  [record] {annotation.to_text()}")
         for source in item.walk_sources():
@@ -841,5 +934,5 @@ def render_task(reader: TimeFReader, task_id: str, *, include_values: bool = Fal
                 for annotation in signal.annotations:
                     lines.append(f"  {'  ' * source.depth}    [signal] {annotation.to_text()}")
     for item in task.target:
-        lines.append(f"TARGET: {item if isinstance(item, str) else f'record {item.record_id}'}")
+        lines.append(f"TARGET: {item if isinstance(item, str) else f'record {_record_label(item)}'}")
     return "\n".join(lines)

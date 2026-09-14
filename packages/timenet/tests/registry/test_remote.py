@@ -173,8 +173,10 @@ def test_open_full_round_trips(version_dir, tmp_path):
         assert reader.record_ids() == sorted(record.id for record in source.records)
         assert reader.task_ids() == sorted(task.id for task in source.tasks)
         for record in source.records:
+            # The caller's id addresses the signal; the surrogate reads its values.
+            surrogate = {signal.external_id: signal.signal_id for signal in reader.record(record.id).signals()}
             for signal in record.signals():
-                np.testing.assert_array_equal(reader.values(signal.id), signal.values)
+                np.testing.assert_array_equal(reader.values(surrogate[signal.id]), signal.values)
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):

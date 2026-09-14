@@ -130,6 +130,8 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
         writer.write(dataset)
     write_ns = time.perf_counter_ns() - started
 
+    # Every entity is identified by the id the corpus gave it. The surrogate the writer assigns is
+    # dense and follows the walk, so it describes the build rather than the content.
     digest = hashlib.sha256()
     started = time.perf_counter_ns()
     series_count = 0
@@ -139,14 +141,14 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
             json.dumps(
                 {
                     "counts": _canonical(_logical_counts(reader.counts())),
-                    "dataset_annotations": _canonical(reader.annotations_for("dataset", "dataset")),
+                    "dataset_annotations": _canonical(reader.annotations_for("dataset")),
                     "tasks": _canonical(
                         [
                             {
-                                "task_id": task.task_id,
+                                "external_id": task.external_id,
                                 "prompt": task.prompt,
-                                "inputs": [item if isinstance(item, str) else item.record_id for item in task.inputs],
-                                "target": [item if isinstance(item, str) else item.record_id for item in task.target],
+                                "inputs": [item if isinstance(item, str) else item.external_id for item in task.inputs],
+                                "target": [item if isinstance(item, str) else item.external_id for item in task.target],
                                 "annotations": _canonical(task.annotations),
                             }
                             for task in reader.tasks(reader.task_ids())
@@ -161,7 +163,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
             digest.update(
                 json.dumps(
                     {
-                        "record_id": record.record_id,
+                        "external_id": record.external_id,
                         "start_time_us": record.start_time_us,
                         "annotations": _canonical(record.annotations),
                         "sources": _canonical(
@@ -184,12 +186,16 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 digest.update(
                     json.dumps(
                         {
-                            "signal_id": signal.signal_id,
+                            "external_id": signal.external_id,
                             "name": signal.name,
                             "spec_type": signal.spec_type,
                             "unit": signal.unit,
                             "dtype": signal.dtype,
                             "axis_type": signal.axis_type,
+                            # The axis itself, not just its kind: the period, the origin and the
+                            # endpoints are what place a value in time, so a writer that halves
+                            # every period must not fingerprint the same.
+                            "time_axis": _canonical(signal.time_axis),
                             "n_values": signal.n_values,
                             "annotations": _canonical(signal.annotations),
                             "values_dtype": values.dtype.str,

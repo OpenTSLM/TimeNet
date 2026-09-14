@@ -96,10 +96,10 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> DeclarativeDat
     shared.annotate(Annotation.static(name="calibration", value="factory"))
 
     for index in range(4):
-        record_id = f"record-{index:03d}"
+        external_id = f"record-{index:03d}"
         leads = [
             Signal(
-                id=f"{record_id}-lead-{lead}",
+                id=f"{external_id}-lead-{lead}",
                 name=f"lead-{lead}",
                 values=_values(index * 3 + lead, 256 * scale, constant=lead == CONSTANT_LEAD),
                 time_axis=FAST,
@@ -111,7 +111,7 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> DeclarativeDat
         leads[1].annotate(Annotation.interval(name="artifact", value="motion", start_us=0, end_us=500_000))
 
         irregular = Signal(
-            id=f"{record_id}-irregular",
+            id=f"{external_id}-irregular",
             name="irregular",
             values=_values(index + 11, 16 * scale),
             time_axis=IrregularAxis(first_us=0, last_us=15_000 * scale),
@@ -119,24 +119,24 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> DeclarativeDat
             spec=TEMPERATURE,
         )
 
-        ecg = Source(id=f"{record_id}-ecg", name="ECG", signals=leads)
+        ecg = Source(id=f"{external_id}-ecg", name="ECG", signals=leads)
         ecg.annotate(Annotation.static(name="device", value="monitor-9000"))
-        aux = Source(id=f"{record_id}-aux", name="Auxiliary", signals=[irregular])
+        aux = Source(id=f"{external_id}-aux", name="Auxiliary", signals=[irregular])
         if index < SHARING_RECORDS:
             aux.signals.append(shared)
         if profile == "rich":
             aux.signals.append(
                 Signal(
-                    id=f"{record_id}-ordinal",
+                    id=f"{external_id}-ordinal",
                     name="ordinal",
                     values=_values(index + 23, 32 * scale).astype(np.float64),
                     time_axis=ORDINAL,
                     spec=COUNTS,
                 )
             )
-        monitor = Source(id=f"{record_id}-monitor", name="Bedside monitor", sources=[ecg, aux])
+        monitor = Source(id=f"{external_id}-monitor", name="Bedside monitor", sources=[ecg, aux])
 
-        record = Record(id=record_id, sources=[monitor], start_time_us=1_700_000_000_000_000 + index)
+        record = Record(id=external_id, sources=[monitor], start_time_us=1_700_000_000_000_000 + index)
         record.annotate(cohort)
         record.annotate(Annotation.static(name="subject_age", value=40 + index, unit="years"))
         dataset.add_record(record)

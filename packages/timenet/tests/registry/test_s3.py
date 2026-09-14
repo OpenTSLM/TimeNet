@@ -24,9 +24,11 @@ def _assert_round_trip(reader, source) -> None:
     assert reader.task_ids() == sorted(task.id for task in source.tasks)
     for record in source.records:
         view = reader.record(record.id)
-        assert [signal.signal_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+        assert [signal.external_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+        # The caller's id addresses the signal; the surrogate reads its values.
+        surrogate = {signal.external_id: signal.signal_id for signal in view.signals()}
         for signal in record.signals():
-            np.testing.assert_array_equal(reader.values(signal.id), signal.values)
+            np.testing.assert_array_equal(reader.values(surrogate[signal.id]), signal.values)
 
 
 @pytest.fixture

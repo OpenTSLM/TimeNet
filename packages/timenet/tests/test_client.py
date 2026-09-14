@@ -42,9 +42,11 @@ def _assert_matches_source(reader: TimeFReader, source=None) -> None:
     assert reader.task_ids() == sorted(task.id for task in source.tasks)
     for record in source.records:
         view = reader.record(record.id)
-        assert [signal.signal_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+        assert [signal.external_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+        # The caller's id addresses the signal; the surrogate reads its values.
+        surrogate = {signal.external_id: signal.signal_id for signal in view.signals()}
         for signal in record.signals():
-            np.testing.assert_array_equal(reader.values(signal.id), signal.values)
+            np.testing.assert_array_equal(reader.values(surrogate[signal.id]), signal.values)
 
 
 def test_no_args_defaults_to_the_hosted_registry(monkeypatch):
@@ -226,7 +228,7 @@ def test_open_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
             return type("_M", (), {"metadata": meta})()
 
     client._registry = _Hosted()  # ty: ignore[invalid-assignment]
-    with pytest.raises(TimeNetAccessError, match="build it locally"):
+    with pytest.raises(TimeNetAccessError, match="build it into a local registry"):
         client.open("org/gated")
     with pytest.raises(TimeNetAccessError, match="Get access at"):
         client.download("org/gated")

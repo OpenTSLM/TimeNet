@@ -50,9 +50,11 @@ def test_namespaced_round_trip(tmp_path):
         assert reader.task_ids() == sorted(task.id for task in original.tasks)
         for record in original.records:
             view = reader.record(record.id)
-            assert [signal.signal_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+            assert [signal.external_id for signal in view.signals()] == [signal.id for signal in record.signals()]
+            # The caller's id addresses the signal; the surrogate reads its values.
+            surrogate = {signal.external_id: signal.signal_id for signal in view.signals()}
             for signal in record.signals():
-                np.testing.assert_array_equal(reader.values(signal.id), signal.values)
+                np.testing.assert_array_equal(reader.values(surrogate[signal.id]), signal.values)
 
 
 def test_cache_dir_is_ignored_by_list(tmp_path):
