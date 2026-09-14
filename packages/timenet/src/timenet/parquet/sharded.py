@@ -1,18 +1,16 @@
-"""The one sharding implementation: stream Arrow row groups into byte-budgeted parquet parts.
+"""Stream Arrow row groups into byte-budgeted parquet parts.
 
-:class:`RotatingPartWriter` is the shared core. The control-plane tables use it through
-:func:`write_sharded_table` here. The Parquet values plane uses it directly (see
-``values_backends.parquet.writer``), so both planes shard through one code path.
+:class:`RotatingPartWriter` is what the Parquet values plane
+(:mod:`timenet.control_plane.values`) shards through. It reports where every row group landed, which
+is what a chunk locator records so a reader can go straight to a run of values.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
-from timenet.parquet import encodings
 
 
 class RotatingPartWriter:
@@ -21,8 +19,8 @@ class RotatingPartWriter:
     The caller decides each row group's content (one Arrow table per :meth:`write`) and its size. This
     opens a :class:`pyarrow.parquet.ParquetWriter` per part and writes each table as one row group.
     It rotates to a new numbered part once the current part's accumulated size exceeds the target,
-    and it reports where each row group landed. Both the control plane and the values plane sit on
-    it, so there is one sharding implementation.
+    and it returns the part and row-group index each table landed in, so a row group never spans two
+    parts and a locator naming one is exact.
     """
 
     def __init__(  # noqa: PLR0913
@@ -80,7 +78,8 @@ class RotatingPartWriter:
 
         Args:
             write_empty_part: If the caller never wrote a row group, still write one empty part so
-                the schema stays on disk. The control tables need this. The values plane does not.
+                the schema stays on disk. The values plane does not ask for this: a modality with no
+                values has no shard to point a locator at.
 
         Returns:
             The relative paths of the parts written.
@@ -115,135 +114,3 @@ class RotatingPartWriter:
 # rows, it extrapolates the rate from the sample, so the expensive per-row measurement stays
 # bounded regardless of size.
 _PROBE_ROWS = 1024
-
-
-class ShardedTableWriter:
-    """Accepts control-table rows one at a time and streams them into byte-budgeted parquet parts.
-
-    This is the streaming core behind :func:`write_sharded_table`. It buffers rows into row groups,
-    flushes a group once it reaches ``min(row_group_target_bytes, control_target_bytes)``, and rotates
-    to a new part once a part reaches ``control_target_bytes``. Until the bytes-per-row rate is known,
-    it measures each row, so it sizes the first group exactly even for a small table or a tiny target.
-    After ``_PROBE_ROWS`` rows it extrapolates the rate from the sample and sizes later groups by row
-    count, re-measuring the rate at each flush. Rows never all live in memory at once, so a caller can
-    feed millions of rows from a stream. :meth:`finish` closes the last part.
-    """
-
-    def __init__(  # noqa: PLR0913
-        self,
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        staging_dir: Path,
-        control_target_bytes: int,
-        row_group_target_bytes: int,
-        encoding: encodings.ParquetEncoding,
-    ) -> None:
-        """Bind the writer to its schema, path template, byte budgets, and encoding.
-
-        Args:
-            schema: The Arrow schema for the table.
-            part_path: Maps a part index to its relative path.
-            staging_dir: The version's staging directory.
-            control_target_bytes: Rotate to a new part once a part's estimated size exceeds this.
-            row_group_target_bytes: Target size of one row group inside a part.
-            encoding: Dictionary/column encodings and compression applied to every part.
-        """
-        self._schema = schema
-        self._core = RotatingPartWriter(
-            staging_dir,
-            schema,
-            part_path,
-            part_target_bytes=control_target_bytes,
-            parquet_kwargs=encodings.parquet_kwargs(
-                dictionary_columns=encoding.dictionary_columns,
-                column_encoding=encoding.column_encoding,
-                compression=encoding.compression,
-                compression_level=encoding.compression_level,
-                data_page_size=encoding.data_page_size,
-            ),
-        )
-        self._row_group_bytes = min(row_group_target_bytes, control_target_bytes)
-        self._buffer: list[dict] = []
-        self._buffer_bytes = 0  # measured per row while the bytes-per-row rate is still unknown
-        self._bytes_per_row = 0  # set once a group is measured, then re-set from every flush
-
-    def _flush(self) -> None:
-        table = pa.Table.from_pylist(self._buffer, schema=self._schema)
-        self._core.write(table, table.nbytes)
-        self._bytes_per_row = max(1, table.nbytes // len(self._buffer))
-        self._buffer.clear()
-
-    def add(self, row: dict) -> None:
-        """Append one row, flushing a row group when it fills.
-
-        Args:
-            row: The already-encoded payload row, matching the schema.
-        """
-        self._buffer.append(row)
-        if self._bytes_per_row:
-            # Rate known: size groups by row count, re-measured at each flush.
-            if len(self._buffer) >= max(1, self._row_group_bytes // self._bytes_per_row):
-                self._flush()
-        else:
-            # Learning: measure each row until a group fills or the probe is large enough to extrapolate.
-            self._buffer_bytes += pa.Table.from_pylist([row], schema=self._schema).nbytes
-            if self._buffer_bytes >= self._row_group_bytes:
-                self._flush()
-            elif len(self._buffer) >= _PROBE_ROWS:
-                self._bytes_per_row = max(1, self._buffer_bytes // len(self._buffer))
-
-    def finish(self, *, write_empty_part: bool = False) -> list[str]:
-        """Flush any buffered rows, close the last part, and return every part written.
-
-        Args:
-            write_empty_part: Write one empty part when no row was ever added, so the schema stays
-                on disk. The control tables need this.
-
-        Returns:
-            The relative paths of the parts written, in order.
-        """
-        if self._buffer:
-            self._flush()
-        return self._core.finish(write_empty_part=write_empty_part)
-
-
-def write_sharded_table(  # noqa: PLR0913
-    rows: Iterable[dict],
-    schema: pa.Schema,
-    part_path: Callable[[int], str],
-    *,
-    staging_dir: Path,
-    control_target_bytes: int,
-    row_group_target_bytes: int,
-    encoding: encodings.ParquetEncoding,
-) -> list[str]:
-    """Write ``rows`` as one or more parquet parts through a :class:`ShardedTableWriter`.
-
-    The table is ordered by a random id, so adjacent groups sample the same size distribution and
-    stay evenly sized. This keeps each group's statistics tight enough to prune on. An empty input
-    still writes exactly one empty part so the schema stays on disk.
-
-    Args:
-        rows: The already-encoded payload rows, consumed lazily.
-        schema: The Arrow schema for the table.
-        part_path: Maps a part index to its relative path.
-        staging_dir: The version's staging directory.
-        control_target_bytes: Rotate to a new part once a part's estimated size exceeds this.
-        row_group_target_bytes: Target size of one row group inside a part.
-        encoding: Dictionary/column encodings and compression applied to every part.
-
-    Returns:
-        The relative paths of the parts written, in order.
-    """
-    writer = ShardedTableWriter(
-        schema,
-        part_path,
-        staging_dir=staging_dir,
-        control_target_bytes=control_target_bytes,
-        row_group_target_bytes=row_group_target_bytes,
-        encoding=encoding,
-    )
-    for row in rows:
-        writer.add(row)
-    return writer.finish(write_empty_part=True)
