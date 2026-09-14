@@ -23,11 +23,18 @@ same primitives describe any sensor stream, from an ECG to a market series.
 
 ## Ingesting a dataset
 
+Records stay separate from the annotations and tasks built on them. This split lets a recording gain
+new tasks later, without repackaging it into a new task-specific dataset.
+
 To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The engine drives it
 through a fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an
 in-memory dataset (CPU only). The engine then derives the schema from the data. It stores the result
-as parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets round-trip
-deterministically, and reading a compiled version never runs connector code.
+as a `manifest.json` plus control tables in Parquet. The connector determines whether the values plane
+itself is Parquet or Zarr. The leaf value types, such as annotations, spans, and specs, are frozen
+dataclasses, so they round-trip deterministically. `Record` and `Task` stay mutable, so annotations
+and tasks can attach to them after construction. When you read a compiled version from a remote
+registry, the registry never runs connector code. A local registry can build a missing version first
+(see [client](../client.md)).
 
 ```mermaid
 flowchart LR
@@ -35,6 +42,6 @@ flowchart LR
     C["convert()<br/><i>CPU only</i>"]
     S["derive_schema()<br/><i>types from data</i>"]
     W["store()<br/><i>TimeFWriter</i>"]
-    R[("registry<br/>parquet + manifest.json")]
+    R[("registry<br/>manifest.json + control tables (parquet) + values (parquet/zarr)")]
     D --> C --> S --> W --> R
 ```
