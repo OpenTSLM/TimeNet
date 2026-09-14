@@ -171,7 +171,7 @@ CREATE TABLE task_items (
 );
 
 CREATE TABLE annotations (
-    content_id VARCHAR NOT NULL,
+    annotation_id VARCHAR NOT NULL,
     name       VARCHAR NOT NULL,
     value      VARCHAR NOT NULL,
     unit       VARCHAR,
@@ -180,7 +180,7 @@ CREATE TABLE annotations (
 
 CREATE TABLE entities_to_annotations (
     occurrence_id   BIGINT  NOT NULL,
-    content_id      VARCHAR NOT NULL,
+    annotation_id      VARCHAR NOT NULL,
     object_type     VARCHAR NOT NULL CHECK (object_type IN ('dataset', 'task', 'record', 'source', 'signal')),
     on_dataset_id   VARCHAR,
     on_task_id      VARCHAR,
@@ -265,8 +265,8 @@ VALIDATIONS: Final = (
     ("duplicate axis_id", "SELECT axis_id FROM axes GROUP BY axis_id HAVING count(*) > 1"),
     ("duplicate spec_id", "SELECT spec_id FROM specs GROUP BY spec_id HAVING count(*) > 1"),
     (
-        "duplicate content_id",
-        "SELECT content_id FROM annotations GROUP BY content_id HAVING count(*) > 1",
+        "duplicate annotation_id",
+        "SELECT annotation_id FROM annotations GROUP BY annotation_id HAVING count(*) > 1",
     ),
     (
         "duplicate occurrence_id",
@@ -350,7 +350,7 @@ VALIDATIONS: Final = (
     ),
     (
         "occurrence names content that does not exist",
-        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN annotations c ON c.content_id = o.content_id",
+        "SELECT o.occurrence_id FROM entities_to_annotations o ANTI JOIN annotations c ON c.annotation_id = o.annotation_id",
     ),
     (
         "occurrence names a record that does not exist",

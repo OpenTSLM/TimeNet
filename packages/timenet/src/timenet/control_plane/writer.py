@@ -528,13 +528,15 @@ class _Loader:
         self.items = _BatchInserter(
             connection, "task_items", ("task_id", "role", "position", "item_type", "text_value", "record_id")
         )
-        self.contents = _BatchInserter(connection, "annotations", ("content_id", "name", "value", "unit", "metadata"))
+        self.contents = _BatchInserter(
+            connection, "annotations", ("annotation_id", "name", "value", "unit", "metadata")
+        )
         self.occurrences = _BatchInserter(
             connection,
             "entities_to_annotations",
             (
                 "occurrence_id",
-                "content_id",
+                "annotation_id",
                 "object_type",
                 "on_dataset_id",
                 "on_task_id",

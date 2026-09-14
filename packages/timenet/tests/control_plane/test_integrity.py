@@ -41,7 +41,7 @@ def connection(tmp_path):
 def _occurrence(**overrides):
     row = {
         "occurrence_id": 1,
-        "content_id": "c1",
+        "annotation_id": "c1",
         "object_type": "record",
         "on_dataset_id": None,
         "on_task_id": None,
