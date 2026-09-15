@@ -54,6 +54,12 @@ def _control_db(version_dir: Path):
         connection.close()
 
 
+def _record_key(reader: TimeFReader, record_id: str) -> int:
+    """Return one record's surrogate id, which is what the reader's internals join on."""
+    found, _missing = reader._control_plane().resolve_record_ids([record_id])
+    return found[0]
+
+
 def _spy(monkeypatch, method: str) -> list:
     """Record every call to one ControlPlaneReader method, and return the recorded arguments."""
     calls: list = []
@@ -528,11 +534,12 @@ def test_the_locator_memo_returns_what_the_control_plane_holds(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         control = reader._control_plane()
         for record in reader.iter_records(with_annotations=False):
+            key = _record_key(reader, record.record_id)
             stored = {}
-            for row in control.record_chunks(record.record_id):
+            for row in control.record_chunks(key):
                 stored.setdefault(row["time_series_id"], []).append(row)
             for series in record.time_series:
-                memoized = reader._index_rows(record.record_id, series.time_series_id)
+                memoized = reader._index_rows(key, series.time_series_id)
                 assert memoized == stored[series.time_series_id]
                 assert [row["chunk_idx"] for row in memoized] == sorted(row["chunk_idx"] for row in memoized)
                 widest = max(widest, len(memoized))
@@ -543,7 +550,7 @@ def test_closing_the_reader_drops_the_locator_memo(tmp_path):
     version_dir = _write(tmp_path)
     reader = TimeFReader(DatasetVersion.open_local(version_dir))
     record = next(iter(reader.iter_records(with_annotations=False)))
-    reader._index_rows(record.record_id, record.time_series[0].time_series_id)
+    reader._index_rows(_record_key(reader, record.record_id), record.time_series[0].time_series_id)
     assert reader._index_rows_cache
 
     reader.close()
@@ -603,7 +610,7 @@ def test_corrupt_chunk_locator_has_series_context(tmp_path):
         with pytest.raises(
             TimeFFormatError, match=f"failed to read series {series_id!r} for record {record.record_id!r}"
         ):
-            reader._load_values(record.record_id, series_id)
+            record.time_series[0].to_arrow()
 
 
 def test_a_truncated_control_database_raises_format_error(tmp_path):

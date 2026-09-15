@@ -61,18 +61,19 @@ ORDER BY t.position
 """
 
 # A series shared by several records is stored once, so its chunks are reached through the link
-# table. Ordering by the series' own id and then by chunk keeps a series' chunks contiguous and in
-# the order the values plane concatenates them.
+# table. The filter is on the record's dense surrogate, which is also the order the link table was
+# written in, so the scan prunes on its zone map instead of comparing the caller's id string on
+# every row. Ordering by the series' own id and then by chunk keeps a series' chunks contiguous and
+# in the order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
 SELECT s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
        c.chunk_major_idx, c.chunk_minor_idx, c.n_values
-FROM records r
-JOIN record_time_series l ON l.record_id = r.record_id
+FROM record_time_series l
 JOIN time_series s ON s.time_series_id = l.time_series_id
 JOIN specs sp ON sp.spec_id = s.spec_id
 JOIN signal_chunks c ON c.time_series_id = s.time_series_id
 JOIN values_artifacts v ON v.artifact_id = c.artifact_id
-WHERE r.external_id = ?
+WHERE l.record_id = ?
 ORDER BY s.time_series_id, c.chunk_idx
 """
 
@@ -256,19 +257,19 @@ class ControlPlaneReader:
         """
         return self._rows(_REGISTERED_ANNOTATIONS, [])
 
-    def record_chunks(self, record_external_id: str) -> list[dict]:
+    def record_chunks(self, record_id: int) -> list[dict]:
         """Return every chunk locator of one record's series.
 
         A read walks one record at a time and then asks for each of its series' values, so the
         locators are fetched once for the whole record rather than once per series.
 
         Args:
-            record_external_id: The id the record was built under.
+            record_id: The record's surrogate id, as :meth:`records` reports it.
 
         Returns:
             One row per chunk, grouped by series and ordered by ``chunk_idx`` within each.
         """
-        return self._rows(_RECORD_CHUNKS, [record_external_id])
+        return self._rows(_RECORD_CHUNKS, [record_id])
 
     # ---- tasks -----------------------------------------------------------------------------
 

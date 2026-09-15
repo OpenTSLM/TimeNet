@@ -104,7 +104,7 @@ class TimeFReader:
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._axis_cache: dict[tuple, TimeAxis] = {}
-        self._index_rows_cache: OrderedDict[str, dict[str, list[dict]]] = OrderedDict()
+        self._index_rows_cache: OrderedDict[int, dict[str, list[dict]]] = OrderedDict()
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -434,26 +434,26 @@ class TimeFReader:
         with self._as_format_error():
             return tuple(self._decode_annotation(row) for row in self._control_plane().registered_annotations())
 
-    def _index_rows(self, record_id: str, time_series_id: str) -> list[dict]:
+    def _index_rows(self, record_key: int, time_series_id: str) -> list[dict]:
         """Return one series' chunk locators, in ``chunk_idx`` order.
 
         One query returns every series of a record, because a read walks one record and then asks for
         each of its series' values. The result is held for the few records a read has in flight.
 
         Args:
-            record_id: The owning record's id.
+            record_key: The owning record's surrogate id, which the control plane joins on.
             time_series_id: The series id.
 
         Returns:
             The series' chunk locator rows, empty if it has none.
         """
         with self._as_format_error():
-            by_series = self._index_rows_cache.get(record_id)
+            by_series = self._index_rows_cache.get(record_key)
             if by_series is None:
                 by_series = {}
-                for row in self._control_plane().record_chunks(record_id):
+                for row in self._control_plane().record_chunks(record_key):
                     by_series.setdefault(row["time_series_id"], []).append(row)
-                self._index_rows_cache[record_id] = by_series
+                self._index_rows_cache[record_key] = by_series
                 if len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
                     self._index_rows_cache.popitem(last=False)
             return by_series.get(time_series_id, [])
@@ -476,7 +476,7 @@ class TimeFReader:
                 corrupt artifact rather than a caller mistake.
         """
         record_id = row["external_id"]
-        series = tuple(self._build_series(record_id, struct) for struct in series_rows)
+        series = tuple(self._build_series(row["record_id"], record_id, struct) for struct in series_rows)
         annotations = tuple(self._decode_annotation(annotation) for annotation in annotation_rows)
         # The record is decoded and built inside the try block so ``Record.__post_init__`` can reject
         # a malformed time_span before it is used to recheck the stored annotation spans.
@@ -503,11 +503,12 @@ class TimeFReader:
         except TimeFValidationError as exc:
             raise TimeFFormatError(str(exc)) from exc
 
-    def _build_series(self, record_id: str, struct: dict) -> TimeSeries:
+    def _build_series(self, record_key: int, record_id: str, struct: dict) -> TimeSeries:
         """Rebuild one series from its stored row, with lazy loaders for its values.
 
         Args:
-            record_id: The owning record's id.
+            record_key: The owning record's surrogate id, which the loaders join on.
+            record_id: The owning record's id, which the loaders report errors against.
             struct: The stored series row, with its spec and axis columns joined in.
 
         Returns:
@@ -526,14 +527,14 @@ class TimeFReader:
         time_offsets_loader = None
         if isinstance(axis, IrregularAxis):
             time_offsets_loader = _TimeOffsetsLoader(
-                self, record_id, time_series_id, axis.first_us, axis.last_us, n_values
+                self, record_key, record_id, time_series_id, axis.first_us, axis.last_us, n_values
             )
         try:
             return TimeSeries(
                 spec=self._spec_by_type[spec_type],
                 signal=struct["signal"],
                 time_axis=axis,
-                loader=_SeriesLoader(self, record_id, time_series_id),
+                loader=_SeriesLoader(self, record_key, record_id, time_series_id),
                 time_offsets_loader=time_offsets_loader,
                 source_id=struct["source_id"],
                 time_series_id=time_series_id,
@@ -635,11 +636,12 @@ class TimeFReader:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _load_time_offsets(self, record_id: str, time_series_id: str) -> pa.Array:
+    def _load_time_offsets(self, record_key: int, record_id: str, time_series_id: str) -> pa.Array:
         """Read an irregular series' per-value time offsets through the values backend.
 
         Args:
-            record_id: The owning record's id.
+            record_key: The owning record's surrogate id.
+            record_id: The owning record's id, for the error message.
             time_series_id: The series id to read.
 
         Returns:
@@ -648,7 +650,7 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If the series has no chunk locator or its time offsets cannot be read.
         """
-        rows = self._index_rows(record_id, time_series_id)
+        rows = self._index_rows(record_key, time_series_id)
         if not rows:
             raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
@@ -660,11 +662,12 @@ class TimeFReader:
                 f"failed to read time offsets for series {time_series_id!r} for record {record_id!r}: {exc}"
             ) from exc
 
-    def _load_values(self, record_id: str, time_series_id: str) -> pa.Array:
+    def _load_values(self, record_key: int, record_id: str, time_series_id: str) -> pa.Array:
         """Read and concatenate a series' chunk values through the values backend.
 
         Args:
-            record_id: The owning record's id.
+            record_key: The owning record's surrogate id.
+            record_id: The owning record's id, for the error message.
             time_series_id: The series id to read.
 
         Returns:
@@ -673,7 +676,7 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If the series has no chunk locator or a chunk cannot be read.
         """
-        rows = self._index_rows(record_id, time_series_id)
+        rows = self._index_rows(record_key, time_series_id)
         if not rows:
             raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
@@ -790,8 +793,10 @@ class _SeriesLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' values."""
+    record_key: int
+    """The owning record's surrogate id, which the control plane joins on."""
     record_id: str
-    """The owning record's id."""
+    """The owning record's id, which errors are reported against."""
     time_series_id: str
     """The id of the series to read."""
 
@@ -801,7 +806,7 @@ class _SeriesLoader:
         Returns:
             The series values in the spec's canonical Arrow representation.
         """
-        return self.reader._load_values(self.record_id, self.time_series_id)
+        return self.reader._load_values(self.record_key, self.record_id, self.time_series_id)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a temporal subsection through the selected values backend.
@@ -812,7 +817,7 @@ class _SeriesLoader:
         Raises:
             TimeFFormatError: If this series has no chunk locator.
         """
-        rows = self.reader._index_rows(self.record_id, self.time_series_id)
+        rows = self.reader._index_rows(self.record_key, self.time_series_id)
         if not rows:
             raise TimeFFormatError(f"no index entry for record {self.record_id!r} series {self.time_series_id!r}")
         if self.reader._values is None:
@@ -833,8 +838,10 @@ class _TimeOffsetsLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' time offsets."""
+    record_key: int
+    """The owning record's surrogate id, which the control plane joins on."""
     record_id: str
-    """The owning record's id."""
+    """The owning record's id, which errors are reported against."""
     time_series_id: str
     """The id of the series to read."""
     first_us: int
@@ -858,7 +865,7 @@ class _TimeOffsetsLoader:
             TimeFFormatError: If the stored time offsets disagree with the axis endpoints or the
                 value count, or if they decrease at any point.
         """
-        time_offsets = self.reader._load_time_offsets(self.record_id, self.time_series_id)
+        time_offsets = self.reader._load_time_offsets(self.record_key, self.record_id, self.time_series_id)
         values = time_offsets.to_numpy(zero_copy_only=False)
         where = f"series {self.time_series_id!r} on record {self.record_id!r}"
         if len(values) != self.n_values:
