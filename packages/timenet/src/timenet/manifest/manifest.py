@@ -37,7 +37,10 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
+    # Version 2 moved the four Parquet control tables into one embedded DuckDB database. There is no
+    # migration: a version 1 directory fails here rather than later with a missing-file error, and a
+    # published dataset is rebuilt from its connector.
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -64,7 +67,7 @@ class Manifest:
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int = 1
+    timef_format_version: int = 2
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
@@ -342,6 +345,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
+        "control_db": None if files.control_db is None else _part_to_dict(files.control_db),
         "records": [_part_to_dict(part) for part in files.records],
         "annotations": [_part_to_dict(part) for part in files.annotations],
         "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
@@ -356,12 +360,14 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
+        control_db = data.get("control_db")
         return ManifestFiles(
             records=_parts(data["records"], "records"),
             annotations=_parts(data["annotations"], "annotations"),
             time_series_index=_parts(data["time_series_index"], "time_series_index"),
             tasks=_parts(data.get("tasks", ()), "tasks"),
             time_series=_parts(data.get("time_series", ()), "time_series"),
+            control_db=None if control_db is None else _part_from_dict(control_db, "control_db"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
