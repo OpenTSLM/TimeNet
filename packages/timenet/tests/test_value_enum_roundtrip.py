@@ -332,6 +332,7 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in record 0 but {idx_c_in_s1} in record 1"
 
 
+@pytest.mark.slow  # writes and reads a whole Zarr store
 def test_enum_zarr_indices_consistent_across_shards(tmp_path):
     """Same cross-shard consistency test as above, but on the Zarr backend."""
     pytest.importorskip("torch")

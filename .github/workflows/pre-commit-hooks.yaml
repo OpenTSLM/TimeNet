@@ -76,7 +76,8 @@ jobs:
     - name: Test with pytest (Python 3.13)
       id: pytest
       continue-on-error: true
-      run: make test
+      # test-all, not test: `make test` deselects the slow set, and CI is where it has to run.
+      run: make test-all
     - name: Test connectors in per-connector environments
       # Each connector's tests and type-check run in an environment built from its own
       # requirements.txt, the same way a build runs.
@@ -113,7 +114,7 @@ jobs:
     - name: Install dependencies
       run: make sync
     - name: Test with pytest (Python 3.11)
-      run: make test
+      run: make test-all
 
   # The ruleset on main requires one status check context named exactly `check`, and a check run
   # takes its name from the job id. Do not add a `name:` here and do not turn this into a matrix:

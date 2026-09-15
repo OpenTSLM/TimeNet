@@ -155,6 +155,7 @@ def test_oversized_decoded_chunk_is_not_cached(monkeypatch):
     assert reader._chunk_cache_bytes == 0
 
 
+@pytest.mark.slow  # writes and reads a whole Zarr store of 4-D frames
 def test_nd_uint8_round_trip_and_range_read(tmp_path):
     frames = np.arange(7 * 4 * 5 * 3, dtype=np.uint8).reshape(7, 4, 5, 3)
     spec = TimeSeriesSpec(
