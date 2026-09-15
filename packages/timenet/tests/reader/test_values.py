@@ -13,6 +13,12 @@ from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.writer import TimeFWriter
 
 
+def _record_key(reader, record_id):
+    """Return one record's surrogate id, which is what the reader's internals join on."""
+    found, _missing = reader._control_plane().resolve_record_ids([record_id])
+    return found[0]
+
+
 def _write(tmp_path, **kwargs):
     dataset = make_dataset()
     dataset.derive_schema()
@@ -96,7 +102,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.time_series[0]
-        rows = reader._index_rows(record.record_id, series.time_series_id)
+        rows = reader._index_rows(_record_key(reader, record.record_id), series.time_series_id)
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()

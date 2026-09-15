@@ -359,3 +359,25 @@ def test_a_failed_validation_publishes_nothing_and_leaves_no_staging_directory(t
         writer.write()
     assert not (tmp_path / "timenet/hello-world" / "1.0.0").exists()
     assert not list((tmp_path / "timenet/hello-world").glob("*.tmp-*"))
+
+
+def test_a_version_on_a_non_local_filesystem_reads_through_a_local_copy(tmp_path):
+    # DuckDB opens a database through its own filesystem layer, not the pyarrow one the rest of the
+    # reader uses, so an object-store version is copied down once and removed again on close.
+    import pyarrow.fs as pafs  # noqa: PLC0415
+
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / "timenet/hello-world" / "1.0.0"
+    remote = DatasetVersion(
+        manifest=DatasetVersion.open_local(version_dir).manifest,
+        filesystem=pafs.SubTreeFileSystem(str(version_dir), pafs.LocalFileSystem()),
+        root="",
+    )
+    with TimeFReader(remote) as reader:
+        assert_datasets_equal(make_dataset(), reader.read())
+        copied = reader._control_plane()._materialized
+        assert copied is not None and copied.exists()
+    assert not copied.exists()
