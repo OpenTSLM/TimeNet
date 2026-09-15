@@ -3,7 +3,7 @@
 The database is attached rather than opened, because the block size can only be set when the file is
 created. Everything goes in inside one transaction: the DDL, every table's rows, the join that turns
 the caller's ids into dense ones, then the checks in
-:data:`~timenet.control_plane.schema.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
+:data:`~timenet.control_plane.checks.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
 build that does not hold together publishes nothing.
 
 A row that names an entity by the caller's id waits in a staging table while the walk runs, because
@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING, Any, assert_never
 import duckdb
 import pyarrow as pa
 
-from timenet.control_plane import schema as ddl
+from timenet.control_plane import checks, schema as ddl
+from timenet.control_plane.payload import PayloadKind, task_payload, text_answer
 from timenet.control_plane.spans import span_row
 from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
@@ -53,6 +54,77 @@ _ARROW_TYPES = {
     "BOOLEAN": pa.bool_(),
 }
 """DuckDB's declared column types, mapped to the Arrow types a batch is built with."""
+
+_STAGING_DDL_TEMPLATE = """
+CREATE TEMP TABLE _stage_record_tasks (
+    record_id  {id} NOT NULL,
+    external_id VARCHAR NOT NULL
+);
+
+CREATE TEMP TABLE _stage_task_items (
+    task_id   {id} NOT NULL,
+    role       VARCHAR NOT NULL,
+    position   INTEGER NOT NULL,
+    item_type  VARCHAR NOT NULL,
+    text_value VARCHAR,
+    external_id VARCHAR
+);
+
+CREATE TEMP TABLE _stage_task_refs (
+    task_id    {id} NOT NULL,
+    field       VARCHAR NOT NULL,
+    position    INTEGER NOT NULL,
+    ref_kind    VARCHAR NOT NULL,
+    external_id VARCHAR NOT NULL
+);
+"""
+"""Where a row waits while the id it names is still unwritten.
+
+A task can name a record, and a record a task, whichever the walk reaches first. The loader writes
+the caller's string into one of these, and :data:`_RESOLVE` turns the whole table into dense ids with
+one join once the walk is over. The tables live in DuckDB's ``temp`` catalog, so they are never part
+of the published file, which is why they are declared here rather than beside the schema.
+"""
+
+_STAGING_DDL = _STAGING_DDL_TEMPLATE.format(id=ddl.ID_TYPE)
+"""The staging tables, created beside the real ones inside the load transaction."""
+
+# Each resolve sorts on the column its reads filter by, because the join that resolves the ids is
+# free to hand its rows back in any order and an unsorted table loses the zone map that prunes the
+# scan.
+_RESOLVE = (
+    (
+        "record_tasks",
+        "(record_id, task_id)",
+        "SELECT s.record_id, t.task_id FROM _stage_record_tasks s "
+        "LEFT JOIN tasks t ON t.external_id = s.external_id ORDER BY s.record_id",
+    ),
+    (
+        "task_items",
+        "(task_id, role, position, item_type, text_value, record_id)",
+        "SELECT s.task_id, s.role, s.position, s.item_type, s.text_value, r.record_id "
+        "FROM _stage_task_items s LEFT JOIN records r ON r.external_id = s.external_id "
+        "ORDER BY s.task_id, s.role, s.item_type, s.position",
+    ),
+    (
+        "task_refs",
+        "(task_id, field, position, ref_kind, ref_id)",
+        "SELECT s.task_id, s.field, s.position, s.ref_kind, "
+        "CASE s.ref_kind WHEN 'record' THEN r.record_id ELSE ts.time_series_id END "
+        "FROM _stage_task_refs s "
+        "LEFT JOIN records r ON s.ref_kind = 'record' AND r.external_id = s.external_id "
+        "LEFT JOIN time_series ts ON s.ref_kind = 'time_series' AND ts.external_id = s.external_id "
+        "ORDER BY s.task_id, s.field, s.position",
+    ),
+)
+"""Each staged table, its target's column list, and the query that resolves it.
+
+Resolving is a step of the write, not a fact about the database, so it lives with the loader that
+runs it: the published file has no staging table and no unresolved id to turn into one. An id that
+names nothing resolves to null rather than failing the insert, so the load reaches
+:data:`~timenet.control_plane.checks.VALIDATIONS` and the offender is reported by name with every
+other one, instead of the bulk insert dying on the first.
+"""
 
 
 @dataclass(frozen=True)
@@ -113,7 +185,7 @@ def write_control_plane(  # noqa: PLR0913 - one parameter per plane the load nee
         The counts the manifest records.
 
     Raises:
-        TimeFValidationError: If a check in :data:`~timenet.control_plane.schema.VALIDATIONS` finds a
+        TimeFValidationError: If a check in :data:`~timenet.control_plane.checks.VALIDATIONS` finds a
             row. The database is left unpublished.
     """  # noqa: DOC502 - raised by _validate and by the loader's id counters
     connection = duckdb.connect()
@@ -121,7 +193,7 @@ def write_control_plane(  # noqa: PLR0913 - one parameter per plane the load nee
         connection.execute(f"ATTACH '{db_path}' AS control (BLOCK_SIZE {ddl.BLOCK_SIZE})")
         connection.execute("USE control")
         connection.execute("BEGIN TRANSACTION")
-        for statement in _statements(ddl.DDL + ddl.STAGING_DDL):
+        for statement in _statements(ddl.DDL + _STAGING_DDL):
             connection.execute(statement)
         counts = _load(connection, dataset, series, series_to_records, values, tasks)
         _resolve(connection)
@@ -149,12 +221,12 @@ def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
     """Turn every staged caller id into the dense id of the row it names.
 
     One join per staged table, once the walk is over and both sides exist. An id that names nothing
-    lands as null, which :data:`~timenet.control_plane.schema.VALIDATIONS` refuses.
+    lands as null, which :data:`~timenet.control_plane.checks.VALIDATIONS` refuses.
 
     Args:
         connection: The connection holding the loaded, not yet committed database.
     """
-    for table, columns, query in ddl.RESOLVE:
+    for table, columns, query in _RESOLVE:
         connection.execute(f"INSERT INTO {table} {columns} {query}")
 
 
@@ -167,7 +239,7 @@ def _validate(connection: duckdb.DuckDBPyConnection) -> None:
     Raises:
         TimeFValidationError: If any check finds a row.
     """
-    for description, query in ddl.VALIDATIONS:
+    for description, query in checks.VALIDATIONS:
         offending = connection.execute(query).fetchall()
         if offending:
             sample = ", ".join(str(row[0]) for row in offending[:3])
@@ -751,7 +823,7 @@ def _load_task(loader: _Loader, task: Task) -> None:
     loader.tasks.add((task_id, task.id, str(task.task_type), task.prompt, task.rationale))
     for position, external_id in enumerate(task.record_ids):
         loader.task_items.add((task_id, "input", position, "record", None, external_id))
-    answer = ddl.text_answer(task.task_type)
+    answer = text_answer(task.task_type)
     if answer is not None and getattr(task, answer.name) is not None:
         loader.task_items.add((task_id, "target", 0, "text", str(getattr(task, answer.name)), None))
     for position, external_id in enumerate(task.from_task_ids):
@@ -784,26 +856,26 @@ def _load_task_payload(loader: _Loader, task_id: int, task: Task) -> None:
 
     Raises:
         TimeFValidationError: If the task's payload and its declaration have drifted apart.
-    """  # noqa: DOC502 - raised by schema.task_payload
-    answer = ddl.text_answer(task.task_type)
-    for declared in ddl.task_payload(task.task_type):
+    """  # noqa: DOC502 - raised by payload.task_payload
+    answer = text_answer(task.task_type)
+    for declared in task_payload(task.task_type):
         value = getattr(task, declared.name)
         # The free-text answer is an item of the task, stored by _load_task beside its records.
         if value is None or declared is answer:
             continue
         text = double = None
-        if declared.kind is ddl.PayloadKind.TEXT:
+        if declared.kind is PayloadKind.TEXT:
             text = str(value)
-        elif declared.kind is ddl.PayloadKind.NUMBER:
+        elif declared.kind is PayloadKind.NUMBER:
             double = float(value)
         loader.task_fields.add((task_id, declared.name, text, double))
         if not declared.stores_elements:
             continue
         items: tuple = tuple(value) if declared.is_list else (value,)
-        if declared.kind is ddl.PayloadKind.SPAN:
+        if declared.kind is PayloadKind.SPAN:
             for position, span in enumerate(items):
                 loader.task_spans.add((task_id, declared.name, position, *span_row(span)))
         else:
-            ref_kind = "record" if declared.kind is ddl.PayloadKind.RECORD_REF else "time_series"
+            ref_kind = "record" if declared.kind is PayloadKind.RECORD_REF else "time_series"
             for position, external_id in enumerate(items):
                 loader.task_refs.add((task_id, declared.name, position, ref_kind, external_id))

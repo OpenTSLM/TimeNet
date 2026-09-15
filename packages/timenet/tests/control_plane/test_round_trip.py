@@ -15,7 +15,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from timenet.control_plane import schema as ddl
+from timenet.control_plane import checks
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
@@ -439,8 +439,8 @@ def test_the_annotation_payload_is_stored_once_however_many_records_carry_it(tmp
 def test_a_failed_validation_publishes_nothing_and_leaves_no_staging_directory(tmp_path, monkeypatch):
     # The checks run inside the load transaction, so a build that does not hold together never
     # reaches COMMIT and never reaches the version directory either.
-    always_fails = (*ddl.VALIDATIONS, ("planted failure", "SELECT record_id FROM records"))
-    monkeypatch.setattr(ddl, "VALIDATIONS", always_fails)
+    always_fails = (*checks.VALIDATIONS, ("planted failure", "SELECT record_id FROM records"))
+    monkeypatch.setattr(checks, "VALIDATIONS", always_fails)
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError, match="planted failure"), TimeFWriter(tmp_path, dataset) as writer:

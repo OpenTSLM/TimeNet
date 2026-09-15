@@ -26,7 +26,7 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 
-from timenet.control_plane import schema as ddl
+from timenet.control_plane.payload import PayloadKind, task_payload, text_answer
 from timenet.control_plane.reader import ControlPlaneReader
 from timenet.control_plane.spans import span_from_row
 from timenet.dataset import Record, TimeFDataset, TimeSeries
@@ -947,20 +947,20 @@ def _task_payload(
     """
     present = {row["field"]: row for row in field_rows}
     refs = _grouped(ref_rows, "field")
-    answer = ddl.text_answer(task_type)
+    answer = text_answer(task_type)
     payload: dict[str, object] = {}
     answers = _items(item_rows, "target", "text", column="text_value")
     if answer is not None and answers:
         payload[answer.name] = answers[0]
-    for declared in ddl.task_payload(task_type):
+    for declared in task_payload(task_type):
         stored = present.get(declared.name)
         if stored is None or declared is answer:
             continue
-        if declared.kind is ddl.PayloadKind.TEXT:
+        if declared.kind is PayloadKind.TEXT:
             payload[declared.name] = stored["text_value"]
-        elif declared.kind is ddl.PayloadKind.NUMBER:
+        elif declared.kind is PayloadKind.NUMBER:
             payload[declared.name] = stored["double_value"]
-        elif declared.kind is ddl.PayloadKind.SPAN:
+        elif declared.kind is PayloadKind.SPAN:
             spans = tuple(_span(row) for row in span_rows.get(declared.name, ()))
             payload[declared.name] = spans if declared.is_list else spans[0]
         else:
