@@ -28,18 +28,13 @@ Most connectors do not use `TimeFWriter` directly. `BaseConnector.store()` and t
 
 ## Disk layout
 
-Every control table shards into numbered parts under its own directory. A small table writes a
-single `part-00000000.parquet` file. A large table splits into a new part when a part reaches
-`control_shard_target_bytes`. The manifest lists the parts. As a result, the reader discovers the
-parts and does not assume fixed names.
+The whole control plane is one embedded DuckDB database. The values plane shards into numbered parts,
+and the manifest lists them, so the reader discovers the parts and does not assume fixed names.
 
 ```
 <root>/<dataset_id>/<version>/
   manifest.json   # written last; its presence marks a committed version
-  records/part-00000000.parquet ...
-  annotations/part-00000000.parquet ...
-  time_series_index/part-00000000.parquet ...
-  tasks/task=<task_type>/part-00000000.parquet ...
+  control.duckdb  # records, series, annotations, tasks, chunk locators
   time_series/part-00000000.parquet ...   # values_backend="parquet" (default)
   time_series.zarr/<spec_type>/...      # values_backend="zarr" (alternative)
   time_series.zarr/_irregular/<spec_type>/...   # values of series storing time offsets
@@ -52,7 +47,6 @@ parts and does not assume fixed names.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `shard_target_bytes` | 128 MiB | Rotate to a new shard (Parquet), or a new Zarr shard, when the buffered values exceed this size. |
-| `control_shard_target_bytes` | 128 MiB | Split a control table (records, annotations, index, tasks) into a new part when its in-memory size exceeds this. |
 | `row_group_target_bytes` | 4 MiB | Flush a row group when the buffered values exceed this size (Parquet only). |
 | `chunk_max_bytes` | 1 MiB | Split a series into chunks no larger than this. |
 | `compression` | `"zstd"` | Codec for the values (Parquet codec, or Zarr Blosc inner codec). |
@@ -65,10 +59,9 @@ zstd compression.
 
 ## Values backends
 
-Only the **values plane** (the temporal values of each series) is backend-specific. Records,
-annotations, tasks, and the time-series index are always Parquet. The manifest records the choice in
-`values_backend`. The index locates every chunk with a backend-agnostic
-`(chunk_file, chunk_major_idx, chunk_minor_idx)` locator:
+Only the **values plane** (the temporal values of each series) is backend-specific. The control
+plane is the same database either way. The manifest records the choice in `values_backend`. A chunk
+locator is backend-agnostic, `(chunk_file, chunk_major_idx, chunk_minor_idx)`:
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
@@ -87,7 +80,7 @@ need no extra column.
 Zarr stores one array for each `(spec_type, stores_time_offsets)` pair.
 Each array has shape `(total_steps, *value_shape)` and uses the spec's dtype.
 Irregular values use `_irregular/`, with matching int64 time offsets under `_time_offsets/`.
-One index row describes a series across its time axis.
+One chunk row describes a series across its time axis.
 Zarr stores every scalar dtype except `str`.
 An enum stores int32 positions in the declared categories, which the reader uses to restore labels.
 

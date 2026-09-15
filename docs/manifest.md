@@ -40,7 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
-    timef_format_version=1,     # validated against the supported set {1}
+    timef_format_version=2,     # validated against the supported set {2}
 )
 ```
 
@@ -65,12 +65,12 @@ A spec records its `nullable` flag in the same way. When an older manifest omits
 SDK reads it as `False`. The current SDK can therefore read artifacts written before nullability
 support without changing their missing-value behavior.
 
-Nullable artifacts also use `timef_format_version=1`. This does not guarantee that older SDKs can
+Nullable artifacts did not move the format version. It does not guarantee that older SDKs can
 read newer nullable artifacts correctly. SDKs from before nullability support can ignore the Zarr
 validity arrays, which mark present timesteps. Those SDKs can treat missing-value placeholders as
 observations.
 
-For nullable artifacts, use an SDK that supports nullability. Format version 1 alone does not show
+For nullable artifacts, use an SDK that supports nullability. The format version alone does not show
 whether a reader supports the `nullable` flag and its storage representation.
 
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
@@ -103,13 +103,15 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
 `time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
-`spec_type -> series count`). All fields default to `0` or `{}`.
+`spec_type -> series count`). All fields default to `0` or `{}`. `time_series_index_rows` counts
+chunk placements once per referencing record, so it is above `time_series_chunks` whenever a version
+shares a series between records.
 
 ## `ManifestFiles`
 
-`ManifestFiles` groups file descriptors by kind: `records`, `annotations`, and
-`time_series_index` (required), plus `tasks` and `time_series` (tuples, empty by default). A
-reader uses this list. It never uses a directory glob.
+`ManifestFiles` groups file descriptors by kind: `control_db`, one `FilePart` or `None`, and
+`time_series`, a tuple that is empty by default. A reader uses this list. It never uses a directory
+glob.
 
 Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
 `checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
