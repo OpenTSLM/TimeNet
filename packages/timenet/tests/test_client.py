@@ -89,7 +89,7 @@ def test_download_rejects_path_traversal(registry_root, tmp_path):
     manifest = client.get("timenet/hello-world")
     bad = dataclasses.replace(
         manifest,
-        files=dataclasses.replace(manifest.files, records=(FilePart("../../escape.txt", "sha256:0", 0),)),
+        files=dataclasses.replace(manifest.files, time_series=(FilePart("../../escape.txt", "sha256:0", 0),)),
     )
     with pytest.raises(TimeFFormatError, match="escapes"):
         client._registry.download_version("timenet/hello-world", "1.0.0", tmp_path / "target", manifest=bad)

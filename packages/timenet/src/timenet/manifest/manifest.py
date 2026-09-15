@@ -346,10 +346,6 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
         "control_db": None if files.control_db is None else _part_to_dict(files.control_db),
-        "records": [_part_to_dict(part) for part in files.records],
-        "annotations": [_part_to_dict(part) for part in files.annotations],
-        "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
-        "tasks": [_part_to_dict(part) for part in files.tasks],
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
 
@@ -362,12 +358,8 @@ def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         control_db = data.get("control_db")
         return ManifestFiles(
-            records=_parts(data["records"], "records"),
-            annotations=_parts(data["annotations"], "annotations"),
-            time_series_index=_parts(data["time_series_index"], "time_series_index"),
-            tasks=_parts(data.get("tasks", ()), "tasks"),
-            time_series=_parts(data.get("time_series", ()), "time_series"),
             control_db=None if control_db is None else _part_from_dict(control_db, "control_db"),
+            time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc

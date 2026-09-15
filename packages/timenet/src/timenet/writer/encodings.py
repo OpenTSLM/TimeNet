@@ -9,13 +9,10 @@ options. It also reads the choice back from the footer of a finished file. Encod
 ``values.list.element``. This is the only combination that pyarrow applies reliably.
 """
 
-from dataclasses import dataclass
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -40,23 +37,6 @@ both lists, pyarrow rejects it."""
 _DICTIONARY_MARKERS = frozenset({"RLE_DICTIONARY", "PLAIN_DICTIONARY"})
 """Footer names for dictionary-encoded indices. PLAIN_DICTIONARY is the name used before Parquet
 version 2.4."""
-
-INDEX_DICTIONARY = ["spec_type", "signal", "chunk_file"]
-INDEX_ENCODING = {
-    "chunk_idx": "DELTA_BINARY_PACKED",
-    "chunk_major_idx": "DELTA_BINARY_PACKED",
-    "chunk_minor_idx": "DELTA_BINARY_PACKED",
-}
-
-RECORDS_DICTIONARY = [
-    "time_series.list.element.spec_type",
-    "time_series.list.element.signal",
-    "time_series.list.element.axis_type",
-]
-
-ANNOTATIONS_DICTIONARY = ["key"]
-
-_TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
 
 
 def byte_stream_split_supported(dtype: str) -> bool:
@@ -131,38 +111,6 @@ def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
     if value_encoding is ValueEncoding.BYTE_STREAM_SPLIT:
         return "BYTE_STREAM_SPLIT" in applied
     return "PLAIN" in applied and not (applied & _DICTIONARY_MARKERS)
-
-
-def task_dictionary(schema: pa.Schema) -> list[str]:
-    """Return the categorical columns to dictionary-encode for a task partition.
-
-    Only string columns qualify for dictionary encoding. The ``target`` column has two possible
-    types. It is a float for a scalar prediction. It is a list of span structs for a localization.
-    For the float type, dictionary encoding gives no benefit. For the list-of-structs type,
-    dictionary encoding fails.
-
-    Args:
-        schema: The task partition's Arrow schema.
-
-    Returns:
-        The subset of categorical task columns present in the schema as strings.
-    """
-    return [name for name in _TASK_CATEGORICAL if name in schema.names and pa.types.is_string(schema.field(name).type)]
-
-
-@dataclass(frozen=True)
-class ParquetEncoding:
-    """Encoding and compression options for one sharded parquet table.
-
-    This class bundles the :func:`parquet_kwargs` inputs into one config object. A sharded-table
-    writer can then take this one object, instead of four separate arguments.
-    """
-
-    dictionary_columns: list[str]
-    compression: str
-    compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
-    column_encoding: dict[str, str] | None = None
-    data_page_size: int | None = None
 
 
 def parquet_kwargs(

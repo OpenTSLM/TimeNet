@@ -1,8 +1,8 @@
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import zarr
 
@@ -27,6 +27,23 @@ def _write(tmp_path, **kwargs) -> Path:
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", **kwargs) as writer:
         writer.write()
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+def _chunks(version_dir):
+    """Return every chunk locator, as the control plane stores them."""
+    connection = duckdb.connect(str(version_dir / "control.duckdb"), read_only=True)
+    try:
+        rows = connection.execute(
+            "SELECT s.external_id, c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values "
+            "FROM time_series_chunks c "
+            "JOIN time_series s ON s.time_series_id = c.time_series_id "
+            "JOIN values_artifacts v ON v.artifact_id = c.artifact_id "
+            "ORDER BY s.external_id, c.chunk_idx"
+        ).fetchall()
+    finally:
+        connection.close()
+    names = ("time_series_id", "chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_idx", "n_values")
+    return [dict(zip(names, row, strict=True)) for row in rows]
 
 
 def test_manifest_records_zarr_backend_and_store_files(tmp_path):
@@ -59,10 +76,9 @@ def test_spec_types_encode_to_distinct_single_path_segments():
     assert all("/" not in name and "\\" not in name for name in encoded)
 
 
-def test_index_locator_resolves_to_values(tmp_path):
+def test_chunk_locator_resolves_to_values(tmp_path):
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    row = index[0]
+    row = _chunks(version_dir)[0]
     # Zarr locator: chunk_file=array path, chunk_major_idx=element start, chunk_minor_idx unused.
     assert row["chunk_minor_idx"] is None
     array = zarr.open_array(store=version_dir / row["chunk_file"], mode="r")
@@ -70,14 +86,14 @@ def test_index_locator_resolves_to_values(tmp_path):
     assert len(chunk) == row["n_values"]
 
 
-def test_one_index_row_per_series(tmp_path):
-    # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
-    # each (record, series) pair gets exactly one placement spanning the series' full length.
+def test_one_chunk_row_per_series(tmp_path):
+    # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply chunk rows:
+    # each series gets exactly one placement spanning its full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    keys = [(row["record_id"], row["time_series_id"]) for row in index]
+    chunks = _chunks(version_dir)
+    keys = [row["time_series_id"] for row in chunks]
     assert len(keys) == len(set(keys))
-    long_series = next(row for row in index if row["time_series_id"] == "ts-long-1")
+    long_series = next(row for row in chunks if row["time_series_id"] == "ts-long-1")
     assert long_series["n_values"] == 512  # the fixture's long series, unsplit
 
 
