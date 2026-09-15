@@ -2,13 +2,10 @@
 
 A version's structure (its records, their series, the annotations, the tasks, and the chunk
 locators that point into the values plane) lives in ``control.duckdb``. The values plane keeps its
-own shards, which this package does not touch.
-
-- :mod:`timenet.control_plane.schema` holds the table definitions.
-- :mod:`timenet.control_plane.checks` holds the queries the writer runs before it publishes.
-- :mod:`timenet.control_plane.payload` says which table holds each field of a typed task.
-- :mod:`timenet.control_plane.writer` loads a dataset into a fresh database.
-- :mod:`timenet.control_plane.reader` answers with one query per table per batch.
+own shards and is not touched here. :mod:`timenet.control_plane.schema` holds the table definitions
+and the checks the writer runs before it publishes, :mod:`timenet.control_plane.writer` loads a
+dataset into a fresh database, and :mod:`timenet.control_plane.reader` answers the reader's
+questions with one query per table per batch.
 """
 
 from timenet.control_plane.reader import ControlPlaneReader

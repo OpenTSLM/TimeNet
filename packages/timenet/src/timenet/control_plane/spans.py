@@ -3,7 +3,7 @@
 A span is four columns: the frame it counts in, its start, its exclusive end (null for a point) and
 the series it is scoped to. The writer and the reader both call this module, so the two halves of
 the contract cannot drift apart. A span must come back as the leaf type its frame and bounds
-describe, or it stops comparing equal to the one the writer stored.
+describe, or it stops comparing equal to the one that was written.
 """
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
