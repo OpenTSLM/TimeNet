@@ -5,7 +5,8 @@ import dataclasses
 import duckdb
 import pytest
 
-from timenet.control_plane import schema as ddl
+from timenet.control_plane import payload, schema as ddl
+from timenet.control_plane.checks import VALIDATIONS
 from timenet.errors import TimeFValidationError
 from timenet.types import TASKS, TaskType
 
@@ -22,13 +23,13 @@ def db():
 
 def _offenders(connection, description):
     """Run one named validation and return the rows it found."""
-    query = next(query for text, query in ddl.VALIDATIONS if text == description)
+    query = next(query for text, query in VALIDATIONS if text == description)
     return connection.execute(query).fetchall()
 
 
 def _failing(connection):
     """Return the description of every validation that finds a row."""
-    return [description for description, query in ddl.VALIDATIONS if connection.execute(query).fetchall()]
+    return [description for description, query in VALIDATIONS if connection.execute(query).fetchall()]
 
 
 # ---- the DDL ----------------------------------------------------------------------------------
@@ -308,32 +309,32 @@ def test_two_text_answers_on_one_task_are_rejected(db):
 
 @pytest.mark.parametrize("task_type", list(TaskType))
 def test_every_task_type_declares_its_whole_payload(task_type):
-    declared = {field.name for field in ddl.task_payload(task_type)}
+    declared = {field.name for field in payload.task_payload(task_type)}
     cls = TASKS[task_type]
-    stored = {field.name for field in dataclasses.fields(cls)} - ddl._TASK_FRAME
+    stored = {field.name for field in dataclasses.fields(cls)} - payload._TASK_FRAME
     if cls.answer_is_record:
         stored.discard("target")
     assert declared == stored
 
 
 def test_a_payload_declaration_that_drifts_is_rejected(monkeypatch):
-    shortened = dict(ddl.TASK_PAYLOAD)
-    shortened[TaskType.CLASSIFICATION] = (ddl.PayloadField("target", ddl.PayloadKind.TEXT),)
-    monkeypatch.setattr(ddl, "TASK_PAYLOAD", shortened)
+    shortened = dict(payload.TASK_PAYLOAD)
+    shortened[TaskType.CLASSIFICATION] = (payload.PayloadField("target", payload.PayloadKind.TEXT),)
+    monkeypatch.setattr(payload, "TASK_PAYLOAD", shortened)
     with pytest.raises(TimeFValidationError, match="do not match the control-plane declaration"):
-        ddl.task_payload(TaskType.CLASSIFICATION)
+        payload.task_payload(TaskType.CLASSIFICATION)
 
 
 def test_a_list_valued_scalar_field_is_rejected(monkeypatch):
-    listed = dict(ddl.TASK_PAYLOAD)
-    listed[TaskType.ANSWER] = (ddl.PayloadField("target", ddl.PayloadKind.TEXT, is_list=True),)
-    monkeypatch.setattr(ddl, "TASK_PAYLOAD", listed)
+    listed = dict(payload.TASK_PAYLOAD)
+    listed[TaskType.ANSWER] = (payload.PayloadField("target", payload.PayloadKind.TEXT, is_list=True),)
+    monkeypatch.setattr(payload, "TASK_PAYLOAD", listed)
     with pytest.raises(TimeFValidationError, match="task_fields stores one value per row"):
-        ddl.task_payload(TaskType.ANSWER)
+        payload.task_payload(TaskType.ANSWER)
 
 
 def test_only_ref_and_span_fields_store_elements():
     for task_type in TaskType:
-        for declared in ddl.task_payload(task_type):
-            expected = declared.kind not in {ddl.PayloadKind.TEXT, ddl.PayloadKind.NUMBER}
+        for declared in payload.task_payload(task_type):
+            expected = declared.kind not in {payload.PayloadKind.TEXT, payload.PayloadKind.NUMBER}
             assert declared.stores_elements is expected
