@@ -1,13 +1,13 @@
 """Read a version's control database: one query per table per batch, never one query per record.
 
-Every call here answers for a whole batch of records or for the whole version. Hydrating a record at
-a time costs 34 ms on a 618,508-record corpus, because each query scans its table; asking for a
-thousand records at once costs 0.111 ms per record, because the same scan answers all of them.
+Every call here answers for a whole batch of records, or for the whole version. One record at a time
+costs 34 ms on a 618,508-record corpus, because each query scans its table. A thousand records at
+once costs 0.111 ms per record, because the same scan answers all of them.
 
-The database opens read-only, so no write-ahead log appears beside a file the manifest has already
-checksummed. A version whose files live on an object store is copied to a local temporary file
-first: DuckDB reads a database through its own filesystem layer, not through the pyarrow one the
-rest of the reader uses.
+The database opens read-only, so no write-ahead log appears beside a file the manifest already
+checksummed. The reader copies a version whose files live on an object store to a local temporary
+file first. DuckDB reads a database through its own filesystem layer, not through the pyarrow one
+the rest of the reader uses.
 """
 
 from collections.abc import Iterator, Sequence
@@ -136,7 +136,7 @@ class ControlPlaneReader:
     """An open, read-only view of one version's control database."""
 
     def __init__(self, version: "DatasetVersion") -> None:
-        """Bind the view to a version. Nothing is opened until the first query.
+        """Bind the view to a version. The database opens on the first query.
 
         Args:
             version: The opened version handle, for its filesystem and root.
@@ -147,7 +147,7 @@ class ControlPlaneReader:
 
     @property
     def connection(self) -> duckdb.DuckDBPyConnection:
-        """The open connection, opened on first use and checked against this reader's schema version.
+        """The connection, opened on first use and checked against this reader's schema version.
 
         Returns:
             The connection, with the control database as its default catalog.
@@ -176,7 +176,7 @@ class ControlPlaneReader:
         return connection
 
     def _database_path(self) -> Path:
-        """Return a local path to the control database, copying it down when it is not local already.
+        """Return a local path to the control database, copied down first when it is remote.
 
         Returns:
             The path DuckDB opens.
@@ -203,7 +203,7 @@ class ControlPlaneReader:
         return self._materialized
 
     def close(self) -> None:
-        """Close the connection and drop any local copy. Safe to call more than once."""
+        """Close the connection and remove any local copy. Safe to call more than once."""
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -251,7 +251,7 @@ class ControlPlaneReader:
             cursor.close()
 
     def resolve_record_ids(self, external_ids: Sequence[str]) -> tuple[list[int], list[str]]:
-        """Turn the caller's record ids into surrogates with one query.
+        """Turn the caller's record ids into surrogate ids with one query.
 
         Args:
             external_ids: The ids the caller asked for.
@@ -323,8 +323,8 @@ class ControlPlaneReader:
     def record_chunks(self, record_ids: Sequence[int]) -> list[dict]:
         """Return every chunk locator of a batch of records' series.
 
-        One statement answers for the whole batch, like every other query here. A read that asked
-        one record at a time paid a scan per record, which is the cost this batching removes.
+        One statement answers for the whole batch, like every other query here. A read of one record
+        at a time paid a scan per record, and this batching removes that cost.
 
         Args:
             record_ids: The surrogate ids of the records to read, as :meth:`records` reports them.
