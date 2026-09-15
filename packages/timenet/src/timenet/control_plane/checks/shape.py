@@ -4,9 +4,10 @@ Each rule here looks at one row and reads no other table. A column group that mu
 all unset, a discriminator that must agree with the column it selects, an interval that must end
 after it starts. Where a check joins, the join only fetches the id that the message reports.
 
-The schema uses a DuckDB ``CHECK`` constraint where the rule fits in one column list (``role``,
-``item_type``, ``ref_kind``, ``backend``). A rule that spans columns belongs here instead, and it
-runs one time against the finished load.
+DuckDB can express some of this as a ``CHECK`` constraint, and the schema uses one where the rule
+fits in a column list (``role``, ``item_type``, ``ref_kind``, ``backend``). A constraint that spans
+columns costs a test per inserted row, and the load inserts by the million. These run one time
+against the finished load instead.
 """
 
 from typing import Final

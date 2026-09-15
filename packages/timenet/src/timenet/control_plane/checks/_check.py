@@ -16,7 +16,7 @@ SAMPLE_ROWS: Final = 3
 
 @dataclass(frozen=True)
 class Check:
-    """One invariant, as a query that must return no rows."""
+    """One invariant the dropped key constraints used to enforce, as a query that must return no rows."""
 
     name: str
     """A stable identifier for this check.
@@ -36,8 +36,8 @@ class Check:
         """The query that counts the offending rows.
 
         Returns:
-            A query with one row and one column. The load runs this one, not :attr:`sql`, so a large
-            breach does not materialize.
+            A query with one row and one column. The load runs this one, not :attr:`sql`, because a
+            count does not materialize a breach of three million rows.
         """
         return f"SELECT count(*) FROM ({self.sql}) AS offending"  # noqa: S608 - self.sql is this package's own text
 

@@ -1,7 +1,7 @@
 """References: every id that names another row names a row that is there.
 
-These are the foreign keys the shipped database does not declare. Each check is one anti-join
-against the finished load.
+These are the foreign keys the shipped database does not declare. Each check is one bulk anti-join,
+run one time against the finished load, in place of a lookup per inserted row.
 
 A reference reaches this point in one of two shapes. A row that names an entity by its surrogate id
 is dangling when the anti-join finds no target. A row that named an entity by the caller's id was
@@ -125,8 +125,8 @@ REFERENCES: Final = (
         sql="SELECT l.record_id FROM record_tasks l ANTI JOIN records r ON r.record_id = l.record_id",
         remedy="Add the record to the dataset before a task names it.",
     ),
-    # The checks below read a resolved id column, which is null where the caller's id named
-    # nothing. Each one reports the row that named it, because the id itself is no longer there.
+    # The checks below look at a resolved id column, which holds null where the caller's id named
+    # nothing. Each reports the row that named it, because the id itself is no longer there.
     Check(
         name="record_tasks_task_resolved",
         invariant="Every task id that a record names belongs to a task the version holds.",
@@ -166,8 +166,9 @@ REFERENCES: Final = (
 )
 """Every id that names another row finds one.
 
-``task_from_tasks`` has no check here, and that one table keeps the caller's id as a string. A
-streamed task skips the cross-task checks that :meth:`~timenet.dataset.TimeFDataset.add_task` runs,
-so a dangling derivation can reach the writer. A surrogate id here resolves to null, which loses the
-name of the missing task. The string keeps the name, so the reader can report it.
+``task_from_tasks`` is deliberately unchecked, which is why that one table still keeps the caller's
+id as a string. A streamed task skips the cross-task checks that
+:meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation can reach the writer.
+A check here rejects a write main accepted. A surrogate id here leaves a null that no longer says
+which task is missing. The reader reports the task by name instead.
 """

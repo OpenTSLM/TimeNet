@@ -439,11 +439,16 @@ def test_the_annotation_payload_is_stored_once_however_many_records_carry_it(tmp
 def test_a_failed_validation_publishes_nothing_and_leaves_no_staging_directory(tmp_path, monkeypatch):
     # The checks run inside the load transaction, so a build that does not hold together never
     # reaches COMMIT and never reaches the version directory either.
-    always_fails = (*checks.VALIDATIONS, ("planted failure", "SELECT record_id FROM records"))
-    monkeypatch.setattr(checks, "VALIDATIONS", always_fails)
+    planted = checks.Check(
+        name="planted_failure",
+        invariant="This check always finds a row.",
+        sql="SELECT record_id FROM records",
+        remedy="Remove the planted check.",
+    )
+    monkeypatch.setattr(checks, "VALIDATIONS", (*checks.VALIDATIONS, planted))
     dataset = make_dataset()
     dataset.derive_schema()
-    with pytest.raises(TimeFValidationError, match="planted failure"), TimeFWriter(tmp_path, dataset) as writer:
+    with pytest.raises(TimeFValidationError, match="planted_failure"), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     assert not (tmp_path / "timenet/hello-world" / "1.0.0").exists()
     assert not list((tmp_path / "timenet/hello-world").glob("*.tmp-*"))

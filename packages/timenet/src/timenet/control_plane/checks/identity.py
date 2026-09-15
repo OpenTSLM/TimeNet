@@ -18,8 +18,9 @@ from timenet.control_plane.schema import EXTERNAL_IDS, KEYED_TABLES
 def _dense_ids(table: str, column: str) -> Check:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
-    A reader splits a corpus across workers with ``id % num_workers = worker_index``. That covers
-    every row one time only while the ids run without a gap.
+    Density is not cosmetic. A reader can partition a corpus across workers with
+    ``id % num_workers = worker_index``. That covers every row exactly once only while the ids run
+    without gaps. A gap shows up as a worker that silently sees fewer records.
 
     Args:
         table: The table to check.
@@ -31,8 +32,8 @@ def _dense_ids(table: str, column: str) -> Check:
     return Check(
         name=f"{table}_ids_dense",
         invariant=f"{table}.{column} runs 0, 1, 2 with no gap and no repeat.",
-        # A distinct count catches a repeat, and the row count against the largest id catches a
-        # gap. Both are needed, because one repeat plus one gap leaves the row count unchanged.
+        # Counting distinct ids catches a repeat; comparing the row count against the largest id
+        # catches a gap. Both are needed: one repeat plus one gap leaves the row count unchanged.
         sql=(
             f"SELECT count(*) FROM {table} HAVING count(*) <> count(DISTINCT {column}) "  # noqa: S608
             f"OR count(*) - 1 <> max({column}) OR min({column}) <> 0"

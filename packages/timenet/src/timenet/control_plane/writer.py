@@ -234,19 +234,23 @@ def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
 def _validate(connection: duckdb.DuckDBPyConnection) -> None:
     """Check every invariant the dropped key constraints used to enforce.
 
+    A check runs as a count, not as a row scan. A corpus of three million rows can break an
+    invariant in every one of them, and the message needs the total and the first few offenders
+    only. The second query runs on the failure path alone.
+
     Args:
         connection: The connection holding the loaded, not yet committed database.
 
     Raises:
-        TimeFValidationError: If any check finds a row.
+        TimeFValidationError: If any check finds a row. The message names the invariant that broke
+            and what to do about it.
     """
-    for description, query in checks.VALIDATIONS:
-        offending = connection.execute(query).fetchall()
-        if offending:
-            sample = ", ".join(str(row[0]) for row in offending[:3])
-            raise TimeFValidationError(
-                f"{description}: {len(offending)} row(s), for example {sample}. The version was not published."
-            )
+    for check in checks.VALIDATIONS:
+        counted = connection.execute(check.count_query).fetchone()
+        total = int(counted[0]) if counted else 0
+        if total:
+            sample = connection.execute(check.sample_query).fetchall()
+            raise TimeFValidationError(check.failure(total, [row[0] for row in sample]))
 
 
 class _Ids:
