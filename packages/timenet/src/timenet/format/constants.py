@@ -5,6 +5,10 @@ from timenet.errors import TimeFValidationError
 
 MANIFEST_FILE = "manifest.json"
 
+# The whole control plane: records, their series, the annotations, the tasks and the chunk locators,
+# in one embedded DuckDB database per version.
+CONTROL_DB_FILE = "control.duckdb"
+
 SHARD_DIR = "time_series"
 SHARD_TEMPLATE = "time_series/part-{:08d}.parquet"
 
