@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 
 
 class RotatingPartWriter:
-    """Writes caller-provided row groups into byte-budgeted parquet parts, rotating parts by budget.
+    """Writes caller-provided row groups into byte-budgeted parquet parts. It rotates them by budget.
 
     The caller decides each row group's content (one Arrow table per :meth:`write`) and its size. This
     opens a :class:`pyarrow.parquet.ParquetWriter` per part and writes each table as one row group.
@@ -53,10 +53,10 @@ class RotatingPartWriter:
         self.parts: list[str] = []
 
     def write(self, table: pa.Table, size_bytes: int) -> tuple[str, int]:
-        """Append ``table`` as one row group, opening a new part first if the current one is full.
+        """Append ``table`` as one row group, and open a new part first when the current one is full.
 
         Args:
-            table: The row group's content, matching the schema.
+            table: The row group's content, which matches the schema.
             size_bytes: The row group's uncompressed size, charged against the part budget.
 
         Returns:

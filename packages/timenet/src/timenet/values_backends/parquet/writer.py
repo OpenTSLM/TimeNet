@@ -67,8 +67,9 @@ def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
     """Return the uncompressed bytes that one step of a series costs.
 
     An irregular series stores an int64 time offset next to each value. So its step costs eight
-    bytes more than a regular step. Chunk sizing, row-group flushing, and shard rotation all use
-    this unit as their budget, so each of them stays within its target for either kind of series.
+    bytes more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
+    use this unit as their budget. At the float32 rate, an irregular series overruns each target
+    by three times.
 
     Args:
         stores_time_offsets: True if the series stores one time offset for each value.
