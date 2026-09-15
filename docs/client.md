@@ -10,9 +10,9 @@ tags:
 
 `TimeNet` is the single Python entry point to TimeNet. It wraps a [registry](registry.md) (the
 catalog) and a local storage path (the download cache). Against a local registry, `load` builds a
-dataset that the registry does not have. This needs an installed package that registers a connector
-for the dataset id. See [Build & publish](build.md). Against a remote registry, `load` never
-runs connector code. The module `timenet.client` contains `TimeNet`.
+missing dataset. This needs an installed package that registers a connector for the dataset id. See
+[Build & publish](build.md). Against a remote registry, `load` never runs connector code. The
+module `timenet.client` contains `TimeNet`.
 
 ```python
 from timenet.client import TimeNet
@@ -44,27 +44,27 @@ client = TimeNet()                     # the hosted registry (timenet://)
 client = TimeNet("./local_registry")   # any directory a build wrote to
 ```
 
-A `timenet-build build` writes to a local registry, so set `$TIMENET_REGISTRY` (or pass the path)
-to load a local build back.
+`timenet-build build` writes to a local registry. To load a local build back, set
+`$TIMENET_REGISTRY` or pass the path.
 
 ## Configuration
 
-By default, TimeNet stores all local state under `~/.cache/timenet/`. If you set the home, TimeNet
-relocates everything below it. Each per-area variable can override only its own path. The
+By default, TimeNet stores all local state under `~/.cache/timenet/`. If you set `TIMENET_HOME`,
+TimeNet relocates everything below it. Each per-area variable can override only its own path. The
 precedence for any value is **CLI flag / argument > environment variable > default**.
 
 | Env var | Default | What |
 | --- | --- | --- |
-| `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
+| `TIMENET_HOME` | `~/.cache/timenet` | The root path. A change to it relocates everything below. |
 | `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-build build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
 | `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
 | `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
-| `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
+| `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry. When unset, the client reads anonymously (enough for public data). |
 | `TIMENET_DOWNLOAD_MODE` | `on_demand` | How a remote `load` fetches bytes: `on_demand` (lazy range reads, cache-first) or `full` (download the whole version first). |
 | `TIMENET_ISOLATION` | `on` | Whether a build runs in an environment built from the connector's requirements. `off` runs it in the current interpreter. |
 
 The configuration is a `pydantic-settings` model, `timenet.config.TimeNetSettings`. You can add new
-settings there.
+values there.
 
 ## Methods
 
@@ -74,7 +74,7 @@ settings there.
 | `get(dataset_id, version=None)` | Returns a dataset's [manifest](manifest.md). |
 | `search(...)` | Filters datasets. This mirrors [`registry.search`](registry.md#search). |
 | `download(dataset_id, version=None, *, force=False)` | Copies a version's files into local storage as an explicit disk cache, and returns the directory. This method is idempotent unless you set `force`. |
-| `load(dataset_id, version=None, *, download=None)` | Reads a `TimeFDataset` with lazy per-series values, in place, through the registry's `open_version` handle. This does not download the whole dataset. `download` (`"full"` / `"on_demand"`) overrides the fetch mode for a remote registry; it is ignored for local. |
+| `load(dataset_id, version=None, *, download=None)` | Reads a `TimeFDataset` with lazy per-series values, in place, through the registry's `open_version` handle. This does not download the whole dataset. `download` (`"full"` / `"on_demand"`) overrides the fetch mode for a remote registry. A local registry ignores it. |
 | `load_torch(dataset_id, version=None)` | Wraps `load` in a read-only `torch.utils.data.Dataset`. This needs the `torch` extra. |
 
 ## Remote loading
@@ -82,11 +82,11 @@ settings there.
 Against a remote registry, `load` fetches bytes one of two ways, set by `TIMENET_DOWNLOAD_MODE`
 (default `on_demand`) or the per-call `download=` argument:
 
-- `on_demand`: the reader range-reads Parquet footers and value slices straight from presigned URLs,
-  pulling only the bytes a query touches. It is cache-first, reusing any complete files a prior `full`
-  load or `download()` left in `TIMENET_STORAGE`.
-- `full`: download the whole version into `TIMENET_STORAGE` first (in parallel, committed atomically),
-  then read it locally. This is what `download()` does.
+- `on_demand`: the reader range-reads Parquet footers and value slices straight from presigned URLs.
+  It fetches only the bytes a query touches. It reads the cache first and reuses any complete files
+  that a prior `full` load or `download()` left in `TIMENET_STORAGE`.
+- `full`: the client downloads the whole version into `TIMENET_STORAGE` first, in parallel and with
+  an atomic commit. Then it reads the version locally. `download()` uses this mode.
 
 ```python
 client = TimeNet("timenet://")
@@ -96,15 +96,15 @@ client.load("chengsenwang/tsqa")
 client.load("chengsenwang/tsqa", download_mode="full")
 ```
 
-A Zarr-backed version always takes the `full` path: its store driver can't range-read presigned URLs.
-Both modes are no-ops for a local registry, which already reads in place, and `download=` is ignored
-there.
+A Zarr-backed version always takes the `full` path: its store driver cannot range-read presigned
+URLs. A local registry already reads in place, so both modes do nothing there. It also ignores
+`download=`.
 
 ## Versions
 
-You can pin a version by adding a suffix `@<version>` to the id. Without a suffix, or with
-`@latest`, you get the latest committed version. This works everywhere that TimeNet accepts an id,
-in the SDK and in the CLI:
+To pin a version, add the suffix `@<version>` to the id. Without a suffix, or with `@latest`, you
+get the latest committed version. This works everywhere that TimeNet accepts an id, in Python and
+in the CLI:
 
 ```python
 client.get("chengsenwang/tsqa@1.0.0")   # pinned

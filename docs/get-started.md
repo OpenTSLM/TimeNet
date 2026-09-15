@@ -41,14 +41,14 @@ are extras. You can add them.
     ```
 
 The `torch` extra accepts any torch build. If you already have a CUDA torch (for example, for
-training), you keep it as-is. For a small CPU-only torch, install it from the PyTorch CPU index
+training), keep it. For a small CPU-only torch, install it from the PyTorch CPU index
 first:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-To work on TimeNet or author connectors, clone the repo and sync with uv:
+To work on TimeNet or author connectors, clone the repository. Then sync with uv:
 
 ```bash
 git clone https://github.com/OpenTSLM/TimeNet.git
@@ -59,8 +59,10 @@ make sync  # install the dev environment (workspace + extras)
 ## Load a dataset
 
 !!! info "No public registry yet"
-    There is no hosted registry yet. First build the offline `timenet/hello-world` dataset into
-    a local registry. The build needs no network. The dataset comes from `timenet-connectors`.
+    TimeNet has no hosted registry yet. The offline `timenet/hello-world` dataset comes from
+    `timenet-connectors`, and its build needs no network.
+
+Build that dataset into a local registry:
 
 ```bash
 timenet-build build timenet/hello-world
@@ -83,8 +85,8 @@ print(df.head())
 ```
 
 !!! tip "pandas is optional"
-    The DataFrame step uses pandas (`uv add pandas`). pandas is not a TimeNet dependency. For a
-    pure-NumPy workflow, remove it.
+    The DataFrame step uses pandas (`uv add pandas`). pandas is not a TimeNet dependency. A
+    pure-NumPy workflow does not need this step.
 
 `load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values.
 `to_arrow()` and `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
