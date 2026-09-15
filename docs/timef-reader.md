@@ -52,8 +52,10 @@ row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple
 
 ## Type reconstruction
 
-`TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
-descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
+`TimeFReader` reads specs, data sources, and annotation metadata from the control database's `specs`
+and `annotation_descriptors` tables, which is the copy its rows are typed against. The manifest holds
+the same declaration for a registry to filter on without downloading the database. `TimeFReader`
+creates no classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
 descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It
 decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
 `StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
@@ -91,12 +93,14 @@ unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestEr
 
 Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
 file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
-on first access to `.tasks`. Records raise it on iteration. The index and annotations raise it on the
-first read that needs them.
+on first access to `.tasks`. Records raise it on iteration. The chunk locators and annotations raise
+it on the first read that needs them.
 
-A corrupt control-plane table raises `TimeFFormatError` with its context. You can call `verify()` for
-an integrity check at construction time. It reopens every listed file through the handle and raises
-`TimeFFormatError` on a missing or mismatched file.
+A corrupt control database raises `TimeFFormatError` with its context, and so does a file the
+manifest lists but the storage does not hold: a lazy read reports a missing control database or a
+missing values shard as `TimeFFormatError`, not as the `FileNotFoundError` underneath it. You can
+call `verify()` for an integrity check at construction time. It reopens every listed file through
+the handle and raises the same `TimeFFormatError` on a missing or mismatched file.
 
 ## Round-trip guarantee
 
