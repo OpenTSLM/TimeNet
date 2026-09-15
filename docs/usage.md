@@ -15,8 +15,8 @@ Every dataset loads the same way. Then it hands off to your framework. There are
 
 - `TimeNet().load("org/name")` returns an in-memory [`TimeFDataset`](timef-dataset.md) with lazy
   per-series values. Use it for single-node work (pandas, polars, torch).
-- `TimeNet().download("org/name")` returns the local TimeF version directory. Its control tables are
-  Parquet. Its values plane is Parquet or Zarr, as recorded in the manifest.
+- `TimeNet().download("org/name")` returns the local TimeF version directory. Its control plane is
+  one DuckDB database. Its values plane is Parquet or Zarr, as recorded in the manifest.
 
 Example status:
 
@@ -63,9 +63,9 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 
     !!! planned "Planned"
         No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
-        directory. Spark can read its Parquet control tables directly. Reading series values depends
-        on the manifest's values backend: Parquet values are accessible to Parquet tooling, while
-        Zarr values need a Zarr-aware reader.
+        directory. Its control plane is a DuckDB database, which DuckDB itself or a JDBC connector
+        can query. Reading series values depends on the manifest's values backend: Parquet values are
+        accessible to Parquet tooling, while Zarr values need a Zarr-aware reader.
 
 === "PyTorch"
 

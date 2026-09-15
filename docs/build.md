@@ -9,7 +9,7 @@ tags:
 # Build & publish
 
 Build turns a [connector](connectors.md)'s raw source into a stored TimeF version. A version is a
-`manifest.json`, Parquet control tables, and a Parquet or Zarr values plane. TimeNet writes the version
+`manifest.json`, a DuckDB control plane, and a Parquet or Zarr values plane. TimeNet writes the version
 into a [registry](registry.md). Build runs on your machine. Today it publishes to a local registry. A
 hosted backend is planned. The command [`timenet-build build`](cli/build.md) drives it. This page
 explains what happens underneath.

@@ -9,7 +9,7 @@ tags:
 # Registry
 
 A registry serves compiled TimeF versions to the SDK. A compiled TimeF version has manifests,
-Parquet control tables, and a values plane in Parquet or Zarr format. A registry never runs
+a DuckDB control plane, and a values plane in Parquet or Zarr format. A registry never runs
 connector code. The registry code lives in `timenet.registry`.
 
 You can have several registries: a public registry, private internal registries, or a local
