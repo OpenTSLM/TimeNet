@@ -207,10 +207,14 @@
     },
     "files": {
       "type": "object",
-      "description": "File descriptors, grouped by kind. The values plane is a list of file parts, never a bare string; the control database is one file.",
-      "required": ["control_db"],
+      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string, except the control database, which is one file.",
+      "required": ["records", "annotations", "time_series_index"],
       "properties": {
         "control_db": { "oneOf": [{ "$ref": "#/$defs/filePart" }, { "type": "null" }], "description": "The version's control database: its records, series, annotations, tasks and chunk locators in one embedded DuckDB file." },
+        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
+        "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
       }
     },

@@ -52,9 +52,12 @@ class ValuesPlane:
     """What the values plane wrote, as the control plane needs to record it."""
 
     placements: dict[tuple[str, int], "ChunkPlacement"]
-    """``(time_series_id, chunk_idx)`` mapped to where that chunk landed."""
-    artifacts: tuple[str, ...]
-    """Every file the values plane wrote, version-relative."""
+    """``(time_series_id, chunk_idx)`` mapped to where that chunk landed.
+
+    The artifacts are the distinct ``chunk_file`` values these name. A Parquet chunk names a shard
+    and a Zarr chunk names an array, so what an artifact is comes from the locator rather than from
+    the file list the manifest keeps.
+    """
     backend: str
     """Which backend wrote them, so a reader knows what the two chunk indexes mean."""
 
@@ -556,9 +559,8 @@ def _load(  # noqa: PLR0913, PLR0917
         task_type = str(task.task_type)
         task_counts[task_type] = task_counts.get(task_type, 0) + 1
 
-    # Declared before the chunks so a chunk row names an artifact the values plane really wrote. An
-    # artifact no chunk names still gets an id here, which keeps the ids dense.
-    for chunk_file in values.artifacts:
+    # Declared before the chunks, so every chunk row can name an artifact that already has an id.
+    for chunk_file in dict.fromkeys(placement.chunk_file for placement in values.placements.values()):
         loader.artifacts.add((loader.artifact(chunk_file), chunk_file, values.backend))
     for (time_series_id, chunk_idx), placement in values.placements.items():
         loader.chunks.add(

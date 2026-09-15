@@ -1,7 +1,7 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec.
 
-The manifest is pure data. It has no file I/O. The writer and the reader read and write the file
-themselves. The ``schema`` block is a direct serialization of
+The manifest is pure data. It has no file I/O. The writer and the reader do the read and write
+operations for the file. The ``schema`` block is a direct serialization of
 :class:`~timenet.types.DatasetSchema` (flat descriptors). No separate set of "entry" types exists to
 keep in sync.
 """
@@ -346,6 +346,10 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
         "control_db": None if files.control_db is None else _part_to_dict(files.control_db),
+        "records": [_part_to_dict(part) for part in files.records],
+        "annotations": [_part_to_dict(part) for part in files.annotations],
+        "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
+        "tasks": [_part_to_dict(part) for part in files.tasks],
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
 
@@ -358,8 +362,12 @@ def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         control_db = data.get("control_db")
         return ManifestFiles(
-            control_db=None if control_db is None else _part_from_dict(control_db, "control_db"),
+            records=_parts(data["records"], "records"),
+            annotations=_parts(data["annotations"], "annotations"),
+            time_series_index=_parts(data["time_series_index"], "time_series_index"),
+            tasks=_parts(data.get("tasks", ()), "tasks"),
             time_series=_parts(data.get("time_series", ()), "time_series"),
+            control_db=None if control_db is None else _part_from_dict(control_db, "control_db"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
