@@ -96,9 +96,11 @@ file at open time. The error surfaces on the first access that needs the file. T
 on first access to `.tasks`. Records raise it on iteration. The chunk locators and annotations raise
 it on the first read that needs them.
 
-A corrupt control database raises `TimeFFormatError` with its context. You can call `verify()` for
-an integrity check at construction time. It reopens every listed file through the handle and raises
-`TimeFFormatError` on a missing or mismatched file.
+A corrupt control database raises `TimeFFormatError` with its context, and so does a file the
+manifest lists but the storage does not hold: a lazy read reports a missing control database or a
+missing values shard as `TimeFFormatError`, not as the `FileNotFoundError` underneath it. You can
+call `verify()` for an integrity check at construction time. It reopens every listed file through
+the handle and raises the same `TimeFFormatError` on a missing or mismatched file.
 
 ## Round-trip guarantee
 

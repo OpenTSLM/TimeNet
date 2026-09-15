@@ -190,8 +190,9 @@ To read one series, the reader joins the record to its bytes through the control
 4. Read the `values` list and rebuild the series on its time axis.
 
 The reader reads only the manifest when it opens a version. Records come back a batch at a time, and
-each batch costs one query per table for the whole batch rather than one query per record. Values
-stay lazy, so a large dataset opens without reading a shard.
+each batch costs one query per table for the whole batch rather than one query per record. Step 2 is
+batched the same way: the first series in a batch that reads its values locates the chunks of every
+record in that batch. Values stay lazy, so a large dataset opens without reading a shard.
 
 ## Encodings
 
