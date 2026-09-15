@@ -81,18 +81,18 @@ ORDER BY t.position
 # A series shared by several records is stored once, so its chunks are reached through the link
 # table. The filter is on the record's dense surrogate, which is also the order the link table was
 # written in, so the scan prunes on its zone map instead of comparing the caller's id string on
-# every row. Ordering by the series' own id and then by chunk keeps a series' chunks contiguous and
-# in the order the values plane concatenates them.
+# every row. Ordering by the record, then by the series' own id, then by chunk keeps a series'
+# chunks contiguous and in the order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
-SELECT s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
+SELECT l.record_id, s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
        c.chunk_major_idx, c.chunk_minor_idx, c.n_values
 FROM record_time_series l
 JOIN time_series s ON s.time_series_id = l.time_series_id
 JOIN specs sp ON sp.spec_id = s.spec_id
 JOIN time_series_chunks c ON c.time_series_id = s.time_series_id
 JOIN values_artifacts v ON v.artifact_id = c.artifact_id
-WHERE l.record_id = ?
-ORDER BY s.time_series_id, c.chunk_idx
+WHERE l.record_id IN (SELECT unnest(?))
+ORDER BY l.record_id, s.time_series_id, c.chunk_idx
 """
 
 _TASKS: Final = "SELECT task_id, external_id, task_type, prompt, rationale FROM tasks ORDER BY task_id"
@@ -320,19 +320,20 @@ class ControlPlaneReader:
         """
         return self._rows(_REGISTERED_ANNOTATIONS, [])
 
-    def record_chunks(self, record_id: int) -> list[dict]:
-        """Return every chunk locator of one record's series.
+    def record_chunks(self, record_ids: Sequence[int]) -> list[dict]:
+        """Return every chunk locator of a batch of records' series.
 
-        A read walks one record at a time and then asks for each of its series' values, so the
-        locators are fetched once for the whole record rather than once per series.
+        One statement answers for the whole batch, like every other query here. A read that asked
+        one record at a time paid a scan per record, which is the cost this batching removes.
 
         Args:
-            record_id: The record's surrogate id, as :meth:`records` reports it.
+            record_ids: The surrogate ids of the records to read, as :meth:`records` reports them.
 
         Returns:
-            One row per chunk, grouped by series and ordered by ``chunk_idx`` within each.
+            One row per chunk, grouped by record and then by series, and ordered by ``chunk_idx``
+            within each series.
         """
-        return self._rows(_RECORD_CHUNKS, [record_id])
+        return self._rows(_RECORD_CHUNKS, [list(record_ids)])
 
     # ---- tasks -----------------------------------------------------------------------------
 

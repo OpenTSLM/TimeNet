@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from fractions import Fraction
 import json
+import math
 from pathlib import Path
 import pickle
 
@@ -13,7 +14,7 @@ from timenet.control_plane.reader import ControlPlaneReader
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import SpanOutsideWindowWarning, TimeFFormatError, TimeFValidationError
-from timenet.reader import TimeFReader
+from timenet.reader import TimeFReader, reader as reader_module
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -58,6 +59,40 @@ def _record_key(reader: TimeFReader, record_id: str) -> int:
     """Return one record's surrogate id, which is what the reader's internals join on."""
     found, _missing = reader._control_plane().resolve_record_ids([record_id])
     return found[0]
+
+
+_BATCHED_RECORDS = 7
+"""How many records the batching fixture holds: enough for a walk to span several batches."""
+
+
+def _batched_records() -> TimeFDataset:
+    """Build a dataset of two-series records, for the assertions that count queries per batch."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/batches",
+            dataset_version=Version(1, 0, 0),
+            name="Batches",
+            description="Records enough to span several read batches.",
+            license=License.CC_BY_4_0,
+            domains=(Domain.GENERAL,),
+        )
+    )
+    spec = TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt)
+    for index in range(_BATCHED_RECORDS):
+        series = tuple(
+            TimeSeries(
+                spec=spec,
+                signal=signal,
+                time_axis=RegularAxis.from_rate_hz(Fraction(500)),
+                loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
+                source_id=f"rec-{index}",
+                time_series_id=f"ecg-rec-{index}-{signal}",
+                n_values=3,
+            )
+            for signal in ("I", "II")
+        )
+        dataset.add_record(time_series=series, record_id=f"rec-{index}")
+    return dataset
 
 
 def _spy(monkeypatch, method: str) -> list:
@@ -526,22 +561,69 @@ def test_a_record_reads_its_chunk_locators_once_for_all_of_its_series(tmp_path, 
         assert len(queries) == 1, f"one query per record, got {len(queries)} for one record"
 
 
+@pytest.mark.parametrize("batch_size", [1, 2, 3, _BATCHED_RECORDS])
+def test_a_walk_reads_one_statement_of_chunk_locators_per_batch(tmp_path, monkeypatch, batch_size):
+    # Locators fetched one record at a time cost one statement per record, whatever the batch size.
+    # That is the N+1 this counts against. The count is tied to the batch size, so a lookup that
+    # went back to one record at a time cannot pass by being small enough.
+    version_dir = _write(tmp_path, dataset=_batched_records())
+    monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
+    queries = _spy(monkeypatch, "record_chunks")
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        for record in reader.iter_records(with_annotations=False):
+            for series in record.time_series:
+                assert len(series.to_numpy()) == 3
+    assert len(queries) == math.ceil(_BATCHED_RECORDS / batch_size)
+    assert all(len(asked) <= batch_size for (asked,) in queries), "no statement spans two batches"
+
+
+def test_shuffled_record_access_does_not_thrash_the_locator_memo(tmp_path, monkeypatch):
+    # A read that touches its records out of order must cost what an in-order read costs. Each
+    # record is served from the batch it was built in, so a shuffled pass pays no lookup of its own.
+    batch_size = 2
+    version_dir = _write(tmp_path, dataset=_batched_records())
+    monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
+    queries = _spy(monkeypatch, "record_chunks")
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        records = list(reader.iter_records(with_annotations=False))
+        assert not queries, "building a record reads no locator; its values are still lazy"
+        # Every other record and then the rest: a deterministic order that crosses every batch
+        # boundary and comes back to a batch it already left.
+        for record in records[1::2] + records[::2]:
+            for series in record.time_series:
+                assert len(series.to_numpy()) == 3
+    assert len(queries) == math.ceil(_BATCHED_RECORDS / batch_size)
+
+
+# A lookup keyed on the (record, series) pair, which is not the per-batch query that fills the memo.
+_ONE_SERIES_LOCATORS = """
+SELECT c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values, sp.spec_type
+FROM time_series s
+JOIN specs sp ON sp.spec_id = s.spec_id
+JOIN record_time_series l ON l.time_series_id = s.time_series_id
+JOIN time_series_chunks c ON c.time_series_id = s.time_series_id
+JOIN values_artifacts v ON v.artifact_id = c.artifact_id
+WHERE l.record_id = ? AND s.external_id = ?
+ORDER BY c.chunk_idx
+"""
+_LOCATOR_COLUMNS = ("chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_idx", "n_values", "spec_type")
+
+
 def test_the_locator_memo_returns_what_the_control_plane_holds(tmp_path):
-    # A small chunk cap splits one series across many chunks. A memo that ignored chunk order, or
-    # the record it was keyed on, would still pass on a fixture with one chunk per series.
+    # A small chunk cap splits one series across many chunks. The oracle asks the database for one
+    # (record, series) pair, so a memo keyed on the wrong record, or stitched from another record's
+    # rows in the same batch, fails here rather than being compared against its own filling call.
     version_dir = _write(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     widest = 0
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        control = reader._control_plane()
+        database = reader._control_plane().connection
         for record in reader.iter_records(with_annotations=False):
             key = _record_key(reader, record.record_id)
-            stored = {}
-            for row in control.record_chunks(key):
-                stored.setdefault(row["time_series_id"], []).append(row)
             for series in record.time_series:
                 memoized = reader._index_rows(key, series.time_series_id)
-                assert memoized == stored[series.time_series_id]
-                assert [row["chunk_idx"] for row in memoized] == sorted(row["chunk_idx"] for row in memoized)
+                stored = database.execute(_ONE_SERIES_LOCATORS, [key, series.time_series_id]).fetchall()
+                assert stored, "the oracle must find the series the record just reported"
+                assert [tuple(row[column] for column in _LOCATOR_COLUMNS) for row in memoized] == stored
                 widest = max(widest, len(memoized))
     assert widest > 1, "the fixture needs a series split across several chunks"
 
