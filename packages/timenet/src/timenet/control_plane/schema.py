@@ -53,7 +53,8 @@ step over, and it would split one series' read across two planes. The next reade
 proposal's ``axis_offsets`` table should look in the values plane instead.
 """
 
-from dataclasses import dataclass, fields
+from collections.abc import Sequence
+from dataclasses import MISSING, dataclass, fields
 from enum import StrEnum, unique
 from typing import Final
 
@@ -536,6 +537,27 @@ def text_answer(task_type: TaskType) -> PayloadField | None:
     return None
 
 
+def required_payload_fields(task_type: TaskType) -> tuple[str, ...]:
+    """Return the payload fields a task type cannot leave unset.
+
+    A field the dataclass gives no default is one its constructor demands, so a stored task without
+    it cannot be rebuilt. The list comes from the dataclass rather than from a second declaration,
+    which is what keeps it in step with the class.
+
+    Args:
+        task_type: The task type to describe.
+
+    Returns:
+        The names of its required payload fields, in declaration order.
+    """
+    defaults = {field.name: field for field in fields(TASKS[task_type])}
+    return tuple(
+        declared.name
+        for declared in task_payload(task_type)
+        if defaults[declared.name].default is MISSING and defaults[declared.name].default_factory is MISSING
+    )
+
+
 def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
@@ -617,6 +639,112 @@ def _task_payload_owners() -> tuple[tuple[str, str], ...]:
         )
         for table in ("task_items", "task_from_tasks", "task_fields", "task_refs", "task_spans")
     )
+
+
+def _rows(rows: Sequence[tuple[str, ...]]) -> str:
+    """Render a declaration as a SQL ``VALUES`` list.
+
+    Args:
+        rows: The tuples to render. Every value comes from this module's own declarations or from a
+            task dataclass, never from input.
+
+    Returns:
+        The rendered list, ready to follow ``VALUES``.
+    """
+    return ", ".join("(" + ", ".join(f"'{value}'" for value in row) + ")" for row in rows)
+
+
+def _typed_task_payload() -> tuple[tuple[str, str], ...]:
+    """Return the checks that each task's stored payload is the one its class declares.
+
+    Main enforced the typing with one table per task type: a column per field, and the database
+    refused a row that did not fit. An entity-attribute-value payload buys a stable set of tables at
+    the cost of that refusal, so these checks put it back. They compare the stored rows against the
+    declaration in one pass each, joining on a rendered ``VALUES`` list rather than scanning the
+    payload tables once per task type.
+
+    Returns:
+        One description and query per check. Each must return no rows.
+    """
+    field_rows: list[tuple[str, ...]] = []
+    ref_rows: list[tuple[str, ...]] = []
+    span_rows: list[tuple[str, ...]] = []
+    required_rows: list[tuple[str, ...]] = []
+    answering_types: list[str] = []
+    for task_type in TASK_PAYLOAD:
+        answer = text_answer(task_type)
+        if answer is not None:
+            answering_types.append(str(task_type))
+        # Every task may carry a scope, stored in task_spans under its own field name.
+        span_rows.append((str(task_type), "scope"))
+        for name in required_payload_fields(task_type):
+            required_rows.append((str(task_type), name))
+        for declared in task_payload(task_type):
+            if declared is answer:
+                continue
+            kind = "element" if declared.stores_elements else declared.kind.value
+            field_rows.append((str(task_type), declared.name, kind))
+            if declared.kind is PayloadKind.SPAN:
+                span_rows.append((str(task_type), declared.name))
+            elif declared.kind is PayloadKind.RECORD_REF:
+                ref_rows.append((str(task_type), declared.name, "record"))
+            elif declared.kind is PayloadKind.TIME_SERIES_REF:
+                ref_rows.append((str(task_type), declared.name, "time_series"))
+
+    declared_fields = [(task_type, name) for task_type, name, _ in field_rows]
+    answering = ", ".join(f"'{name}'" for name in answering_types)
+    checks = [
+        (
+            "a task stores a payload field its type does not declare",
+            f"SELECT t.external_id FROM task_fields f JOIN tasks t ON t.task_id = f.task_id "  # noqa: S608
+            f"ANTI JOIN (VALUES {_rows(declared_fields)}) AS d(task_type, field) "
+            f"ON d.task_type = t.task_type AND d.field = f.field",
+        ),
+        (
+            "a task stores a payload field in the wrong column",
+            f"SELECT t.external_id FROM task_fields f JOIN tasks t ON t.task_id = f.task_id "  # noqa: S608
+            f"JOIN (VALUES {_rows(field_rows)}) AS d(task_type, field, kind) "
+            f"ON d.task_type = t.task_type AND d.field = f.field WHERE "
+            f"(d.kind = '{PayloadKind.TEXT.value}' AND (f.text_value IS NULL OR f.double_value IS NOT NULL)) OR "
+            f"(d.kind = '{PayloadKind.NUMBER.value}' AND (f.double_value IS NULL OR f.text_value IS NOT NULL)) OR "
+            f"(d.kind = 'element' AND (f.text_value IS NOT NULL OR f.double_value IS NOT NULL))",
+        ),
+        (
+            "a task stores a payload span its type does not declare",
+            f"SELECT t.external_id FROM task_spans s JOIN tasks t ON t.task_id = s.task_id "  # noqa: S608
+            f"ANTI JOIN (VALUES {_rows(span_rows)}) AS d(task_type, field) "
+            f"ON d.task_type = t.task_type AND d.field = s.field",
+        ),
+        (
+            "a task stores a text answer its type does not declare",
+            f"SELECT t.external_id FROM task_items i JOIN tasks t ON t.task_id = i.task_id "  # noqa: S608
+            f"WHERE i.role = 'target' AND i.item_type = 'text' AND t.task_type NOT IN ({answering})",
+        ),
+        (
+            "a task stores more than one text answer",
+            "SELECT task_id FROM task_items WHERE role = 'target' AND item_type = 'text' "
+            "GROUP BY task_id HAVING count(*) > 1",
+        ),
+    ]
+    if ref_rows:
+        checks.append(
+            (
+                "a task stores a payload reference its type does not declare",
+                f"SELECT t.external_id FROM task_refs p JOIN tasks t ON t.task_id = p.task_id "  # noqa: S608
+                f"ANTI JOIN (VALUES {_rows(ref_rows)}) AS d(task_type, field, ref_kind) "
+                f"ON d.task_type = t.task_type AND d.field = p.field AND d.ref_kind = p.ref_kind",
+            )
+        )
+    if required_rows:
+        checks.append(
+            (
+                "a task is missing a payload field its type requires",
+                f"SELECT t.external_id FROM tasks t "  # noqa: S608
+                f"JOIN (VALUES {_rows(required_rows)}) AS d(task_type, field) ON d.task_type = t.task_type "
+                f"ANTI JOIN task_fields f ON f.task_id = t.task_id AND f.field = d.field",
+            )
+        )
+    return tuple(checks)
 
 
 VALIDATIONS: Final = (
@@ -744,6 +872,7 @@ VALIDATIONS: Final = (
         "SELECT t.external_id FROM task_refs p JOIN tasks t ON t.task_id = p.task_id "
         "WHERE p.ref_kind = 'time_series' AND p.ref_id IS NULL",
     ),
+    *_typed_task_payload(),
     (
         "an interval span ends before it starts",
         "SELECT task_id FROM task_spans WHERE end_at IS NOT NULL AND end_at <= start_at "

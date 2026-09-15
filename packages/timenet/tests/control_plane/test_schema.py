@@ -234,6 +234,75 @@ def test_an_annotation_end_without_a_start_is_rejected(db):
     assert _offenders(db, "annotation span bound without a start")
 
 
+# ---- the stored payload against the class that declares it --------------------------------------
+#
+# One typed table per task type used to refuse a payload that did not fit. An entity-attribute-value
+# payload cannot, so these are the checks that put that refusal back.
+
+
+def test_a_field_the_type_does_not_declare_is_rejected(db):
+    _insert_task(db, "answer")
+    db.execute("INSERT INTO task_fields VALUES (0, 'target_schema', 'scp5', NULL)")
+    assert _offenders(db, "a task stores a payload field its type does not declare")
+
+
+def test_a_number_field_stored_as_text_is_rejected(db):
+    _insert_task(db, "scalar_prediction")
+    db.execute("INSERT INTO task_fields VALUES (0, 'target', '62.5', NULL)")
+    assert _offenders(db, "a task stores a payload field in the wrong column")
+
+
+def test_an_element_field_carrying_a_value_is_rejected(db):
+    # A ref or span field's task_fields row says only that the field is set; its elements live in
+    # task_refs or task_spans.
+    _insert_task(db, "temporal_localization")
+    db.execute("INSERT INTO task_fields VALUES (0, 'target', 'here', NULL)")
+    assert _offenders(db, "a task stores a payload field in the wrong column")
+
+
+def test_a_missing_required_field_is_rejected(db):
+    # TSGenerationTask.target_record_id has no default, so a task without it cannot be rebuilt.
+    _insert_task(db, "ts_generation")
+    assert _offenders(db, "a task is missing a payload field its type requires")
+
+
+def test_a_required_field_that_is_present_passes(db):
+    _insert_task(db, "ts_generation")
+    db.execute("INSERT INTO task_fields VALUES (0, 'target_record_id', NULL, NULL)")
+    assert not _offenders(db, "a task is missing a payload field its type requires")
+
+
+def test_a_reference_of_the_wrong_kind_is_rejected(db):
+    _insert_task(db, "ts_correspondence")
+    db.execute("INSERT INTO task_refs VALUES (0, 'candidate_record_ids', 0, 'time_series', 0)")
+    assert _offenders(db, "a task stores a payload reference its type does not declare")
+
+
+def test_a_span_the_type_does_not_declare_is_rejected(db):
+    _insert_task(db, "answer")
+    db.execute("INSERT INTO task_spans VALUES (0, 'target_span', 0, 'seconds', 0, 10, NULL)")
+    assert _offenders(db, "a task stores a payload span its type does not declare")
+
+
+def test_every_task_may_carry_a_scope_span(db):
+    _insert_task(db, "answer")
+    db.execute("INSERT INTO task_spans VALUES (0, 'scope', 0, 'seconds', 0, 10, NULL)")
+    assert not _offenders(db, "a task stores a payload span its type does not declare")
+
+
+def test_a_text_answer_on_a_type_that_answers_otherwise_is_rejected(db):
+    _insert_task(db, "scalar_prediction")
+    db.execute("INSERT INTO task_items VALUES (0, 'target', 0, 'text', '62.5', NULL)")
+    assert _offenders(db, "a task stores a text answer its type does not declare")
+
+
+def test_two_text_answers_on_one_task_are_rejected(db):
+    _insert_task(db, "answer")
+    db.execute("INSERT INTO task_items VALUES (0, 'target', 0, 'text', 'yes', NULL)")
+    db.execute("INSERT INTO task_items VALUES (0, 'target', 1, 'text', 'no', NULL)")
+    assert _offenders(db, "a task stores more than one text answer")
+
+
 # ---- the task payload declaration ---------------------------------------------------------------
 
 
