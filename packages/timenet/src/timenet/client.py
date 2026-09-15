@@ -3,8 +3,8 @@
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
 (the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
 ``load``. Against a local registry, ``load`` builds a dataset the registry does not have when an
-installed package registers a connector for its id; against a remote registry it never runs connector
-code.
+installed package registers a connector for its id. Against a remote registry, ``load`` never runs
+connector code.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -49,7 +49,7 @@ def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]
         The bare dataset id and the resolved version. ``None`` means the latest version.
 
     Raises:
-        TimeFValidationError: The ref and ``version`` both give a version.
+        TimeFValidationError: If the ref and ``version`` both give a version.
     """
     ref_id, ref_version = split_ref(dataset_id)
     if ref_version is not None and version is not None:
@@ -179,11 +179,12 @@ class TimeNet:
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them
+        in place. A remote registry materializes the version to local storage first (see
+        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole
+        version.
 
-        Against a local registry, a dataset the registry does not have is built first, if some
+        Against a local registry, ``load`` builds a dataset the registry does not have, when some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
         instead of starting a download and a build. A remote registry raises as before.
 
@@ -227,8 +228,8 @@ class TimeNet:
         """Raise for a non-open dataset read from a registry that does not host its data.
 
         Credentialed and restricted datasets cannot be redistributed, so TimeNet never serves their
-        bytes. Such a dataset is build-your-own: a local registry holds only what the user built, so a
-        local read is fine, but a hosted registry can only point the user at where to obtain access.
+        bytes. Such a dataset is build-your-own. A local registry holds only what the user built, so
+        a local read is fine. A hosted registry can only point the user at where to obtain access.
 
         Args:
             dataset_id: The bare dataset id.

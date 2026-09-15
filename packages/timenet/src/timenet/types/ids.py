@@ -40,7 +40,7 @@ def is_canonical_uuid(value: str) -> bool:
     """Return whether ``value`` is a canonical UUID string that round-trips exactly.
 
     Only canonical values qualify for compact 16-byte storage. A canonical value is lowercase and
-    hyphenated, exactly as :func:`str` renders a :class:`uuid.UUID`. Its round-trip back to a string
+    hyphenated, exactly as :func:`str` formats a :class:`uuid.UUID`. Its round-trip back to a string
     is byte-for-byte identical.
 
     Args:

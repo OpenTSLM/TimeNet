@@ -63,7 +63,7 @@ class TimeFTorchDataset(Dataset):
         return self._transform(item) if self._transform is not None else item
 
     def _resolve_task(self, task_id: str, record_id: str) -> Task:
-        """Return the task that a record references. Raise an error if the id does not exist.
+        """Return the task that a record references. If the id does not exist, raise an error.
 
         Args:
             task_id: A task id from the record's ``task_ids``.

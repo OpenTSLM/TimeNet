@@ -1,9 +1,9 @@
 """The HTTP transport for :class:`~timenet.registry.RemoteRegistry`.
 
-Owns how the SDK talks to the hosted registry. It prefixes ``/api/v1`` and attaches the bearer token
-and a ``timenet/<version>`` User-Agent to API calls. It resolves presigned download URLs without
-leaking the token to object storage. It maps HTTP status codes onto TimeNet errors. A sync
-:class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
+This module owns how the SDK talks to the hosted registry. It prefixes ``/api/v1`` and attaches the
+bearer token and a ``timenet/<version>`` User-Agent to API calls. It resolves presigned download URLs
+without leaking the token to object storage. It maps HTTP status codes onto TimeNet errors. A sync
+:class:`httpx.Client` serves the API calls. :meth:`new_async_client` hands out an
 :class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
@@ -52,7 +52,7 @@ def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
     """Issue a request, retrying while the service answers 429, honoring Retry-After.
 
     Args:
-        send: Issues the request and returns the response; called again for each retry.
+        send: Issues the request and returns the response. It is called again for each retry.
 
     Returns:
         The first non-429 response, or the last 429 once the retry budget is spent (so the caller's
@@ -75,7 +75,7 @@ def timenet_user_agent() -> str:
     """Return the ``timenet/<version>`` User-Agent used for backend tracing.
 
     Returns:
-        The User-Agent string; ``timenet/0+unknown`` if the package metadata is unavailable.
+        The User-Agent string. It is ``timenet/0+unknown`` if the package metadata is unavailable.
     """
     try:
         version = importlib.metadata.version("timenet")
@@ -152,12 +152,12 @@ class RegistryHttpClient:
         """Open a client against a registry service root.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.timenet.ai``. A trailing slash is
-                stripped. The ``/api/v1`` prefix is added per request.
+            base_url: The service root, for example ``https://registry.timenet.ai``. A trailing slash
+                is stripped. The ``/api/v1`` prefix is added per request.
             token: Bearer token, or ``None`` for anonymous.
             timeout: Per-request timeout in seconds.
-            transport: An httpx transport for testing (e.g. ``httpx.MockTransport``). ``None`` uses the
-                default network transport.
+            transport: An httpx transport for testing (for example ``httpx.MockTransport``). ``None``
+                uses the default network transport.
         """
         self._base_url = base_url.rstrip("/")
         self._token = token
@@ -178,7 +178,7 @@ class RegistryHttpClient:
         """Return the headers for a registry API call: the User-Agent plus, when set, the token.
 
         The ``timenet/<version>`` User-Agent identifies the SDK to the backend for tracing and the
-        bearer token authenticates the call. Both stay on API calls only; presigned object-store
+        bearer token authenticates the call. Both stay on API calls only. Presigned object-store
         requests send neither.
 
         Returns:
@@ -193,7 +193,7 @@ class RegistryHttpClient:
         """GET an API path and return the parsed JSON body.
 
         Args:
-            path: A path under ``/api/v1`` (e.g. ``/datasets``).
+            path: A path under ``/api/v1`` (for example ``/datasets``).
             params: Optional query parameters.
 
         Returns:
@@ -223,7 +223,7 @@ class RegistryHttpClient:
 
         Args:
             path: A path under ``/api/v1``.
-            content: Raw request body bytes (e.g. the manifest), mutually exclusive with ``json``.
+            content: Raw request body bytes (for example the manifest), exclusive with ``json``.
             json: A JSON-serializable body.
 
         Returns:
@@ -273,7 +273,7 @@ class RegistryHttpClient:
         Args:
             url: The presigned PUT URL.
             content: The request body.
-            headers: Headers the presign requires (e.g. the checksum binding).
+            headers: Headers the presign requires (for example the checksum binding).
         """
         response = self._client.put(url, content=content, headers=dict(headers))
         _raise_for_status(response)

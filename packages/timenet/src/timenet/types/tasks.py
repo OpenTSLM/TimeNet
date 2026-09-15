@@ -5,9 +5,11 @@ Every task has the same shape: inputs give one typed answer. The shared frame li
 optional ``scope`` that narrows the input to a region. It also holds the annotations given as
 context, the answer (``target``, inline or by reference to stored annotations), and an optional
 ``rationale`` chain of thought. A subclass adds only what makes its answer a different kind of
-thing. That is a category, free text, a number, a set of regions, or a produced series. Prompt and
-scope live on the base. So a whole-recording category and a category over a given window are the
-same task type, with ``scope`` unset or set. A caption is an :class:`AnswerTask` with no prompt.
+thing. That is a category, free text, a number, a set of regions, or a produced series.
+
+Prompt and scope live on the base. So a whole-recording category and a category over a given window
+are the same task type, with ``scope`` unset or set. A caption is an :class:`AnswerTask` with no
+prompt.
 
 The class is the type tag (for example, a filter such as ``search(task=ClassificationTask)``). The
 instance carries the payload. Task payload shapes are fixed in code, unlike specs and annotations.
@@ -164,8 +166,8 @@ class ClassificationTask(Task):
     """One categorical label: over the whole record, or over ``scope`` when one is set.
 
     A whole-recording class ("this ECG shows atrial fibrillation") and a scoped label ("this 30 s
-    epoch is sleep stage N2") differ in one way. The only difference is whether ``scope`` narrows
-    the input. So both are this type.
+    epoch is sleep stage N2") differ in one way: whether ``scope`` narrows the input. So both are
+    this type.
     """
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
@@ -229,7 +231,7 @@ class TemporalLocalizationTask(Task):
     refs: ClassVar[TaskRefs] = TaskRefs(span_fields=("target",))
     target: tuple[TimePoint | TimeInterval, ...] | None = None
     """The regions to find. ``None`` means the answer is stored by reference in
-    ``target_annotation_ids``; ``()`` is a positive answer that nothing was found in scope."""
+    ``target_annotation_ids``. ``()`` is a positive answer that nothing was found in scope."""
     mode: LocalizationMode = LocalizationMode.SPARSE
     """Whether the spans must cover the region of interest (see :class:`LocalizationMode`)."""
 
@@ -296,7 +298,7 @@ class ForecastingTask(Task):
                 forecast with no input. If it sets ``target_record_id`` and that same id also appears
                 in ``context_record_ids``, its own answer as input. If ``target_span`` and
                 ``target_record_id`` are both set. If ``target_span`` carries ``context_record_ids``.
-                Its context is already ``scope``, so a context record would re-expose the target
+                Its context is already ``scope``, so a context record re-exposes the target
                 region. If ``target_span`` is a point, which spans no values. :meth:`check_against_scope`
                 checks for a missing scope, a frame mismatch, or a context that leaks the target. It
                 runs once ``add_task`` has stamped any ``scope=``, and also here when the task is built
@@ -345,9 +347,10 @@ class ForecastingTask(Task):
         """Reject a ``target_span`` forecast whose context scope is missing, misframed, or leaks the target.
 
         Raises:
-            TimeFValidationError: If ``target_span`` is set with no ``scope``, the whole-record default
-                would include the region to predict. If ``scope`` and ``target_span`` are in different
-                frames. If ``scope`` reaches into or past ``target_span`` on a series they share.
+            TimeFValidationError: If ``target_span`` is set with no ``scope``, because the whole-record
+                default includes the region to predict. If ``scope`` and ``target_span`` are in
+                different frames. If ``scope`` reaches into or past ``target_span`` on a series they
+                share.
         """
         if self.target_span is None:
             return

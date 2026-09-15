@@ -1,6 +1,6 @@
 """The :class:`Access` enum: how a user obtains a dataset's data.
 
-Access (what you must do to get the bytes) is a separate axis from the license (how you may
+Access (what you must do to get the bytes) is a separate axis from the license (how you can
 redistribute them). A dataset can be openly licensed yet credentialed, or the reverse.
 """
 

@@ -35,9 +35,9 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
         The matching registry backend.
 
     Raises:
-        ValueError: If ``uri`` carries a scheme no backend handles, if a ``timenet://`` URI carries a
-            path, or if ``uri`` is a ``file://`` URI with a host component (the host would be dropped
-            without notice).
+        ValueError: If ``uri`` carries a scheme no backend handles. If a ``timenet://`` URI carries
+            a path. If ``uri`` is a ``file://`` URI with a host component, because the host drops
+            without notice.
     """
     text = str(uri)
     if text.startswith("timenet://"):

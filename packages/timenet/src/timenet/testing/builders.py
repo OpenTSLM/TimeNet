@@ -99,11 +99,12 @@ def make_dataset() -> TimeFDataset:
 
     The dataset covers two modalities over a shared data source. Two records share one series.
     One long series exercises chunk splitting. One record uses a windowed series. It uses all three
-    annotation shapes, and one annotation appears in two records. It chains a classification task
-    to an answer task, and the answer carries a rationale and an input annotation. It also adds a
-    scoped classification, a scalar prediction, and a temporal localization whose target is a point
-    and an interval. The ids never change, so two calls produce equal datasets. This is the canonical
-    writer and reader round-trip fixture.
+    annotation shapes, and one annotation appears in two records.
+
+    It chains a classification task to an answer task, and the answer carries a rationale and an
+    input annotation. It also adds a scoped classification, a scalar prediction, and a temporal
+    localization whose target is a point and an interval. The ids never change, so two calls produce
+    equal datasets. This is the canonical writer and reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.

@@ -23,7 +23,7 @@ class TimeNetSettings(BaseSettings):
     cache: Path | None = None
     registry: str | None = None
     token: str | None = None
-    """Bearer token for a remote registry (``TIMENET_TOKEN``); ``None`` is anonymous."""
+    """Bearer token for a remote registry (``TIMENET_TOKEN``). ``None`` is anonymous."""
     isolation: Literal["on", "off"] = "on"
     """Whether a build runs in an environment built from the connector's requirements.
 

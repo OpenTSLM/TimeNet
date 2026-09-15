@@ -50,7 +50,7 @@ def seconds_to_us(seconds: float) -> int:
 
 
 def us_to_seconds(microseconds: int) -> float:
-    """Render microseconds back as seconds.
+    """Convert microseconds back to seconds.
 
     This is exact for everything TimeF can store. A value written in seconds reads back equal to
     itself, unless it was finer than a microsecond.
@@ -71,7 +71,7 @@ def unix_us(moment: datetime | int) -> int:
     microseconds, so this changes the origin without rounding. An ``int`` passes through, for a source
     that gives microseconds directly.
 
-    This refuses a float. The value ``1700000000.5`` can mean seconds or microseconds, and the wrong
+    This rejects a float. The value ``1700000000.5`` can mean seconds or microseconds, and the wrong
     reading is off by a factor of a million. If the source gives seconds, wrap it in
     :func:`seconds_to_us` so the unit is visible at the call site.
 
