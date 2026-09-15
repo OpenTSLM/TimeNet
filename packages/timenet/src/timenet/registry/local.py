@@ -10,6 +10,7 @@ import pyarrow.fs as pafs
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
@@ -133,6 +134,7 @@ class LocalRegistry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and write it into this registry's directory tree.
@@ -145,6 +147,7 @@ class LocalRegistry(WritableRegistry):
             dataset: The populated dataset to store.
             force: Overwrite an already-committed version instead of skipping it.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
+            values_layout: Chunk and row-group byte targets for the values plane.
             progress_cb: Optional writer progress callback.
 
         Returns:
@@ -161,7 +164,13 @@ class LocalRegistry(WritableRegistry):
             return version
         if force and final_dir.exists():
             shutil.rmtree(final_dir)
-        with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+        with TimeFWriter(
+            self._root,
+            dataset,
+            values_backend=values_backend,
+            values_layout=values_layout,
+            progress_cb=progress_cb,
+        ) as writer:
             writer.write()
         return version
 

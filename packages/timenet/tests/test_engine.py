@@ -2,16 +2,21 @@ from pathlib import Path
 import tempfile
 from typing import cast
 
+import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from timenet.config import settings
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset
+from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset.axis import RegularAxis
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
 from timenet.errors import TimeFValidationError
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, WINDOWED_VALUES_LAYOUT
 from timenet.manifest import Manifest
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
+from timenet.types import TimeSeriesSpec, ureg
 
 
 def _write_demo_card() -> Path:
@@ -109,8 +114,10 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
         def exists(self, dataset_id: str, version: str) -> bool:
             return False
 
-        def store(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
+        # values_layout is required here: the engine must pass it, like values_backend.
+        def store(self, dataset, *, force: bool, values_backend: str, values_layout, progress_cb) -> None:
             self.values_backend = values_backend
+            self.values_layout = values_layout
 
     class _ZarrConnector(_DemoConnector):
         values_backend = "zarr"
@@ -125,6 +132,78 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
     )
 
     assert registry.values_backend == "zarr"
+    assert registry.values_layout == DEFAULT_VALUES_LAYOUT
+
+
+# One series of 2 MiB of float32 values. That is four row groups under the windowed layout and one
+# under the default, so the written shard shows which layout the writer used.
+_LAYOUT_SERIES_VALUES = 2 * 2**20 // 4
+
+
+def _wide_dataset() -> TimeFDataset:
+    """Build a dataset with one series long enough to fill several fine-layout row groups.
+
+    Returns:
+        The populated dataset, carrying the demo card's identity.
+    """
+    dataset = TimeFDataset(metadata=make_dataset().metadata)
+    spec = TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless)
+    values = np.arange(_LAYOUT_SERIES_VALUES, dtype=np.float32)
+    series = TimeSeries.from_values(
+        values,
+        spec=spec,
+        signal="a",
+        time_axis=RegularAxis.from_rate_hz(100),
+        time_series_id="ts-000",
+    )
+    dataset.add_record(time_series=(series,), subject_ids=("subj-0",), record_id="record-000")
+    return dataset
+
+
+class _WideConnector(_DemoConnector):
+    def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        return _wide_dataset()
+
+
+def _row_group_shapes(version_dir: Path) -> list[tuple[int, int]]:
+    """Read back the row groups of every values shard.
+
+    Args:
+        version_dir: The committed version directory.
+
+    Returns:
+        One ``(chunks, uncompressed bytes)`` pair per row group, shard by shard.
+    """
+    shapes = []
+    for shard in sorted((version_dir / "time_series").glob("*.parquet")):
+        metadata = pq.read_metadata(shard)
+        for index in range(metadata.num_row_groups):
+            row_group = metadata.row_group(index)
+            shapes.append((row_group.num_rows, row_group.total_byte_size))
+    return shapes
+
+
+def test_run_pipeline_writes_the_layout_the_connector_declares(tmp_path):
+    class _WindowedConnector(_WideConnector):
+        values_layout = WINDOWED_VALUES_LAYOUT
+
+    version_dir = run_pipeline(_WindowedConnector(), tmp_path, cache_dir=tmp_path / "cache")
+
+    shapes = _row_group_shapes(version_dir)
+    # 64 KiB chunks pack eight to a 512 KiB row group, and 2 MiB of values fill four of them.
+    assert [chunks for chunks, _ in shapes] == [8, 8, 8, 8]
+    assert all(size <= 2 * WINDOWED_VALUES_LAYOUT.row_group_target_bytes for _, size in shapes)
+
+
+def test_a_connector_that_declares_no_layout_writes_what_it_writes_today(tmp_path):
+    assert _WideConnector().values_layout == DEFAULT_VALUES_LAYOUT
+
+    declared = run_pipeline(_WideConnector(), tmp_path / "declared", cache_dir=tmp_path / "cache")
+    # The same dataset through store_dataset, which no caller passes a layout to.
+    today = store_dataset(_wide_dataset(), tmp_path / "today")
+
+    assert _row_group_shapes(declared) == _row_group_shapes(today)
+    assert [chunks for chunks, _ in _row_group_shapes(today)] == [2]  # two 1 MiB chunks, one row group
 
 
 class _CountingConnector(_DemoConnector):

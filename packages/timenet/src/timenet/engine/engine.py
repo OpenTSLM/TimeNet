@@ -9,6 +9,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.registry.writable import WritableRegistry
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
@@ -23,6 +24,7 @@ def run_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    values_layout: ValuesLayout | None = None,
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
 
@@ -43,6 +45,8 @@ def run_pipeline(  # noqa: PLR0913
         values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
             ``None``, this function uses the connector's ``values_backend``, so a connector that
             needs Zarr declares it once on the class.
+        values_layout: Chunk and row-group byte targets for the values plane. When ``None``, this
+            function uses the connector's ``values_layout``.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -50,6 +54,7 @@ def run_pipeline(  # noqa: PLR0913
         The committed version directory.
     """
     resolved_backend = _resolve_values_backend(connector, values_backend)
+    resolved_layout = connector.values_layout if values_layout is None else values_layout
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
     metadata = connector.metadata()
@@ -69,7 +74,9 @@ def run_pipeline(  # noqa: PLR0913
     dataset.derive_schema()
     if committed:  # force rebuild: drop the old committed version so the writer can republish it
         shutil.rmtree(version_dir)
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+    store_dataset(
+        dataset, root, values_backend=resolved_backend, values_layout=resolved_layout, progress_cb=progress_cb
+    )
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -86,6 +93,7 @@ def publish_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    values_layout: ValuesLayout | None = None,
 ) -> str:
     """Run one connector and publish the result through a writable registry.
 
@@ -100,6 +108,8 @@ def publish_pipeline(  # noqa: PLR0913
         keep_cache: Keep the cache directory instead of removing it after publishing.
         values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
             ``None``, this function uses the connector's ``values_backend``.
+        values_layout: Chunk and row-group byte targets for the values plane. When ``None``, this
+            function uses the connector's ``values_layout``.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
 
@@ -107,6 +117,7 @@ def publish_pipeline(  # noqa: PLR0913
         The published version string.
     """
     resolved_backend = _resolve_values_backend(connector, values_backend)
+    resolved_layout = connector.values_layout if values_layout is None else values_layout
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
     version = str(metadata.dataset_version)
@@ -118,7 +129,13 @@ def publish_pipeline(  # noqa: PLR0913
 
     dataset = connector.convert(connector.download(cache))
     dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    registry.store(
+        dataset,
+        force=force,
+        values_backend=resolved_backend,
+        values_layout=resolved_layout,
+        progress_cb=progress_cb,
+    )
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
@@ -147,6 +164,7 @@ def store_dataset(
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     values_backend: str = "parquet",
+    values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
@@ -160,12 +178,15 @@ def store_dataset(
         root: Parent directory. This function creates the version directory beneath it.
         progress_cb: Optional writer progress callback.
         values_backend: Storage backend for the values plane.
+        values_layout: Chunk and row-group byte targets for the values plane.
 
     Returns:
         The committed version directory.
     """
     if dataset.schema is None:
         dataset.derive_schema()
-    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend) as writer:
+    with TimeFWriter(
+        root, dataset, progress_cb=progress_cb, values_backend=values_backend, values_layout=values_layout
+    ) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)

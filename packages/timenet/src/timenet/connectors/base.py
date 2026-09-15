@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import ClassVar, Generic, TypeVar
 
 from timenet.dataset import TimeFDataset
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.types import DatasetMetadata
 
 
@@ -36,6 +37,11 @@ class BaseConnector(ABC, Generic[TRaw]):
 
     values_backend: str = "parquet"
     """Default storage backend for this connector's values plane."""
+
+    values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT
+    """Default values-plane byte targets for this connector. Declare
+    :data:`~timenet.format.layout.WINDOWED_VALUES_LAYOUT` when one item of this corpus is a window
+    of a record, and say in a comment what it buys and what it costs."""
 
     def __init__(self) -> None:
         cls = type(self)

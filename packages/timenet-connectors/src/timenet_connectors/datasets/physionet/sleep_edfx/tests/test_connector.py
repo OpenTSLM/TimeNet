@@ -8,6 +8,7 @@ import pytest
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.format.layout import WINDOWED_VALUES_LAYOUT
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import (
@@ -147,6 +148,12 @@ def _asked(task) -> tuple[str, ...]:
     # A task id is generated, so two builds never share one. What a task asks is what a
     # consumer reads, and this is that. Every part is text, so a list of these sorts.
     return (type(task).__name__, str(task.target), str(task.scope), str(task.record_ids), str(task.prompt))
+
+
+def test_the_connector_declares_the_windowed_values_layout():
+    # One item of this corpus is one scored 30 s epoch, not a whole night. The default layout reads
+    # a shuffled epoch in 115 s where this one takes 26.5 s.
+    assert SleepEdfxConnector.values_layout is WINDOWED_VALUES_LAYOUT
 
 
 def test_a_recording_name_states_a_subject_number_and_a_night():
