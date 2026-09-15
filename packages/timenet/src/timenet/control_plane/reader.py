@@ -298,4 +298,4 @@ class ControlPlaneReader:
         Returns:
             One dict per row, keyed by column name.
         """
-        return self.connection.execute(query, parameters).arrow().to_pylist()
+        return self.connection.execute(query, parameters).to_arrow_table().to_pylist()

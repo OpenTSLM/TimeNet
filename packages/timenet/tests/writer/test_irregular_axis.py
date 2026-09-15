@@ -2,9 +2,9 @@
 
 import json
 
+import duckdb
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset, TimeSeries
@@ -241,11 +241,11 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     dataset.add_record(time_series=(ts,))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    records_path = version_dir / "records/part-00000000.parquet"
-    table = pq.read_table(records_path)
-    rows = table.to_pylist()
-    rows[0]["time_series"][0]["last_time_offset_us"] = _HATCH_US[-1] + 1_000  # axis now disagrees with the stream
-    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), records_path)
+    connection = duckdb.connect(str(version_dir / "control.duckdb"))
+    try:  # the axis now disagrees with the stream the values plane holds
+        connection.execute("UPDATE axes SET last_us = ?", [int(_HATCH_US[-1]) + 1_000])
+    finally:
+        connection.close()
     back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).time_series[0]
     with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
         back.time_offsets_us()
