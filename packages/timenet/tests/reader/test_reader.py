@@ -954,6 +954,23 @@ def test_task_payload_field_written_before_it_existed_reads_as_none(tmp_path):
     assert task.target_schema is None
 
 
+@pytest.mark.parametrize("table_column", [("records", "start_time_us"), ("annotations", "source")])
+def test_a_control_table_missing_a_declared_column_is_corruption(tmp_path, table_column):
+    """A column the schema declares is not optional: a database without it is a corrupt artifact.
+
+    A task's optional payload field is a row, so an absent one reads as the dataclass default. A
+    record's or an annotation's field is a column of a table the DDL creates whole, so a database
+    that answers ``meta.schema_version`` and then lacks the column was damaged after it was written.
+    Reading it as ``None`` would hand the caller a record that silently lost its start time.
+    """
+    table, column = table_column
+    version_dir = _write(tmp_path)
+    with _control_db(version_dir) as db:
+        db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader, pytest.raises(TimeFFormatError):
+        list(reader.iter_records())
+
+
 def _annotation_dataset(annotations):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(

@@ -90,8 +90,12 @@ class TimeFReader:
         open a version is the same for three records or three million.
 
         A structurally corrupt or missing file fails on its first access, not here. Examples of a
-        first access are ``.tasks``, the first record, or the first value read. Call :meth:`verify`
-        for a check of the version's integrity at construction time. Build the handle with
+        first access are ``.tasks``, the first record, or the first value read. The failure reaches
+        the caller as :class:`~timenet.errors.TimeFFormatError`, which is what :meth:`verify` raises
+        for the same file, and not as the ``FileNotFoundError`` the filesystem raised under it. One
+        unreadable artifact reported with two types would make a caller catch both to cover one
+        condition. Call :meth:`verify` for a check of the version's integrity at construction time.
+        Build the handle with
         :meth:`~timenet.registry.BaseRegistry.open_version` or with
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
