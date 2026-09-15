@@ -3432,6 +3432,9 @@ cli = [
     { name = "rich" },
     { name = "typer" },
 ]
+pandas = [
+    { name = "pandas" },
+]
 s3 = [
     { name = "boto3" },
 ]
@@ -3452,6 +3455,7 @@ requires-dist = [
     { name = "jaxtyping", specifier = ">=0.3" },
     { name = "jsonschema", marker = "extra == 'build'", specifier = ">=4.18" },
     { name = "numpy", specifier = ">=2.1" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2" },
     { name = "pint", specifier = ">=0.25" },
     { name = "pyarrow", specifier = ">=21" },
     { name = "pydantic-settings", specifier = ">=2.4" },
@@ -3463,7 +3467,7 @@ requires-dist = [
     { name = "uv", marker = "extra == 'build'", specifier = ">=0.10.10" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=3" },
 ]
-provides-extras = ["cli", "torch", "build", "zarr", "s3", "all"]
+provides-extras = ["cli", "torch", "build", "zarr", "pandas", "s3", "all"]
 
 [[package]]
 name = "timenet-connectors"

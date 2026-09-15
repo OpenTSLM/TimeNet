@@ -64,6 +64,11 @@ build = [
 zarr = [
     "zarr>=3",
 ]
+# The pandas view (timenet.pandas). The core reader never imports pandas; the module imports it
+# lazily and raises a clear "install timenet[pandas]" message when the extra is absent.
+pandas = [
+    "pandas>=2",
+]
 # The S3 registry backend (store/download against an s3:// bucket). boto3 is imported lazily and raises a
 # clear "install timenet[s3]" message when the extra is absent; pyarrow (already a core dep) supplies the
 # S3FileSystem for lazy range reads.
