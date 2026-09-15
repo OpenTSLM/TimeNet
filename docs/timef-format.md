@@ -77,13 +77,23 @@ immutable afterwards, so a shipped constraint would re-check something that cann
 ECG-QA, 1.35M control rows, plain tables measure 19.7 MB against 189.0 MB with keys and indexes, and
 the write takes 3.9 s against 11.9 s.
 
-### `meta`, `records`, `time_series`, `record_time_series`
+### `meta`, `specs`, `annotation_descriptors`
 
 `meta` is a `(key, value)` table holding the control-plane schema version and the dataset id.
 
+`specs` is one row per time-series spec: `spec_type`, `name`, `unit_value`, `dtype`, `categories`,
+`value_shape`, `dimension_names`, `nullable`, and the spec's optional data source as three columns.
+`annotation_descriptors` is one row per annotation key: `annotation_type`, `value_type`, `unit` and
+`description`. Together they are the dataset's type declaration, stored once and referenced by id, so
+a million series never repeat a unit and a client that attaches the database over HTTP can ask what a
+signal carries without the manifest beside it. The manifest's `schema` block holds the same content
+as a projection, so a registry can filter datasets without downloading the database.
+
+### `records`, `time_series`, `record_time_series`, `record_tasks`
+
 `records` is one row per [record](data-model/records.md): `external_id`, `start_time_us`, the
 optional session span as `time_span_start_us` and `time_span_end_us`, and the ordered `subject_ids`
-and `task_ids` lists.
+list.
 
 `time_series` is one row per distinct series: `external_id`, `signal`, `source_id`, `n_values`, and a
 reference to the `specs` and `axes` rows it shares with every other series of the same shape. A
@@ -93,6 +103,9 @@ fills `first_us` and `last_us` instead.
 `record_time_series` links them, with a `position` that keeps a record's series in the order it
 declared them. It is a link table rather than a column on `time_series` because one series can be
 shared by several records and is then stored once.
+
+`record_tasks` is the reverse of the records a task names: two dense ids per link. An array of task
+ids on the record row could not be joined or filtered; this can, from either side.
 
 ### `annotations`, `record_annotations`, `dataset_annotations`, `task_annotations`
 
@@ -107,9 +120,9 @@ One attachment table per target kind says what carries it: `record_annotations` 
 `(object_type, object_id)` table measured 55.7 MB against 50.2 MB for one table per kind on a
 3.06M-attachment corpus, and the gather query 25.50 ms against 21.24 ms.
 
-### `values_artifacts`, `signal_chunks`
+### `values_artifacts`, `time_series_chunks`
 
-`signal_chunks` is one row per values chunk: the series it belongs to, its `chunk_idx`, the artifact
+`time_series_chunks` is one row per values chunk: the series it belongs to, its `chunk_idx`, the artifact
 it landed in, `chunk_major_idx`, `chunk_minor_idx`, and `n_values`. The two locator columns are
 backend-neutral. For the Parquet backend, `chunk_major_idx` is the row group in the shard and
 `chunk_minor_idx` is the row within that row group. For the Zarr backend, `chunk_major_idx` is the
@@ -118,11 +131,17 @@ element-start index in the per-modality array and `chunk_minor_idx` is null.
 `values_artifacts` names each file the values plane wrote and which backend wrote it, so a chunk row
 carries an id rather than repeating a path and a reader knows what the two indexes mean.
 
-### `tasks`, `task_items`, `task_fields`, `task_refs`, `task_spans`
+### `tasks`, `task_items`, `task_from_tasks`, `task_fields`, `task_refs`, `task_spans`
 
 `tasks` holds the frame every [task](data-model/tasks.md) shares: `external_id`, `task_type`,
-`prompt` and `rationale`. `task_items` holds the ordered `record_ids` and `from_task_ids` it names,
-and its `scope` sits in `task_spans` under the field name `scope`.
+`prompt` and `rationale`. Its `scope` sits in `task_spans` under the field name `scope`.
+
+`task_items` is the task's ordered list of inputs and targets, whatever they are made of:
+`(role, position, item_type, text_value, record_id)`, with `role` either `input` or `target` and
+`item_type` either `record` or `text`. The records a task is about are its input items; a free-text
+answer is its target item. `task_from_tasks` keeps the ids of the tasks it derives from. That is the
+one reference stored as the caller's string, because a streamed task can name a parent the version
+never stores and the reader has to be able to say which one.
 
 The three payload tables hold what makes each type a different kind of thing. Every payload field
 that is set gets one `task_fields` row, whatever its kind, and a plain scalar keeps its value there
@@ -130,6 +149,11 @@ that is set gets one `task_fields` row, whatever its kind, and a plain scalar ke
 holding spans puts them in `task_spans`. The `task_fields` row alone says the field is set, which is
 what keeps an empty list (a localization that searched and found nothing) distinguishable from an
 absent one (an answer stored by reference).
+
+A payload spread over three shared tables cannot say in its column types what each task type holds,
+so the writer checks it: every task carries the fields its class requires, in the column its kind
+belongs in, and none the class does not declare. A malformed payload fails the write rather than the
+read.
 
 ## The values plane
 
@@ -161,7 +185,7 @@ compression at level 19 (Parquet) or 9 (Zarr).
 To read one series, the reader joins the record to its bytes through the control plane:
 
 1. Read the record row and walk `record_time_series` to its series.
-2. Find that series' chunks in `signal_chunks`, joined to `values_artifacts` for the file name.
+2. Find that series' chunks in `time_series_chunks`, joined to `values_artifacts` for the file name.
 3. For each chunk, open `chunk_file` and go to `chunk_major_idx`, then `chunk_minor_idx`.
 4. Read the `values` list and rebuild the series on its time axis.
 

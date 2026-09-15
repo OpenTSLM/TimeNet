@@ -52,8 +52,10 @@ row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple
 
 ## Type reconstruction
 
-`TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
-descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
+`TimeFReader` reads specs, data sources, and annotation metadata from the control database's `specs`
+and `annotation_descriptors` tables, which is the copy its rows are typed against. The manifest holds
+the same declaration for a registry to filter on without downloading the database. `TimeFReader`
+creates no classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
 descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It
 decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
 `StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
