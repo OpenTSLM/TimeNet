@@ -381,3 +381,21 @@ def test_a_version_on_a_non_local_filesystem_reads_through_a_local_copy(tmp_path
         copied = reader._control_plane()._materialized
         assert copied is not None and copied.exists()
     assert not copied.exists()
+
+
+def test_a_read_that_spans_several_batches_keeps_stored_order(tmp_path, monkeypatch):
+    # A batch answers for many records at once, so a corpus larger than one batch has to stitch the
+    # batches back together in order. Shrinking the batch makes a three-record fixture do that.
+    import timenet.reader.reader as reader_module  # noqa: PLC0415
+
+    monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", 1)
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / "timenet/hello-world" / "1.0.0"
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert [record.record_id for record in reader.iter_records()] == ["record-0", "record-1", "record-2"]
+        selected = list(reader.iter_records(record_ids=["record-2", "record-0"]))
+        assert [record.record_id for record in selected] == ["record-0", "record-2"]
+        assert_datasets_equal(make_dataset(), reader.read())
