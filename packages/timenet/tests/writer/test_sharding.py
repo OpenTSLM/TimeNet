@@ -1,12 +1,12 @@
 """Sharded write/read round-trips and targeted-read verification.
 
-Small byte targets split every artifact type into many parts. These tests assert the round-trip is
-lossless and, crucially, that a read only touches the shards and row groups it must: materializing one
-series opens only the value shard(s) its chunks live in and reads only those chunks' row groups, never
-the whole plane. The control-plane tables are still read eagerly on this branch; their targeted (pruned)
-reads land with the pruned reader, and their assertions belong here too once that exists.
+Small byte targets split the values plane into many shards. These tests assert the round-trip is
+lossless and, crucially, that a read only touches the shards and row groups it must: materializing
+one series opens only the value shard(s) its chunks live in and reads only those chunks' row groups,
+never the whole plane.
 """
 
+import duckdb
 import pyarrow.parquet as pq
 import pytest
 
@@ -29,9 +29,8 @@ import timenet.values_backends.parquet.reader as values_reader
 from timenet.writer import TimeFWriter
 
 
-# Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.
+# Small enough that a modest dataset shards the values plane into several parts, tiny on disk.
 _SMALL_TARGETS = {
-    "control_shard_target_bytes": 128,
     "shard_target_bytes": 256,
     "row_group_target_bytes": 128,
     "chunk_max_bytes": 64,
@@ -67,8 +66,21 @@ def _write(tmp_path, dataset, **targets):
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def _index_rows(version_dir, manifest):
-    return [r for part in manifest.files.time_series_index for r in pq.read_table(version_dir / part.path).to_pylist()]
+def _chunk_rows(version_dir):
+    """Return every chunk locator, as the control plane stores them."""
+    connection = duckdb.connect(str(version_dir / "control.duckdb"), read_only=True)
+    try:
+        rows = connection.execute(
+            "SELECT s.external_id, c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values "
+            "FROM time_series_chunks c "
+            "JOIN time_series s ON s.time_series_id = c.time_series_id "
+            "JOIN values_artifacts v ON v.artifact_id = c.artifact_id "
+            "ORDER BY s.external_id, c.chunk_idx"
+        ).fetchall()
+    finally:
+        connection.close()
+    names = ("time_series_id", "chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_idx", "n_values")
+    return [dict(zip(names, row, strict=True)) for row in rows]
 
 
 # ---- round trip ------------------------------------------------------------------------------
@@ -79,11 +91,7 @@ def test_all_artifact_types_shard_and_round_trip(tmp_path, n_records, series_len
     original = _sharded_dataset(n_records, series_len)
     version_dir = _write(tmp_path, _sharded_dataset(n_records, series_len), **_SMALL_TARGETS)
     files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
-    classification_parts = [part for part in files.tasks if "task=classification" in part.path]
-    assert len(files.records) >= 3
-    assert len(files.annotations) >= 3
-    assert len(files.time_series_index) >= 3
-    assert len(classification_parts) >= 3
+    assert files.control_db is not None
     assert len(files.time_series) >= 3  # values-plane shards
     for rel in files.all_parts():
         assert (version_dir / rel).exists()
@@ -95,26 +103,23 @@ def test_all_artifact_types_shard_and_round_trip(tmp_path, n_records, series_len
 # ---- metadata --------------------------------------------------------------------------------
 
 
-def test_index_is_globally_sorted_across_parts(tmp_path):
-    # The bounded-memory index writer emits rows in encoded (record_id, time_series_id, chunk_idx) order
-    # by nested iteration; across dozens of parts the concatenation must stay globally sorted, which is
-    # what lets the reader concatenate parts in manifest order and bisect.
+def test_the_counted_rows_match_the_stored_chunks(tmp_path):
+    # Each series in this fixture belongs to one record, so the per-record count and the chunk count
+    # agree; a shared series would make the per-record count the larger of the two.
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert len(manifest.files.time_series_index) >= 3
-    rows = _index_rows(version_dir, manifest)
-    keys = [(r["record_id"], r["time_series_id"], r["chunk_idx"]) for r in rows]
-    assert keys == sorted(keys)
+    rows = _chunk_rows(version_dir)
+    assert len(rows) == manifest.counts.time_series_chunks
     assert len(rows) == manifest.counts.time_series_index_rows
 
 
-def test_index_metadata_locates_every_series_in_the_shards(tmp_path):
+def test_chunk_locators_place_every_series_in_the_shards(tmp_path):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     shards = {part.path for part in manifest.files.time_series}
     row_group_counts = {rel: pq.ParquetFile(version_dir / rel).metadata.num_row_groups for rel in shards}
-    rows = _index_rows(version_dir, manifest)
-    assert len(rows) == manifest.counts.time_series_index_rows
+    rows = _chunk_rows(version_dir)
+    assert len(rows) == manifest.counts.time_series_chunks
     for row in rows:
         assert row["chunk_file"] in shards  # locator points at a listed shard
         assert 0 <= row["chunk_major_idx"] < row_group_counts[row["chunk_file"]]  # a real row group in it
@@ -132,7 +137,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         _ = [s.time_series for s in dataset.records]  # touch every record's series metadata
-    # values are lazy; building records may open control-plane tables but no value shard (under time_series/)
+    # values are lazy; building records reads the control plane but no value shard
     assert not [p for p in opened if "/time_series/" in p]
 
 
@@ -140,7 +145,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
 def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, series_id):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    expected_shards = {r["chunk_file"] for r in _index_rows(version_dir, manifest) if r["time_series_id"] == series_id}
+    expected_shards = {r["chunk_file"] for r in _chunk_rows(version_dir) if r["time_series_id"] == series_id}
     assert expected_shards <= {part.path for part in manifest.files.time_series}
     assert len(expected_shards) < len(manifest.files.time_series)  # the series lives in only some shards
 
@@ -149,7 +154,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
-        assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
+        assert not [p for p in opened if "/time_series/" in p]  # read touches the control plane, not value shards
         series = next(ts for s in dataset.records for ts in s.time_series if ts.time_series_id == series_id)
         series.to_arrow()
     opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened if "/time_series/" in p}
@@ -158,11 +163,8 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
 
 def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     expected = {
-        (r["chunk_file"], r["chunk_major_idx"])
-        for r in _index_rows(version_dir, manifest)
-        if r["time_series_id"] == "ts-006"
+        (r["chunk_file"], r["chunk_major_idx"]) for r in _chunk_rows(version_dir) if r["time_series_id"] == "ts-006"
     }
 
     read: list[tuple[str, int]] = []

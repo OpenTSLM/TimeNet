@@ -1,6 +1,6 @@
 """Copy-on-write edits: remove_records validate-and-cascade, and the edit_version round trip."""
 
-import pyarrow.parquet as pq
+import duckdb
 import pytest
 
 from timenet.dataset.edit import edit_version, remove_records
@@ -200,8 +200,16 @@ def test_edit_version_round_trip(tmp_path):
     manifest = Manifest.from_json((out / "manifest.json").read_text())
     assert str(manifest.metadata.dataset_version) == "1.0.1"
 
-    index = pq.read_table(out / "time_series_index/part-00000000.parquet").to_pylist()
-    assert all(row["record_id"] != "record-1" for row in index)  # no orphaned index rows
+    connection = duckdb.connect(str(out / "control.duckdb"), read_only=True)
+    try:  # the removed record leaves no orphan behind in the control plane
+        surviving = connection.execute("SELECT external_id FROM records").fetchall()
+        orphans = connection.execute(
+            "SELECT l.record_id FROM record_time_series l ANTI JOIN records r ON r.record_id = l.record_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert {row[0] for row in surviving} == {"record-0", "record-2"}
+    assert orphans == []
 
 
 def test_edit_version_same_version_rejected(tmp_path):

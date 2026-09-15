@@ -1,21 +1,11 @@
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.format.constants import (
-    MAX_PART_INDEX,
-    SHARD_TEMPLATE,
-    TASK_PART_TEMPLATE,
-    check_relative_path,
-    part_path,
-)
+from timenet.format.constants import MAX_PART_INDEX, SHARD_TEMPLATE, check_relative_path, part_path
 
 
 def test_part_path_zero_pads_the_index():
     assert part_path(SHARD_TEMPLATE, 42) == "time_series/part-00000042.parquet"
-
-
-def test_part_path_fills_named_template_fields():
-    assert part_path(TASK_PART_TEMPLATE, 0, task_type="forecast") == "tasks/task=forecast/part-00000000.parquet"
 
 
 def test_part_path_allows_the_largest_eight_digit_index():
@@ -34,7 +24,7 @@ def test_part_path_rejects_a_negative_index():
 
 
 def test_check_relative_path_accepts_a_path_within_the_root():
-    check_relative_path("path", "records/part-00000000.parquet")  # must not raise
+    check_relative_path("path", "time_series/part-00000000.parquet")  # must not raise
 
 
 @pytest.mark.parametrize(
@@ -42,7 +32,7 @@ def test_check_relative_path_accepts_a_path_within_the_root():
     [
         "/etc/passwd",  # absolute path
         "../../etc/passwd",  # traversal above root
-        "records/../../etc/passwd",  # traversal mid-path
+        "time_series/../../etc/passwd",  # traversal mid-path
     ],
 )
 def test_check_relative_path_rejects_a_path_that_escapes_the_root(path):
