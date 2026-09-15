@@ -8,7 +8,7 @@ class FilePart:
     """One data file of a dataset version. It has a path, a checksum, and a byte size in one record.
 
     The path, checksum, and size stay together in one record. A reader does not need to join a file
-    to its digest across two structures. A consumer can verify integrity and plan a download from
+    to its digest across two structures. A consumer can check integrity and plan a download from
     the manifest alone.
     """
 
@@ -24,8 +24,8 @@ class FilePart:
 class ManifestFiles:
     """Descriptors for every artifact of a dataset version, grouped by kind. Readers use this data, not a glob.
 
-    A version has two artifacts: one control database and the values-plane parts. The values plane is
-    a list, so it can shard; the control database is one file, because DuckDB addresses one file.
+    A version has two artifacts: one control database and the values-plane parts. The values plane
+    is a list, so it can shard. The control database is one file, because DuckDB addresses one file.
     Each entry is a :class:`FilePart`, with its own path, checksum, and size.
     """
 
