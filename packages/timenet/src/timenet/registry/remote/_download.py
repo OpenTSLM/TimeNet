@@ -1,8 +1,9 @@
 """Parallel, atomic download of a whole dataset version into a local directory.
 
-Resolves each file's presigned URL and streams it concurrently into a staging directory, bounded by a
-semaphore. A single rename then swaps the staging directory into place, so an interrupted download
-never replaces a good copy. The download is async under the hood (httpx ``AsyncClient``).
+This module resolves each file's presigned URL and streams it concurrently into a staging directory,
+bounded by a semaphore. A single rename then swaps the staging directory into place, so an
+interrupted download never replaces a good copy. The download is async internally (httpx
+``AsyncClient``).
 :func:`download_version_files` is the synchronous entry point. It runs the coroutine even from inside a
 running event loop.
 """
@@ -146,7 +147,7 @@ async def _stream_one(
         client: The async HTTP client.
         url: The presigned URL.
         dest: The target file path.
-        expected_checksum: The manifest's ``sha256:<hex>`` digest to verify the bytes against.
+        expected_checksum: The manifest's ``sha256:<hex>`` digest to check the bytes against.
         progress_cb: Called with each chunk's byte count as it is written, or ``None``.
 
     Raises:

@@ -2,13 +2,14 @@
 
 An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/<version>/``. This
 matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
-the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
-optional endpoint override come
-from the environment through boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
-``AWS_ENDPOINT_URL``), so nothing is hardcoded. A read is served lazily through a
-:class:`pyarrow.fs.S3FileSystem` with range reads and no whole-version download. A version already
-cached on local disk is read from there instead. The backend has no catalog, so listing and search are
-unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
+the key prefix differs from a :class:`~timenet.registry.LocalRegistry`.
+
+Credentials, region, and an optional endpoint override come from the environment through boto3's
+default session (``AWS_*`` vars, ``AWS_PROFILE``, ``AWS_ENDPOINT_URL``), so nothing is hardcoded.
+This backend reads lazily through a :class:`pyarrow.fs.S3FileSystem`, with range reads and no
+whole-version download. It reads a version already cached on local disk from there instead. The
+backend has no catalog, so listing and search are unsupported. Use it to ``store`` and to fetch by
+an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -50,7 +51,7 @@ class S3Registry(WritableRegistry):
 
         Args:
             uri: The bucket or prefix root, for example ``s3://my-bucket/registry``.
-            cache_dir: Where downloads are cached; defaults to the configured storage directory.
+            cache_dir: Where downloads are cached. The default is the configured storage directory.
 
         Raises:
             TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
@@ -164,10 +165,11 @@ class S3Registry(WritableRegistry):
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
 
-        Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then moves each object
-        into the final ``<version>/`` prefix with a server-side copy, writing ``manifest.json`` last as
-        the commit marker. A failed publish then never leaves a partial version a reader can trust. An
-        already-committed version is skipped unless ``force``.
+        This method uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then it
+        moves each object into the final ``<version>/`` prefix with a server-side copy. It writes
+        ``manifest.json`` last as the commit marker. A failed publish then never leaves a partial
+        version a reader can trust. It skips an already-committed version unless the caller sets
+        ``force``.
 
         Args:
             dataset: The populated dataset to store.

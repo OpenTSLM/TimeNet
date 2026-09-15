@@ -13,7 +13,7 @@ class TimeNetError(Exception):
 
 
 class TimeNetRegistryError(TimeNetError):
-    """TimeNet could not load or reach a registry, or the registry could not serve a request."""
+    """TimeNet cannot load or reach a registry, or the registry cannot serve a request."""
 
 
 class TimeNetDatasetNotFoundError(TimeNetError):
@@ -25,7 +25,7 @@ class TimeNetAccessError(TimeNetError):
 
 
 class TimeNetDownloadError(TimeNetError):
-    """TimeNet could not fetch a dataset's source data, or what arrived is not what was expected."""
+    """TimeNet cannot fetch a dataset's source data, or what arrived is not what it expected."""
 
 
 class TimeFValidationError(TimeNetError, ValueError):
@@ -33,7 +33,7 @@ class TimeFValidationError(TimeNetError, ValueError):
 
 
 class TimeFEditError(TimeFValidationError):
-    """An edit would leave a dataset referentially inconsistent (for example, a dangling reference)."""
+    """An edit leaves a dataset referentially inconsistent (for example, a dangling reference)."""
 
 
 class TimeNetInvalidCardError(TimeNetError, ValueError):

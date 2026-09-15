@@ -70,8 +70,8 @@ class TimeFDataset:
             start_time: The wall-clock timestamp for the record's relative zero point. This value
                 can be a timezone-aware datetime or a whole number of Unix microseconds. Use
                 ``None`` when no wall-clock reference exists.
-            time_span: The overall span of the session. Use this if the series have gaps that an
-                unscoped span can fall into (see :attr:`Record.time_span`). The value must be a
+            time_span: The overall span of the session. If the series have gaps that an unscoped
+                span can fall into, use this (see :attr:`Record.time_span`). The value must be a
                 whole-record :class:`~timenet.types.TimeInterval` object that contains every
                 series window.
 
@@ -187,9 +187,9 @@ class TimeFDataset:
         """Register annotations that tasks reference but no record carries.
 
         Deduped by id, so many tasks can share one annotation without copying it. The writer persists
-        these alongside the record annotations, so a task's ``input_annotation_ids`` /
-        ``target_annotation_ids`` resolve without the annotation being attached to a record. Register
-        an annotation before the task that references it (:meth:`add_task` checks the reference).
+        these alongside the record annotations. A task's ``input_annotation_ids`` and
+        ``target_annotation_ids`` then resolve without an attachment to a record. Register an
+        annotation before the task that references it (:meth:`add_task` checks the reference).
 
         Args:
             annotations: The annotations to register. A repeated id must map to an equal annotation.
@@ -210,10 +210,12 @@ class TimeFDataset:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records and
-        registered annotations, then hands the tasks over through ``source``; the writer streams them to
-        disk without a list. Streamed tasks are trusted, not validated the way :meth:`add_task` validates
-        them: each must already have its ``record_ids`` set and reference only registered annotations and
+        every task in memory is the scaling wall. A streaming connector builds the bounded records
+        and registered annotations, then hands the tasks over through ``source``. The writer streams
+        them to disk without a list.
+
+        Streamed tasks are trusted, not validated the way :meth:`add_task` validates them. Each must
+        already have its ``record_ids`` set. Each must reference only registered annotations and
         existing records. Streamed tasks do not populate ``Record.task_ids``.
 
         Args:
@@ -225,7 +227,8 @@ class TimeFDataset:
 
         Raises:
             TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
-                streams its tasks or materializes them, never both, or the writer would drop one set.
+                streams its tasks or materializes them, never both. With both, the writer drops one
+                set.
         """
         if self._tasks:
             raise TimeFValidationError(
@@ -249,11 +252,12 @@ class TimeFDataset:
     def iter_streamed_tasks_validated(self) -> Iterator[Task]:
         """Yield the streamed tasks, validating each against the dataset before it is written.
 
-        Streamed tasks skip :meth:`add_task`'s checks, so validate each here as it passes through: an
-        undeclared type, an attachment to an unknown record, a dangling reference, a bad answer, or an
-        out-of-window span raises before the task reaches disk. The dataset holds no task list, so the
-        cross-task checks (duplicate ids, ``from_tasks`` derivations) that need every task at once do
-        not run for a stream.
+        Streamed tasks skip :meth:`add_task`'s checks, so this method validates each one as it
+        passes through. An undeclared type, an attachment to an unknown record, a dangling reference,
+        a bad answer, or an out-of-window span raises before the task reaches disk.
+
+        The dataset holds no task list, so the cross-task checks (duplicate ids, ``from_tasks``
+        derivations) that need every task at once do not run for a stream.
 
         Yields:
             Each validated task, in the source's order.
@@ -307,9 +311,8 @@ class TimeFDataset:
         """Validate a whole batch of tasks, then attach all of it or none of it.
 
         :meth:`add_task` and :meth:`add_tasks` both call this method. This keeps the singular and
-        plural forms consistent. The singular form is just a batch of one. Validation has no side
-        effects, so the attachment step below runs only after the method confirms that the whole
-        batch is good.
+        plural forms consistent. The singular form is a batch of one. Validation has no side
+        effects, so the attachment step below runs only after the whole batch passes.
 
         Args:
             batch: The tasks to register together, already drained from the caller's iterable.
@@ -512,9 +515,9 @@ class TimeFDataset:
             task: The task to register.
 
         Raises:
-            TimeFValidationError: If the task sets more than one inline answer field, or sets an
-                inline answer together with ``target_annotation_ids``, or sets no answer at all on
-                a task whose answer is not a produced series.
+            TimeFValidationError: If the task sets more than one inline answer field. If it sets an
+                inline answer together with ``target_annotation_ids``. If it sets no answer at all
+                on a task whose answer is not a produced series.
         """
         name = type(task).__name__
         inline = [field_name for field_name in type(task).answer_fields if getattr(task, field_name) is not None]

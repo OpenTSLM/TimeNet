@@ -121,10 +121,10 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
 
 
 def _histogram(counter: Counter[str]) -> str:
-    """Render a counter as ``a=1, b=2`` sorted by key, or ``-`` when empty.
+    """Format a counter as ``a=1, b=2`` sorted by key, or ``-`` when empty.
 
     Args:
-        counter: The counts to render.
+        counter: The counts to format.
 
     Returns:
         The ``key=count`` pairs joined by commas, or ``-`` if empty.
@@ -133,7 +133,7 @@ def _histogram(counter: Counter[str]) -> str:
 
 
 def _fixed_width(header: tuple[str, ...], table_rows: Sequence[tuple[str, ...]]) -> str:
-    """Render a header + rows as a 2-space-padded fixed-width table, indented two spaces.
+    """Format a header and its rows as a 2-space-padded fixed-width table, indented two spaces.
 
     Args:
         header: The column headers.

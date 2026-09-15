@@ -353,8 +353,8 @@ class TimeSeries:
     def step_range(self, span: Span) -> tuple[int, int]:
         """Return the half-open step range ``(start, stop)`` of this series that ``span`` covers.
 
-        The bridge to step-based forecasting libraries: ``stop - start`` is the horizon ``h`` that
-        GluonTS, Nixtla, and fev speak in. The pair feeds :meth:`read_steps` to read the ground
+        This is the bridge to step-based forecasting libraries. ``stop - start`` is the horizon ``h``
+        that GluonTS, Nixtla, and fev speak in. The pair feeds :meth:`read_steps` to read the ground
         truth. A step span already counts in this series' own steps, so it is the range, bounded by the
         series' length. The axis locates a time span instead: the steps whose time offsets fall in
         ``[start_us, end_us)``, each rounded up to the next step. An ordinal series has no timeline, so a

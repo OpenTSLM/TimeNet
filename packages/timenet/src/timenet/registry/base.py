@@ -148,7 +148,7 @@ class BaseRegistry(ABC):
             staging: The staging directory to write into.
 
         Raises:
-            TimeFFormatError: If ``relpath`` would escape ``staging`` (an absolute or ``..`` path).
+            TimeFFormatError: If ``relpath`` escapes ``staging`` (an absolute or ``..`` path).
         """  # noqa: DOC502 - raised by safe_version_path
         destination = safe_version_path(staging, relpath)
         destination.parent.mkdir(parents=True, exist_ok=True)

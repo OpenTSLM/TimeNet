@@ -1,7 +1,7 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec.
 
-The manifest is pure data. It has no file I/O. The writer and the reader do the read and write
-operations for the file. The ``schema`` block is a direct serialization of
+The manifest is pure data. It has no file I/O. The writer and the reader read and write the file
+themselves. The ``schema`` block is a direct serialization of
 :class:`~timenet.types.DatasetSchema` (flat descriptors). No separate set of "entry" types exists to
 keep in sync.
 """
