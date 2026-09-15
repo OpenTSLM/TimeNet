@@ -12,6 +12,15 @@ that. The id the caller chose survives as ``external_id`` on the entity that own
 the reader hands back and what stays stable across a rebuild. Surrogate ids are assigned per build,
 so nothing outside the file should quote one.
 
+**A type declaration is stored once, with its columns spelled out.** ``specs`` carries the whole
+:class:`~timenet.types.TimeSeriesSpec` and ``annotation_descriptors`` the whole
+:class:`~timenet.types.AnnotationDescriptor`, so the database says what dtype, unit and value shape a
+signal carries without the manifest beside it. A client can attach the file over HTTP and answer that
+from SQL. A million series still reference the declaration by id, so the unit and the value type are
+stored once rather than repeated per row. The manifest keeps the same block as a projection, so a
+registry can filter datasets without downloading the database, but the reader types its rows against
+the database.
+
 **An annotation is attached through one table per target kind.** A polymorphic
 ``(object_type, object_id)`` table was measured at 55.7 MB against 50.2 MB for one table per kind on
 a 3.06M-attachment corpus, and the query that gathers everything for one object ran 25.50 ms against
@@ -33,6 +42,15 @@ what they mean: Parquet reads them as a row group and a row inside it, Zarr read
 an element offset and leaves the minor index null. ``values_artifacts`` lists every file the values
 plane wrote and which backend wrote it, so a chunk row can be checked against a declared artifact at
 write time.
+
+**There is no axis-offsets table, and that is deliberate.** An irregular axis stores one microsecond
+offset per value, so the offsets are as long as the values themselves and are read exactly when the
+values are read. They stay in the values plane, in a column beside the values of the same chunk, as
+they do on main: one chunk locator finds both, one read returns both, and the control plane keeps
+only the endpoints (``axes.first_us`` and ``axes.last_us``) that a query filters on. Putting them in
+a table here would move a per-value column into the database that every structural query then has to
+step over, and it would split one series' read across two planes. The next reader looking for the
+proposal's ``axis_offsets`` table should look in the values plane instead.
 """
 
 from dataclasses import dataclass, fields
@@ -90,8 +108,27 @@ CREATE TABLE meta (
 );
 
 CREATE TABLE specs (
-    spec_id  {id} NOT NULL,
-    spec_type VARCHAR NOT NULL
+    spec_id              {id} NOT NULL,
+    spec_type             VARCHAR NOT NULL,
+    name                  VARCHAR NOT NULL,
+    unit_value            VARCHAR NOT NULL,
+    data_source_type      VARCHAR,
+    data_source_name      VARCHAR,
+    data_source_provider  VARCHAR,
+    dtype                 VARCHAR NOT NULL,
+    categories            VARCHAR[] NOT NULL,
+    value_shape           BIGINT[] NOT NULL,
+    dimension_names       VARCHAR[] NOT NULL,
+    nullable              BOOLEAN NOT NULL
+);
+
+CREATE TABLE annotation_descriptors (
+    descriptor_id  {id} NOT NULL,
+    key             VARCHAR NOT NULL,
+    annotation_type VARCHAR NOT NULL,
+    value_type      VARCHAR,
+    unit            VARCHAR,
+    description     VARCHAR
 );
 
 CREATE TABLE axes (
@@ -110,8 +147,7 @@ CREATE TABLE records (
     start_time_us      BIGINT,
     time_span_start_us BIGINT,
     time_span_end_us   BIGINT,
-    subject_ids        VARCHAR[] NOT NULL,
-    task_ids           VARCHAR[] NOT NULL
+    subject_ids        VARCHAR[] NOT NULL
 );
 
 CREATE TABLE time_series (
@@ -170,9 +206,22 @@ CREATE TABLE tasks (
     rationale   VARCHAR
 );
 
+CREATE TABLE record_tasks (
+    record_id {id} NOT NULL,
+    task_id   {id}
+);
+
 CREATE TABLE task_items (
+    task_id   {id} NOT NULL,
+    role       VARCHAR NOT NULL CHECK (role IN ('input', 'target')),
+    position   INTEGER NOT NULL,
+    item_type  VARCHAR NOT NULL CHECK (item_type IN ('text', 'record')),
+    text_value VARCHAR,
+    record_id {id}
+);
+
+CREATE TABLE task_from_tasks (
     task_id    {id} NOT NULL,
-    role        VARCHAR NOT NULL CHECK (role IN ('record', 'from_task')),
     position    INTEGER NOT NULL,
     external_id VARCHAR NOT NULL
 );
@@ -185,11 +234,11 @@ CREATE TABLE task_fields (
 );
 
 CREATE TABLE task_refs (
-    task_id    {id} NOT NULL,
-    field       VARCHAR NOT NULL,
-    position    INTEGER NOT NULL,
-    ref_kind    VARCHAR NOT NULL CHECK (ref_kind IN ('record', 'time_series')),
-    external_id VARCHAR NOT NULL
+    task_id  {id} NOT NULL,
+    field     VARCHAR NOT NULL,
+    position  INTEGER NOT NULL,
+    ref_kind  VARCHAR NOT NULL CHECK (ref_kind IN ('record', 'time_series')),
+    ref_id   {id}
 );
 
 CREATE TABLE task_spans (
@@ -197,8 +246,8 @@ CREATE TABLE task_spans (
     field           VARCHAR NOT NULL,
     position        INTEGER NOT NULL,
     frame           VARCHAR NOT NULL CHECK (frame IN ('seconds', 'steps')),
-    start_us        BIGINT NOT NULL,
-    end_us          BIGINT,
+    start_at        BIGINT NOT NULL,
+    end_at          BIGINT,
     time_series_ids VARCHAR[]
 );
 
@@ -208,7 +257,7 @@ CREATE TABLE values_artifacts (
     backend      VARCHAR NOT NULL CHECK (backend IN ('parquet', 'zarr'))
 );
 
-CREATE TABLE signal_chunks (
+CREATE TABLE time_series_chunks (
     time_series_id {id} NOT NULL,
     chunk_idx       INTEGER NOT NULL,
     artifact_id    {id} NOT NULL,
@@ -221,6 +270,75 @@ CREATE TABLE signal_chunks (
 
 DDL: Final = _DDL_TEMPLATE.format(id=ID_TYPE)
 """Every table, in an order that lets each reference name a table that already exists."""
+
+_STAGING_DDL_TEMPLATE: Final = """
+CREATE TEMP TABLE _stage_record_tasks (
+    record_id  {id} NOT NULL,
+    external_id VARCHAR NOT NULL
+);
+
+CREATE TEMP TABLE _stage_task_items (
+    task_id   {id} NOT NULL,
+    role       VARCHAR NOT NULL,
+    position   INTEGER NOT NULL,
+    item_type  VARCHAR NOT NULL,
+    text_value VARCHAR,
+    external_id VARCHAR
+);
+
+CREATE TEMP TABLE _stage_task_refs (
+    task_id    {id} NOT NULL,
+    field       VARCHAR NOT NULL,
+    position    INTEGER NOT NULL,
+    ref_kind    VARCHAR NOT NULL,
+    external_id VARCHAR NOT NULL
+);
+"""
+"""Where a row waits while the id it names is still unwritten.
+
+A task can name a record, and a record a task, whichever the walk reaches first. The loader writes
+the caller's string into one of these, and :data:`RESOLVE` turns the whole table into dense ids with
+one join once the walk is over. The tables live in DuckDB's ``temp`` catalog, so they are never part
+of the published file.
+"""
+
+STAGING_DDL: Final = _STAGING_DDL_TEMPLATE.format(id=ID_TYPE)
+"""The staging tables, created beside the real ones inside the load transaction."""
+
+# Each resolve sorts on the column its reads filter by, because the join that resolves the ids is
+# free to hand its rows back in any order and an unsorted table loses the zone map that prunes the
+# scan.
+RESOLVE: Final = (
+    (
+        "record_tasks",
+        "(record_id, task_id)",
+        "SELECT s.record_id, t.task_id FROM _stage_record_tasks s "
+        "LEFT JOIN tasks t ON t.external_id = s.external_id ORDER BY s.record_id",
+    ),
+    (
+        "task_items",
+        "(task_id, role, position, item_type, text_value, record_id)",
+        "SELECT s.task_id, s.role, s.position, s.item_type, s.text_value, r.record_id "
+        "FROM _stage_task_items s LEFT JOIN records r ON r.external_id = s.external_id "
+        "ORDER BY s.task_id, s.role, s.item_type, s.position",
+    ),
+    (
+        "task_refs",
+        "(task_id, field, position, ref_kind, ref_id)",
+        "SELECT s.task_id, s.field, s.position, s.ref_kind, "
+        "CASE s.ref_kind WHEN 'record' THEN r.record_id ELSE ts.time_series_id END "
+        "FROM _stage_task_refs s "
+        "LEFT JOIN records r ON s.ref_kind = 'record' AND r.external_id = s.external_id "
+        "LEFT JOIN time_series ts ON s.ref_kind = 'time_series' AND ts.external_id = s.external_id "
+        "ORDER BY s.task_id, s.field, s.position",
+    ),
+)
+"""Each staged table, its target's column list, and the query that resolves it.
+
+An id that names nothing resolves to null rather than failing the insert, so the load reaches
+:data:`VALIDATIONS` and the offender is reported by name with every other one, instead of the bulk
+insert dying on the first.
+"""
 
 ANNOTATION_TABLES: Final = {
     "dataset": ("dataset_annotations", None),
@@ -237,6 +355,7 @@ KEYED_TABLES: Final = {
     "records": "record_id",
     "time_series": "time_series_id",
     "specs": "spec_id",
+    "annotation_descriptors": "descriptor_id",
     "axes": "axis_id",
     "annotations": "annotation_id",
     "tasks": "task_id",
@@ -251,6 +370,7 @@ EXTERNAL_IDS: Final = ("records", "time_series", "annotations", "tasks")
 TABLES: Final = (
     "meta",
     "specs",
+    "annotation_descriptors",
     "axes",
     "records",
     "time_series",
@@ -258,12 +378,14 @@ TABLES: Final = (
     "annotations",
     *(table for table, _ in ANNOTATION_TABLES.values()),
     "tasks",
+    "record_tasks",
     "task_items",
+    "task_from_tasks",
     "task_fields",
     "task_refs",
     "task_spans",
     "values_artifacts",
-    "signal_chunks",
+    "time_series_chunks",
 )
 """Every table the control plane defines, for a reader that wants to check what it opened."""
 
@@ -395,6 +517,25 @@ def task_payload(task_type: TaskType) -> tuple[PayloadField, ...]:
     return declared
 
 
+def text_answer(task_type: TaskType) -> PayloadField | None:
+    """Return the payload field a task type answers with in free text, if it has one.
+
+    That answer is an item of the task rather than a named field of its payload, so it is stored in
+    ``task_items`` beside the records the task names, not in ``task_fields``.
+
+    Args:
+        task_type: The task type to describe.
+
+    Returns:
+        The field, or ``None`` when the type answers with a number, a span, a reference or a record.
+    """
+    answers = TASKS[task_type].answer_fields
+    for declared in task_payload(task_type):
+        if declared.kind is PayloadKind.TEXT and declared.name in answers:
+            return declared
+    return None
+
+
 def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
@@ -474,7 +615,7 @@ def _task_payload_owners() -> tuple[tuple[str, str], ...]:
             f"{table} names a task that does not exist",
             f"SELECT p.task_id FROM {table} p ANTI JOIN tasks t ON t.task_id = p.task_id",  # noqa: S608
         )
-        for table in ("task_items", "task_fields", "task_refs", "task_spans")
+        for table in ("task_items", "task_from_tasks", "task_fields", "task_refs", "task_spans")
     )
 
 
@@ -488,11 +629,28 @@ VALIDATIONS: Final = (
     ),
     (
         "duplicate (time_series_id, chunk_idx)",
-        "SELECT time_series_id, chunk_idx FROM signal_chunks GROUP BY time_series_id, chunk_idx HAVING count(*) > 1",
+        "SELECT time_series_id, chunk_idx FROM time_series_chunks "
+        "GROUP BY time_series_id, chunk_idx HAVING count(*) > 1",
     ),
     (
         "duplicate values artifact",
         "SELECT chunk_file FROM values_artifacts GROUP BY chunk_file HAVING count(*) > 1",
+    ),
+    (
+        "duplicate specs.spec_type",
+        "SELECT spec_type FROM specs GROUP BY spec_type HAVING count(*) > 1",
+    ),
+    (
+        "duplicate annotation_descriptors.key",
+        "SELECT key FROM annotation_descriptors GROUP BY key HAVING count(*) > 1",
+    ),
+    (
+        "spec carries half a data source",
+        "SELECT spec_type FROM specs WHERE (data_source_type IS NULL) <> (data_source_name IS NULL)",
+    ),
+    (
+        "annotation names a key the schema does not declare",
+        "SELECT n.external_id FROM annotations n ANTI JOIN annotation_descriptors d ON d.key = n.key",
     ),
     (
         "link names a record that does not exist",
@@ -513,55 +671,82 @@ VALIDATIONS: Final = (
     ),
     (
         "chunk names a series that does not exist",
-        "SELECT c.time_series_id FROM signal_chunks c ANTI JOIN time_series s ON s.time_series_id = c.time_series_id",
+        "SELECT c.time_series_id FROM time_series_chunks c "
+        "ANTI JOIN time_series s ON s.time_series_id = c.time_series_id",
     ),
     (
         "chunk names an artifact the values plane did not declare",
-        "SELECT c.artifact_id FROM signal_chunks c ANTI JOIN values_artifacts a ON a.artifact_id = c.artifact_id",
+        "SELECT c.artifact_id FROM time_series_chunks c ANTI JOIN values_artifacts a ON a.artifact_id = c.artifact_id",
     ),
     # The backend-neutral locator cannot say in its column types that a Parquet chunk needs both
     # indexes and a Zarr chunk needs only one. The artifact's backend says it instead, once the rows
     # are in.
     (
         "parquet chunk without a row offset",
-        "SELECT a.chunk_file FROM signal_chunks c JOIN values_artifacts a ON a.artifact_id = c.artifact_id "
+        "SELECT a.chunk_file FROM time_series_chunks c JOIN values_artifacts a ON a.artifact_id = c.artifact_id "
         "WHERE a.backend = 'parquet' AND c.chunk_minor_idx IS NULL",
     ),
     (
         "zarr chunk with a row offset",
-        "SELECT a.chunk_file FROM signal_chunks c JOIN values_artifacts a ON a.artifact_id = c.artifact_id "
+        "SELECT a.chunk_file FROM time_series_chunks c JOIN values_artifacts a ON a.artifact_id = c.artifact_id "
         "WHERE a.backend = 'zarr' AND c.chunk_minor_idx IS NOT NULL",
     ),
     (
         "series length disagrees with its chunks",
         "SELECT s.time_series_id FROM time_series s JOIN ("
-        "SELECT time_series_id, sum(n_values) AS total FROM signal_chunks GROUP BY time_series_id"
+        "SELECT time_series_id, sum(n_values) AS total FROM time_series_chunks GROUP BY time_series_id"
         ") c ON c.time_series_id = s.time_series_id WHERE c.total <> s.n_values",
     ),
     (
         "series has no chunk in the values plane",
-        "SELECT s.time_series_id FROM time_series s ANTI JOIN signal_chunks c ON c.time_series_id = s.time_series_id",
+        "SELECT s.time_series_id FROM time_series s "
+        "ANTI JOIN time_series_chunks c ON c.time_series_id = s.time_series_id",
     ),
     *_attachment_targets(),
     *_task_payload_owners(),
     (
+        "duplicate (record_id, task_id) link",
+        "SELECT record_id, task_id FROM record_tasks GROUP BY record_id, task_id HAVING count(*) > 1",
+    ),
+    (
+        "record_tasks names a record that does not exist",
+        "SELECT l.record_id FROM record_tasks l ANTI JOIN records r ON r.record_id = l.record_id",
+    ),
+    # A resolved id column holds null where the caller's id named nothing, so each of these reports
+    # the row that named it rather than the id that is missing.
+    (
+        "record names a task that does not exist",
+        "SELECT r.external_id FROM record_tasks l JOIN records r ON r.record_id = l.record_id WHERE l.task_id IS NULL",
+    ),
+    (
         "task item names a record that does not exist",
-        "SELECT i.task_id FROM task_items i ANTI JOIN records r ON r.external_id = i.external_id "
-        "WHERE i.role = 'record'",
+        "SELECT t.external_id FROM task_items i JOIN tasks t ON t.task_id = i.task_id "
+        "WHERE i.item_type = 'record' AND i.record_id IS NULL",
+    ),
+    (
+        "task item disagrees with its item_type",
+        "SELECT t.external_id FROM task_items i JOIN tasks t ON t.task_id = i.task_id "
+        "WHERE (i.item_type = 'text' AND (i.text_value IS NULL OR i.record_id IS NOT NULL)) "
+        "OR (i.item_type = 'record' AND i.text_value IS NOT NULL)",
+    ),
+    (
+        "duplicate (task_id, role, item_type, position) item",
+        "SELECT task_id, role, item_type, position FROM task_items "
+        "GROUP BY task_id, role, item_type, position HAVING count(*) > 1",
     ),
     (
         "task payload names a record that does not exist",
-        "SELECT p.task_id FROM task_refs p ANTI JOIN records r ON r.external_id = p.external_id "
-        "WHERE p.ref_kind = 'record'",
+        "SELECT t.external_id FROM task_refs p JOIN tasks t ON t.task_id = p.task_id "
+        "WHERE p.ref_kind = 'record' AND p.ref_id IS NULL",
     ),
     (
         "task payload names a series that does not exist",
-        "SELECT p.task_id FROM task_refs p ANTI JOIN time_series s ON s.external_id = p.external_id "
-        "WHERE p.ref_kind = 'time_series'",
+        "SELECT t.external_id FROM task_refs p JOIN tasks t ON t.task_id = p.task_id "
+        "WHERE p.ref_kind = 'time_series' AND p.ref_id IS NULL",
     ),
     (
         "an interval span ends before it starts",
-        "SELECT task_id FROM task_spans WHERE end_us IS NOT NULL AND end_us <= start_us "
+        "SELECT task_id FROM task_spans WHERE end_at IS NOT NULL AND end_at <= start_at "
         "UNION ALL "
         "SELECT annotation_id FROM annotations WHERE span_end_us IS NOT NULL AND span_end_us <= span_start_us",
     ),
@@ -576,7 +761,9 @@ The writer runs these against the loaded database before it commits, which is th
 can be violated: a version is written once by one process and is immutable afterwards. Each check is
 one bulk anti-join rather than a lookup per row.
 
-``task_items`` with ``role = 'from_task'`` is deliberately absent. A streamed task skips the
-cross-task checks that :meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation
-can reach the writer, and the reader is what reports it.
+``task_from_tasks`` is deliberately unchecked, and is why that one table still keeps the caller's
+string id. A streamed task skips the cross-task checks that
+:meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation can reach the writer.
+Refusing it here would reject a write main accepted, and resolving it to a dense id would leave a
+null that no longer says which task is missing. The reader reports it by name instead.
 """

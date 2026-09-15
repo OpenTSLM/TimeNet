@@ -733,13 +733,9 @@ def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
 
 
 def _corrupt_descriptor(version_dir, key, field, value):
-    """Rewrite one annotation descriptor field in the manifest, simulating on-disk corruption."""
-    manifest_path = version_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    for descriptor in manifest["schema"]["annotations"]:
-        if descriptor["key"] == key:
-            descriptor[field] = value
-    manifest_path.write_text(json.dumps(manifest))
+    """Rewrite one stored annotation descriptor field, simulating on-disk corruption."""
+    with _control_db(version_dir) as db:
+        db.execute(f"UPDATE annotation_descriptors SET {field} = ? WHERE key = ?", [value, key])  # noqa: S608
 
 
 def test_annotation_shape_disagreeing_with_its_descriptor_raises_format_error(tmp_path):

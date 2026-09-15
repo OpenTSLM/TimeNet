@@ -7,7 +7,9 @@ only that the datasets differ.
 """
 
 from fractions import Fraction
+import json
 from pathlib import Path
+import shutil
 
 import duckdb
 import pyarrow as pa
@@ -324,6 +326,92 @@ def test_an_annotation_on_two_records_comes_back_on_both(restored):
 def test_a_registered_annotation_comes_back_carried_by_no_record(restored):
     assert [annotation.id for annotation in restored.registered_annotations] == ["ann-options"]
     assert "answer_options" not in _annotations(restored, "rec-query")
+
+
+# ---- what the database says on its own ----------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def stored(tmp_path_factory):
+    """The every-task dataset, written once, for the assertions that read its tables directly."""
+    root = tmp_path_factory.mktemp("stored")
+    dataset = _every_task_type()
+    dataset.derive_schema()
+    with TimeFWriter(root, dataset) as writer:
+        writer.write()
+    return root / dataset.metadata.dataset_id / "1.0.0"
+
+
+def _query(version_dir: Path, sql: str) -> list[tuple]:
+    """Run one query against a committed control database."""
+    connection = duckdb.connect(str(version_dir / "control.duckdb"), read_only=True)
+    try:
+        return connection.execute(sql).fetchall()
+    finally:
+        connection.close()
+
+
+def test_the_database_says_what_a_signal_carries_without_the_manifest(stored):
+    # A client attaching the database over HTTP has to be able to answer this from SQL alone.
+    assert _query(stored, "SELECT spec_type, name, unit_value, dtype, nullable FROM specs ORDER BY spec_type") == [
+        ("ecg", "ECG", "millivolt", "float32", False),
+        ("steps", "Steps", "dimensionless", "float32", False),
+    ]
+
+
+def test_the_database_carries_each_annotation_key_once_with_its_unit(stored):
+    assert _query(stored, "SELECT key, annotation_type, value_type, unit FROM annotation_descriptors ORDER BY key") == [
+        ("age", "static", "int", "years"),
+        ("answer_options", "static", "list", None),
+        ("artifact", "interval", "str", None),
+        ("cohort", "static", "str", None),
+        ("stimulus", "point", None, None),
+    ]
+
+
+def test_the_reader_takes_its_schema_from_the_database(stored, tmp_path):
+    # Emptying the manifest's projection leaves the reader answering from the database, which is the
+    # copy its rows are typed against.
+    shutil.copytree(stored, tmp_path / "version")
+    manifest_path = tmp_path / "version" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema"]["time_series_specs"] = []
+    manifest["schema"]["annotations"] = []
+    manifest_path.write_text(json.dumps(manifest))
+    with TimeFReader(DatasetVersion.open_local(tmp_path / "version")) as reader:
+        assert [spec.spec_type for spec in reader.schema.time_series_specs] == ["ecg", "steps"]
+        assert [d.key for d in reader.schema.annotations] == ["age", "cohort", "stimulus", "artifact", "answer_options"]
+
+
+def test_a_task_keeps_its_records_and_its_answer_in_one_ordered_list(stored):
+    rows = _query(
+        stored,
+        "SELECT i.role, i.item_type, i.position, i.text_value, r.external_id "
+        "FROM task_items i LEFT JOIN records r ON r.record_id = i.record_id "
+        "JOIN tasks t ON t.task_id = i.task_id WHERE t.external_id = 'task-answer' "
+        "ORDER BY i.role, i.position",
+    )
+    assert rows == [("input", "record", 0, None, "rec-query"), ("target", "text", 0, "Normal.", None)]
+
+
+def test_a_record_names_its_tasks_through_dense_ids(stored):
+    rows = _query(
+        stored,
+        "SELECT t.external_id FROM record_tasks l "
+        "JOIN records r ON r.record_id = l.record_id JOIN tasks t ON t.task_id = l.task_id "
+        "WHERE r.external_id = 'rec-edited' ORDER BY l.task_id",
+    )
+    assert rows == [("task-edit",), ("task-gen",)]
+
+
+def test_a_derivation_keeps_the_id_the_caller_gave_the_task(stored):
+    # The one reference left as a string: a streamed task can name a parent the version never stores,
+    # and the reader has to be able to say which one.
+    rows = _query(
+        stored,
+        "SELECT t.external_id, f.external_id FROM task_from_tasks f JOIN tasks t ON t.task_id = f.task_id",
+    )
+    assert rows == [("task-answer", "task-classification")]
 
 
 def test_the_annotation_payload_is_stored_once_however_many_records_carry_it(tmp_path):

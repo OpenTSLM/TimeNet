@@ -72,7 +72,7 @@ def _chunk_rows(version_dir):
     try:
         rows = connection.execute(
             "SELECT s.external_id, c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values "
-            "FROM signal_chunks c "
+            "FROM time_series_chunks c "
             "JOIN time_series s ON s.time_series_id = c.time_series_id "
             "JOIN values_artifacts v ON v.artifact_id = c.artifact_id "
             "ORDER BY s.external_id, c.chunk_idx"
