@@ -4,7 +4,7 @@ The values plane is the float32 waveform of every series. It is the one part of 
 on-disk representation is swappable. Everything else is backend-agnostic: records, annotations, tasks,
 and the time-series index that locates each chunk. A :class:`BaseValuesBackend` takes the deduped,
 sorted series and writes their values. It returns one :class:`ChunkPlacement` per chunk plus the list
-of value files to record in the manifest. The core writer does not know about shards, row groups, or
+of value files for the manifest. The core writer does not know about shards, row groups, or
 arrays.
 
 Concrete backends live in their own modules: :mod:`timenet.values_backends.parquet.writer` (the

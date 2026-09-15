@@ -15,4 +15,4 @@ class ValuesBackend(StrEnum):
 
 
 SUPPORTED_VALUES_BACKENDS: frozenset[ValuesBackend] = frozenset(ValuesBackend)
-"""Every backend a writer may target and a reader can resolve."""
+"""Every backend a writer can target and a reader can resolve."""

@@ -26,7 +26,7 @@ class _Readable(Protocol):
 
 
 def file_checksum(path: Path) -> str:
-    """Return a file's manifest checksum, hashing it a block at a time.
+    """Return a file's manifest checksum, and hash it a block at a time.
 
     Args:
         path: The file to hash.
@@ -39,7 +39,7 @@ def file_checksum(path: Path) -> str:
 
 
 def stream_checksum(handle: _Readable) -> str:
-    """Return an open binary stream's manifest checksum, hashing it a block at a time.
+    """Return an open binary stream's manifest checksum, and hash it a block at a time.
 
     This is the stream counterpart of :func:`file_checksum`. A reader can use it to hash a file
     opened through a pyarrow filesystem (local now, an object store later) instead of a local
