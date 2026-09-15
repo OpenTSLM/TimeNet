@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.errors import TimeFFormatError
-from timenet.values_backends.reader import BaseValuesReader
+from timenet.values_backends.reader import BaseValuesReader, SeriesChunks, window_chunks
 
 
 if TYPE_CHECKING:
@@ -47,8 +47,8 @@ class _DecodedGroup:
 def _offsets_leaf_position(shard: pq.ParquetFile) -> int | None:
     """Return the Parquet leaf index of a shard's ``time_offsets_us`` column.
 
-    Column chunks are indexed by leaf, and a list column keeps its leaf under a nested path, so a
-    leaf index is not the position of the Arrow field.
+    Column chunks are indexed by leaf. A list column keeps its leaf under a nested path, so a leaf
+    index is not the position of the Arrow field.
 
     Args:
         shard: The open shard.
@@ -67,7 +67,7 @@ def _offsets_leaf_position(shard: pq.ParquetFile) -> int | None:
 
 
 def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
-    """Return the Arrow type a spec's values should come back as.
+    """Return the Arrow type a spec's values come back as.
 
     A ``"str"`` reads back as plain text. An ``"enum"`` reads back as a dictionary array (the shard
     already stores one). Every other dtype maps through NumPy so the in-memory and stored types
@@ -89,7 +89,7 @@ def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
 
 
 class ParquetValuesReader(BaseValuesReader):
-    """Reads values from Parquet shards, decoding each shared row group at most once."""
+    """Reads values from Parquet shards. It decodes each shared row group at most once."""
 
     def __init__(self) -> None:
         """Start with empty (per-process) shard, row-group, offsets-leaf, and target-type caches."""
@@ -162,29 +162,32 @@ class ParquetValuesReader(BaseValuesReader):
         return pa.concat_arrays([chunk.cast(pa.int64()) for chunk in chunks])
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, chunks: SeriesChunks, start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
-        """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
+        """Read one window of a scalar series, and trim its end chunks at the window boundaries.
+
+        The window's chunks come from a bisection of the series' offsets, so this method touches
+        only the chunks it reads. A walk over every chunk instead puts the whole of a finely chunked
+        signal in the path of each window.
 
         Returns:
             The requested scalar values in the spec's canonical Arrow type.
         """
         target = self._target(spec)
-        total = sum(row["n_values"] for row in rows)
-        bounded_stop = min(stop, total)
-        if start >= bounded_stop:
+        rows, offsets = chunks.rows, chunks.offsets()
+        first, last, bounded_stop = window_chunks(offsets, start, stop)
+        if first == last:
             return pa.array([], type=target)
         parts = []
-        cursor = 0
-        for row in rows:
-            row_stop = cursor + row["n_values"]
-            if row_stop > start and cursor < bounded_stop:
-                group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
-                values = group.values[row["chunk_minor_idx"]].values
-                lo = max(start - cursor, 0)
-                hi = min(bounded_stop - cursor, row["n_values"])
-                parts.append(values.slice(lo, hi - lo).cast(target))
-            cursor = row_stop
+        for index in range(first, last):
+            row = rows[index]
+            cursor = int(offsets[index])
+            lo = max(start - cursor, 0)
+            hi = min(bounded_stop - cursor, row["n_values"])
+            if hi <= lo:  # an empty chunk inside the window contributes nothing
+                continue
+            group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
+            parts.append(group.values[row["chunk_minor_idx"]].values.slice(lo, hi - lo).cast(target))
         return pa.concat_arrays(parts)
 
     def close(self) -> None:
@@ -196,14 +199,14 @@ class ParquetValuesReader(BaseValuesReader):
         self._offsets_leaf.clear()
 
     def _row_group(self, version: DatasetVersion, rel_path: str, row_group: int) -> _DecodedGroup:
-        """Return a shard row group's values and time offsets together, decoding it at most once.
+        """Return a shard row group's values and time offsets together, decoded at most once.
 
         Both columns come back in one read because pyarrow decodes a row group's columns in a single
-        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more when a
-        caller wants both, which is nearly always the case for an irregular series.
+        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more
+        when a caller wants both, and a caller of an irregular series nearly always wants both.
 
         Chunks of different series can share a row group. Without this cache, every per-series read
-        will re-decode the whole column. That makes value materialization quadratic in chunks per group.
+        decodes the whole column again. That makes value materialization quadratic in chunks per group.
 
         Args:
             version: The opened version handle.

@@ -11,6 +11,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.values_backends.reader import SeriesChunks
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
 
@@ -336,7 +337,7 @@ def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monk
         return original_read(version, rel, start, stop)
 
     monkeypatch.setattr(reader, "_read_range", track_read)
-    selected = reader.load_range(version, rows, 1, 5, spec)
+    selected = reader.load_range(version, SeriesChunks(rows), 1, 5, spec)
     assert selected.equals(full.slice(1, 4))
     assert selected.to_pylist() == [0.0, None, None, 0.0]
     validity_reads = [(lo, hi) for rel, lo, hi in reads if "/_validity/" in rel]
