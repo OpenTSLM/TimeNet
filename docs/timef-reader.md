@@ -47,17 +47,15 @@ does not build a `TimeFDataset`.
 
 `TimeFReader` keeps the index as Arrow data and searches it per lookup. It does not expand the index
 into one Python object per row. As a result, when a large dataset opens, the memory it uses stays
-proportional to the size of the index file. It does not grow to a multiple of that size.
+proportional to the size of the index file. It does not grow to a multiple of that size. Each index
+row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple.
 
 ## Type reconstruction
 
-`TimeFReader` reads specs, data sources, and annotation metadata from the control database's `specs`
-and `annotation_descriptors` tables. Those tables are the copy that its rows are typed against. The
-manifest holds the same declaration for a registry to filter on without downloading the database.
-
-`TimeFReader` creates no classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec` descriptor
-for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It decodes
-the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
+`TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
+descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
+descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It
+decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
 `StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
 
 Everything pickles and compares equal to the original data, field by field. This equality is why
@@ -89,26 +87,24 @@ calls `close()`, it releases them.
 
 `DatasetVersion.open_local` and a registry's `open_version` build the handle. If the version directory
 has no `manifest.json`, they raise `FileNotFoundError`. If the manifest is malformed or is an
-unsupported version, they raise `TimeFFormatError` (a `TimeNetInvalidManifestError`).
+unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestError`).
 
-When you open the reader, it reads nothing else. So the reader does not catch a missing or corrupt
-file at that point. The error surfaces on the first access that needs the file. Tasks raise the
-error on first access to `.tasks`. Records raise it on iteration. The chunk locators and annotations
-raise it on the first read that needs them.
+Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
+file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
+on first access to `.tasks`. Records raise it on iteration. The chunk locators and annotations raise
+it on the first read that needs them.
 
-A corrupt control database raises `TimeFFormatError` with its context. So does a file that the
-manifest lists and the storage does not hold. A lazy read reports a missing control database or a
-missing values shard as `TimeFFormatError`, not as the `FileNotFoundError` underneath it. You can
-call `verify()` for an integrity check at construction time. It reopens every listed file through
-the handle and raises the same `TimeFFormatError` on a missing or mismatched file.
+A corrupt control database raises `TimeFFormatError` with its context. You can call `verify()` for
+an integrity check at construction time. It reopens every listed file through the handle and raises
+`TimeFFormatError` on a missing or mismatched file.
 
 ## Round-trip guarantee
 
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every record's
 `record_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
-`signal`, `source_id`, `time_series_id`, window, and values, and it preserves the exact dtype and
-shape. It restores each task's payload and resolved `from_tasks`. The read does not preserve
-`TimeSeries` object identity. `time_series_id` is the durable handle.
+`signal`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
+preserved. It restores each task's payload and resolved `from_tasks`. `TimeSeries` object identity is
+not preserved. `time_series_id` is the durable handle.
 
 ---
 
