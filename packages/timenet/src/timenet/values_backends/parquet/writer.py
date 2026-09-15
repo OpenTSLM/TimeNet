@@ -2,8 +2,8 @@
 
 Each shard uses zstd compression and holds one modality. Each shard carries the values encoding
 chosen for its ``spec_type`` (see :mod:`timenet.writer.value_encoding`). The backend-neutral
-time-series index records each chunk's placement. This record supplies a ``chunk_file`` plus a
-:class:`~timenet.values_backends.writer.ChunkDataIndex`. For Parquet, this index gives the
+time-series index holds one row per chunk. Each index row carries a ``chunk_file`` and a
+:class:`~timenet.values_backends.writer.ChunkDataIndex`. For Parquet, that index gives the
 row group (``major_idx``) and the row offset (``minor_idx``).
 """
 
@@ -68,8 +68,8 @@ def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
 
     An irregular series stores an int64 time offset next to each value. So its step costs eight
     bytes more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
-    use this unit as their budget. If the code charged every series at the float32 rate, an
-    irregular series would overrun each target by three times.
+    use this unit as their budget. At the float32 rate, an irregular series overruns each target
+    by three times.
 
     Args:
         stores_time_offsets: True if the series stores one time offset for each value.
@@ -116,7 +116,7 @@ class ParquetValuesBackend(BaseValuesBackend):
 
         Returns:
             The shard Arrow schema with ``values`` as ``list<element>`` for that dtype. A ``"str"``
-            dtype stores variable-width text; an ``"enum"`` dtype uses a dictionary leaf.
+            dtype stores variable-width text. An ``"enum"`` dtype uses a dictionary leaf.
         """
         if dtype == "str":
             return shard_schema(self._id_types, pa.string())
@@ -201,9 +201,11 @@ class ParquetValuesBackend(BaseValuesBackend):
         The caller passes the values it buffered for the modality's first row group. So the
         decision costs only a distinct-value count over data already in memory. The backend does
         not read the series a second time and does not call the loader again. The buffer size stays
-        within ``row_group_target_bytes``. The backend logs the decision at INFO level under this
-        module's logger. So a builder can see, for each ``spec_type``, what encoding the backend
-        chose. For the auto path, the log also shows the cardinality that drove the choice.
+        within ``row_group_target_bytes``.
+
+        The backend logs the decision at INFO level under this module's logger. So a builder can
+        see, for each ``spec_type``, what encoding the backend chose. For the auto path, the log
+        also shows the cardinality that drove the choice.
 
         Args:
             spec_type: The modality for this decision. The log line names it.
@@ -455,8 +457,8 @@ def _plan_chunks(
 ) -> list[_Chunk]:
     """Split a validated series into backend-independent logical chunks.
 
-    The code cuts values and time offsets at the same boundaries. This lets one chunk locator
-    address both. So time offset ``k`` is always in the same chunk as value ``k``.
+    The code cuts values and time offsets at the same boundaries. This lets one index row address
+    both. So time offset ``k`` is always in the same chunk as value ``k``.
 
     Args:
         ts: Series metadata used for chunk identity and timing.

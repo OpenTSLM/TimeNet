@@ -1,12 +1,14 @@
-"""This module pins Parquet encodings by column role, instead of the writer choosing them by heuristics.
+"""This module pins Parquet encodings by column role, not by a heuristic in the writer.
 
 Monotonic integers use DELTA_BINARY_PACKED. Bounded categorical columns use dictionary encoding with
 RLE. ID-like columns stay in plain encoding. Float waveform values are the one column type with no
 fixed rule. For these columns, the writer measures the data and selects an encoding for each modality
-(see :mod:`timenet.writer.value_encoding`). This module converts that choice into pyarrow write
-options. It also reads the choice back from the footer of a finished file. Encodings use the explicit
-``use_dictionary`` list and a ``column_encoding`` map. Nested elements use the path
-``values.list.element``. This is the only combination that pyarrow applies reliably.
+(see :mod:`timenet.writer.value_encoding`).
+
+This module converts that choice into pyarrow write options. It also reads the choice back from the
+footer of a finished file. Encodings use the explicit ``use_dictionary`` list and a
+``column_encoding`` map. Nested elements use the path ``values.list.element``. This is the only
+combination that pyarrow applies reliably.
 """
 
 from typing import Any
@@ -95,8 +97,8 @@ def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
     and PLAIN for the dictionary page itself. For this reason, PLAIN alone does not prove that a
     column is plain-encoded. PLAIN alone can also mean this: Parquet abandoned a dictionary that
     grew past its page limit. Parquet then finished the chunk in plain encoding. This fallback is
-    lossless. The writer does not control this fallback. For this reason, the check accepts
-    PLAIN for the dictionary case too.
+    lossless, and the writer does not control it. The check therefore accepts PLAIN for the
+    dictionary case too.
 
     Args:
         value_encoding: The encoding the writer selected.
@@ -154,10 +156,9 @@ def parquet_kwargs(
 def values_encoding_of(path: str, column_path: str = "values.list.element") -> set[str]:
     """Return the encodings applied to one shard column.
 
-    The writer uses this function as a self-check. The check confirms that pyarrow actually
-    applied the configured encoding. If the column path is wrong, pyarrow silently drops the
-    encoding request. This silent failure costs the compression benefit, with no error to warn
-    the writer.
+    The writer uses this function as a self-check. The check catches an encoding that pyarrow did
+    not apply. If the column path is wrong, pyarrow silently drops the encoding request. This
+    silent failure costs the compression benefit, with no error to warn the writer.
 
     Args:
         path: Path to a shard parquet file.

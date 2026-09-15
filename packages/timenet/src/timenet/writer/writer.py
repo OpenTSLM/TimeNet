@@ -68,7 +68,7 @@ class TimeFWriter:
 
         Args:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
-            dataset: The populated dataset. The writer derives the schema automatically if needed.
+            dataset: The populated dataset. The writer derives the schema when the dataset has none.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
@@ -128,7 +128,7 @@ class TimeFWriter:
     # ---- context manager -----------------------------------------------------------------------
 
     def __enter__(self) -> "TimeFWriter":
-        """Create the staging directory, refusing to overwrite a committed version.
+        """Create the staging directory, and refuse to overwrite a committed version.
 
         Returns:
             This writer.
@@ -146,8 +146,8 @@ class TimeFWriter:
         """Remove abandoned ``<version>.tmp-*`` staging dirs left by a crashed build.
 
         A hard kill (SIGKILL or OOM) never reaches :meth:`abort`, so its staging directory lingers.
-        Clear any such sibling for this version before you write a fresh one. The writer does not
-        support concurrent writes of the same version.
+        This method removes any such sibling of this version before the writer stages a fresh one.
+        The writer does not support concurrent writes of the same version.
         """
         parent = self._final_dir.parent
         if not parent.is_dir():
@@ -228,7 +228,7 @@ class TimeFWriter:
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
-        Sharing one series across records is the supported dedupe path. Two different series that
+        One series shared across records is the supported dedupe path. Two different series that
         claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
         the other's records read back the wrong data. Two series that share an id must describe the
         same signal. The writer rejects a disagreement instead of keeping the first series.
@@ -372,7 +372,7 @@ class TimeFWriter:
         """Read an irregular series' time offsets and check them against what it declares.
 
         The method returns ``None`` for every other axis shape. The backend writes that as a null cell.
-        These checks make ``first_time_offset_us`` and ``last_time_offset_us`` verified metadata. An
+        These checks make ``first_time_offset_us`` and ``last_time_offset_us`` checked metadata. An
         axis cannot claim endpoints that its own stream does not have.
 
         Args:
@@ -409,11 +409,11 @@ class TimeFWriter:
     # ---- control plane -------------------------------------------------------------------------
 
     def _tasks_to_write(self) -> Iterator[Task]:
-        """Yield the dataset's tasks, validating a streamed one as it passes.
+        """Yield the dataset's tasks, and validate a streamed one as it passes.
 
         ``iter_tasks()`` yields a materialized dataset's tasks and a streamed one's identically, so
-        one path serves both. A stream is read exactly once, which is what lets a one-shot source
-        still be written.
+        one path serves both. A stream is read exactly once, so a one-shot source can still be
+        written.
 
         Yields:
             Each task to store.
@@ -479,13 +479,13 @@ class TimeFWriter:
     # ---- helpers -------------------------------------------------------------------------------
 
     def _validate_shared_annotations(self) -> None:
-        """Check annotations sharing an id across records are field-equal, and registered ids are distinct.
+        """Check that annotations that share an id are field-equal, and that registered ids are distinct.
 
         Raises:
             TimeFValidationError: If two annotations share an id but are not equal, or an id is both
                 registered and carried by a record. The reader restores a registered annotation from
-                the dataset attachment table, so an id that is also carried by a record would come
-                back attached to that record instead; reject it here rather than silently moving it.
+                the dataset attachment table. An id that a record also carries comes back attached
+                to that record instead. The writer rejects it here and does not move it silently.
         """
         record_ann_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
         overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
@@ -535,8 +535,8 @@ def _series_identity(ts: TimeSeries) -> tuple:
     """Return the fields that must agree for two series to be the same signal.
 
     This compares the descriptive fields that the writer persists, not the values. The ``loader`` is a
-    callable, so two equal series built separately compare unequal. Reading every shared series
-    only to compare it defeats the lazy read path on the largest datasets.
+    callable, so two equal series built separately compare unequal. A read of every shared series
+    only for that comparison defeats the lazy read path on the largest datasets.
 
     Args:
         ts: The series to describe.
