@@ -28,7 +28,7 @@ from urllib.parse import quote
 
 import numpy as np
 
-from timenet.control_plane.values import ZARR, ChunkLocator, PendingSignal
+from timenet.control_plane.values import PARQUET, ZARR, ChunkLocator, ChunkSlice, PendingSignal
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_CHUNK_MAX_BYTES, DEFAULT_SHARD_TARGET_BYTES
 
@@ -210,12 +210,24 @@ class ZarrValuesPlaneWriter:
 
         Raises:
             ImportError: If the ``zarr`` extra is not installed.
+            TimeFValidationError: If the modality's dtype is one this backend does not store.
         """
         try:
             import zarr  # noqa: PLC0415
             from zarr.codecs import BloscCodec  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             raise ImportError("the zarr values backend needs the zarr extra: pip install 'timenet[zarr]'") from exc
+
+        # "enum" is a spec dtype rather than a NumPy one, and its values are labels, so it has no
+        # more of a fixed width than "str" does. Asking NumPy for it would raise a TypeError here.
+        itemsize = 0 if signal.dtype == "enum" else np.dtype(signal.dtype).itemsize
+        if itemsize == 0:
+            raise TimeFValidationError(
+                f"the {ZARR!r} values backend has no dictionary layer, so it stores every scalar "
+                f"dtype but {signal.dtype!r}, which modality {signal.spec_type!r} carries: "
+                f"free-form strings would inflate on disk and read back slowly. Write this dataset "
+                f"with values_backend={PARQUET!r}"
+            )
 
         if self._group is None:
             self._group = zarr.open_group(store=self._staging_dir / STORE_DIR, mode="w")
@@ -224,7 +236,6 @@ class ZarrValuesPlaneWriter:
             clevel=self._compression_level,
             shuffle="bitshuffle",
         )
-        itemsize = np.dtype(signal.dtype).itemsize
         values = _Appender(
             self._group.create_array(
                 name=values_array_path(signal.spec_type, irregular).removeprefix(f"{STORE_DIR}/"),
@@ -274,6 +285,16 @@ class _Partition:
             raise TimeFValidationError(
                 "a signal's time offsets must match its partition: an irregular partition takes "
                 "time offsets from every signal and any other takes none"
+            )
+        if time_offsets is not None and len(time_offsets) != len(values):
+            # The two arrays advance independently and a locator addresses both with the values
+            # offset, so an unequal pair here shifts every signal appended to this partition after
+            # it. Signal checks the same thing, but this is the site that relies on it, and any
+            # other producer of a PendingSignal reaches it without passing through Signal.
+            raise TimeFValidationError(
+                f"a signal has {len(values)} values and {len(time_offsets)} time offsets; an "
+                f"irregular partition advances both arrays together, so it needs one offset "
+                f"per value"
             )
         start = self.values.length
         self.values.append(values)
@@ -338,6 +359,47 @@ class _Appender:
         rest = data[count:]
         self._buffer = [rest] if len(rest) else []
         self._pending = len(rest)
+
+
+def read_chunk_slices(root: Path, slices: Sequence[ChunkSlice]) -> dict[int, np.ndarray]:
+    """Read the planned run of each chunk a set of windows crosses.
+
+    No fallback to a whole chunk is needed here. A locator addresses an element offset, so a planned
+    run is one contiguous slice of the array and Zarr fetches only the storage chunks that slice
+    crosses. This backend writes one locator per signal, so a window plans one slice per signal and
+    there is no row group for several signals to share.
+
+    Args:
+        root: The version directory holding the store.
+        slices: The planned chunk runs, for any number of windows, in any order.
+
+    Returns:
+        Each window's values, keyed by its :attr:`~timenet.control_plane.values.ChunkSlice.request`,
+        in the array's own dtype.
+
+    Raises:
+        ImportError: If the ``zarr`` extra is not installed.
+    """
+    try:
+        import zarr  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover - exercised only without the extra
+        raise ImportError("this version stores values in Zarr; install the extra: pip install 'timenet[zarr]'") from exc
+
+    opened: dict[str, Any] = {}
+    pieces: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for piece in slices:
+        array = opened.get(piece.locator.chunk_file)
+        if array is None:
+            array = zarr.open_array(store=root / piece.locator.chunk_file, mode="r")
+            opened[piece.locator.chunk_file] = array
+        begin = piece.locator.chunk_major_idx + piece.start
+        pieces.setdefault(piece.request, []).append(
+            (piece.locator.chunk_idx, np.asarray(array[begin : piece.locator.chunk_major_idx + piece.stop]))
+        )
+    return {
+        request: np.concatenate([values for _, values in sorted(parts)]) if len(parts) > 1 else parts[0][1]
+        for request, parts in pieces.items()
+    }
 
 
 def read_chunks(root: Path, locators: Sequence[ChunkLocator]) -> np.ndarray:

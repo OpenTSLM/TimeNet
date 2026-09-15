@@ -26,9 +26,9 @@ import duckdb
 import numpy as np
 
 from timenet.control_plane import schema as ddl
-from timenet.control_plane.values import ChunkLocator, read_many_values, read_values
+from timenet.control_plane.values import ChunkLocator, read_many_values, read_many_windows, read_values
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.constants import CONTROL_DB_FILE
 
 
@@ -354,6 +354,30 @@ WHERE c.signal_id IN (SELECT unnest(?))
 ORDER BY va.chunk_file, c.chunk_major_idx, c.chunk_minor_idx
 """
 
+# The same locators for a windowed read, in chunk order, plus the dtype the signal's spec states.
+# A chunk row carries its own length, so this is everything a window needs to be planned: chunk k
+# covers the steps the lengths before it cover, plus its own. The dtype rides along because a window
+# that covers no value reads nothing, and an empty array still has to come back in the signal's own
+# dtype; the values plane could only learn it by decoding a chunk, which is what a window avoids.
+_BATCH_WINDOW_LOCATORS = """
+SELECT c.signal_id, c.chunk_idx, va.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values,
+       sp.dtype
+FROM signal_chunks c
+JOIN values_artifacts va ON va.artifact_id = c.artifact_id
+JOIN signals sig ON sig.signal_id = c.signal_id
+JOIN specs sp ON sp.spec_id = sig.spec_id
+WHERE c.signal_id IN (SELECT unnest(?))
+ORDER BY c.signal_id, c.chunk_idx
+"""
+
+# The dtype of signals the locator query said nothing about, because they have no chunk rows at all.
+_SPEC_DTYPES = """
+SELECT sig.signal_id, sp.dtype
+FROM signals sig
+JOIN specs sp ON sp.spec_id = sig.spec_id
+WHERE sig.signal_id IN (SELECT unnest(?))
+"""
+
 
 class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hierarchy is
     """Opens a version's control database and answers questions about its hierarchy."""
@@ -367,7 +391,8 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
                 URL here to open a remote database in place, without downloading it.
 
         Raises:
-            TimeFFormatError: If the database is missing, or was written by a newer schema.
+            TimeFFormatError: If the database is missing, or does not carry this reader's schema
+                version.
         """
         self._root = Path(root)
         self._target = str(database) if database is not None else str(self._root / CONTROL_DB_FILE)
@@ -375,9 +400,33 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             raise TimeFFormatError(f"no control database at {self._root / CONTROL_DB_FILE}")
         self._backends: dict[str, str] | None = None
         self._opened: duckdb.DuckDBPyConnection | None = _connect(self._target)
+        try:
+            self._check_schema_version()
+        except Exception:
+            # Nothing will close a reader whose __init__ raised, and the caller still holds the
+            # exception's traceback, so without this the refused file keeps its handle. A second
+            # open of the same file in the same process then fails on the open, not on the version.
+            self.close()
+            raise
+
+    def _check_schema_version(self) -> None:
+        """Refuse a control database this reader cannot read.
+
+        Raises:
+            TimeFFormatError: If the database states no schema version, or states one other than
+                this reader's.
+        """
         version = self.connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         if version is None:
             raise TimeFFormatError(f"{self._target} has no schema_version in its meta table")
+        # The format is pre-release, so the reader reads one version and refuses every other. An
+        # older file is refused along with a newer one: there is no migration to run, and the tables
+        # a query names may not be there.
+        if str(version[0]) != str(ddl.SCHEMA_VERSION):
+            raise TimeFFormatError(
+                f"{self._target} is control-plane schema version {version[0]}, and this reader reads "
+                f"version {ddl.SCHEMA_VERSION} only; rebuild the dataset"
+            )
 
     def __getstate__(self) -> dict[str, Any]:
         """Drop the open connection so the reader can cross a process boundary.
@@ -519,10 +568,15 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         wanted = list(external_ids)
         if not wanted:
             return []
-        return self._records_by_id(self._resolve_ids("records", "record_id", wanted))
+        return self.records_by_id(self._resolve_ids("records", "record_id", wanted))
 
-    def _records_by_id(self, record_ids: Sequence[int]) -> list[RecordView]:  # noqa: PLR0914
+    def records_by_id(self, record_ids: Sequence[int]) -> list[RecordView]:  # noqa: PLR0914
         """Rebuild many records with four queries, whatever the batch size.
+
+        This takes the surrogate ids a walk already holds, so it skips the lookup
+        :meth:`records` pays to turn the caller's own ids into them. It is also what a caller needs
+        to read records in an order of its own choosing, such as the shuffled order a DataLoader
+        asks for, which :meth:`iter_records` cannot express because it walks storage order.
 
         Each query scans its table once and answers for the whole batch, so the per-record cost
         falls with the batch. Measured on a 618,508-record corpus: 34.49 ms per record one at a
@@ -534,7 +588,10 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
 
         Returns:
             The reconstructed records, in the order the ids were given.
-        """
+
+        Raises:
+            TimeFFormatError: If a signal's stored axis is one this reader cannot rebuild.
+        """  # noqa: DOC502 - raised by _axis_of
         wanted = list(record_ids)
         if not wanted:
             return []
@@ -617,10 +674,10 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             Each record in this worker's slice.
 
         Raises:
-            ValueError: If the worker index and count do not describe a slice.
+            TimeFValidationError: If the worker index and count do not describe a slice.
         """  # noqa: DOC502 - raised by _id_batches
         for batch in self._id_batches("records", "record_id", batch_size, worker_index, num_workers):
-            yield from self._records_by_id(batch)
+            yield from self.records_by_id(batch)
 
     def iter_tasks(self, *, batch_size: int = 512, worker_index: int = 0, num_workers: int = 1) -> Iterator[TaskView]:
         """Walk every task, hydrating each batch's records together.
@@ -634,10 +691,25 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             Each task in this worker's slice, with its input and target records rebuilt.
 
         Raises:
-            ValueError: If the worker index and count do not describe a slice.
+            TimeFValidationError: If the worker index and count do not describe a slice.
         """  # noqa: DOC502 - raised by _id_batches
         for batch in self._id_batches("tasks", "task_id", batch_size, worker_index, num_workers):
-            yield from self._tasks_by_id(batch)
+            yield from self.tasks_by_id(batch)
+
+    def _catalog(self) -> str:
+        """Return the catalog this reader's unqualified table names resolve against.
+
+        Returns:
+            The current database: the file's own name for a local open, ``control`` for a URL, which
+            is attached beside the in-memory database the connection starts in.
+
+        Raises:
+            TimeFFormatError: If the connection names no current database.
+        """
+        row = self.connection.execute("SELECT current_database()").fetchone()
+        if row is None:
+            raise TimeFFormatError(f"{self._target} is open on no database")
+        return str(row[0])
 
     def _resolve_ids(self, table: str, column: str, external_ids: Sequence[str]) -> list[int]:
         """Turn the caller's own ids into surrogates with one query.
@@ -671,17 +743,22 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             One batch of ids at a time.
 
         Raises:
-            ValueError: If the worker index and count do not describe a slice, or the batch is empty.
+            TimeFValidationError: If the worker index and count do not describe a slice, or the
+                batch is empty.
         """
         if num_workers < 1 or not 0 <= worker_index < num_workers:
-            raise ValueError(f"worker {worker_index} of {num_workers} is not a slice of the corpus")
+            raise TimeFValidationError(f"worker {worker_index} of {num_workers} is not a slice of the corpus")
         if batch_size < 1:
-            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+            raise TimeFValidationError(f"batch_size must be at least 1, got {batch_size}")
         query = _PARTITIONED_IDS.format(table=table, column=column)
         # The ids stream from their own cursor: hydrating a batch runs more queries, and a second
         # query on the same connection would discard the result this one is still reading.
         cursor = self.connection.cursor()
         try:
+            # A cursor is a new connection on the same instance, so it starts on the instance's own
+            # default catalog rather than this reader's. Over a URL the control plane is attached
+            # beside an empty in-memory one, and an unqualified table name would miss it.
+            cursor.execute(f"USE {_sql_identifier(self._catalog())}")
             found = cursor.execute(query, [num_workers, worker_index])
             while rows := found.fetchmany(batch_size):
                 yield [row[0] for row in rows]
@@ -717,9 +794,9 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         wanted = list(external_ids)
         if not wanted:
             return []
-        return self._tasks_by_id(self._resolve_ids("tasks", "task_id", wanted))
+        return self.tasks_by_id(self._resolve_ids("tasks", "task_id", wanted))
 
-    def _tasks_by_id(self, task_ids: Sequence[int]) -> list[TaskView]:
+    def tasks_by_id(self, task_ids: Sequence[int]) -> list[TaskView]:
         """Rebuild many tasks, hydrating every record they refer to in one batch.
 
         Args:
@@ -739,7 +816,7 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         # Every record any of these tasks names, rebuilt together rather than one task at a time. A
         # task item already carries the surrogate, so nothing has to be resolved first.
         referenced = {row[5] for row in items if row[3] == "record" and row[5] is not None}
-        records = {record.record_id: record for record in self._records_by_id(sorted(referenced))}
+        records = {record.record_id: record for record in self.records_by_id(sorted(referenced))}
         for task_id, role, _position, item_type, text_value, record_id in items:
             item = text_value if item_type == "text" else records.get(record_id)
             if item is None:
@@ -841,6 +918,17 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         """
         return [ChunkLocator(*row) for row in self.connection.execute(_CHUNK_LOCATORS, [signal_id]).fetchall()]
 
+    def _spec_dtypes(self, signal_ids: Sequence[int]) -> dict[int, str]:
+        """Return the dtype each signal's spec declares.
+
+        Args:
+            signal_ids: The signals to look up.
+
+        Returns:
+            The dtype per signal id. An id naming no signal is not in the mapping.
+        """
+        return dict(self.connection.execute(_SPEC_DTYPES, [list(signal_ids)]).fetchall())
+
     def values_backends(self) -> dict[str, str]:
         """Return which backend wrote each values artifact.
 
@@ -864,9 +952,13 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
             signal_id: The signal's surrogate id, as :class:`SignalView` carries it.
 
         Returns:
-            The signal's values.
+            The signal's values. A signal with no chunks reads back empty in the dtype its spec
+            declares, which is what :meth:`values_window` hands back for the same signal.
         """
-        return read_values(self._root, self.chunk_locators(signal_id), self.values_backends())
+        locators = self.chunk_locators(signal_id)
+        if not locators:
+            return _empty_values(self._spec_dtypes([signal_id]).get(signal_id, "float64"))
+        return read_values(self._root, locators, self.values_backends())
 
     def values_for(self, signal_ids: Sequence[int]) -> dict[int, np.ndarray]:
         """Read many signals' values in one pass over the values plane.
@@ -891,8 +983,98 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         locators = [ChunkLocator(*row) for row in self.connection.execute(_BATCH_CHUNK_LOCATORS, [wanted]).fetchall()]
         return read_many_values(self._root, locators, self.values_backends())
 
+    def values_window(self, signal_id: int, start: int, stop: int) -> np.ndarray:
+        """Read the half-open step range ``[start, stop)`` of one signal.
+
+        The canonical item of a corpus is not always a whole record. One scored 30 second epoch of
+        an overnight polysomnogram is 12 KB of a 34 MB recording, and :meth:`values` would decode all
+        34 MB of it to hand back the 12 KB. This reads only the chunks the window crosses, which the
+        chunk rows' own lengths are enough to work out.
+
+        A ``stop`` past the signal's last step is clamped to it, so a scoring that overruns the
+        signals it scores reads the steps that exist. An empty window reads back an empty array of
+        the signal's dtype without touching the values plane at all.
+
+        Args:
+            signal_id: The signal's surrogate id, as :class:`SignalView` carries it.
+            start: The window's first step, inclusive.
+            stop: The window's last step, exclusive.
+
+        Returns:
+            The window's values. A signal id that names nothing reads back empty, as
+            :meth:`values` does.
+
+        Raises:
+            TimeFValidationError: If the window runs backwards or starts before the first step.
+        """  # noqa: DOC502 - raised by the values plane's window planner
+        return self.values_windows([(signal_id, start, stop)])[0]
+
+    def values_windows(self, windows: Sequence[tuple[int, int, int]]) -> list[np.ndarray]:
+        """Read many step windows in one pass over the values plane.
+
+        This is to :meth:`values_window` what :meth:`values_for` is to :meth:`values`: one query for
+        every locator, then the work grouped by artifact and row group so each row group is decoded
+        once however many windows land in it.
+
+        Two things land in one row group, and both matter. An item cut from a record asks for a
+        window of each of its signals, and those are neighbours in the shard. A batch of items cut
+        from the same record asks for many windows of each of those signals, and consecutive windows
+        share a chunk, so a batch of 256 epochs of one polysomnogram decodes each row group once
+        rather than 256 times. That is why a window names its signal in the request rather than
+        keying the batch by signal: a signal can be asked for more than once.
+
+        Args:
+            windows: One ``(signal_id, start, stop)`` per window, with ``stop`` exclusive. A signal
+                may appear any number of times. An id naming no signal reads back empty.
+
+        Returns:
+            Each window's values, in the order asked for.
+
+        Raises:
+            TimeFValidationError: If a window runs backwards or starts before the first step.
+        """  # noqa: DOC502 - raised by the values plane's window planner
+        if not windows:
+            return []
+        wanted = sorted({signal_id for signal_id, _, _ in windows})
+        rows = self.connection.execute(_BATCH_WINDOW_LOCATORS, [wanted]).fetchall()
+        locators = [ChunkLocator(*row[:-1]) for row in rows]
+        dtype_of = {row[0]: row[-1] for row in rows}
+        chunkless = [signal_id for signal_id in wanted if signal_id not in dtype_of]
+        if chunkless:
+            # No chunk row to ride on, so this asks the specs table directly. It is a second query,
+            # which is why it only runs for the signals the first one did not answer for.
+            dtype_of.update(self._spec_dtypes(chunkless))
+        found = read_many_windows(self._root, locators, windows, self.values_backends())
+        # A window covering no value read nothing, so its dtype comes from the spec rather than from
+        # the values plane, which would have had to decode a chunk to state one.
+        return [
+            found.get(request, _empty_values(dtype_of.get(signal_id, "float64")))
+            for request, (signal_id, _, _) in enumerate(windows)
+        ]
+
+
+_TEXT_DTYPES = frozenset({"str", "enum"})
+"""The spec dtypes whose values are text rather than numbers."""
+
+
+def _empty_values(dtype: str) -> np.ndarray:
+    """Return the array a window covering no value reads back.
+
+    Args:
+        dtype: The dtype the signal's spec declares.
+
+    Returns:
+        An empty array in the dtype a read of that signal hands back. Text reads back as ``object``,
+        the way Arrow gives NumPy a string column; ``np.empty(0, dtype="str")`` would say ``<U1``
+        and so claim a one-character limit that the signal does not have.
+    """
+    return np.empty(0, dtype=np.dtype(object) if dtype in _TEXT_DTYPES else np.dtype(dtype))
+
 
 _REMOTE_SCHEMES = ("http://", "https://", "s3://", "gs://", "az://")
+
+_NO_CREDENTIALS = "Secret Validation Failure"
+"""What DuckDB says when the credential chain resolved no credentials to put in a secret."""
 
 
 def _connect(target: str) -> duckdb.DuckDBPyConnection:
@@ -908,20 +1090,97 @@ def _connect(target: str) -> duckdb.DuckDBPyConnection:
 
     Returns:
         A read-only connection whose default database is the control plane.
-    """
+
+    Raises:
+        TimeFFormatError: If the scheme needs a DuckDB extension that could not be loaded.
+    """  # noqa: DOC502 - raised by _authorize
     if not target.startswith(_REMOTE_SCHEMES):
         return duckdb.connect(target, read_only=True)
     connection = duckdb.connect()
     connection.execute("INSTALL httpfs")
     connection.execute("LOAD httpfs")
-    if target.startswith(("s3://", "gs://", "az://")):
-        # Let DuckDB resolve credentials the way every other AWS tool does: environment, shared
-        # config, SSO. Without a secret an object store answers 403 and DuckDB reports it as a
-        # database that does not exist, which is a confusing way to learn you are not signed in.
-        connection.execute("CREATE SECRET IF NOT EXISTS (TYPE s3, PROVIDER credential_chain)")
-    connection.execute(f"ATTACH '{target}' AS control (READ_ONLY)")
+    _authorize(connection, target)
+    connection.execute(f"ATTACH '{_sql_literal(target)}' AS control (READ_ONLY)")
     connection.execute("USE control")
     return connection
+
+
+def _authorize(connection: duckdb.DuckDBPyConnection, target: str) -> None:
+    """Give a connection what it needs to reach the object store a URL names.
+
+    An S3 or Azure URL gets a credential-chain secret, so DuckDB resolves credentials the way the
+    vendor's own tools do: environment, shared config, SSO. DuckDB walks that chain when the secret
+    is created, not when the read runs, so a machine with no credentials fails right there. That
+    failure is not fatal: with no secret the request goes out unsigned, which is what a public bucket
+    wants, and a private one answers 403 on the read instead.
+
+    Args:
+        connection: The connection that is about to attach the database.
+        target: The URL being attached.
+
+    Raises:
+        TimeFFormatError: If the URL is on Azure and DuckDB's azure extension cannot be loaded.
+            Without it DuckDB has no filesystem for the scheme at all. Also if the secret fails for
+            any reason other than an empty chain, since then the caller has credentials that did
+            not reach the request.
+    """
+    if target.startswith("s3://"):
+        store = "s3"
+    elif target.startswith("az://"):
+        try:
+            connection.execute("INSTALL azure")
+            connection.execute("LOAD azure")
+        except duckdb.Error as exc:
+            raise TimeFFormatError(
+                f"reading {target} needs DuckDB's azure extension, which did not load: {exc}"
+            ) from exc
+        store = "azure"
+    else:
+        # An HTTP URL needs no secret, and DuckDB reaches Google Cloud Storage with an HMAC key pair
+        # that this reader has no way to be handed, so a gs:// read is anonymous. A public bucket
+        # serves it; a private one answers 403.
+        return
+    try:
+        connection.execute(f"CREATE SECRET IF NOT EXISTS (TYPE {store}, PROVIDER credential_chain)")
+    except duckdb.Error as exc:
+        # DuckDB raises a bare duckdb.Error for every failure here, so the message is the only thing
+        # that separates a chain resolving nothing, which is the anonymous read above, from a
+        # failure that leaves a signed-in caller unsigned: the extension that provides the chain
+        # not installing, above all. Suppressing that one turns a setup problem into DuckDB's
+        # "database does not exist" on the read, which says nothing about credentials.
+        if _NO_CREDENTIALS not in str(exc):
+            raise TimeFFormatError(
+                f"DuckDB could not create the {store} credential secret for {target}: {exc}"
+            ) from exc
+
+
+def _sql_literal(value: str) -> str:
+    """Escape a value for a single-quoted SQL literal.
+
+    DuckDB takes no parameter for the target of an ATTACH, so it goes into the statement as text. A
+    path can hold a single quote, as a home directory named ``o'brien`` does, and doubling it is how
+    SQL says the character rather than the end of the literal.
+
+    Args:
+        value: The value the literal should carry.
+
+    Returns:
+        The value with every single quote doubled.
+    """
+    return value.replace("'", "''")
+
+
+def _sql_identifier(name: str) -> str:
+    """Quote a name so SQL reads it as an identifier.
+
+    Args:
+        name: The identifier, such as the name of a catalog.
+
+    Returns:
+        The name in double quotes, with any double quote inside it doubled.
+    """
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
 def _axis_of(  # noqa: PLR0913, PLR0917 - one parameter per stored column
@@ -931,7 +1190,7 @@ def _axis_of(  # noqa: PLR0913, PLR0917 - one parameter per stored column
     start_index: int | None,
     first_us: int | None,
     last_us: int | None,
-) -> TimeAxis | None:
+) -> TimeAxis:
     """Rebuild a signal's axis from the columns ``axes`` stores it in.
 
     The axis is what places values in time, so a consumer that builds a frame or a tensor needs the
@@ -947,18 +1206,32 @@ def _axis_of(  # noqa: PLR0913, PLR0917 - one parameter per stored column
         last_us: An irregular axis' last offset.
 
     Returns:
-        The axis, or ``None`` if the stored kind is not one this reader knows.
+        The axis the row describes.
+
+    Raises:
+        TimeFFormatError: If the row names a kind this reader cannot rebuild, or leaves out a column
+            that kind needs. A default in place of a missing column would put a signal somewhere
+            other than where it was recorded.
     """
-    if axis_type == "regular" and period_numerator_us is not None and period_denominator:
+    if axis_type == "regular":
+        if period_numerator_us is None or not period_denominator or start_index is None:
+            raise TimeFFormatError(
+                f"regular axis stores period_numerator_us={period_numerator_us}, "
+                f"period_denominator={period_denominator}, start_index={start_index}; it needs all three"
+            )
         return RegularAxis(
             period_us=Fraction(period_numerator_us, period_denominator),
-            start_index=start_index or 0,
+            start_index=start_index,
         )
     if axis_type == "irregular":
-        return IrregularAxis(first_us=first_us or 0, last_us=last_us or 0)
+        if first_us is None or last_us is None:
+            raise TimeFFormatError(
+                f"irregular axis stores first_us={first_us}, last_us={last_us}; it needs both endpoints"
+            )
+        return IrregularAxis(first_us=first_us, last_us=last_us)
     if axis_type == "ordinal":
         return OrdinalAxis()
-    return None
+    raise TimeFFormatError(f"axes row names axis type {axis_type!r}, which this reader cannot rebuild")
 
 
 def _annotation(row: Sequence[Any]) -> ResolvedAnnotation:

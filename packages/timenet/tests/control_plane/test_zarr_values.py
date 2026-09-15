@@ -5,15 +5,39 @@ ask two things: that a Zarr-written version reads back byte for byte with its dt
 the same hierarchy written to either backend comes back identical.
 """
 
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
-from timenet.control_plane import TimeFReader, TimeFWriter
-from timenet.control_plane.zarr_values import STORE_DIR
-from timenet.testing import make_dataset
+from timenet.control_plane import DeclarativeDataset, Record, Signal, Source, TimeFReader, TimeFWriter
+from timenet.control_plane.values import PendingSignal
+from timenet.control_plane.zarr_values import STORE_DIR, ZarrValuesPlaneWriter
+from timenet.dataset.axis import RegularAxis
+from timenet.errors import TimeFValidationError
+from timenet.testing import make_dataset, make_metadata
+from timenet.types import TimeSeriesSpec, ureg
 
 
 pytest.importorskip("zarr")
+
+STAGE_SPEC = TimeSeriesSpec(spec_type="sleep-stage", name="Sleep stage", unit_value=ureg.dimensionless, dtype="str")
+STAGE_AXIS = RegularAxis(period_us=Fraction(30_000_000, 1))
+
+
+def _string_dataset():
+    """Build a dataset whose one signal carries string values rather than numbers."""
+    stages = Signal(
+        id="stages",
+        name="Sleep stage",
+        values=np.array(["W", "N1", "N2", "N3", "REM"]),
+        time_axis=STAGE_AXIS,
+        spec=STAGE_SPEC,
+    )
+    return DeclarativeDataset(
+        metadata=make_metadata(),
+        records=[Record(id="night-000", sources=[Source(id="psg", name="PSG", signals=[stages])])],
+    )
 
 
 def _write(root, backend, **options):
@@ -138,6 +162,75 @@ def test_the_manifest_says_which_backend_wrote_the_values(tmp_path):
     assert all(part.path.startswith(f"{STORE_DIR}/") for part in manifest.files.time_series)
 
 
+def test_a_string_signal_is_refused_by_name(tmp_path):
+    """``np.dtype('str').itemsize`` is 0, so the chunk budget used to divide by zero instead.
+
+    Naming a backend that cannot hold the dtype is caller input, not a corrupt artifact, so the
+    refusal is the same class as the partition's below it and a caller catching ``ValueError``
+    around the write sees both.
+    """
+    dataset = _string_dataset()
+    with (
+        pytest.raises(TimeFValidationError) as raised,
+        TimeFWriter(tmp_path, dataset.metadata, values_backend="zarr") as writer,
+    ):
+        writer.write(dataset)
+    assert isinstance(raised.value, ValueError)
+    message = str(raised.value)
+    assert "'str'" in message
+    assert "'zarr'" in message
+    assert "'parquet'" in message
+
+
+def test_a_pending_signal_whose_two_arrays_disagree_is_refused(tmp_path):
+    """The partition advances both arrays together, and it is reached without passing through Signal.
+
+    ``Signal`` refuses the same pair at construction, but a backend implementing the public
+    ``ValuesWriter`` protocol is handed a ``PendingSignal``, which nothing else checks.
+    """
+    writer = ZarrValuesPlaneWriter(tmp_path)
+    pending = PendingSignal(
+        signal_id=1,
+        name="Chest temperature",
+        spec_type="temperature",
+        dtype="float32",
+        values=np.arange(100, dtype=np.float32),
+        time_offsets_us=np.arange(99, dtype=np.int64),
+    )
+    with pytest.raises(TimeFValidationError, match="one offset per value"):
+        writer.add(pending)
+
+
+def test_an_enum_signal_is_refused_by_name_too(tmp_path):
+    """'enum' is no NumPy dtype at all, so asking NumPy for its width raised a TypeError instead."""
+    stage_spec = TimeSeriesSpec(
+        spec_type="sleep-stage",
+        name="Sleep stage",
+        unit_value=ureg.dimensionless,
+        dtype="enum",
+        categories=("W", "N1", "N2", "N3", "REM"),
+    )
+    stages = Signal(
+        id="stages",
+        name="Sleep stage",
+        values=np.array(["W", "N1", "N2", "N3", "REM"]),
+        time_axis=STAGE_AXIS,
+        spec=stage_spec,
+    )
+    dataset = DeclarativeDataset(
+        metadata=make_metadata(),
+        records=[Record(id="night-000", sources=[Source(id="psg", name="PSG", signals=[stages])])],
+    )
+    with (
+        pytest.raises(TimeFValidationError) as raised,
+        TimeFWriter(tmp_path, dataset.metadata, values_backend="zarr") as writer,
+    ):
+        writer.write(dataset)
+    message = str(raised.value)
+    assert "'enum'" in message
+    assert "'parquet'" in message
+
+
 def test_an_unknown_backend_is_refused(tmp_path):
     dataset = make_dataset(n_records=1, n_values=32)
     with (
@@ -156,3 +249,25 @@ def test_a_small_chunk_budget_does_not_change_what_comes_back(tmp_path):
         there = other.values(_signal(other, "record-000", "record-000-lead-i").signal_id)
         np.testing.assert_array_equal(here, there)
         assert here.dtype == there.dtype
+
+
+def test_a_window_reads_the_same_steps_a_slice_of_the_whole_signal_holds(zarr_version, parquet_version):
+    """A window is a range read on this backend too, so both backends must return the same bytes."""
+    with TimeFReader(zarr_version) as zarred, TimeFReader(parquet_version) as parqueted:
+        from_store = _signal(zarred, "record-001", "record-001-lead-ii").signal_id
+        from_shard = _signal(parqueted, "record-001", "record-001-lead-ii").signal_id
+        whole = zarred.values(from_store)
+        for start, stop in ((0, 0), (0, 256), (17, 33), (200, 4_000)):
+            window = zarred.values_window(from_store, start, stop)
+            assert window.dtype == whole.dtype
+            assert window.tobytes() == whole[start:stop].tobytes(), f"window [{start}, {stop})"
+            assert window.tobytes() == parqueted.values_window(from_shard, start, stop).tobytes()
+
+
+def test_a_window_crossing_a_storage_chunk_is_stitched_back(tmp_path):
+    """A 256 byte Zarr chunk holds 64 float32, so this window crosses several of them."""
+    version = _write(tmp_path / "split", "zarr", chunk_max_bytes=256)
+    with TimeFReader(version) as reader:
+        signal_id = _signal(reader, "record-000", "record-000-lead-i").signal_id
+        whole = reader.values(signal_id)
+        assert reader.values_window(signal_id, 30, 200).tobytes() == whole[30:200].tobytes()
