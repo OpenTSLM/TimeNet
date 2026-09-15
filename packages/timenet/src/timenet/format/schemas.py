@@ -6,8 +6,8 @@ A shard's column layout is fixed. Only its ``time_series_id`` column varies: it 
 into the shard schema. ``binary(16)`` decodes back to the canonical string, so callers always see
 string ids.
 
-Every other id lives in the control database as the caller's own string. The shard is the one place
-where a logical id still needs a storage decision.
+Every other id lives in the control database as the caller's own string, so the shard is the one
+place a logical id still needs a storage decision.
 """
 
 from collections.abc import Iterable
@@ -20,8 +20,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types.ids import id_to_bytes
 
 
-#: The logical ids that cross-reference TimeF records, series, annotations and tasks. A shard
-#: column holds ``time_series_id``.
+#: The logical ids that cross-reference TimeF entities. A shard column holds ``time_series_id``.
 LOGICAL_IDS: tuple[str, ...] = (
     "record_id",
     "time_series_id",
@@ -80,7 +79,7 @@ class IdCodec:
 
     This is the one place that holds the ``str -> bytes`` conversion for a ``uuid16`` column. The
     writer builds a codec (:meth:`from_uuid16` or :meth:`from_id_types`) and the values plane calls
-    it. The two halves of the shard contract cannot drift apart.
+    it, so the two halves of the shard contract cannot drift apart.
     """
 
     uuid16: frozenset[str]

@@ -46,7 +46,7 @@ def _chunks(version_dir):
     rows = _query(
         version_dir,
         "SELECT s.external_id, c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values "
-        "FROM time_series_chunks c "
+        "FROM signal_chunks c "
         "JOIN time_series s ON s.time_series_id = c.time_series_id "
         "JOIN values_artifacts v ON v.artifact_id = c.artifact_id "
         "ORDER BY s.external_id, c.chunk_idx",

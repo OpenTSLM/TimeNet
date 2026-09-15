@@ -35,7 +35,7 @@ def _chunks(version_dir):
     try:
         rows = connection.execute(
             "SELECT s.external_id, c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values "
-            "FROM time_series_chunks c "
+            "FROM signal_chunks c "
             "JOIN time_series s ON s.time_series_id = c.time_series_id "
             "JOIN values_artifacts v ON v.artifact_id = c.artifact_id "
             "ORDER BY s.external_id, c.chunk_idx"
@@ -155,7 +155,6 @@ def test_oversized_decoded_chunk_is_not_cached(monkeypatch):
     assert reader._chunk_cache_bytes == 0
 
 
-@pytest.mark.slow  # writes and reads a whole Zarr store of 4-D frames
 def test_nd_uint8_round_trip_and_range_read(tmp_path):
     frames = np.arange(7 * 4 * 5 * 3, dtype=np.uint8).reshape(7, 4, 5, 3)
     spec = TimeSeriesSpec(
