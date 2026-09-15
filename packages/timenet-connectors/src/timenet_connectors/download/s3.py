@@ -4,8 +4,9 @@ This helper downloads an ``s3://bucket/key`` object to a local path with boto3, 
 in parallel with multipart downloads. When AWS credentials are configured (environment, ``AWS_PROFILE``
 / the shared ``~/.aws`` config / SSO, container and instance roles), the client uses them, so a private
 source stays reachable. When none are configured, it reads anonymously, which is what a public bucket
-such as physionet-open needs. The code imports ``boto3`` lazily, so users who build only offline
-datasets do not need it.
+such as physionet-open needs. Credentials that resolve but grant nothing on the bucket get the same
+treatment after the fact: a refused signed request is retried unsigned. The code imports ``boto3``
+lazily, so users who build only offline datasets do not need it.
 """
 
 import logging
@@ -19,8 +20,11 @@ from timenet_connectors.download.progress import DownloadProgress, ProgressCallb
 
 _LOG = logging.getLogger(__name__)
 
+_FORBIDDEN = 403
+_ACCESS_DENIED_CODES = frozenset({"403", "AccessDenied", "Forbidden", "InvalidAccessKeyId"})
 
-def _s3_client() -> Any:
+
+def _s3_client(*, anonymous: bool = False) -> Any:
     """Build a boto3 S3 client, using credentials when available and anonymous access otherwise.
 
     boto3 resolves credentials through its full chain: environment variables, ``AWS_PROFILE`` and the
@@ -29,6 +33,9 @@ def _s3_client() -> Any:
     configured, or the provider chain fails to load (for example an SSO profile missing an optional
     dependency), the client falls back to anonymous access, which is what a public bucket such as
     physionet-open needs.
+
+    Args:
+        anonymous: Skip credential resolution and sign nothing.
 
     Returns:
         A boto3 S3 client.
@@ -47,6 +54,9 @@ def _s3_client() -> Any:
             "Run the build without --no-isolation, or install it yourself"
         ) from exc
     session = boto3.session.Session()
+    unsigned = Config(signature_version=UNSIGNED)
+    if anonymous:
+        return session.client("s3", config=unsigned)
     try:
         credentials = session.get_credentials()
     except BotoCoreError:
@@ -56,7 +66,22 @@ def _s3_client() -> Any:
     if credentials is not None:
         return session.client("s3")
     _LOG.info("no usable AWS credentials; reading S3 with unsigned (anonymous) requests")
-    return session.client("s3", config=Config(signature_version=UNSIGNED))
+    return session.client("s3", config=unsigned)
+
+
+def _is_access_denied(exc: Any) -> bool:
+    """Return whether a boto3 error is the bucket refusing a signed request.
+
+    Args:
+        exc: The ``ClientError`` boto3 raised.
+
+    Returns:
+        Whether the error is an access denial rather than a missing object or a transport fault.
+    """
+    response = getattr(exc, "response", None) or {}
+    code = (response.get("Error") or {}).get("Code")
+    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    return code in _ACCESS_DENIED_CODES or status == _FORBIDDEN
 
 
 def download_s3_object(s3_url: str, dest: Path) -> None:
@@ -72,6 +97,7 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
 
     Raises:
         TimeFValidationError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
+        ClientError: If S3 refuses the read, both signed and, where that was denied, unsigned.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
@@ -83,20 +109,35 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
     # boto3 invokes the Callback from its own transfer worker threads. These threads do not inherit
     # the ambient ContextVar sink, so capture it here on the calling thread and call it directly.
     sink = current_sink()
+
+    def fetch(reader: Any) -> None:
+        if sink is None:
+            reader.download_file(bucket, key, str(part))
+            return
+        # boto3 reports bytes incrementally. A HEAD gives the total for a full progress figure.
+        total = reader.head_object(Bucket=bucket, Key=key)["ContentLength"]
+        transferred = 0
+
+        def _on_bytes(count: int, report: ProgressCallback = sink) -> None:
+            nonlocal transferred
+            transferred += count
+            report(DownloadProgress(s3_url, transferred, total))
+
+        reader.download_file(bucket, key, str(part), Callback=_on_bytes)
+
+    from botocore.exceptions import ClientError  # noqa: PLC0415 - _s3_client proved boto3 imports
+
     try:
-        if sink is not None:
-            # boto3 reports bytes incrementally. A HEAD gives the total for a full progress figure.
-            total = client.head_object(Bucket=bucket, Key=key)["ContentLength"]
-            transferred = 0
-
-            def _on_bytes(count: int, report: ProgressCallback = sink) -> None:
-                nonlocal transferred
-                transferred += count
-                report(DownloadProgress(s3_url, transferred, total))
-
-            client.download_file(bucket, key, str(part), Callback=_on_bytes)
-        else:
-            client.download_file(bucket, key, str(part))
+        try:
+            fetch(client)
+        except ClientError as exc:
+            if not _is_access_denied(exc):
+                raise
+            # Credentials that the chain resolved, but that grant nothing on this bucket, sign a
+            # request the bucket refuses. A public bucket answers the same request unsigned, so
+            # retry that way: an EC2 instance role reaches physionet-open no other way.
+            _LOG.info("signed request to %s was refused; retrying anonymously", s3_url)
+            fetch(_s3_client(anonymous=True))
         part.replace(dest)
     except BaseException:
         part.unlink(missing_ok=True)  # a partial or interrupted download must not masquerade as complete
