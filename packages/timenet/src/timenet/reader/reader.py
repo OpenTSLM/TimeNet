@@ -1,13 +1,14 @@
 """``TimeFReader`` reads a TimeF version directory and rebuilds it as a :class:`TimeFDataset`.
 
 The file ``manifest.json`` controls the reader. The reader does not run connector code. When you open
-a version, the reader reads only the manifest. It resolves the schema, tasks, records, annotations,
-and each series' values only on first use. The reader rebuilds types from the control database's own
-declaration, and it does not create classes at runtime. As a result, read-back objects can pickle,
-and they match the original objects field for field.
+a version, the reader reads only the manifest. It resolves tasks, records, annotations, and each
+series' values only on first use. The reader rebuilds types from the manifest's flat descriptors and
+the version's control database, and it does not create classes at runtime. As a result, read-back
+objects can pickle, and they match the original objects field for field.
 
-The rebuild is batched. Records come back a batch at a time. Each batch costs one query per table
-for the whole batch, not one query per record.
+The rebuild is batched. Records come back a batch at a time, and each batch costs one query per
+table for the whole batch rather than one query per record. Measured on a 618,508-record corpus:
+34.49 ms per record one at a time, 0.111 ms per record in batches of a thousand.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 
-from timenet.control_plane.payload import PayloadKind, task_payload, text_answer
+from timenet.control_plane import schema as ddl
 from timenet.control_plane.reader import ControlPlaneReader
 from timenet.control_plane.spans import span_from_row
 from timenet.dataset import Record, TimeFDataset, TimeSeries
@@ -36,20 +37,15 @@ from timenet.format.checksums import stream_checksum
 from timenet.types import (
     TASKS,
     Annotation,
-    AnnotationDescriptor,
-    AnnotationType,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Task,
     TaskType,
     TimeInterval,
-    TimeSeriesSpec,
     annotation_type_of,
-    ureg,
     value_type_of,
 )
-from timenet.values_backends.reader import BaseValuesReader, SeriesChunks, make_values_reader
+from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 if TYPE_CHECKING:
@@ -57,19 +53,15 @@ if TYPE_CHECKING:
 
 
 _RECORD_BATCH_ROWS = 512
-"""How many records one round of control-database queries rebuilds.
+"""How many records one round of control-plane queries rebuilds.
 
 Each query in the round scans its table once and answers for the whole batch, so the per-record cost
-falls with the batch size. A few hundred records keep that cost low and still fit in memory.
+falls with the batch size. A few hundred is where the curve flattens and the decoded rows still sit
+comfortably in memory.
 """
 
-_INDEX_ROWS_CACHE_RECORDS = 2 * _RECORD_BATCH_ROWS
-"""How many records keep their index rows.
-
-The rows are fetched a batch at a time, so the cache holds the batch a read is walking and the one
-before it. A smaller cache drops rows that the same batch asks for again, and the next record pays
-another statement for them.
-"""
+_INDEX_ROWS_CACHE_RECORDS = 8
+"""How many records keep their chunk locators. A read walks one record at a time, so this is small."""
 
 _AXIS_CACHE_SIZE = 1024
 """Maximum number of stored time axes. Series with the same timing can reuse an axis.
@@ -87,13 +79,10 @@ class TimeFReader:
         records, annotations, and each series' values only on first use. As a result, the cost to
         open a version is the same for three records or three million.
 
-        A structurally corrupt or missing file fails on its first access, not here. A first access
-        is ``.tasks``, the first record, or the first value read. The failure reaches the caller as
-        :class:`~timenet.errors.TimeFFormatError`, not as the ``FileNotFoundError`` the filesystem
-        raised under it. :meth:`verify` raises that same type for the same file.
-
-        Call :meth:`verify` for a check of the version's integrity at construction time. Build the
-        handle with :meth:`~timenet.registry.BaseRegistry.open_version` or with
+        A structurally corrupt or missing file fails on its first access, not here. Examples of a
+        first access are ``.tasks``, the first record, or the first value read. Call :meth:`verify`
+        for a check of the version's integrity at construction time. Build the handle with
+        :meth:`~timenet.registry.BaseRegistry.open_version` or with
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
         Args:
@@ -107,19 +96,15 @@ class TimeFReader:
         self._root = version.root
         self._manifest = version.manifest
 
-        # The schema types the rows, and the rows are in the control database, so that is where the
-        # reader reads it from. The manifest carries the same block as a projection a registry can
-        # filter on without downloading the database.
-        self._schema: DatasetSchema | None = None
-        self._spec_by_type: dict[str, TimeSeriesSpec] = {}
-        self._annotation_descriptors: dict[str, AnnotationDescriptor] = {}
+        self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
+        self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
         # This is per-process scratch space. The reader builds it on demand and drops it on pickle.
         # ``__getstate__`` must stay in step with these fields.
         self._control: ControlPlaneReader | None = None
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._axis_cache: dict[tuple, TimeAxis] = {}
-        self._index_rows_cache: OrderedDict[int, dict[str, SeriesChunks]] = OrderedDict()
+        self._index_rows_cache: OrderedDict[str, dict[str, list[dict]]] = OrderedDict()
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -156,7 +141,7 @@ class TimeFReader:
         self.close()
 
     def close(self) -> None:
-        """Close the values backend and the control database, and release their caches."""
+        """Close the values backend and the control database, releasing their caches."""
         if self._values is not None:
             self._values.close()
             self._values = None
@@ -206,14 +191,8 @@ class TimeFReader:
 
     @property
     def schema(self) -> DatasetSchema:
-        """The dataset's type declaration, rebuilt from the control database on first use.
-
-        Returns:
-            The specs and annotation descriptors the database declares, with the task classes the
-            manifest names. A task class is code rather than data, so the version declares which ones
-            it holds and the reader resolves them against the built-in registry.
-        """
-        return self._declaration()
+        """The dataset's type declaration, reconstructed from the manifest."""
+        return self._manifest.schema
 
     @property
     def tasks(self) -> tuple[Task, ...]:
@@ -250,7 +229,7 @@ class TimeFReader:
             metadata=self._manifest.metadata,
             records=records,
             tasks=tasks,
-            schema=self.schema,
+            schema=self._manifest.schema,
             registered_annotations=self._read_registered_annotations(),
         )
 
@@ -262,8 +241,8 @@ class TimeFReader:
     ) -> Iterator[Record]:
         """Yield records lazily without materializing a :class:`TimeFDataset`.
 
-        Records are rebuilt a batch at a time, so the reader queries the control database once per
-        batch per table, not once per record. Records come back in stored order (sorted by
+        Records are rebuilt a batch at a time, so the control plane is queried once per batch per
+        table rather than once per record. Records come back in stored order (sorted by
         ``record_id``), not in the order you asked for them. An id that the dataset does not contain
         raises ``TimeFValidationError``.
 
@@ -296,48 +275,8 @@ class TimeFReader:
 
     # ---- loading -------------------------------------------------------------------------------
 
-    def _declaration(self) -> DatasetSchema:
-        """Rebuild the version's type declaration from the control database, once per reader.
-
-        Returns:
-            The rebuilt schema, cached with the by-type lookups the record and annotation builders use.
-
-        Raises:
-            TimeFFormatError: If the database declares a spec or a descriptor that cannot be rebuilt.
-        """  # noqa: DOC502 - raised by _as_format_error
-        if self._schema is None:
-            with self._as_format_error():
-                control = self._control_plane()
-                schema = DatasetSchema(
-                    time_series_specs=tuple(_spec(row) for row in control.specs()),
-                    annotations=tuple(_descriptor(row) for row in control.annotation_descriptors()),
-                    tasks=self._manifest.schema.tasks,
-                )
-            self._schema = schema
-            self._spec_by_type = {spec.spec_type: spec for spec in schema.time_series_specs}
-            self._annotation_descriptors = {d.key: d for d in schema.annotations}
-        return self._schema
-
-    def _specs(self) -> dict[str, TimeSeriesSpec]:
-        """Return each declared spec, keyed by its spec type.
-
-        Returns:
-            The lookup the series builder resolves a row's ``spec_type`` against.
-        """
-        self._declaration()
-        return self._spec_by_type
-
-    def _descriptors(self) -> dict[str, AnnotationDescriptor]:
-        """Return each declared annotation descriptor, keyed by its annotation key.
-
-        Returns:
-            The lookup the annotation builder resolves a row's ``key`` against.
-        """
-        self._declaration()
-        return self._annotation_descriptors
-
     def _control_plane(self) -> ControlPlaneReader:
-        """Return the open view of the control database, built on first use.
+        """Return the open control-plane view, built on first use.
 
         Returns:
             The cached view.
@@ -384,14 +323,10 @@ class TimeFReader:
             return
         control = self._control_plane()
         series = _by_record(control.record_series(record_ids))
-        tasks = _by_record(control.record_tasks(record_ids))
         annotations = _by_record(control.record_annotations(record_ids)) if with_annotations else {}
-        # The batch travels with the records it built, so the first series that reads its values
-        # fetches the locators of the whole batch instead of its own record's.
-        batch_keys = tuple(record_ids)
         for row in control.records(record_ids):
             key = row["record_id"]
-            yield self._build_record(row, series.get(key, ()), tasks.get(key, ()), annotations.get(key, ()), batch_keys)
+            yield self._build_record(row, series.get(key, ()), annotations.get(key, ()))
 
     def _load_tasks(self) -> tuple[Task, ...]:
         """Rebuild every task, one query per payload table for the whole version.
@@ -403,18 +338,32 @@ class TimeFReader:
             TimeFFormatError: If a task derives from an id no task carries.
         """
         rows = self._control_plane().tasks()
-        grouped = {
-            name: _grouped(rows[name], "task_id") for name in ("items", "fields", "refs", "spans", "annotations")
-        }
-        derivations = _grouped(rows["from_tasks"], "task_id")
+        items = _grouped(rows["items"], "task_id")
+        fields = _grouped(rows["fields"], "task_id")
+        refs = _grouped(rows["refs"], "task_id")
+        spans = _grouped(rows["spans"], "task_id")
+        attached = _grouped(rows["annotations"], "task_id")
 
         by_id: dict[str, Task] = {}
         pending: dict[str, tuple[str, ...]] = {}
         for row in rows["tasks"]:
             key = row["task_id"]
-            task = _build_task(row, {name: group.get(key, []) for name, group in grouped.items()})
+            task_type = TaskType(row["task_type"])
+            cls = TASKS[task_type]
+            own_spans = _grouped(spans.get(key, ()), "field")
+            scope_rows = own_spans.get("scope", ())
+            task = cls(
+                id=row["external_id"],
+                record_ids=_items(items.get(key, ()), "record"),
+                prompt=row["prompt"],
+                scope=_span(scope_rows[0]) if scope_rows else None,
+                input_annotation_ids=_items(attached.get(key, ()), "input", column="role"),
+                target_annotation_ids=_items(attached.get(key, ()), "target", column="role"),
+                rationale=row["rationale"],
+                **_task_payload(task_type, fields.get(key, ()), refs.get(key, ()), own_spans),  # ty: ignore[invalid-argument-type]
+            )
             by_id[task.id] = task
-            pending[task.id] = tuple(item["external_id"] for item in derivations.get(key, ()))
+            pending[task.id] = _items(items.get(key, ()), "from_task")
         for task_id, from_ids in pending.items():
             resolved = []
             for from_id in from_ids:
@@ -438,10 +387,9 @@ class TimeFReader:
                 or value type disagrees with its descriptor.
         """
         key = row["key"]
-        descriptors = self._descriptors()
-        if key not in descriptors:
+        if key not in self._annotation_descriptors:
             raise TimeFFormatError(f"annotation row references unknown key {key!r} (not in schema)")
-        descriptor = descriptors[key]
+        descriptor = self._annotation_descriptors[key]
         fields: dict = {
             "id": row["external_id"],
             "key": key,
@@ -486,87 +434,39 @@ class TimeFReader:
         with self._as_format_error():
             return tuple(self._decode_annotation(row) for row in self._control_plane().registered_annotations())
 
-    def _index_rows(
-        self, record_key: int, time_series_id: str, batch_keys: tuple[int, ...] | None = None
-    ) -> list[dict]:
-        """Return one series' index rows, in ``chunk_idx`` order.
+    def _index_rows(self, record_id: str, time_series_id: str) -> list[dict]:
+        """Return one series' chunk locators, in ``chunk_idx`` order.
+
+        One query returns every series of a record, because a read walks one record and then asks for
+        each of its series' values. The result is held for the few records a read has in flight.
 
         Args:
-            record_key: The owning record's surrogate id. The control database joins its rows on it.
+            record_id: The owning record's id.
             time_series_id: The series id.
-            batch_keys: The surrogate ids of the batch ``record_key`` was built in.
 
         Returns:
-            The series' index rows, empty if it has none.
-        """
-        return self._chunks(record_key, time_series_id, batch_keys).rows
-
-    def _chunks(self, record_key: int, time_series_id: str, batch_keys: tuple[int, ...] | None = None) -> SeriesChunks:
-        """Return one series' index rows and chunk offsets, in ``chunk_idx`` order.
-
-        One query returns every series of a whole batch of records. A record built by
-        :meth:`_build_batch` carries the batch it belongs to, so the first series that wants its
-        rows fetches the batch's. The cache holds the rows for the batch a read is walking and the
-        one before it. A series' chunk offsets are held with its rows, so every window of that
-        series reuses them.
-
-        Args:
-            record_key: The owning record's surrogate id. The control database joins its rows on it.
-            time_series_id: The series id.
-            batch_keys: The surrogate ids of the batch ``record_key`` was built in. ``None`` fetches
-                that record alone, which is what a caller outside the batched walk gets.
-
-        Returns:
-            The series' index rows and chunk offsets, with no rows if it has none.
+            The series' chunk locator rows, empty if it has none.
         """
         with self._as_format_error():
-            by_series = self._index_rows_cache.get(record_key)
+            by_series = self._index_rows_cache.get(record_id)
             if by_series is None:
-                by_series = self._fetch_locators(record_key, batch_keys or (record_key,))
-            return by_series.get(time_series_id) or SeriesChunks(rows=[])
-
-    def _fetch_locators(self, record_key: int, batch_keys: tuple[int, ...]) -> dict[str, SeriesChunks]:
-        """Read one batch's index rows with a single statement and cache them per record.
-
-        Args:
-            record_key: The record whose index rows the caller asked for.
-            batch_keys: The batch to fetch, which contains ``record_key``.
-
-        Returns:
-            ``record_key``'s index rows, keyed by series id, empty if the record has no series.
-        """
-        wanted = [key for key in batch_keys if key not in self._index_rows_cache]
-        grouped: dict[int, dict[str, list[dict]]] = {key: {} for key in wanted}
-        for row in self._control_plane().record_chunks(wanted):
-            grouped[row["record_id"]].setdefault(row["time_series_id"], []).append(row)
-        fetched = {
-            key: {series_id: SeriesChunks(rows=rows) for series_id, rows in by_series.items()}
-            for key, by_series in grouped.items()
-        }
-        self._index_rows_cache.update(fetched)
-        while len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
-            self._index_rows_cache.popitem(last=False)
-        return fetched.get(record_key, {})
+                by_series = {}
+                for row in self._control_plane().record_chunks(record_id):
+                    by_series.setdefault(row["time_series_id"], []).append(row)
+                self._index_rows_cache[record_id] = by_series
+                if len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
+                    self._index_rows_cache.popitem(last=False)
+            return by_series.get(time_series_id, [])
 
     # ---- record construction -------------------------------------------------------------------
 
-    def _build_record(
-        self,
-        row: dict,
-        series_rows: Iterable[dict],
-        task_rows: Iterable[dict],
-        annotation_rows: Iterable[dict],
-        batch_keys: tuple[int, ...],
-    ) -> Record:
+    def _build_record(self, row: dict, series_rows: Iterable[dict], annotation_rows: Iterable[dict]) -> Record:
         """Rebuild one record from its stored row and the rows that hang off it.
 
         Args:
             row: The record's own stored row.
             series_rows: Its series rows, in the record's own series order.
-            task_rows: Its task links, in task order.
             annotation_rows: Its annotation rows, in the record's own annotation order.
-            batch_keys: The surrogate ids of the batch this record was read in, which its series'
-                loaders fetch their index rows with.
 
         Returns:
             The rebuilt record.
@@ -576,7 +476,7 @@ class TimeFReader:
                 corrupt artifact rather than a caller mistake.
         """
         record_id = row["external_id"]
-        series = tuple(self._build_series(row["record_id"], record_id, struct, batch_keys) for struct in series_rows)
+        series = tuple(self._build_series(record_id, struct) for struct in series_rows)
         annotations = tuple(self._decode_annotation(annotation) for annotation in annotation_rows)
         # The record is decoded and built inside the try block so ``Record.__post_init__`` can reject
         # a malformed time_span before it is used to recheck the stored annotation spans.
@@ -587,7 +487,7 @@ class TimeFReader:
                 record_id=record_id,
                 time_series=series,
                 subject_ids=tuple(row["subject_ids"]),
-                task_ids=tuple(task["external_id"] for task in task_rows),
+                task_ids=tuple(row["task_ids"]),
                 annotations=annotations,
                 start_time=row["start_time_us"],
                 time_span=time_span,
@@ -603,15 +503,12 @@ class TimeFReader:
         except TimeFValidationError as exc:
             raise TimeFFormatError(str(exc)) from exc
 
-    def _build_series(self, record_key: int, record_id: str, struct: dict, batch_keys: tuple[int, ...]) -> TimeSeries:
+    def _build_series(self, record_id: str, struct: dict) -> TimeSeries:
         """Rebuild one series from its stored row, with lazy loaders for its values.
 
         Args:
-            record_key: The owning record's surrogate id, which the loaders join on.
-            record_id: The owning record's id, which the loaders report errors against.
+            record_id: The owning record's id.
             struct: The stored series row, with its spec and axis columns joined in.
-            batch_keys: The surrogate ids of the batch the owning record was read in, which the
-                loaders fetch their index rows with.
 
         Returns:
             The rebuilt series.
@@ -620,9 +517,8 @@ class TimeFReader:
             TimeFFormatError: If the row names a spec type the schema does not declare, or the series
                 cannot be built from what the row says.
         """
-        specs = self._specs()
         spec_type = struct["spec_type"]
-        if spec_type not in specs:
+        if spec_type not in self._spec_by_type:
             raise TimeFFormatError(f"record {record_id!r} references unknown spec_type {spec_type!r}")
         time_series_id = struct["external_id"]
         axis = self._axis(struct, record_id)
@@ -630,14 +526,14 @@ class TimeFReader:
         time_offsets_loader = None
         if isinstance(axis, IrregularAxis):
             time_offsets_loader = _TimeOffsetsLoader(
-                self, record_key, record_id, time_series_id, batch_keys, axis.first_us, axis.last_us, n_values
+                self, record_id, time_series_id, axis.first_us, axis.last_us, n_values
             )
         try:
             return TimeSeries(
-                spec=specs[spec_type],
+                spec=self._spec_by_type[spec_type],
                 signal=struct["signal"],
                 time_axis=axis,
-                loader=_SeriesLoader(self, record_key, record_id, time_series_id, batch_keys),
+                loader=_SeriesLoader(self, record_id, time_series_id),
                 time_offsets_loader=time_offsets_loader,
                 source_id=struct["source_id"],
                 time_series_id=time_series_id,
@@ -739,24 +635,20 @@ class TimeFReader:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _load_time_offsets(
-        self, record_key: int, record_id: str, time_series_id: str, batch_keys: tuple[int, ...]
-    ) -> pa.Array:
+    def _load_time_offsets(self, record_id: str, time_series_id: str) -> pa.Array:
         """Read an irregular series' per-value time offsets through the values backend.
 
         Args:
-            record_key: The owning record's surrogate id.
-            record_id: The owning record's id, for the error message.
+            record_id: The owning record's id.
             time_series_id: The series id to read.
-            batch_keys: The batch the owning record was read in, which the index rows are fetched for.
 
         Returns:
             One int64 microsecond time offset per value.
 
         Raises:
-            TimeFFormatError: If the series has no index row or its time offsets cannot be read.
+            TimeFFormatError: If the series has no chunk locator or its time offsets cannot be read.
         """
-        rows = self._index_rows(record_key, time_series_id, batch_keys)
+        rows = self._index_rows(record_id, time_series_id)
         if not rows:
             raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
@@ -768,82 +660,33 @@ class TimeFReader:
                 f"failed to read time offsets for series {time_series_id!r} for record {record_id!r}: {exc}"
             ) from exc
 
-    def _load_values(
-        self, record_key: int, record_id: str, time_series_id: str, batch_keys: tuple[int, ...]
-    ) -> pa.Array:
+    def _load_values(self, record_id: str, time_series_id: str) -> pa.Array:
         """Read and concatenate a series' chunk values through the values backend.
 
         Args:
-            record_key: The owning record's surrogate id.
-            record_id: The owning record's id, for the error message.
+            record_id: The owning record's id.
             time_series_id: The series id to read.
-            batch_keys: The batch the owning record was read in, which the index rows are fetched for.
 
         Returns:
             The series values in the spec's canonical Arrow representation.
 
         Raises:
-            TimeFFormatError: If the series has no index row or a chunk cannot be read.
+            TimeFFormatError: If the series has no chunk locator or a chunk cannot be read.
         """
-        rows = self._index_rows(record_key, time_series_id, batch_keys)
+        rows = self._index_rows(record_id, time_series_id)
         if not rows:
             raise TimeFFormatError(f"no index entry for record {record_id!r} series {time_series_id!r}")
         if self._values is None:
             self._values = make_values_reader(self._manifest.values_backend)
         try:
             spec_type = rows[0]["spec_type"]
-            return self._values.load(self._version, rows, self._specs()[spec_type])
+            return self._values.load(self._version, rows, self._spec_by_type[spec_type])
         except (KeyError, OSError, IndexError, ValueError) as exc:
             raise TimeFFormatError(f"failed to read series {time_series_id!r} for record {record_id!r}: {exc}") from exc
 
 
-def _spec(row: dict) -> TimeSeriesSpec:
-    """Rebuild one time-series spec from its stored row.
-
-    Args:
-        row: The stored ``specs`` row.
-
-    Returns:
-        The spec, with its unit resolved against the shared registry.
-    """
-    source = row["data_source_type"]
-    return TimeSeriesSpec(
-        spec_type=row["spec_type"],
-        name=row["name"],
-        unit_value=ureg.Unit(row["unit_value"]),
-        data_source=(
-            None
-            if source is None
-            else DataSource(data_source_type=source, name=row["data_source_name"], provider=row["data_source_provider"])
-        ),
-        dtype=row["dtype"],
-        categories=tuple(row["categories"]),
-        value_shape=tuple(row["value_shape"]),
-        dimension_names=tuple(row["dimension_names"]),
-        nullable=row["nullable"],
-    )
-
-
-def _descriptor(row: dict) -> AnnotationDescriptor:
-    """Rebuild one annotation descriptor from its stored row.
-
-    Args:
-        row: The stored ``annotation_descriptors`` row.
-
-    Returns:
-        The descriptor.
-    """
-    return AnnotationDescriptor(
-        key=row["key"],
-        annotation_type=AnnotationType(row["annotation_type"]),
-        value_type=row["value_type"],
-        unit=row["unit"],
-        description=row["description"],
-    )
-
-
 def _by_record(rows: Iterable[dict]) -> dict[int, list[dict]]:
-    """Group a batch's rows by the record they belong to, and keep their stored order.
+    """Group a batch's rows by the record they belong to, keeping their stored order.
 
     Args:
         rows: The rows to group, already ordered by record and then by position.
@@ -855,7 +698,7 @@ def _by_record(rows: Iterable[dict]) -> dict[int, list[dict]]:
 
 
 def _grouped(rows: Iterable[dict], column: str) -> dict[Any, list[dict]]:
-    """Group rows by one column, and keep their stored order within each group.
+    """Group rows by one column, keeping their stored order within each group.
 
     Args:
         rows: The rows to group.
@@ -870,58 +713,18 @@ def _grouped(rows: Iterable[dict], column: str) -> dict[Any, list[dict]]:
     return groups
 
 
-def _build_task(row: dict, own: dict[str, list[dict]]) -> Task:
-    """Rebuild one task from its own row and the rows that hang off it.
+def _items(rows: Iterable[dict], role: str, *, column: str = "role") -> tuple[str, ...]:
+    """Return the external ids of one role's rows, in position order.
 
     Args:
-        row: The task's own stored row.
-        own: Its ``items``, ``fields``, ``refs``, ``spans`` and ``annotations`` rows, each in
-            position order.
+        rows: The task's item or attachment rows.
+        role: The role to keep.
+        column: The column holding the role.
 
     Returns:
-        The rebuilt task, without its ``from_tasks``, which need every task to be built first.
+        The external ids.
     """
-    task_type = TaskType(row["task_type"])
-    spans = _grouped(own["spans"], "field")
-    scope_rows = spans.get("scope", ())
-    return TASKS[task_type](
-        id=row["external_id"],
-        record_ids=_items(own["items"], "input", "record"),
-        prompt=row["prompt"],
-        scope=_span(scope_rows[0]) if scope_rows else None,
-        input_annotation_ids=_annotation_ids(own["annotations"], "input"),
-        target_annotation_ids=_annotation_ids(own["annotations"], "target"),
-        rationale=row["rationale"],
-        **_task_payload(task_type, own["fields"], own["refs"], spans, own["items"]),  # ty: ignore[invalid-argument-type]
-    )
-
-
-def _items(rows: Iterable[dict], role: str, item_type: str, *, column: str = "external_id") -> tuple[str, ...]:
-    """Return one kind of task item, in position order.
-
-    Args:
-        rows: The task's ``task_items`` rows.
-        role: ``"input"`` or ``"target"``.
-        item_type: ``"record"`` or ``"text"``.
-        column: The column holding the item's value.
-
-    Returns:
-        The values of the items that match.
-    """
-    return tuple(row[column] for row in rows if row["role"] == role and row["item_type"] == item_type)
-
-
-def _annotation_ids(rows: Iterable[dict], role: str) -> tuple[str, ...]:
-    """Return the ids of the annotations a task holds in one role, in position order.
-
-    Args:
-        rows: The task's attachment rows.
-        role: ``"input"`` or ``"target"``.
-
-    Returns:
-        The annotation ids.
-    """
-    return tuple(row["external_id"] for row in rows if row["role"] == role)
+    return tuple(row["external_id"] for row in rows if row[column] == role)
 
 
 def _span(row: dict):
@@ -933,7 +736,7 @@ def _span(row: dict):
     Returns:
         The span.
     """
-    return span_from_row(row["frame"], row["start_at"], row["end_at"], row["time_series_ids"])
+    return span_from_row(row["frame"], row["start_us"], row["end_us"], row["time_series_ids"])
 
 
 def _task_payload(
@@ -941,41 +744,33 @@ def _task_payload(
     field_rows: Iterable[dict],
     ref_rows: Iterable[dict],
     span_rows: dict[Any, list[dict]],
-    item_rows: Iterable[dict],
 ) -> dict[str, object]:
-    """Rebuild one task's type-specific payload from its payload tables and its items.
+    """Rebuild one task's type-specific payload from its three payload tables.
 
     A field with no ``task_fields`` row was ``None`` when it was written, so it is left out and the
     dataclass default applies. That is what keeps an empty tuple distinguishable from an absent one.
-    A free-text answer is an item of the task rather than a named field, so it comes from
-    ``task_items`` instead.
 
     Args:
         task_type: The task's type, which declares what its payload holds.
         field_rows: The task's ``task_fields`` rows.
         ref_rows: The task's ``task_refs`` rows.
         span_rows: The task's ``task_spans`` rows, grouped by field.
-        item_rows: The task's ``task_items`` rows.
 
     Returns:
         The payload, as keyword arguments for the task's constructor.
     """
     present = {row["field"]: row for row in field_rows}
     refs = _grouped(ref_rows, "field")
-    answer = text_answer(task_type)
     payload: dict[str, object] = {}
-    answers = _items(item_rows, "target", "text", column="text_value")
-    if answer is not None and answers:
-        payload[answer.name] = answers[0]
-    for declared in task_payload(task_type):
+    for declared in ddl.task_payload(task_type):
         stored = present.get(declared.name)
-        if stored is None or declared is answer:
+        if stored is None:
             continue
-        if declared.kind is PayloadKind.TEXT:
+        if declared.kind is ddl.PayloadKind.TEXT:
             payload[declared.name] = stored["text_value"]
-        elif declared.kind is PayloadKind.NUMBER:
+        elif declared.kind is ddl.PayloadKind.NUMBER:
             payload[declared.name] = stored["double_value"]
-        elif declared.kind is PayloadKind.SPAN:
+        elif declared.kind is ddl.PayloadKind.SPAN:
             spans = tuple(_span(row) for row in span_rows.get(declared.name, ()))
             payload[declared.name] = spans if declared.is_list else spans[0]
         else:
@@ -995,14 +790,10 @@ class _SeriesLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' values."""
-    record_key: int
-    """The owning record's surrogate id. The control database joins its rows on it."""
     record_id: str
-    """The owning record's id, which errors are reported against."""
+    """The owning record's id."""
     time_series_id: str
     """The id of the series to read."""
-    batch_keys: tuple[int, ...]
-    """The batch the owning record was read in, so one statement locates the whole batch's chunks."""
 
     def __call__(self) -> pa.Array:
         """Read the series' values.
@@ -1010,7 +801,7 @@ class _SeriesLoader:
         Returns:
             The series values in the spec's canonical Arrow representation.
         """
-        return self.reader._load_values(self.record_key, self.record_id, self.time_series_id, self.batch_keys)
+        return self.reader._load_values(self.record_id, self.time_series_id)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a temporal subsection through the selected values backend.
@@ -1019,15 +810,15 @@ class _SeriesLoader:
             The requested steps in their canonical Arrow representation.
 
         Raises:
-            TimeFFormatError: If this series has no index row.
+            TimeFFormatError: If this series has no chunk locator.
         """
-        chunks = self.reader._chunks(self.record_key, self.time_series_id, self.batch_keys)
-        if not chunks.rows:
+        rows = self.reader._index_rows(self.record_id, self.time_series_id)
+        if not rows:
             raise TimeFFormatError(f"no index entry for record {self.record_id!r} series {self.time_series_id!r}")
         if self.reader._values is None:
             self.reader._values = make_values_reader(self.reader._manifest.values_backend)
-        spec = self.reader._specs()[chunks.rows[0]["spec_type"]]
-        return self.reader._values.load_range(self.reader._version, chunks, start, stop, spec)
+        spec = self.reader._spec_by_type[rows[0]["spec_type"]]
+        return self.reader._values.load_range(self.reader._version, rows, start, stop, spec)
 
 
 @dataclass(frozen=True)
@@ -1042,14 +833,10 @@ class _TimeOffsetsLoader:
 
     reader: TimeFReader
     """The reader that reads and decodes the series' time offsets."""
-    record_key: int
-    """The owning record's surrogate id. The control database joins its rows on it."""
     record_id: str
-    """The owning record's id, which errors are reported against."""
+    """The owning record's id."""
     time_series_id: str
     """The id of the series to read."""
-    batch_keys: tuple[int, ...]
-    """The batch the owning record was read in, so one statement locates the whole batch's chunks."""
     first_us: int
     """The axis' first time offset, checked against the stored stream."""
     last_us: int
@@ -1058,10 +845,11 @@ class _TimeOffsetsLoader:
     """The declared value count, checked against the stored stream's length."""
 
     def __call__(self) -> pa.Array:
-        """Read the series' time offsets and check them against the axis and value count.
+        """Read the series' time offsets, checking them against the axis and value count.
 
-        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. Without
-        this check, a corrupt shard hands back a decreasing, wrong-length, or off-endpoint stream.
+        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. As a
+        result, a corrupt shard can otherwise hand back a decreasing, wrong-length, or off-endpoint
+        stream.
 
         Returns:
             One int64 microsecond time offset per value.
@@ -1070,9 +858,7 @@ class _TimeOffsetsLoader:
             TimeFFormatError: If the stored time offsets disagree with the axis endpoints or the
                 value count, or if they decrease at any point.
         """
-        time_offsets = self.reader._load_time_offsets(
-            self.record_key, self.record_id, self.time_series_id, self.batch_keys
-        )
+        time_offsets = self.reader._load_time_offsets(self.record_id, self.time_series_id)
         values = time_offsets.to_numpy(zero_copy_only=False)
         where = f"series {self.time_series_id!r} on record {self.record_id!r}"
         if len(values) != self.n_values:
