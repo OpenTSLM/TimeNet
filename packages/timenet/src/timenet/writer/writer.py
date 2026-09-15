@@ -19,6 +19,7 @@ import uuid
 import numpy as np
 import pyarrow as pa
 
+from timenet.control_plane.writer import ValuesPlane, write_control_plane
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.time_series import _validate_enum_values
@@ -26,6 +27,7 @@ from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     ANNOTATIONS_TEMPLATE,
+    CONTROL_DB_FILE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
     DEFAULT_CONTROL_SHARD_TARGET_BYTES,
@@ -211,9 +213,8 @@ class TimeFWriter:
         placements = self._write_values(unique_series)
         self._write_records()
         self._write_annotations()
-        self._write_tasks()
         self._write_index(placements, series_to_records)
-        self._counts = self._build_counts(unique_series, placements)
+        self._counts = self._write_control_db(unique_series, series_to_records, placements)
         self._written = True
 
     def close(self) -> None:
@@ -575,13 +576,18 @@ class TimeFWriter:
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
-    def _write_tasks(self) -> None:
-        # Route tasks to a byte-budgeted sink per type, created on first sight of a type, so they reach
-        # disk in row-group batches without the whole list ever living in memory. iter_tasks() yields a
-        # materialized dataset's tasks and a streamed one's identically, so one path serves both.
-        # _task_type_counts feeds the manifest counts, tallied here so the tasks are never iterated twice.
+    def _write_tasks(self) -> Iterator[Task]:
+        """Write each task's Parquet row and hand the task on to the control database.
+
+        Tasks are routed to a byte-budgeted sink per type, created on first sight of a type, so they
+        reach disk in row-group batches without the whole list ever living in memory. ``iter_tasks()``
+        yields a materialized dataset's tasks and a streamed one's identically, so one path serves
+        both, and yielding each task on keeps a one-shot stream read exactly once.
+
+        Yields:
+            Each task, after its row has been written.
+        """
         self._task_files: list[str] = []
-        self._task_type_counts: dict[str, int] = {}
         sinks: dict[str, ShardedTableWriter] = {}
         schemas: dict[str, pa.Schema] = {}
         if self._dataset.has_task_stream:
@@ -605,7 +611,7 @@ class TimeFWriter:
                     dictionary_columns=encodings.task_dictionary(schema),
                 )
             sinks[task_type_str].add(_task_row(task, schema, self._codec))
-            self._task_type_counts[task_type_str] = self._task_type_counts.get(task_type_str, 0) + 1
+            yield task
         for task_type_str in sorted(sinks):  # stable file order regardless of the type interleaving
             self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
 
@@ -657,6 +663,43 @@ class TimeFWriter:
             column_encoding=encodings.INDEX_ENCODING,
         )
 
+    def _write_control_db(
+        self,
+        unique_series: list[TimeSeries],
+        series_to_records: dict[str, list[str]],
+        placements: dict[tuple[str, int], ChunkPlacement],
+    ) -> ManifestCounts:
+        """Load the version's structure into ``control.duckdb`` and return the manifest's counts.
+
+        The tasks are handed over as they are written, so a one-shot task stream is read exactly
+        once even though two planes record it.
+
+        Args:
+            unique_series: The deduped series, in the order the values plane wrote them.
+            series_to_records: Each series id mapped to the records that reference it.
+            placements: Where the values plane put every chunk.
+
+        Returns:
+            The counts block for the manifest.
+        """
+        counts = write_control_plane(
+            self._staging_dir / CONTROL_DB_FILE,
+            self._dataset,
+            series=unique_series,
+            series_to_records=series_to_records,
+            values=ValuesPlane(placements=placements, backend=self._values_backend_name),
+            tasks=self._write_tasks(),
+        )
+        return ManifestCounts(
+            records=counts.records,
+            annotations=counts.annotations,
+            registered_annotations=counts.registered_annotations,
+            tasks=counts.tasks,
+            time_series_chunks=counts.chunks,
+            time_series_index_rows=counts.record_series_chunks,
+            time_series_specs=counts.specs,
+        )
+
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
@@ -672,6 +715,7 @@ class TimeFWriter:
                 time_series_index=self._file_parts(self._index_parts),
                 tasks=self._file_parts(self._task_files),
                 time_series=self._file_parts(self._value_files),
+                control_db=self._file_part(CONTROL_DB_FILE),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
@@ -705,27 +749,6 @@ class TimeFWriter:
                     f"annotation id {ann.id!r} is shared across records but instances are not equal"
                 )
             seen[ann.id] = ann
-
-    def _build_counts(
-        self,
-        unique_series: list[TimeSeries],
-        placements: dict[tuple[str, int], ChunkPlacement],
-    ) -> ManifestCounts:
-        tasks_by_type = self._task_type_counts  # tallied while streaming/writing the tasks
-        specs_by_type: dict[str, int] = {}
-        for ts in unique_series:
-            specs_by_type[ts.spec.spec_type] = specs_by_type.get(ts.spec.spec_type, 0) + 1
-        annotation_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
-        annotation_ids |= {ann.id for ann in self._dataset.registered_annotations}
-        return ManifestCounts(
-            records=len(self._dataset.records),
-            annotations=len(annotation_ids),
-            registered_annotations=len(self._dataset.registered_annotations),
-            tasks=tasks_by_type,
-            time_series_chunks=len(placements),
-            time_series_index_rows=self._index_rows,
-            time_series_specs=specs_by_type,
-        )
 
     def _file_parts(self, rels: Iterable[str]) -> tuple[FilePart, ...]:
         """Describe each staged artifact by its path, checksum, and size.

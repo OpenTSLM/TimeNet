@@ -15,6 +15,16 @@ from timenet.manifest import Manifest
 from timenet.registry import LocalRegistry
 
 
+def _declared_paths(files: dict) -> list[str]:
+    """Return every path in a manifest ``files`` block.
+
+    ``control_db`` is one file object rather than a list of parts, so it is pulled out separately.
+    """
+    control = files.get("control_db")
+    paths = [] if control is None else [control["path"]]
+    return paths + [p["path"] for key, group in files.items() if key != "control_db" for p in group]
+
+
 def _summary(manifest: Manifest) -> dict:
     md = manifest.metadata
     return {
@@ -156,7 +166,7 @@ def build_publish_fake(*, token: str = "tok_rw"):  # noqa: S107
             return httpx.Response(403, json={"detail": "write scope required"})
         if path.endswith("/publish"):
             state["manifest"] = json.loads(request.content)
-            files = [p["path"] for group in state["manifest"]["files"].values() for p in group]
+            files = _declared_paths(state["manifest"]["files"])
             state["published"] = files
             return httpx.Response(200, json={"files": sorted(files)})
         if path.endswith("/publish/upload-url"):
@@ -238,7 +248,7 @@ def _service_write(root: Path, manifests: dict, parts: list[str], request: httpx
     if action == "publish":
         manifests[dataset_id, version] = request.content
         files = json.loads(request.content)["files"]
-        return httpx.Response(200, json={"files": [p["path"] for group in files.values() for p in group]})
+        return httpx.Response(200, json={"files": _declared_paths(files)})
     if action == "publish/upload-url":
         relpath = json.loads(request.content)["path"]
         url = f"http://blob.local/upload/{dataset_id}/{version}/{relpath}"

@@ -177,7 +177,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).time_series[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)

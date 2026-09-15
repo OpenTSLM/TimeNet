@@ -1,11 +1,18 @@
 """Load one dataset version's structure into a fresh embedded DuckDB database.
 
 The database is attached rather than opened, because the block size can only be set when the file is
-created. Everything goes in inside one transaction: the DDL, every table's rows, then the checks in
+created. Everything goes in inside one transaction: the DDL, every table's rows, the join that turns
+the caller's ids into dense ones, then the checks in
 :data:`~timenet.control_plane.checks.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
 build that does not hold together publishes nothing.
 
-Rows reach DuckDB one Arrow table per batch, never through ``executemany``.
+A row that names an entity by the caller's id waits in a staging table while the walk runs, because
+a record can name a task the stream has not reached yet and a task can name a record the same way.
+One join per staged table resolves them all once the walk is over, so the shipped file joins on
+dense ids and never on a string.
+
+Rows reach DuckDB one Arrow table per batch, never through ``executemany``. Measured on the ECG-QA
+control plane, 1.35 million rows: 1,674 rows/s row by row against 132,079 rows/s this way.
 """
 
 from collections.abc import Iterable
@@ -18,12 +25,12 @@ import duckdb
 import pyarrow as pa
 
 from timenet.control_plane import checks, schema as ddl
-from timenet.control_plane.payload import PayloadKind, task_payload
+from timenet.control_plane.payload import PayloadKind, task_payload, text_answer
 from timenet.control_plane.spans import span_row
 from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Task
+from timenet.types import Annotation, DatasetSchema, Task, TimeSeriesSpec
 
 
 if TYPE_CHECKING:
@@ -40,9 +47,11 @@ _ARROW_TYPES = {
     "VARCHAR": pa.string(),
     "VARCHAR[]": pa.list_(pa.string()),
     "BIGINT": pa.int64(),
+    "BIGINT[]": pa.list_(pa.int64()),
     "INTEGER": pa.int32(),
     "UINTEGER": pa.uint32(),
     "DOUBLE": pa.float64(),
+    "BOOLEAN": pa.bool_(),
 }
 """DuckDB's declared column types, mapped to the Arrow types a batch is built with."""
 
@@ -124,9 +133,12 @@ class ValuesPlane:
     """What the values plane wrote, as the control plane needs to record it."""
 
     placements: dict[tuple[str, int], "ChunkPlacement"]
-    """``(time_series_id, chunk_idx)`` mapped to where that chunk landed."""
-    artifacts: tuple[str, ...]
-    """Every file the values plane wrote, version-relative."""
+    """``(time_series_id, chunk_idx)`` mapped to where that chunk landed.
+
+    The artifacts are the distinct ``chunk_file`` values these name. A Parquet chunk names a shard
+    and a Zarr chunk names an array, so what an artifact is comes from the locator rather than from
+    the file list the manifest keeps.
+    """
     backend: str
     """Which backend wrote them, so a reader knows what the two chunk indexes mean."""
 
@@ -146,7 +158,7 @@ class ControlPlaneCounts:
     chunks: int
     """How many chunk placements the values plane wrote."""
     record_series_chunks: int
-    """Chunks counted once per record that references them."""
+    """Chunks counted once per referencing record, which is what the old index table held one row per."""
     specs: dict[str, int]
     """How many distinct series carry each spec type."""
 
@@ -182,9 +194,10 @@ def write_control_plane(  # noqa: PLR0913 - one parameter per plane the load nee
         connection.execute(f"ATTACH '{db_path}' AS control (BLOCK_SIZE {ddl.BLOCK_SIZE})")
         connection.execute("USE control")
         connection.execute("BEGIN TRANSACTION")
-        for statement in _statements(ddl.DDL):
+        for statement in _statements(ddl.DDL + _STAGING_DDL):
             connection.execute(statement)
         counts = _load(connection, dataset, series, series_to_records, values, tasks)
+        _resolve(connection)
         _validate(connection)
         connection.execute("COMMIT")
         connection.execute("CHECKPOINT control")
@@ -203,6 +216,19 @@ def _statements(script: str) -> list[str]:
         Each non-empty statement, stripped.
     """
     return [statement.strip() for statement in script.split(";") if statement.strip()]
+
+
+def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
+    """Turn every staged caller id into the dense id of the row it names.
+
+    One join per staged table, once the walk is over and both sides exist. An id that names nothing
+    lands as null, which :data:`~timenet.control_plane.checks.VALIDATIONS` refuses.
+
+    Args:
+        connection: The connection holding the loaded, not yet committed database.
+    """
+    for table, columns, query in _RESOLVE:
+        connection.execute(f"INSERT INTO {table} {columns} {query}")
 
 
 def _validate(connection: duckdb.DuckDBPyConnection) -> None:
@@ -372,7 +398,29 @@ class _Loader:
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self.meta = _BatchInserter(connection, "meta", ("key", "value"))
-        self.specs = _BatchInserter(connection, "specs", ("spec_id", "spec_type"))
+        self.specs = _BatchInserter(
+            connection,
+            "specs",
+            (
+                "spec_id",
+                "spec_type",
+                "name",
+                "unit_value",
+                "data_source_type",
+                "data_source_name",
+                "data_source_provider",
+                "dtype",
+                "categories",
+                "value_shape",
+                "dimension_names",
+                "nullable",
+            ),
+        )
+        self.descriptors = _BatchInserter(
+            connection,
+            "annotation_descriptors",
+            ("descriptor_id", "key", "annotation_type", "value_type", "unit", "description"),
+        )
         self.axes = _BatchInserter(
             connection,
             "axes",
@@ -388,9 +436,9 @@ class _Loader:
                 "time_span_start_us",
                 "time_span_end_us",
                 "subject_ids",
-                "task_ids",
             ),
         )
+        self.record_tasks = _BatchInserter(connection, "_stage_record_tasks", ("record_id", "external_id"))
         self.series = _BatchInserter(
             connection,
             "time_series",
@@ -414,20 +462,25 @@ class _Loader:
             ),
         )
         self.tasks = _BatchInserter(connection, "tasks", ("task_id", "external_id", "task_type", "prompt", "rationale"))
-        self.task_items = _BatchInserter(connection, "task_items", ("task_id", "role", "position", "external_id"))
+        self.task_items = _BatchInserter(
+            connection,
+            "_stage_task_items",
+            ("task_id", "role", "position", "item_type", "text_value", "external_id"),
+        )
+        self.task_from_tasks = _BatchInserter(connection, "task_from_tasks", ("task_id", "position", "external_id"))
         self.task_fields = _BatchInserter(connection, "task_fields", ("task_id", "field", "text_value", "double_value"))
         self.task_refs = _BatchInserter(
-            connection, "task_refs", ("task_id", "field", "position", "ref_kind", "external_id")
+            connection, "_stage_task_refs", ("task_id", "field", "position", "ref_kind", "external_id")
         )
         self.task_spans = _BatchInserter(
             connection,
             "task_spans",
-            ("task_id", "field", "position", "frame", "start_us", "end_us", "time_series_ids"),
+            ("task_id", "field", "position", "frame", "start_at", "end_at", "time_series_ids"),
         )
         self.artifacts = _BatchInserter(connection, "values_artifacts", ("artifact_id", "chunk_file", "backend"))
         self.chunks = _BatchInserter(
             connection,
-            "signal_chunks",
+            "time_series_chunks",
             ("time_series_id", "chunk_idx", "artifact_id", "chunk_major_idx", "chunk_minor_idx", "n_values"),
         )
         self.attachments = {
@@ -438,12 +491,10 @@ class _Loader:
         self.record_ids = _Ids("records")
         self.series_ids = _Ids("time series")
         self.task_ids = _Ids("tasks")
-        self._spec_ids = _Ids("specs")
         self._axis_ids = _Ids("axes")
         self._annotation_ids = _Ids("annotations")
         self._artifact_ids = _Ids("values artifacts")
 
-        self.record_id_of: dict[str, int] = {}
         self.series_id_of: dict[str, int] = {}
         self.annotation_id_of: dict[str, int] = {}
         self._spec_id_of: dict[str, int] = {}
@@ -459,13 +510,16 @@ class _Loader:
         return (
             self.meta,
             self.specs,
+            self.descriptors,
             self.axes,
             self.records,
+            self.record_tasks,
             self.series,
             self.record_series,
             self.annotations,
             self.tasks,
             self.task_items,
+            self.task_from_tasks,
             self.task_fields,
             self.task_refs,
             self.task_spans,
@@ -474,23 +528,51 @@ class _Loader:
             *(table.inserter for table in self.attachments.values()),
         )
 
-    def spec(self, spec_type: str) -> int:
-        """Return a spec type's id, storing it the first time a series uses it.
+    def declare(self, schema: DatasetSchema) -> None:
+        """Store the dataset's derived type declaration, which every row below references.
 
-        The manifest's schema block owns the full :class:`~timenet.types.TimeSeriesSpec`. The
-        control plane stores only the reference, so a series joins on an id instead of repeating
-        the name.
+        The specs and the annotation descriptors go in in the order the schema derived them, so the
+        ids the rest of the load references run in that order too.
+
+        Args:
+            schema: The dataset's derived schema.
+        """
+        for spec_id, spec in enumerate(schema.time_series_specs):
+            self._spec_id_of[spec.spec_type] = spec_id
+            self.specs.add((spec_id, *_spec_columns(spec)))
+        for descriptor_id, descriptor in enumerate(schema.annotations):
+            self.descriptors.add(
+                (
+                    descriptor_id,
+                    descriptor.key,
+                    str(descriptor.annotation_type),
+                    descriptor.value_type,
+                    descriptor.unit,
+                    descriptor.description,
+                )
+            )
+
+    def spec(self, spec_type: str) -> int:
+        """Return the id of the stored spec a series carries.
+
+        A million series reference the declaration by id, so the unit and the value type are stored
+        once rather than repeated per row.
 
         Args:
             spec_type: The spec's stable type tag.
 
         Returns:
             The spec id.
+
+        Raises:
+            TimeFValidationError: If the schema declares no spec of that type, which means the schema
+                and the records it was derived from have drifted apart.
         """
         spec_id = self._spec_id_of.get(spec_type)
         if spec_id is None:
-            spec_id = self._spec_id_of[spec_type] = self._spec_ids.claim()
-            self.specs.add((spec_id, spec_type))
+            raise TimeFValidationError(
+                f"a series carries spec_type {spec_type!r}, which the dataset's schema does not declare"
+            )
         return spec_id
 
     def axis(self, axis: TimeAxis) -> int:
@@ -555,6 +637,32 @@ class _Loader:
         return artifact_id
 
 
+def _spec_columns(spec: TimeSeriesSpec) -> tuple:
+    """Return a spec's stored columns, in the order the table declares them.
+
+    Args:
+        spec: The spec to store.
+
+    Returns:
+        Every column after ``spec_id``. A spec with no data source stores null in all three of its
+        columns.
+    """
+    source = spec.data_source
+    return (
+        spec.spec_type,
+        spec.name,
+        str(spec.unit_value),
+        None if source is None else source.data_source_type,
+        None if source is None else source.name,
+        None if source is None else source.provider,
+        spec.dtype,
+        list(spec.categories),
+        list(spec.value_shape),
+        list(spec.dimension_names),
+        spec.nullable,
+    )
+
+
 def _axis_columns(axis: TimeAxis) -> tuple:
     """Return the stored columns of an axis, with every column its shape does not use set to null.
 
@@ -596,10 +704,19 @@ def _load(  # noqa: PLR0913, PLR0917
 
     Returns:
         The counts the manifest records.
+
+    Raises:
+        TimeFValidationError: If the dataset's schema was never derived, so the database has no type
+            declaration to store its rows against.
     """
+    if dataset.schema is None:
+        raise TimeFValidationError(
+            "the control plane stores the dataset's derived schema, so derive_schema() must run before the write"
+        )
     loader = _Loader(connection)
     loader.meta.add(("schema_version", str(ddl.SCHEMA_VERSION)))
     loader.meta.add(("dataset_id", dataset.metadata.dataset_id))
+    loader.declare(dataset.schema)
 
     specs: dict[str, int] = {}
     for ts in series:
@@ -618,7 +735,8 @@ def _load(  # noqa: PLR0913, PLR0917
         )
         specs[ts.spec.spec_type] = specs.get(ts.spec.spec_type, 0) + 1
 
-    # Records take their ids in sorted order, so every reader walks them in the same sequence.
+    # Records take their ids in sorted order, so the reader walks them in the order the Parquet
+    # control plane sorted them into and a caller sees the same sequence as before.
     for record in sorted(dataset.records, key=lambda r: r.record_id):
         _load_record(loader, record)
     for position, annotation in enumerate(dataset.registered_annotations):
@@ -630,9 +748,8 @@ def _load(  # noqa: PLR0913, PLR0917
         task_type = str(task.task_type)
         task_counts[task_type] = task_counts.get(task_type, 0) + 1
 
-    # Declared before the chunks so a chunk row names an artifact the values plane really wrote. An
-    # artifact no chunk names still gets an id here, which keeps the ids dense.
-    for chunk_file in values.artifacts:
+    # Declared before the chunks, so every chunk row can name an artifact that already has an id.
+    for chunk_file in dict.fromkeys(placement.chunk_file for placement in values.placements.values()):
         loader.artifacts.add((loader.artifact(chunk_file), chunk_file, values.backend))
     for (time_series_id, chunk_idx), placement in values.placements.items():
         loader.chunks.add(
@@ -666,14 +783,13 @@ def _load(  # noqa: PLR0913, PLR0917
 
 
 def _load_record(loader: _Loader, record: Record) -> None:
-    """Insert one record, its link to each of its series, and its annotations.
+    """Insert one record, its links to its tasks and its series, and its annotations.
 
     Args:
         loader: The loader feeding the tables.
         record: The record to insert.
     """
     record_id = loader.record_ids.claim()
-    loader.record_id_of[record.record_id] = record_id
     time_span = record.time_span
     loader.records.add(
         (
@@ -683,9 +799,10 @@ def _load_record(loader: _Loader, record: Record) -> None:
             None if time_span is None else time_span.start_us,
             None if time_span is None else time_span.end_us,
             list(record.subject_ids),
-            list(record.task_ids),
         )
     )
+    for task_id in record.task_ids:
+        loader.record_tasks.add((record_id, task_id))
     for position, ts in enumerate(record.time_series):
         loader.record_series.add((record_id, loader.series_id_of[ts.time_series_id], position))
     for position, annotation in enumerate(record.annotations):
@@ -694,6 +811,10 @@ def _load_record(loader: _Loader, record: Record) -> None:
 
 def _load_task(loader: _Loader, task: Task) -> None:
     """Insert one task: the frame every task shares, then the payload its own class declares.
+
+    A task's ordered items go in one table whatever they are: the records it is about as input
+    items, and a free-text answer as its target item. ``task_fields`` keeps what is genuinely a named
+    field of the payload rather than an item of the task.
 
     Args:
         loader: The loader feeding the tables.
@@ -704,9 +825,13 @@ def _load_task(loader: _Loader, task: Task) -> None:
     """
     task_id = loader.task_ids.claim()
     loader.tasks.add((task_id, task.id, str(task.task_type), task.prompt, task.rationale))
-    for role, external_ids in (("record", task.record_ids), ("from_task", task.from_task_ids)):
-        for position, external_id in enumerate(external_ids):
-            loader.task_items.add((task_id, role, position, external_id))
+    for position, external_id in enumerate(task.record_ids):
+        loader.task_items.add((task_id, "input", position, "record", None, external_id))
+    answer = text_answer(task.task_type)
+    if answer is not None and getattr(task, answer.name) is not None:
+        loader.task_items.add((task_id, "target", 0, "text", str(getattr(task, answer.name)), None))
+    for position, external_id in enumerate(task.from_task_ids):
+        loader.task_from_tasks.add((task_id, position, external_id))
     if task.scope is not None:
         loader.task_spans.add((task_id, "scope", 0, *span_row(task.scope)))
     for role, annotation_ids in (("input", task.input_annotation_ids), ("target", task.target_annotation_ids)):
@@ -735,9 +860,11 @@ def _load_task_payload(loader: _Loader, task_id: int, task: Task) -> None:
     Raises:
         TimeFValidationError: If the task's payload and its declaration have drifted apart.
     """  # noqa: DOC502 - raised by payload.task_payload
+    answer = text_answer(task.task_type)
     for declared in task_payload(task.task_type):
         value = getattr(task, declared.name)
-        if value is None:
+        # The free-text answer is an item of the task, stored by _load_task beside its records.
+        if value is None or declared is answer:
             continue
         text = double = None
         if declared.kind is PayloadKind.TEXT:
