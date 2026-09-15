@@ -1,18 +1,18 @@
 """Load one dataset version's structure into a fresh embedded DuckDB database.
 
-The database is attached rather than opened, because the block size can only be set when the file is
-created. Everything goes in inside one transaction: the DDL, every table's rows, the join that turns
-the caller's ids into dense ones, then the checks in
+The writer attaches the database rather than opening it, because only a new file can take a block
+size. One transaction holds everything: the DDL, every table's rows, the join that turns the
+caller's ids into surrogate ids, then the checks in
 :data:`~timenet.control_plane.checks.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
 build that does not hold together publishes nothing.
 
-A row that names an entity by the caller's id waits in a staging table while the walk runs, because
-a record can name a task the stream has not reached yet and a task can name a record the same way.
-One join per staged table resolves them all once the walk is over, so the shipped file joins on
-dense ids and never on a string.
+A row that names an entity by the caller's id waits in a staging table while the walk runs. A record
+can name a task the stream reaches later, and a task can name a record the same way. One join per
+staged table resolves them all once the walk is over. The shipped file therefore joins on surrogate
+ids and never on a string.
 
-Rows reach DuckDB one Arrow table per batch, never through ``executemany``. Measured on the ECG-QA
-control plane, 1.35 million rows: 1,674 rows/s row by row against 132,079 rows/s this way.
+Rows reach DuckDB one Arrow table per batch, never through ``executemany``. On the ECG-QA control
+plane of 1.35 million rows, this way loads 132,079 rows/s against 1,674 rows/s row by row.
 """
 
 from collections.abc import Iterable
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 
 _INSERT_BATCH = 50_000
-"""Rows buffered per table before a batch is handed to DuckDB."""
+"""Rows buffered per table before the writer hands a batch to DuckDB."""
 
 _STAGED = "_timef_staged_batch"
 """The name each batch is registered under while its ``INSERT`` runs."""
@@ -81,9 +81,9 @@ CREATE TEMP TABLE _stage_task_refs (
 """Where a row waits while the id it names is still unwritten.
 
 A task can name a record, and a record a task, whichever the walk reaches first. The loader writes
-the caller's string into one of these, and :data:`_RESOLVE` turns the whole table into dense ids with
-one join once the walk is over. The tables live in DuckDB's ``temp`` catalog, so they are never part
-of the published file, which is why they are declared here rather than beside the schema.
+the caller's id into one of these tables. Once the walk is over, :data:`_RESOLVE` turns the whole
+table into surrogate ids with one join. These tables live in DuckDB's ``temp`` catalog and are never
+part of the published file. They are declared here rather than beside the schema for that reason.
 """
 
 _STAGING_DDL = _STAGING_DDL_TEMPLATE.format(id=ddl.ID_TYPE)
@@ -119,11 +119,12 @@ _RESOLVE = (
 )
 """Each staged table, its target's column list, and the query that resolves it.
 
-Resolving is a step of the write, not a fact about the database, so it lives with the loader that
-runs it: the published file has no staging table and no unresolved id to turn into one. An id that
-names nothing resolves to null rather than failing the insert, so the load reaches
-:data:`~timenet.control_plane.checks.VALIDATIONS` and the offender is reported by name with every
-other one, instead of the bulk insert dying on the first.
+The resolve step belongs to the write, not to the database, so it lives with the loader that runs
+it. The published file has no staging table and no unresolved id.
+
+An id that names nothing resolves to null rather than failing the insert. The load therefore reaches
+:data:`~timenet.control_plane.checks.VALIDATIONS`, which reports that id by name with every other
+one. Without the null, the bulk insert stops at the first offender.
 """
 
 
@@ -135,8 +136,8 @@ class ValuesPlane:
     """``(time_series_id, chunk_idx)`` mapped to where that chunk landed.
 
     The artifacts are the distinct ``chunk_file`` values these name. A Parquet chunk names a shard
-    and a Zarr chunk names an array, so what an artifact is comes from the locator rather than from
-    the file list the manifest keeps.
+    and a Zarr chunk names an array. The locator therefore says what an artifact is, not the file
+    list the manifest keeps.
     """
     backend: str
     """Which backend wrote them, so a reader knows what the two chunk indexes mean."""
@@ -157,7 +158,7 @@ class ControlPlaneCounts:
     chunks: int
     """How many chunk placements the values plane wrote."""
     record_series_chunks: int
-    """Chunks counted once per referencing record, which is what the old index table held one row per."""
+    """Chunks counted once per referencing record. The old index table held one row for each."""
     specs: dict[str, int]
     """How many distinct series carry each spec type."""
 
@@ -218,7 +219,7 @@ def _statements(script: str) -> list[str]:
 
 
 def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
-    """Turn every staged caller id into the dense id of the row it names.
+    """Turn every staged caller id into the surrogate id of the row it names.
 
     One join per staged table, once the walk is over and both sides exist. An id that names nothing
     lands as null, which :data:`~timenet.control_plane.checks.VALIDATIONS` refuses.
@@ -267,7 +268,7 @@ class _Ids:
             The id.
 
         Raises:
-            TimeFValidationError: If the id would not fit the column that stores it.
+            TimeFValidationError: If the next id does not fit the column that stores it.
         """
         if self._next > ddl.MAX_ID:
             raise TimeFValidationError(f"too many {self._kind} for a {ddl.ID_TYPE} id: the limit is {ddl.MAX_ID + 1}")
@@ -279,8 +280,8 @@ class _Ids:
 class _BatchInserter:
     """Buffers rows for one table and flushes them to DuckDB in batches.
 
-    Nothing constrains the order rows arrive in: the database declares no foreign keys, and the
-    invariants they used to enforce are checked once against the finished load instead.
+    Nothing constrains the order rows arrive in. The database declares no foreign keys, and the
+    checks that stand in for them run once against the finished load instead.
     """
 
     def __init__(self, connection: duckdb.DuckDBPyConnection, table: str, columns: tuple[str, ...]) -> None:
@@ -301,7 +302,7 @@ class _BatchInserter:
         self.count = 0
 
     def add(self, row: tuple) -> None:
-        """Buffer one row, flushing when the batch fills.
+        """Buffer one row, and flush the batch when it fills.
 
         Args:
             row: The row's values, in column order.
@@ -348,8 +349,8 @@ class _BatchInserter:
 class _Attachments:
     """One annotation target kind: its table's inserter and its own dense attachment counter.
 
-    Each kind counts from 0, so ``record_annotations`` and ``task_annotations`` both start at zero
-    and neither has to know how many rows the other holds.
+    Each kind counts from 0, so ``record_annotations`` and ``task_annotations`` both start at 0.
+    Neither has to know how many rows the other holds.
     """
 
     def __init__(self, connection: duckdb.DuckDBPyConnection, table: str, target: str | None, *, role: bool) -> None:
@@ -373,12 +374,12 @@ class _Attachments:
         self._role = role
 
     def add(self, annotation_id: int, position: int, *, target: int | None = None, role: str | None = None) -> None:
-        """Attach one annotation to one object.
+        """Attach one annotation to one entity.
 
         Args:
             annotation_id: The id of the stored payload.
             position: Where the attachment sits in the target's own ordered list.
-            target: The target object's id, ignored by the dataset's table.
+            target: The target entity's id, ignored by the dataset's table.
             role: Whether a task holds the annotation as input or as its answer.
         """
         row: tuple[Any, ...] = (self._ids.claim(), annotation_id)
@@ -527,8 +528,8 @@ class _Loader:
     def declare(self, schema: DatasetSchema) -> None:
         """Store the dataset's derived type declaration, which every row below references.
 
-        The specs and the annotation descriptors go in in the order the schema derived them, so the
-        ids the rest of the load references run in that order too.
+        The specs and the annotation descriptors go in in the order the schema derived them. The ids
+        the rest of the load references run in that order too.
 
         Args:
             schema: The dataset's derived schema.
@@ -552,7 +553,7 @@ class _Loader:
         """Return the id of the stored spec a series carries.
 
         A million series reference the declaration by id, so the unit and the value type are stored
-        once rather than repeated per row.
+        once rather than per row.
 
         Args:
             spec_type: The spec's stable type tag.
@@ -572,7 +573,7 @@ class _Loader:
         return spec_id
 
     def axis(self, axis: TimeAxis) -> int:
-        """Return an axis' id, storing it the first time a series uses it.
+        """Return the id of an axis, stored the first time a series uses it.
 
         Args:
             axis: The series' time axis.
@@ -588,7 +589,7 @@ class _Loader:
         return axis_id
 
     def annotation(self, annotation: Annotation) -> int:
-        """Return an annotation's id, storing its payload the first time the id is seen.
+        """Return the id of an annotation, with its payload stored the first time the id is seen.
 
         Args:
             annotation: The annotation whose payload to store.
@@ -619,7 +620,7 @@ class _Loader:
         return annotation_id
 
     def artifact(self, chunk_file: str) -> int:
-        """Return a values artifact's id, assigning it the first time the file is named.
+        """Return the id of a values artifact, assigned the first time the file is named.
 
         Args:
             chunk_file: The artifact's version-relative path.
@@ -660,10 +661,10 @@ def _spec_columns(spec: TimeSeriesSpec) -> tuple:
 
 
 def _axis_columns(axis: TimeAxis) -> tuple:
-    """Return an axis' stored columns, with every column its shape does not use set to null.
+    """Return the stored columns of an axis, with every column its shape does not use set to null.
 
-    The dispatch is positive and ends in :func:`~typing.assert_never`, so a new axis shape fails at
-    type-check time instead of storing a row of nulls under another shape's tag.
+    The dispatch is positive and ends in :func:`~typing.assert_never`. A new axis shape therefore
+    fails at type-check time, instead of storing a row of nulls under another shape's tag.
 
     Args:
         axis: The series' time axis.
@@ -806,10 +807,10 @@ def _load_record(loader: _Loader, record: Record) -> None:
 
 
 def _load_task(loader: _Loader, task: Task) -> None:
-    """Insert one task: the frame every task shares, then the payload its own class declares.
+    """Insert one task: the frame every task shares, then the payload its own type declares.
 
-    A task's ordered items go in one table whatever they are: the records it is about as input
-    items, and a free-text answer as its target item. ``task_fields`` keeps what is genuinely a named
+    A task's ordered items go in one table, whatever they are. The records it is about go in as
+    input items, and a free-text answer as its target item. ``task_fields`` keeps what is a named
     field of the payload rather than an item of the task.
 
     Args:
@@ -843,11 +844,10 @@ def _load_task(loader: _Loader, task: Task) -> None:
 
 
 def _load_task_payload(loader: _Loader, task_id: int, task: Task) -> None:
-    """Insert the payload fields a task's own class declares.
+    """Insert the payload fields a task's own type declares.
 
-    Every field that is not ``None`` gets one ``task_fields`` row, whatever its kind. That row is
-    what says the field is set, so a list-valued field that is empty stays distinguishable from one
-    that is absent.
+    Every field that is not ``None`` gets one ``task_fields`` row, whatever its kind. That row says
+    the field is set. An empty list-valued field therefore stays distinguishable from an absent one.
 
     Args:
         loader: The loader feeding the tables.

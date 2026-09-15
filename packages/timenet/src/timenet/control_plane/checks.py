@@ -1,21 +1,22 @@
 """What the writer checks before it commits, as queries that must return no rows.
 
-These are not tests. They run inside the load transaction, against the loaded tables, in the moment
-between the last insert and ``COMMIT``, and they stand in for the primary and foreign keys the
-shipped database does not declare. That trade is measured: on ECG-QA (1.35M control rows) plain
-tables are 19.7 MB and the same content with keys and indexes is 189.0 MB, and the write takes 3.9 s
-against 11.9 s. A version is written once by one process and is immutable afterwards, so a
-constraint carried in the file would re-check, for the rest of the dataset's life, something that
-cannot change. Checking each invariant once, here, costs the load one bulk anti-join per check and
-costs every later reader nothing.
+These are not tests. They run inside the load transaction, against the loaded tables, between the
+last insert and ``COMMIT``. They stand in for the primary and foreign keys the shipped database does
+not declare.
+
+That trade is measured. On ECG-QA (1.35M control rows), plain tables are 19.7 MB and the same
+content with keys and indexes is 189.0 MB. The write takes 3.9 s against 11.9 s. One process writes
+a version once, and the version is immutable afterwards. A constraint carried in the file therefore
+re-checks, for the rest of the dataset's life, something that cannot change. One check per invariant
+here costs the load one bulk anti-join, and costs every later reader nothing.
 
 A failed check aborts the transaction, so a build that does not hold together publishes nothing and
-leaves no file behind. Each check reports every offending row it found rather than dying on the
-first, which is why a resolved id that names nothing is stored as null and caught here instead of
-failing its insert.
+leaves no file behind. Each check reports every offending row rather than stopping at the first. A
+resolved id that names nothing is therefore stored as null and caught here, rather than failing its
+insert.
 
-The builders below generate the repetitive checks: the same density check for every keyed table, the
-same anti-join for every attachment table, and the payload checks that come from the declaration in
+The builders below generate the repetitive checks. Each keyed table gets the same density check, and
+each attachment table the same anti-join. The payload checks come from the declaration in
 :mod:`timenet.control_plane.payload`.
 """
 
@@ -35,9 +36,9 @@ from timenet.control_plane.schema import ANNOTATION_TABLES, EXTERNAL_IDS, KEYED_
 def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
-    Density is not cosmetic. A reader that partitions a corpus across workers with
-    ``id % num_workers = worker_index`` covers every row exactly once only while the ids run without
-    gaps, and a gap would show up as a worker silently seeing fewer records.
+    Density is not cosmetic. A reader can partition a corpus across workers with
+    ``id % num_workers = worker_index``. That covers every row exactly once only while the ids run
+    without gaps. A gap shows up as a worker that silently sees fewer records.
 
     Args:
         table: The table to check.
@@ -56,7 +57,7 @@ def _dense_ids(table: str, column: str) -> tuple[str, str]:
 
 
 def _unique_external_id(table: str) -> tuple[str, str]:
-    """Return the check that one table's external ids are unique.
+    """Return the check that no two rows in one table share an ``external_id``.
 
     Args:
         table: The table to check.
@@ -131,11 +132,11 @@ def _rows(rows: Sequence[tuple[str, ...]]) -> str:
 def _typed_task_payload() -> tuple[tuple[str, str], ...]:
     """Return the checks that each task's stored payload is the one its class declares.
 
-    Main enforced the typing with one table per task type: a column per field, and the database
-    refused a row that did not fit. An entity-attribute-value payload buys a stable set of tables at
-    the cost of that refusal, so these checks put it back. They compare the stored rows against the
-    declaration in one pass each, joining on a rendered ``VALUES`` list rather than scanning the
-    payload tables once per task type.
+    Main enforced the typing with one table per task type. Each field had its own column, and the
+    database refused a row that did not fit. An entity-attribute-value payload buys a stable set of
+    tables at the cost of that refusal. These checks put the refusal back. Each compares the stored
+    rows against the declaration in one pass. Each joins on a rendered ``VALUES`` list rather than
+    scanning the payload tables once per task type.
 
     Returns:
         One description and query per check. Each must return no rows.
@@ -360,13 +361,13 @@ VALIDATIONS: Final = (
 )
 """Every invariant the dropped key constraints used to enforce, as a query that must return no rows.
 
-The writer runs these against the loaded database before it commits, which is the only moment they
-can be violated: a version is written once by one process and is immutable afterwards. Each check is
-one bulk anti-join rather than a lookup per row.
+The writer runs these against the loaded database before it commits. That is the only moment they
+can be violated: one process writes a version once, and the version is immutable afterwards. Each
+check is one bulk anti-join rather than a lookup per row.
 
-``task_from_tasks`` is deliberately unchecked, and is why that one table still keeps the caller's
-string id. A streamed task skips the cross-task checks that
+``task_from_tasks`` is deliberately unchecked, which is why that one table still keeps the caller's
+id as a string. A streamed task skips the cross-task checks that
 :meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation can reach the writer.
-Refusing it here would reject a write main accepted, and resolving it to a dense id would leave a
-null that no longer says which task is missing. The reader reports it by name instead.
+A check here rejects a write main accepted. A surrogate id here leaves a null that no longer says
+which task is missing. The reader reports the task by name instead.
 """
