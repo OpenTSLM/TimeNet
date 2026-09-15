@@ -38,5 +38,5 @@ split, is an [annotation](annotations.md) with no span.
 A typed [spec](../types.md) declares each modality once: a name and the unit of its values. TimeF
 carries the unit as a [pint](https://pint.readthedocs.io) unit. The unit is part of the type. So
 different signals read through the same API. Examples are an accelerometer trace in g, a temperature
-signal in °C, and a market series in a currency. The spec declares no unit for time. Time offsets are
-whole microseconds by construction. So a caller cannot state another unit.
+signal in °C, and a market series in a currency. The spec declares no unit for time. Time offsets
+are whole microseconds by construction. A caller therefore cannot state another unit.

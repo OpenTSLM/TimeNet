@@ -46,13 +46,14 @@ TimeSeries(
 | `time_offsets_loader` | `Callable[[], pa.Array] \| None` | no | One int64 microsecond time offset per value. `IrregularAxis` requires this field. Other axis types reject it. |
 
 `TimeSeries` is frozen and uses identity equality (`eq=False`). The writer dedupes by
-`time_series_id`. If a connector reuses one instance, or gives two instances the same explicit ID,
+`time_series_id`. If a connector reuses one instance, or gives two instances the same explicit id,
 both collapse to one chunk on disk.
-Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`. The connector supplies
-`loader` at build. [`TimeFReader`](timef-reader.md) supplies `loader` again on read-back. In both
-cases, `loader` remains the lazy boundary. `read_steps(start, stop)` lets range-aware storage loaders
-select a temporal subsection, then return it as Arrow. Older connector callables do not support this.
-They fall back to a full-read slice.
+
+Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`. The connector
+supplies `loader` at build. [`TimeFReader`](timef-reader.md) supplies `loader` again on read-back.
+In both cases, `loader` remains the lazy boundary. `read_steps(start, stop)` lets range-aware
+storage loaders select a temporal subsection, then return it as Arrow. Older connector callables do
+not support `read_steps`. They fall back to a full-read slice.
 
 `TimeSeriesSpec.dtype`, `value_shape`, and `dimension_names` describe one timestep. Scalar series keep
 the defaults `float32`, `()`, and `()`. An RGB camera, for example, uses `dtype="uint8"`,
@@ -64,13 +65,13 @@ If a connector already holds the values in memory, use the classmethod
 `TimeSeries.from_values(values, *, spec, signal, time_axis, source_id=None, time_series_id=None)`.
 This method wraps the values in a loader cast to the spec's dtype. For a `"str"` or `"enum"` spec,
 pass the labels and the loader keeps them as text. It takes `n_values` from the length of the array.
-If a series stores time offsets instead of computing them, use
+If a series stores time offsets rather than compute them, use
 `TimeSeries.from_irregular(values, *, time_offsets_us, ...)`. This method derives the axis from the
-stream, so the two values cannot disagree. Use the `loader=` constructor above only for lazy sources
-(files, remote shards).
+stream, so the two values cannot disagree. Use the `loader=` constructor shown earlier only for lazy
+sources (files, remote shards).
 
 `from_values()` and `from_irregular()` convert the values once and retain the resulting Arrow array.
-Repeated reads reuse that array without repeating the conversion.
+Repeated reads reuse that array and do not repeat the conversion.
 If you supply a loader, that loader controls its own reads and stored results.
 The constructors still use NumPy to convert numeric NumPy inputs.
 Enum inputs use dictionary encoding, which stores each distinct label once.
@@ -119,14 +120,15 @@ Use `record.has_absolute_time` to find out whether the anchor is known.
 annotation's span with the same rule that a task's `scope` uses. A span scoped to named
 `time_series_ids` must lie inside the *intersection* of those series' windows. If an unscoped span
 declares a `time_span`, `add_annotation` validates the span against the record's `time_span`.
-Otherwise, `add_annotation` validates the span against the *union* of the series' windows. A span
-that leaves the window this rule selects warns with `SpanOutsideWindowWarning` and is kept as it was
-given. Some sources state a region that reaches past the signals it was written for, and a connector
-records what the source says. Pass `warn_when_outside=False` to raise `TimeFValidationError` instead.
-The reader keeps the same default, so it reads back a span the writer accepted.
+Otherwise, `add_annotation` validates the span against the *union* of the series' windows. If a span
+leaves the window this rule selects, `add_annotation` warns with `SpanOutsideWindowWarning` and
+keeps the span as given. Some sources state a region that reaches past the signals it was written
+for, and a connector records what the source says. To raise `TimeFValidationError` instead, pass
+`warn_when_outside=False`. The reader keeps the same default, so it reads back a span the writer
+accepted.
 
 `add_annotations([...])` attaches an iterable the same way, but as one all-or-nothing operation. It
-validates the whole batch first. It leaves the record untouched if any annotation fails.
+validates the whole batch first. If any annotation fails, it leaves the record untouched.
 
 `to_arrow()` and `to_numpy()` return the sole signal's 1-D values (Arrow or NumPy) for the common
 single-signal record. For a multi-signal record, both methods raise `ValueError`. In that case, index
@@ -178,16 +180,16 @@ both a task and its records. `add_task` raises `TimeFValidationError` in these c
 - A task sets both `target` and `target_annotation_ids`, or sets neither, unless its answer is a
   produced series.
 - A [`Span`](types.md#span) (the `scope` or a localization target) has `time_series_ids` that do not
-  resolve on every target record. A span that falls outside a record's covered span warns with
-  `SpanOutsideWindowWarning` and is kept, the same way an annotation's span is.
+  resolve on every target record. If a span falls outside a record's covered span, `add_task` warns
+  with `SpanOutsideWindowWarning` and keeps it, the same way `add_annotation` does.
 - An `input_annotation_ids` or `target_annotation_ids` entry names an annotation that no target record
   carries.
 
 `add_tasks` is all-or-nothing. It validates the whole batch before it attaches any task. If one task is
-bad, `add_tasks` raises an error and leaves the dataset untouched. To keep tasks that were added before
-a failure, call `add_task` in a loop instead.
+bad, `add_tasks` raises an error and leaves the dataset untouched. To keep the tasks you added
+before a failure, call `add_task` in a loop instead.
 
-Validation of the whole batch also enforces relationships across the batch:
+`add_tasks` also enforces relationships across the batch:
 
 - Task ids stay unique against the batch and the dataset.
 - Every `from_tasks` parent already exists in the dataset, or the batch includes it.
@@ -234,8 +236,8 @@ to_features_and_targets(*, task=None, output="arrow", features="timestep")
     -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]
 ```
 
-`to_features_and_targets` builds an `(X, y)` training pair. **By default, it defers
-materialization.**
+`to_features_and_targets` builds an `(X, y)` training pair. **By default, it does not materialize
+the arrays.**
 
 The `features` parameter picks the shape of `X`:
 

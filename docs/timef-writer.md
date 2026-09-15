@@ -28,8 +28,9 @@ Most connectors do not use `TimeFWriter` directly. `BaseConnector.store()` and t
 
 ## Disk layout
 
-The whole control plane is one embedded DuckDB database. The values plane shards into numbered parts,
-and the manifest lists them, so the reader discovers the parts and does not assume fixed names.
+The whole control plane is one embedded DuckDB database. The values plane shards into numbered
+parts, and the manifest lists them. The reader therefore discovers the parts and does not assume
+fixed names.
 
 ```
 <root>/<dataset_id>/<version>/
@@ -61,7 +62,7 @@ zstd compression.
 
 Only the **values plane** (the temporal values of each series) is backend-specific. The control
 plane is the same database either way. The manifest records the choice in `values_backend`. A chunk
-locator is backend-agnostic, `(chunk_file, chunk_major_idx, chunk_minor_idx)`:
+locator is backend-neutral, `(chunk_file, chunk_major_idx, chunk_minor_idx)`:
 
 | Backend | Layout | Chunk locator |
 | --- | --- | --- |
@@ -74,8 +75,8 @@ This column is null unless the series stores an offset for each value.
 Each shard stores one modality, so its value type matches the spec's dtype.
 Text and enum values use dictionary encoding, which stores each distinct label once.
 
-This backend supports scalar values only. Arrow uses a bit to mark whether each value is present, so nulls
-need no extra column.
+This backend supports scalar values only. Arrow uses a bit to mark whether each value is present,
+so nulls need no extra column.
 
 Zarr stores one array for each `(spec_type, stores_time_offsets)` pair.
 Each array has shape `(total_steps, *value_shape)` and uses the spec's dtype.
@@ -89,25 +90,29 @@ Each boolean marks whether the corresponding timestep is present.
 Non-nullable specs do not write this array.
 
 Each backend chunks the data in its own way. Parquet needs the logical `chunk_max_bytes` split to
-pack series into row groups. Zarr chunks the storage itself. As a result, its index carries one
-placement per series. The index splits a series only past 2³⁰ values, to keep `n_values` in int32.
+pack series into row groups. Zarr chunks the storage itself, so its index carries one placement per
+series. The index splits a series only past 2³⁰ values, to keep `n_values` in int32.
+
 The Zarr writer buffers appends per `(spec_type, stores_time_offsets)` partition. It flushes at
-shard-aligned boundaries. As a result, the writer writes each shard object exactly once. It does not
-read, change, and write the object again for each series.
+shard-aligned boundaries. The writer therefore writes each shard one time. It does not read a shard,
+change it, and write it again for each series.
 
 The Zarr backend needs the `zarr` extra (`pip install 'timenet[zarr]'`). The core package never
 imports the extra. A Zarr series can hold embeddings, pose tensors, spectrogram frames, or image
 sequences. Recordings can have different durations. Every series that shares a `spec_type` must have
-the same dtype and trailing shape. Parquet deliberately rejects N-D specs, which stay on Zarr. The
-Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer types,
-`bool`, `str`, and `enum`. The Zarr backend stores every scalar dtype **except `str`**: it
-has no dictionary layer, so free-form string signals inflate on disk and read slowly, and the writer
-rejects them. An `enum` signal stores int32 codebook indices compactly. A dataset's
-values plane uses **one** backend for the whole dataset (the manifest's single `values_backend`
-field), so a dataset with a `str` signal must be entirely Parquet, and a dataset needing
-N-D tensors must be entirely Zarr. They cannot be mixed per signal.
-A [copy-on-write edit](#copy-on-write-edits) keeps the backend of
-the base version, unless overridden.
+the same dtype and trailing shape.
+
+The Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer
+types, `bool`, `str`, and `enum`. Parquet deliberately rejects N-D specs, which stay on Zarr. The
+Zarr backend stores every scalar dtype **except `str`**. Zarr has no dictionary layer, so free-form
+string signals inflate on disk and read slowly. The writer rejects them. An `enum` signal stores
+int32 codebook indices compactly.
+
+A dataset's values plane uses **one** backend for the whole dataset, named by the manifest's single
+`values_backend` field. A dataset with a `str` signal must therefore be entirely Parquet. A dataset
+that needs N-D tensors must be entirely Zarr. One dataset cannot mix the two backends per signal. A
+[copy-on-write edit](#copy-on-write-edits) keeps the backend of the base version, unless you
+override it.
 
 ## Streaming and chunking
 
@@ -115,28 +120,29 @@ the base version, unless overridden.
 series exactly once. `write()` sorts the series by `(spec_type, signal, time_series_id)`. Then it
 streams the series through the values backend.
 
-With Parquet, the writer splits each series into chunks of at most `chunk_max_bytes`. It buffers the
-chunks until they reach `row_group_target_bytes`, then flushes them as one row group. Shards rotate at
-`shard_target_bytes` and at every `spec_type` boundary, so each shard holds one modality. A row group
-never spans shards. As a result, the `(chunk_file, chunk_major_idx, chunk_minor_idx)` pointers in the
-index are exact.
+With Parquet, the writer splits each series into chunks of at most `chunk_max_bytes`. It buffers
+the chunks until they reach `row_group_target_bytes`, then flushes them as one row group. Shards
+rotate at `shard_target_bytes` and at every `spec_type` boundary, so each shard holds one modality.
+A row group never spans shards. The `(chunk_file, chunk_major_idx, chunk_minor_idx)` pointers in the
+index are therefore exact.
 
-The 2³¹ element cap on a row group comes from the 32-bit offsets of the `values` list column, so the
-cap does not depend on the element type. The byte-based flush keeps the row group well under it.
+The 2³¹ element cap on a row group comes from the 32-bit offsets of the `values` list column. The
+cap therefore does not depend on the element type. The byte-based flush keeps the row group well
+under it.
 
 ## Encodings
 
-The writer pins each encoding by data role. It does not leave the choice to pyarrow heuristics. As a
-result, re-built versions stay stable:
+The writer pins each encoding by data role. It does not leave the choice to pyarrow heuristics.
+Re-built versions therefore stay stable:
 
 - `time_offsets_us.list.element` -> **DELTA_BINARY_PACKED** + zstd, for the irregular series that
   carry one time offset per value. A monotonic stream stores as small deltas instead of full int64
-  values. The same read-back self-check verifies this encoding.
+  values. The same read-back self-check validates this encoding.
 - monotonic ints (`chunk_idx`, `chunk_major_idx`, `chunk_minor_idx`) -> DELTA_BINARY_PACKED.
 - bounded categoricals (`spec_type`, `signal`, `key`, `target`, `chunk_file`)
   -> dictionary + RLE.
-- id columns -> plain. The writer stores an id column as **`binary(16)`** when every value in the
-  space for that id is a canonical UUID (see below). Otherwise, it stores the column as a UTF-8
+- id columns -> plain. If every value in the space for that id is a canonical UUID (see below), the
+  writer stores the id column as **`binary(16)`**. Otherwise, it stores the column as a UTF-8
   string.
 - `values.list.element` -> measured, not pinned (see below).
 
@@ -148,9 +154,9 @@ Parquet.
 
 ### Values encoding
 
-No single encoding is right for every waveform. As a result, the writer measures the data instead of
-pinning one encoding. The table below shows real measurements from real sources, at zstd level 3, for
-the values column only:
+No single encoding is right for every waveform. So the writer measures the data rather than pin one
+encoding. The table below shows measurements from real sources, at zstd level 3, for the values
+column only:
 
 | Encoding | PTB-XL ECG (quantized, 11k distinct in 69M) | TSQA (continuous, 10.5M distinct in 11.5M) |
 | --- | --- | --- |
@@ -160,32 +166,34 @@ the values column only:
 
 BYTE_STREAM_SPLIT transposes each float into four byte planes and compresses each plane apart. It
 wins on smooth, high-cardinality signals, where the sign and high-mantissa planes stay nearly
-constant. It loses badly on quantized data. There, the low mantissa byte is noise, and the split
-isolates this noise into an incompressible plane. Dictionary wins instead on quantized data. A
-physical conversion onto a fixed grid leaves only a few thousand distinct values behind tens of
-millions of samples. Examples include the 0.001 mV step of wfdb and an integer ADC scale.
+constant. It loses on quantized data, where the low mantissa byte is noise that the split isolates
+into an incompressible plane. Dictionary wins instead on quantized data. A physical conversion onto
+a fixed grid leaves only a few thousand distinct values behind tens of millions of samples. Examples
+include the 0.001 mV step of wfdb and an integer ADC scale.
 
 The rule uses cardinality, counted on a sample. If the sample has at most 65,536 distinct values,
-the writer selects `dictionary`. Above that, floats select `byte_stream_split`, while strings and
-integers select `plain`, because a byte-plane split has no meaning for them. Two dtypes skip the
-count: bool signals always select `plain`, and enum signals always select `dictionary`. For floats,
-the writer never selects `plain` automatically. The sample is the values already buffered for the
-first row group of a modality. As a result, the decision costs only a distinct-value count, with no
-extra reads. The writer makes one decision per `spec_type`, before it opens the first shard for that
-type. The decision is deterministic in the data. As a result, re-building an unchanged source
-reaches the same encoding.
+the writer selects `dictionary`. With more distinct values than that, floats select
+`byte_stream_split`, and strings and integers select `plain`. A byte-plane split has no meaning for
+strings and integers. Two dtypes skip the count: bool signals always select `plain`, and enum
+signals always select `dictionary`. For floats, the writer never selects `plain` automatically.
+
+The sample is the values already buffered for the first row group of a modality. The decision
+therefore costs only a distinct-value count, with no extra reads. The writer makes one decision per
+`spec_type`, before it opens the first shard for that type. The decision is deterministic in the
+data, so a re-build of an unchanged source reaches the same encoding.
 
 The manifest records the choice as `value_encoding`, a `spec_type` -> encoding map. This record is
-provenance, not a contract. Parquet records the applied encoding in the footer of every file. As a
-result, a reader resolves the encoding without the manifest.
+provenance, not a contract. Parquet records the applied encoding in the footer of every file. So a
+reader resolves the encoding without the manifest.
 
 The `TimeFWriter(value_encoding=...)` argument controls this choice. It defaults to `auto`, the
-measured selection described above. You can set a concrete value, `dictionary`,
-`byte_stream_split`, or `plain`, to force one encoding for every modality. High-cardinality
-*quantized* data, such as a 24-bit integer-scaled signal, needs a forced encoding. This kind of data
-suits neither branch. It has too many distinct values for a dictionary and too much low-bit noise for
-a byte split. Only the Parquet backend applies an encoding. The writer rejects a forced encoding when
-you write another backend.
+measured selection described earlier. To force one encoding for every modality, set a concrete
+value: `dictionary`, `byte_stream_split`, or `plain`.
+
+High-cardinality *quantized* data, such as a 24-bit integer-scaled signal, needs a forced encoding.
+This kind of data suits neither branch. It has too many distinct values for a dictionary and too
+much low-bit noise for a byte split. Only the Parquet backend applies an encoding. If you write
+another backend, the writer rejects a forced encoding.
 
 ```python
 with TimeFWriter(root, dataset, value_encoding="plain") as writer:
@@ -198,10 +206,10 @@ also includes the sampled cardinality behind the choice. This is standard-librar
 handler attached. You must configure a handler to see the output. The same decisions also appear in
 the manifest.
 
-A read-back self-check verifies that the selection reached every shard. This check exists because
-pyarrow silently drops a column encoding when the column path does not match. Parquet has its own
-dictionary-to-plain fallback. This fallback happens when a dictionary outgrows its page limit. It is
-lossless, and the writer permits it.
+A read-back self-check validates that the selection reached every shard. This check exists because
+pyarrow drops a column encoding, without an error, when the column path does not match. Parquet has
+its own dictionary-to-plain fallback. This fallback happens when a dictionary outgrows its page
+limit. It is lossless, and the writer permits it.
 
 ### Id storage
 
@@ -209,12 +217,12 @@ Entity ids default to a **UUIDv7** string (`timenet.types.new_id`). UUIDv7 is ti
 writer already sorts series by id, so this ordering clusters values by creation time and compresses
 their shared prefix.
 
-For each of the six logical ids (`record_id`, `time_series_id`, `annotation_id`, `task_id`,
-`source_id`, `subject_id`), the writer verifies whether every value is a canonical UUID. If every
-value is a canonical UUID, the writer stores the columns for that id as 16 raw bytes (`binary(16)`)
-instead of a 36-char string. Connector-supplied non-UUID ids, for example `ecgqa-test-0`, stay
-strings. The reader infers each id's storage type from the Parquet schema and decodes `binary(16)`
-back to the canonical string, so callers always see string ids.
+The writer validates the six logical ids (`record_id`, `time_series_id`, `annotation_id`, `task_id`,
+`source_id`, `subject_id`) against the canonical UUID form. If every value is a canonical UUID, the
+writer stores that id's columns as 16 raw bytes (`binary(16)`) instead of a 36-char string.
+Connector-supplied non-UUID ids, for example `ecgqa-test-0`, stay strings. The reader infers each
+id's storage type from the Parquet schema. It decodes `binary(16)` back to the canonical string, so
+callers always see string ids.
 
 ## Validation
 
@@ -233,10 +241,10 @@ Intrinsic checks for each record, annotation, and task happen at insertion (see
 ## Commit protocol
 
 The writer stages everything in `<version>.tmp-<uuid>/`. `close()` writes `manifest.json` last. It
-then publishes the version with a single atomic `os.replace` call to `<version>/`. `__enter__` raises
-`FileExistsError` if a committed `manifest.json` already exists. If any failure occurs, the context
-manager calls `abort()`. `abort()` removes only the staging directory, so a partial dataset is never
-visible.
+then publishes the version with a single atomic `os.replace` call to `<version>/`. If a committed
+`manifest.json` already exists, `__enter__` raises `FileExistsError`. If any failure occurs, the
+context manager calls `abort()`. `abort()` removes only the staging directory, so a partial dataset
+is never visible.
 
 ## Manifest
 
@@ -253,25 +261,26 @@ A copy-on-write edit also records a `derived_from` lineage block.
 
 ## Copy-on-write edits
 
-A committed version is immutable. As a result, removing a row means writing a **new** version
-without that row.
+A committed version is immutable. To remove a row, the writer writes a **new** version without that
+row.
 
 `timenet.dataset.edit.edit_version(base_dir, out_root, *, dataset_version, remove_record_ids=(),
 cascade=False)` performs the edit. It reads the base version into memory. Values stay lazy and pull
 from the base shards. It applies the removals, repairs every cross-reference, and writes a fresh
 version through the normal atomic-commit writer.
 
-Ids are stable and never reused. As a result, surviving references stay valid without renumbering.
-With content-defined chunking, the rewrite re-stores only the changed chunks.
+Ids are stable, and TimeNet never reuses one. Surviving references therefore stay valid, with no
+renumbering. With content-defined chunking, the rewrite re-stores only the changed chunks.
 
-The writer enforces referential integrity *before* the write. It never filters on read. As a result,
-a committed version is always consistent.
+The writer enforces referential integrity *before* the write. It never filters on read. So a
+committed version is always consistent.
 
-Removing a record strips the id of that record from the `record_ids` list of every task. It also
-drops task ids that the surviving records can no longer resolve. A task can lose a **required**
-reference: a forecasting `target_record_id` or `context_record_ids`, its last remaining record, or a
-`from_task` edge to a removed task. When this happens, the edit fails with `TimeFEditError`, unless
-`cascade=True`. With `cascade=True`, the edit removes the invalidated dependents transitively.
+When the edit removes a record, it strips that record's id from the `record_ids` list of every task.
+It also removes task ids that the surviving records can no longer resolve. A task can lose a
+**required** reference: a forecasting `target_record_id` or `context_record_ids`, its last remaining
+record, or a `from_task` edge to a removed task. If a task loses a required reference, the edit
+fails with `TimeFEditError`, unless you set `cascade=True`. With `cascade=True`, the edit removes
+the invalidated dependents transitively.
 
 The `derived_from` field in the new manifest records the base version and the operation.
 

@@ -26,8 +26,8 @@ same primitives describe any sensor stream, from an ECG to a market series.
 To onboard a dataset, you write one [`BaseConnector`](../connectors.md). The engine drives it
 through a fixed pipeline. `download` fetches raw files (I/O only). `convert` parses them into an
 in-memory dataset (CPU only). The engine then derives the schema from the data. It stores the result
-as parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets round-trip
-deterministically, and reading a compiled version never runs connector code.
+as Parquet plus a `manifest.json`. The whole surface is frozen dataclasses. So datasets round-trip
+deterministically, and a read of a compiled version never runs connector code.
 
 ```mermaid
 flowchart LR

@@ -45,9 +45,11 @@ from timenet.types import ureg
 
 `ureg` is **private to TimeNet**. An import of `timenet` does not call
 `pint.set_application_registry`. Your own registry stays untouched. Everything TimeNet persists or
-pickles stores units by *name* and rebuilds them against `ureg`. Therefore nothing in the format
-depends on process-global pint state. The manifest codec writes `str(unit)`. `TimeSeriesSpec`
-converts every `pint.Unit` attribute in `__getstate__`, even the ones a subclass adds.
+pickles stores units by *name* and rebuilds them against `ureg`. So nothing in the format depends on
+process-global pint state.
+
+The manifest codec writes `str(unit)`. `TimeSeriesSpec` converts every `pint.Unit` attribute in
+`__getstate__`, even the ones a subclass adds.
 
 That covers TimeNet's own types. It cannot cover a bare `pint.Unit` or `pint.Quantity` that you
 pickle yourself. Those store only the unit name. They resolve it against pint's *application*
@@ -121,17 +123,17 @@ vibration = TimeSeriesSpec(
 
 The full logical array shape is `(n_steps, *value_shape)`. For example, an RGB frame stream can use
 `dtype="uint8"`, `value_shape=(height, width, 3)`, and
-`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`; scalar
-values of a non-`"str"`/`"enum"` dtype preserve their NumPy type on disk, and `"str"`/`"enum"` values
-read back as text. An `"enum"` dtype stores values as a PyArrow
-dictionary array; the torch bridge maps them to integer codes.
-Multidimensional values require the Zarr
-values backend.
+`dimension_names=("height", "width", "color")`. Parquet stores scalar values of any `dtype`. A
+scalar value of a non-`"str"`/`"enum"` dtype preserves its NumPy type on disk. A `"str"` or
+`"enum"` value reads back as text. An `"enum"` dtype stores values as a PyArrow dictionary array,
+and the torch bridge maps them to integer codes.
+
+Multidimensional values require the Zarr values backend.
 
 ### Missing values
 
-Python callers use `None` to supply a missing timestep when `nullable=True`.
-Constructors reject `None` when `nullable=False`.
+When `nullable=True`, Python callers use `None` to supply a missing timestep.
+When `nullable=False`, constructors reject `None`.
 Arrow stores missingness in a validity bitmap, a separate bit for each timestep.
 The numeric array does not contain Python objects.
 
@@ -145,10 +147,10 @@ markers into nulls.
 Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
 The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
 
-`TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
-the loaded array contains nulls. In some cases, the previous conversion lost the distinction between
-missing values and NaN.
-A nullable spec without actual nulls still supports `to_numpy()`. NaN and infinity remain valid values.
+`TimeSeries.to_arrow()` preserves nulls. If the loaded array contains nulls,
+`TimeSeries.to_numpy()` raises `TimeFValidationError`. In some cases, the previous conversion lost
+the distinction between missing values and NaN. A nullable spec with no nulls still supports
+`to_numpy()`. NaN and infinity remain valid values.
 
 `TimeSeries.to_numpy_and_mask()` returns values and a validity mask, a boolean array that marks
 present timesteps. Together, the values and mask preserve the missingness that Arrow stores.
@@ -274,13 +276,13 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 
 `TaskType` is the enum of type tags. TimeNet derives `TASKS` at import from a walk of the `Task`
 subclass tree. Therefore it registers every concrete task in the module by its `task_type`. If two
-classes claim the same tag, TimeNet rejects them instead of a silent collapse. Task payloads are
-fixed in code, unlike specs and annotations. TimeNet resolves them on read against `TASKS`, not from
-the manifest.
+classes claim the same tag, TimeNet rejects them. It does not collapse them without an error. Task
+payloads are fixed in code, unlike specs and annotations. TimeNet resolves them on read against
+`TASKS`, not from the manifest.
 
-The first four types carry a scalar-ish `target`. Therefore generic training code reads `task.target`
-for any of them. The three series-output types are the exception. Their answer is a *series*. They
-set `answer_is_record` and point at the record that holds it, instead of a value in `target`.
+The first four types carry an inline `target`. So generic training code reads `task.target` for any
+of them. The three series-output types are the exception. Their answer is a *series*. They set
+`answer_is_record` and point at the record that holds it, instead of a value in `target`.
 
 ### Span
 
@@ -291,10 +293,11 @@ timeline. A **step** frame reads them as ordinal indices into one series' own ar
 you annotate with for any span. It and the frame bases `TimeSpan` / `StepSpan` are abstract, so you
 always build a concrete leaf.
 
-Time spans sit on the recording timeline, the same frame as a series' `time_axis`, so a bound stays
-meaningful on a windowed record that starts partway into the recording. `TimePoint(start_us=...)` is one
-point. `TimeInterval(start_us=..., end_us=...)` is the half-open range `[start_us, end_us)`. Either
-covers the whole record, or a subset of series named by `time_series_ids` (`None` = every series). Build
+Time spans sit on the recording timeline, the same frame as a series' `time_axis`. A bound therefore
+stays meaningful on a windowed record that starts partway into the recording.
+`TimePoint(start_us=...)` is one point. `TimeInterval(start_us=..., end_us=...)` is the half-open
+range `[start_us, end_us)`. Either covers the whole record, or a subset of series named by
+`time_series_ids` (`None` = every series). Build
 with `.seconds()` for the seconds a recording documents itself in, or `.micros()` when the source already
 has integers. For a wall-clock moment, build it from the record (`record.time_point(at)` /
 `record.time_interval(start, end)`), which supplies its own `start_time` as the anchor. Bounds are stored
@@ -306,9 +309,9 @@ str). `StepPoint(time_series_id=..., start=...)` is one step.
 `StepInterval(time_series_id=..., start=..., stop=...)` is the half-open range `[start, stop)`. There
 are no unit builders. Construct them directly.
 
-Which frame fits is decided by the series' **axis**, not by the caller: a timeline axis (regular or
-irregular) takes a time span, an ordinal axis takes a step span. [`add_task`](timef-dataset.md) checks a
-span against the axis of every series it names and rejects a mismatch.
+The series' **axis** decides which frame fits, not the caller. A timeline axis (regular or
+irregular) takes a time span. An ordinal axis takes a step span. [`add_task`](timef-dataset.md)
+validates a span against the axis of every series it names, and rejects a mismatch.
 
 ```python
 # a time interval on one series; start is stored as 5_000_000
@@ -510,14 +513,14 @@ an invariant. Examples: a negative `Version` component, a `unit_value` that is n
 malformed dataset ref, a `dataset_id` that is not an `org/name` pair, or a version supplied twice. It
 subclasses `ValueError`, so `except ValueError` keeps catching all of it.
 
-Plain `ValueError` is for genuine programming bugs, not bad data or input. One example: two `Task`
-classes declare the same `task_type`, a definition bug raised at import. That is never a data or input
-problem. A tag of TimeF validation failure on it makes the distinction useless.
+Plain `ValueError` is for programming bugs, not for bad data or input. One example: two `Task`
+classes declare the same `task_type`, a definition bug raised at import. That is never a data or
+input problem. A `TimeFValidationError` tag on such a bug makes the distinction useless.
 
 `timenet.errors` also defines the warnings TimeNet raises. `TimeNetWarning` is the base, and it
-derives from `UserWarning`. `SpanOutsideWindowWarning` is raised where a span leaves its window and
-is kept rather than refused. Filter it by type to silence a source that states such a region for
-every recording.
+derives from `UserWarning`. TimeNet raises `SpanOutsideWindowWarning` when it keeps a span that
+leaves its window. To silence a source that states such a region for every recording, filter the
+warning by type.
 
 | Warning | Base(s) | Warned when |
 | --- | --- | --- |

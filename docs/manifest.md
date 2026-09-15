@@ -65,15 +65,15 @@ A spec records its `nullable` flag in the same way. When an older manifest omits
 SDK reads it as `False`. The current SDK can therefore read artifacts written before nullability
 support without changing their missing-value behavior.
 
-Nullable artifacts did not move the format version. It does not guarantee that older SDKs can
-read newer nullable artifacts correctly. SDKs from before nullability support can ignore the Zarr
-validity arrays, which mark present timesteps. Those SDKs can treat missing-value placeholders as
-observations.
+Nullable artifacts did not move the format version. An unchanged version number therefore does not
+mean that an older SDK reads a nullable artifact correctly. SDKs from before nullability support can
+ignore the Zarr validity arrays, which mark present timesteps. Those SDKs can treat missing-value
+placeholders as observations.
 
 For nullable artifacts, use an SDK that supports nullability. The format version alone does not show
 whether a reader supports the `nullable` flag and its storage representation.
 
-If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
+If you construct or parse a `Manifest` with an unsupported `timef_format_version`, `Manifest` raises
 `TimeNetInvalidManifestError`.
 
 ### Codec
@@ -104,8 +104,8 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
 `time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
 `spec_type -> series count`). All fields default to `0` or `{}`. `time_series_index_rows` counts
-chunk placements once per referencing record, so it is above `time_series_chunks` whenever a version
-shares a series between records.
+chunk placements once for each record that references them. It is therefore more than
+`time_series_chunks` whenever a version shares a series between records.
 
 ## `ManifestFiles`
 
