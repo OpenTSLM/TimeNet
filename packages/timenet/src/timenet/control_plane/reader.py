@@ -17,6 +17,7 @@ file, so a downloaded version stays exactly as it was checksummed in the manifes
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
@@ -26,6 +27,7 @@ import numpy as np
 
 from timenet.control_plane import schema as ddl
 from timenet.control_plane.values import ChunkLocator, read_many_values, read_values
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
 from timenet.errors import TimeFFormatError
 from timenet.format.constants import CONTROL_DB_FILE
 
@@ -80,6 +82,13 @@ class SignalView:
     dtype: str
     axis_type: str
     n_values: int
+    time_axis: TimeAxis | None = None
+    """The axis itself, not just its kind. A consumer that places values in time needs the period or
+    the endpoints, and the batch query already joins ``axes``, so carrying it costs no extra query."""
+    nullable: bool = False
+    """Whether the spec allows an absent timestep. Nothing in the values plane records one today, so
+    a consumer that wants a validity mask has nothing to build one from; this is what it would key
+    off when the values plane grows one."""
     annotations: list[ResolvedAnnotation] = field(default_factory=list)
 
 
@@ -172,7 +181,9 @@ FROM sources WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id, path
 # Signals hang off sources through a link table, because one series can be used by several records.
 _BATCH_SIGNALS = """
 SELECT src.record_id, sig.signal_id, ss.source_id, sig.external_id, sig.name, sig.n_values,
-       sp.spec_type, sp.unit, sp.dtype, ax.axis_type
+       sp.spec_type, sp.unit, sp.dtype, sp.nullable,
+       ax.axis_type, ax.period_numerator_us, ax.period_denominator, ax.start_index,
+       ax.first_us, ax.last_us
 FROM sources src
 JOIN source_signals ss ON ss.source_id = src.source_id
 JOIN signals sig ON sig.signal_id = ss.signal_id
@@ -546,7 +557,19 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
         # One series can be used by several records, so a batch can hold more than one view of it.
         signals: dict[int, list[SignalView]] = {}
         for row in self.connection.execute(_BATCH_SIGNALS, [wanted]).fetchall():
-            (_record_id, signal_id, source_id, signal_external, name, n_values, spec_type, unit, dtype, axis) = row
+            (
+                _record_id,
+                signal_id,
+                source_id,
+                signal_external,
+                name,
+                n_values,
+                spec_type,
+                unit,
+                dtype,
+                nullable,
+                *axis_columns,
+            ) = row
             signal = SignalView(
                 signal_id=signal_id,
                 external_id=signal_external,
@@ -554,8 +577,10 @@ class TimeFReader:  # noqa: PLR0904 - the read surface is wide because the hiera
                 spec_type=spec_type,
                 unit=unit,
                 dtype=dtype,
-                axis_type=axis,
+                axis_type=axis_columns[0],
                 n_values=n_values,
+                time_axis=_axis_of(*axis_columns),
+                nullable=bool(nullable),
             )
             signals.setdefault(signal_id, []).append(signal)
             sources[source_id].signals.append(signal)
@@ -897,6 +922,43 @@ def _connect(target: str) -> duckdb.DuckDBPyConnection:
     connection.execute(f"ATTACH '{target}' AS control (READ_ONLY)")
     connection.execute("USE control")
     return connection
+
+
+def _axis_of(  # noqa: PLR0913, PLR0917 - one parameter per stored column
+    axis_type: str,
+    period_numerator_us: int | None,
+    period_denominator: int | None,
+    start_index: int | None,
+    first_us: int | None,
+    last_us: int | None,
+) -> TimeAxis | None:
+    """Rebuild a signal's axis from the columns ``axes`` stores it in.
+
+    The axis is what places values in time, so a consumer that builds a frame or a tensor needs the
+    period or the endpoints rather than just the word ``regular``. The batch query already joins
+    ``axes`` to read the discriminator, so the remaining columns ride along for free.
+
+    Args:
+        axis_type: The discriminator, one of ``regular``, ``irregular`` or ``ordinal``.
+        period_numerator_us: The regular period's numerator, in microseconds.
+        period_denominator: The regular period's denominator.
+        start_index: Where a regular axis starts counting.
+        first_us: An irregular axis' first offset.
+        last_us: An irregular axis' last offset.
+
+    Returns:
+        The axis, or ``None`` if the stored kind is not one this reader knows.
+    """
+    if axis_type == "regular" and period_numerator_us is not None and period_denominator:
+        return RegularAxis(
+            period_us=Fraction(period_numerator_us, period_denominator),
+            start_index=start_index or 0,
+        )
+    if axis_type == "irregular":
+        return IrregularAxis(first_us=first_us or 0, last_us=last_us or 0)
+    if axis_type == "ordinal":
+        return OrdinalAxis()
+    return None
 
 
 def _annotation(row: Sequence[Any]) -> ResolvedAnnotation:

@@ -1,7 +1,7 @@
 [project]
 name = "timenet"
 version = "0.1.0"
-description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
+description = "TimeNet is infrastructure for finding, downloading, and loading time series datasets in a shared TimeF format."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -41,6 +41,9 @@ Issues = "https://github.com/OpenTSLM/TimeNet/issues"
 # ROCm, MPS) satisfies it, so a user with an existing CUDA torch reuses it and nothing is downgraded.
 # For a small CPU-only torch, install it from the CPU index first:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch = [
+    "torch>=2.2",
+]
 # The S3 registry backend (store/download against an s3:// bucket). boto3 is imported lazily and raises a
 # clear "install timenet[s3]" message when the extra is absent; pyarrow (already a core dep) supplies the
 # S3FileSystem for lazy range reads.
@@ -54,6 +57,7 @@ zarr = [
 ]
 all = [
     "timenet[s3]",
+    "timenet[torch]",
     "timenet[zarr]",
 ]
 

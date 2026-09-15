@@ -33,7 +33,7 @@ target-version = "py311"
 # first-party. Config is discovered from the repo root, not shared by uv.
 src = ["packages/*/src"]
 # Local git worktrees carry their own (possibly unrelated) configs.
-extend-exclude = [".worktrees"]
+extend-exclude = [".worktrees", "benchmarks/paper"]
 
 [tool.ruff.format]
 # quote-style (double) and indent-style (space) are ruff's defaults; only the non-default is set here.
@@ -98,7 +98,7 @@ lines-after-imports = 2
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--strict-markers"]
-testpaths = ["packages", "benchmarks/end_to_end/tests"]
+testpaths = ["packages", "benchmarks/end_to_end/tests", "spikes/duckdb-control-plane/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
@@ -106,7 +106,11 @@ markers = [
 
 [tool.ty.src]
 # Local git worktrees carry their own (possibly unrelated) copies of the code.
-exclude = [".worktrees/**"]
+# benchmarks/paper/** is the reference measurement harness, copied in verbatim so that the timing,
+# the delivered item and the checksum are the same code on both sides of the comparison. Its Original
+# lanes run here; its TimeF lane targets the previous SDK and only ever runs in that environment.
+# Editing any of it to satisfy a checker would destroy the property the copy exists for.
+exclude = [".worktrees/**", "benchmarks/paper/**"]
 
 [tool.ty.environment]
 python-version = "3.13"
