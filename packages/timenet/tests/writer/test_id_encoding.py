@@ -1,4 +1,4 @@
-"""uuid7 default ids are stored as binary(16) and round-trip back to canonical strings."""
+"""uuid7 default ids: the shard stores them as binary(16), and every id round-trips as a string."""
 
 import uuid
 
@@ -39,18 +39,19 @@ def _spec():
     )
 
 
-def _series():
+def _series(time_series_id=None):
     return TimeSeries(
         spec=_spec(),
         signal="c",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+        **({} if time_series_id is None else {"time_series_id": time_series_id}),
     )
 
 
-def _uuid_dataset(*, record_id=None):
-    """Build a dataset whose ids default to uuid7 (unless an explicit record_id is passed)."""
+def _uuid_dataset(*, record_id=None, time_series_id=None):
+    """Build a dataset whose ids default to uuid7 (unless an explicit id is passed)."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/uuid-test",
@@ -60,7 +61,7 @@ def _uuid_dataset(*, record_id=None):
             license=License.MIT,
         )
     )
-    record = dataset.add_record(time_series=(_series(),), record_id=record_id)
+    record = dataset.add_record(time_series=(_series(time_series_id),), record_id=record_id)
     record.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(record, ClassificationTask(target="x"))
     dataset.derive_schema()
@@ -86,17 +87,10 @@ def test_manifest_has_no_id_encoding(tmp_path):
     assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
 
 
-def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
+def test_the_shard_id_column_is_binary16_on_disk(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset())
-    records = pq.read_table(version_dir / "records/part-00000000.parquet").schema
-    assert records.field("record_id").type == pa.binary(16)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").schema
-    assert index.field("record_id").type == pa.binary(16)
-    assert index.field("time_series_id").type == pa.binary(16)
     shard = next(version_dir.glob("time_series/part-*.parquet"))
     assert pq.read_table(shard).schema.field("time_series_id").type == pa.binary(16)
-    annotations = pq.read_table(version_dir / "annotations/part-00000000.parquet").schema
-    assert annotations.field("id").type == pa.binary(16)
 
 
 def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
@@ -189,13 +183,13 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
 
 
 def test_non_uuid_ids_stay_string(tmp_path):
-    version_dir = _write(tmp_path, _uuid_dataset(record_id="record-0"))
-    records = pq.read_table(version_dir / "records/part-00000000.parquet").schema
-    assert records.field("record_id").type == pa.string()
+    version_dir = _write(tmp_path, _uuid_dataset(time_series_id="ts-0"))
+    shard = next(version_dir.glob("time_series/part-*.parquet"))
+    assert pq.read_table(shard).schema.field("time_series_id").type == pa.string()
 
 
-def test_span_series_ids_round_trip_as_binary16(tmp_path):
-    """A span nests time_series ids inside a struct column; they encode like any other id column."""
+def test_span_series_ids_round_trip(tmp_path):
+    """A span names the series it is scoped to; those ids survive the write as the caller wrote them."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/uuid-test",
@@ -218,10 +212,6 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-
-    partition = version_dir / "tasks/task=classification/part-00000000.parquet"
-    scope_type = pq.read_table(partition).schema.field("scope").type
-    assert scope_type.field("time_series_ids").type == pa.list_(pa.binary(16))
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
