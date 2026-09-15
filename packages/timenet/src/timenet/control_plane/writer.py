@@ -206,8 +206,9 @@ def _statements(script: str) -> list[str]:
 def _validate(connection: duckdb.DuckDBPyConnection) -> None:
     """Check every invariant the dropped key constraints used to enforce.
 
-    Each check runs as a count, not as a row scan. The second query names the first few offending
-    rows, and it runs only after a count finds a breach.
+    A check runs as a count, not as a row scan. A corpus of three million rows can break an
+    invariant in every one of them, and the message needs the total and the first few offenders
+    only. The second query runs on the failure path alone.
 
     Args:
         connection: The connection holding the loaded, not yet committed database.
