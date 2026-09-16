@@ -23,6 +23,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.values_backends import ValuesBackend
 
 
 def _metadata():
@@ -55,6 +56,22 @@ def test_add_record_accepts_a_complete_hierarchy(make_series):
 
     assert dataset.add_record(record=record) is record
     assert dataset.records == (record,)
+
+
+@pytest.mark.parametrize("values_backend", [ValuesBackend.PARQUET, ValuesBackend.ZARR])
+def test_declarative_write_and_open_round_trip(tmp_path, make_series, values_backend):
+    dataset = _dataset()
+    signal = make_series(time_series_id="signal")
+    record = Record(
+        record_id="record",
+        sources=(Source(id="source", name="Device", signals=(signal,)),),
+    )
+    dataset.add_record(record=record)
+
+    version_path = dataset.write(path=tmp_path, values_backend=values_backend)
+    restored = TimeFDataset.open(path=version_path)
+
+    assert restored.records[0].sources[0].signals[0].to_arrow().equals(signal.to_arrow())
 
 
 def test_add_record_rejects_a_complete_record_mixed_with_construction_fields(make_series):
@@ -231,6 +248,34 @@ def test_add_record_rejects_duplicate_time_series_ids(make_series):
         _dataset().add_record(time_series=(ts, ts))
 
 
+def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
+    dataset = _dataset()
+    signal = make_series(time_series_id="shared-signal")
+    dataset.add_record(
+        record=Record(
+            record_id="record-a",
+            sources=(Source(id="source-a", name="A", signals=(signal,)),),
+        )
+    )
+
+    with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
+        dataset.add_record(
+            record=Record(
+                record_id="record-b",
+                sources=(Source(id="source-b", name="B", signals=(signal,)),),
+            )
+        )
+
+
+def test_add_record_rejects_a_source_owned_by_two_records(make_series):
+    dataset = _dataset()
+    source = Source(id="shared-source", name="Device", signals=(make_series(),))
+    dataset.add_record(record=Record(record_id="record-a", sources=(source,)))
+
+    with pytest.raises(TimeFValidationError, match="each Source has one owner"):
+        dataset.add_record(record=Record(record_id="record-b", sources=(source,)))
+
+
 def test_add_task_warns_for_a_scope_outside_record_span(make_series):
     # Span times are in the source recording timeline, so a window past the series' end warns.
     dataset = _dataset()
@@ -346,18 +391,20 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
 def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     dataset = _dataset()
     dataset.add_record(time_series=(make_series(),), record_id="s-0")
-    task = AnswerTask(prompt="q", target="a")
-    task.record_ids = ("missing",)
+    unknown = Record(
+        record_id="missing",
+        sources=(Source(id="missing-source", name="Missing", signals=(make_series(time_series_id="missing"),)),),
+    )
+    task = AnswerTask(prompt="q", target="a", inputs=(unknown,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
-    with pytest.raises(TimeFValidationError, match="unknown record"):
+    with pytest.raises(TimeFValidationError, match="not registered"):
         list(dataset.iter_streamed_tasks_validated())
 
 
 def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
     dataset = _dataset()
-    dataset.add_record(time_series=(make_series(),), record_id="s-0")
-    task = ClassificationTask(target="a")
-    task.record_ids = ("s-0",)
+    record = dataset.add_record(time_series=(make_series(),), record_id="s-0")
+    task = ClassificationTask(target="a", inputs=(record,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
     with pytest.raises(TimeFValidationError, match="not one of the declared"):
         list(dataset.iter_streamed_tasks_validated())
