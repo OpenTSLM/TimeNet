@@ -1,19 +1,16 @@
 """``TimeFWriter``: serialize a :class:`~timenet.dataset.TimeFDataset` to the TimeF layout on disk.
 
-The writer keeps the Parquet control plane fixed and sends series values to a selected Parquet or
-Zarr backend. The configured chunk, row-group, and shard targets bound the backend buffers.
-The writer stages everything in a temporary directory and publishes it with a single atomic rename.
-A ``manifest.json`` in the version directory marks a committed version.
+The writer loads the version's structure into one embedded DuckDB control database and sends series
+values to a selected Parquet or Zarr backend. The configured chunk, row-group, and shard targets
+bound the backend buffers. The writer stages everything in a temporary directory and publishes it
+with a single atomic rename. A ``manifest.json`` in the version directory marks a committed version.
 """
 
 from collections.abc import Callable, Iterable, Iterator
-from enum import StrEnum
-import itertools
-import json
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, assert_never
+from typing import Any
 import uuid
 
 import numpy as np
@@ -21,38 +18,22 @@ import pyarrow as pa
 
 from timenet.control_plane.writer import ValuesPlane, write_control_plane
 from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.axis import IrregularAxis, to_time_offsets_us
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
-    ANNOTATIONS_TEMPLATE,
     CONTROL_DB_FILE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
-    DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
-    INDEX_TEMPLATE,
     MANIFEST_FILE,
-    RECORDS_TEMPLATE,
-    TASK_PART_TEMPLATE,
-    part_path,
 )
-from timenet.format.schemas import (
-    LOGICAL_IDS,
-    TASK_COMMON_NAMES,
-    UUID16,
-    IdCodec,
-    IdTypes,
-    annotations_schema,
-    index_schema,
-    records_schema,
-    task_schema,
-)
+from timenet.format.schemas import LOGICAL_IDS, UUID16, IdCodec, IdTypes
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types import Annotation, Task
+from timenet.types import Task
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -61,9 +42,7 @@ from timenet.values_backends.writer import (
     ZarrValuesConfig,
     make_values_backend,
 )
-from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.sharded import ShardedTableWriter
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
@@ -76,7 +55,6 @@ class TimeFWriter:
         dataset: TimeFDataset,
         *,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
-        control_shard_target_bytes: int = DEFAULT_CONTROL_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
@@ -90,10 +68,8 @@ class TimeFWriter:
 
         Args:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
-            dataset: The populated dataset. The writer derives the schema automatically if needed.
+            dataset: The populated dataset. The writer derives the schema when the dataset has none.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
-            control_shard_target_bytes: Split a control table (records, annotations, index, tasks) into
-                a new part once the in-memory Arrow size of the emitted rows exceeds this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
@@ -133,7 +109,6 @@ class TimeFWriter:
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
-        self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -149,9 +124,6 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
-        # A streamed dataset's task iterator, peeked once for id types and reused for the write.
-        self._task_iter: Iterator[Task] = iter(())
-        self._first_task: Task | None = None
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -174,8 +146,8 @@ class TimeFWriter:
         """Remove abandoned ``<version>.tmp-*`` staging dirs left by a crashed build.
 
         A hard kill (SIGKILL or OOM) never reaches :meth:`abort`, so its staging directory lingers.
-        Clear any such sibling for this version before you write a fresh one. The writer does not
-        support concurrent writes of the same version.
+        This method removes any such sibling of this version before the writer stages a fresh one.
+        The writer does not support concurrent writes of the same version.
         """
         parent = self._final_dir.parent
         if not parent.is_dir():
@@ -211,9 +183,6 @@ class TimeFWriter:
 
         unique_series, series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        self._write_records()
-        self._write_annotations()
-        self._write_index(placements, series_to_records)
         self._counts = self._write_control_db(unique_series, series_to_records, placements)
         self._written = True
 
@@ -242,46 +211,24 @@ class TimeFWriter:
     # ---- id storage ----------------------------------------------------------------------------
 
     def _resolve_id_types(self) -> None:
-        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
-        values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
-        for record in self._dataset.records:
-            values["record_id"].append(record.record_id)
-            values["subject_id"].extend(record.subject_ids)
-            for ts in record.time_series:
-                values["time_series_id"].append(ts.time_series_id)
-                if ts.source_id is not None:
-                    values["source_id"].append(ts.source_id)
-            for ann in record.annotations:
-                values["annotation_id"].append(ann.id)
-        for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
-            values["annotation_id"].append(ann.id)
-        if self._dataset.has_task_stream:
-            # Streamed tasks are not materialized; one peeked id decides binary(16)-vs-string storage
-            # without draining millions of tasks. Keep the validating iterator so _write_tasks reuses
-            # it: the source is consumed (and validated) exactly once, even a one-shot generator.
-            self._task_iter = self._dataset.iter_streamed_tasks_validated()
-            self._first_task = next(self._task_iter, None)
-            if self._first_task is not None:
-                values["task_id"].append(self._first_task.id)
-        else:
-            for task in self._dataset.tasks:
-                values["task_id"].append(task.id)
+        """Pick the shard's id storage: ``binary(16)`` when every id is a canonical UUID, else string.
 
-        id_types: IdTypes = {}
-        for name in LOGICAL_IDS:
-            vals = values[name]
-            is_uuid16 = bool(vals) and all(is_canonical_uuid(v) for v in vals)
-            id_types[name] = UUID16 if is_uuid16 else pa.string()
+        ``time_series_id`` is the one id a shard carries, so it is the one this resolves. Every other
+        id lives in the control database as the caller's own string.
+        """
+        ids = [ts.time_series_id for record in self._dataset.records for ts in record.time_series]
+        is_uuid16 = bool(ids) and all(is_canonical_uuid(value) for value in ids)
+        id_types: IdTypes = {name: pa.string() for name in LOGICAL_IDS}
+        id_types["time_series_id"] = UUID16 if is_uuid16 else pa.string()
         self._id_types = id_types
-        self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
-        self._codec = IdCodec.from_uuid16(self._uuid16)
+        self._codec = IdCodec.from_id_types(id_types)
 
     # ---- values --------------------------------------------------------------------------------
 
     def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
-        Sharing one series across records is the supported dedupe path. Two different series that
+        One series shared across records is the supported dedupe path. Two different series that
         claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
         the other's records read back the wrong data. Two series that share an id must describe the
         same signal. The writer rejects a disagreement instead of keeping the first series.
@@ -425,7 +372,7 @@ class TimeFWriter:
         """Read an irregular series' time offsets and check them against what it declares.
 
         The method returns ``None`` for every other axis shape. The backend writes that as a null cell.
-        These checks make ``first_time_offset_us`` and ``last_time_offset_us`` verified metadata. An
+        These checks make ``first_time_offset_us`` and ``last_time_offset_us`` checked metadata. An
         axis cannot claim endpoints that its own stream does not have.
 
         Args:
@@ -459,209 +406,22 @@ class TimeFWriter:
             )
         return pa.array(time_offsets)
 
-    # ---- metadata tables -----------------------------------------------------------------------
+    # ---- control plane -------------------------------------------------------------------------
 
-    def _control_sink(
-        self,
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> ShardedTableWriter:
-        """Open a control-table sink wired to this writer's staging dir, byte budgets, and compression.
+    def _tasks_to_write(self) -> Iterator[Task]:
+        """Yield the dataset's tasks, and validate a streamed one as it passes.
 
-        One place owns that wiring, so the materialized tables and the streamed task write share it.
-
-        Args:
-            schema: The Arrow schema for the table.
-            part_path: Maps a part index to its relative path.
-            dictionary_columns: Columns to dictionary-encode.
-            column_encoding: Optional per-column encoding overrides.
-
-        Returns:
-            A sink ready to accept rows via :meth:`ShardedTableWriter.add`.
-        """
-        encoding_kwargs: dict[str, Any] = {
-            "dictionary_columns": dictionary_columns,
-            "column_encoding": column_encoding,
-            "compression": self._compression,
-            "data_page_size": self._data_page_size,
-        }
-        if self._compression_level is not None:
-            encoding_kwargs["compression_level"] = self._compression_level
-        return ShardedTableWriter(
-            schema,
-            part_path,
-            staging_dir=self._staging_dir,
-            control_target_bytes=self._control_shard_target_bytes,
-            row_group_target_bytes=self._row_group_target_bytes,
-            encoding=encodings.ParquetEncoding(**encoding_kwargs),
-        )
-
-    def _write_control_table(
-        self,
-        rows: Iterable[dict],
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> list[str]:
-        sink = self._control_sink(
-            schema, part_path, dictionary_columns=dictionary_columns, column_encoding=column_encoding
-        )
-        for row in rows:
-            sink.add(row)
-        return sink.finish(write_empty_part=True)
-
-    def _write_records(self) -> None:
-        codec = self._codec
-        rows: list[dict] = [
-            {
-                "record_id": codec.encode("record_id", record.record_id),
-                "start_time_us": record.start_time,
-                "time_span": codec.encode_span(record.time_span),
-                "subject_ids": codec.encode_list("subject_id", record.subject_ids),
-                "time_series": [_time_series_struct(ts, codec) for ts in record.time_series],
-                "task_ids": codec.encode_list("task_id", record.task_ids),
-                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in record.annotations]),
-            }
-            for record in self._dataset.records
-        ]
-        rows.sort(key=lambda r: r["record_id"])
-        self._record_parts = self._write_control_table(
-            iter(rows),
-            records_schema(self._id_types),
-            lambda index: part_path(RECORDS_TEMPLATE, index),
-            dictionary_columns=encodings.RECORDS_DICTIONARY,
-        )
-
-    def _annotation_row(self, ann: Annotation) -> dict:
-        """Build an annotation's stored row with an empty ``record_ids`` for the caller to fill.
-
-        Args:
-            ann: The annotation to encode.
-
-        Returns:
-            The row dict; a record-carried annotation appends its record ids, a registered one leaves
-            the list empty.
-        """
-        codec = self._codec
-        return {
-            "id": codec.encode("annotation_id", ann.id),
-            "key": ann.key,
-            "value": None if ann.value is None else json.dumps(ann.value),
-            "source": ann.source,
-            "span": codec.encode_span(ann.span),
-            "record_ids": [],
-        }
-
-    def _write_annotations(self) -> None:
-        codec = self._codec
-        by_id: dict[str, dict] = {}
-        for record in self._dataset.records:
-            for ann in record.annotations:
-                row = by_id.setdefault(ann.id, self._annotation_row(ann))
-                row["record_ids"].append(codec.encode("record_id", record.record_id))
-        for ann in self._dataset.registered_annotations:
-            # A registered annotation that no record carries writes with an empty record_ids: tasks
-            # reference it by id, and the reader resolves it from the table, not through a record.
-            by_id.setdefault(ann.id, self._annotation_row(ann))
-        rows = sorted(by_id.values(), key=lambda r: r["id"])
-        self._annotation_parts = self._write_control_table(
-            iter(rows),
-            annotations_schema(self._id_types),
-            lambda index: part_path(ANNOTATIONS_TEMPLATE, index),
-            dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
-        )
-
-    def _write_tasks(self) -> Iterator[Task]:
-        """Write each task's Parquet row, then yield the task on to the control database.
-
-        Each task type gets its own byte-budgeted sink, created when that type is first seen, so
-        tasks reach disk in row-group batches and the whole list never has to live in memory.
-        ``iter_tasks()`` yields the tasks of a materialized dataset and of a streamed one the same
-        way, so one path serves both.
+        ``iter_tasks()`` yields a materialized dataset's tasks and a streamed one's identically, so
+        one path serves both. A stream is read exactly once, so a one-shot source can still be
+        written.
 
         Yields:
-            Each task, after its row is written.
+            Each task to store.
         """
-        self._task_files: list[str] = []
-        sinks: dict[str, ShardedTableWriter] = {}
-        schemas: dict[str, pa.Schema] = {}
         if self._dataset.has_task_stream:
-            # Reuse the iterator the id-type peek started: the source is consumed and validated once.
-            # The peek already pulled the first task, so chain it back ahead of the rest.
-            if self._first_task is None:
-                tasks: Iterable[Task] = ()
-            else:
-                tasks = itertools.chain((self._first_task,), self._task_iter)
+            yield from self._dataset.iter_streamed_tasks_validated()
         else:
-            tasks = self._dataset.iter_tasks()
-        for task in tasks:
-            task_type_str = str(task.task_type)
-            schema = schemas.get(task_type_str)
-            if schema is None:
-                schema = task_schema(task.task_type, self._id_types)
-                schemas[task_type_str] = schema
-                sinks[task_type_str] = self._control_sink(
-                    schema,
-                    lambda index, tt=task_type_str: part_path(TASK_PART_TEMPLATE, index, task_type=tt),
-                    dictionary_columns=encodings.task_dictionary(schema),
-                )
-            sinks[task_type_str].add(_task_row(task, schema, self._codec))
-            yield task
-        for task_type_str in sorted(sinks):  # stable file order regardless of the type interleaving
-            self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
-
-    def _write_index(
-        self, placements: dict[tuple[str, int], ChunkPlacement], series_to_records: dict[str, list[str]]
-    ) -> None:
-        # Emit rows in encoded (record_id, time_series_id, chunk_idx) order through nested iteration.
-        # This keeps the parts globally sorted and avoids materializing the whole index in memory.
-        # The reader selects the parts where a probe lands, then bisects each part. This approach
-        # requires global order across the split.
-        codec = self._codec
-        record_to_series: dict[str, list[str]] = {}
-        for time_series_id, record_ids in series_to_records.items():
-            for record_id in record_ids:
-                record_to_series.setdefault(record_id, []).append(time_series_id)
-        chunks_by_series: dict[str, list[int]] = {}
-        for time_series_id, chunk_idx in placements:  # noqa: PLE1141 - keys are (id, chunk) tuples
-            chunks_by_series.setdefault(time_series_id, []).append(chunk_idx)
-        for chunk_idxs in chunks_by_series.values():
-            chunk_idxs.sort()
-
-        enc_sid: dict[str, Any] = {sid: codec.encode("record_id", sid) for sid in record_to_series}
-        enc_tid: dict[str, Any] = {tid: codec.encode("time_series_id", tid) for tid in chunks_by_series}
-
-        def rows() -> Iterable[dict]:
-            for record_id in sorted(record_to_series, key=lambda s: enc_sid[s]):
-                series = record_to_series[record_id]
-                for time_series_id in sorted(series, key=lambda t: enc_tid[t]):
-                    for chunk_idx in chunks_by_series[time_series_id]:
-                        placement = placements[time_series_id, chunk_idx]
-                        yield {
-                            "record_id": enc_sid[record_id],
-                            "time_series_id": enc_tid[time_series_id],
-                            "spec_type": placement.spec_type,
-                            "signal": placement.signal,
-                            "chunk_idx": chunk_idx,
-                            "chunk_file": placement.chunk_file,
-                            "chunk_major_idx": placement.data_index.major_idx,
-                            "chunk_minor_idx": placement.data_index.minor_idx,
-                            "n_values": placement.n_values,
-                        }
-
-        self._index_rows = sum(len(chunks_by_series[t]) for series in record_to_series.values() for t in series)
-        self._index_parts = self._write_control_table(
-            rows(),
-            index_schema(self._id_types),
-            lambda index: part_path(INDEX_TEMPLATE, index),
-            dictionary_columns=encodings.INDEX_DICTIONARY,
-            column_encoding=encodings.INDEX_ENCODING,
-        )
+            yield from self._dataset.iter_tasks()
 
     def _write_control_db(
         self,
@@ -670,9 +430,6 @@ class TimeFWriter:
         placements: dict[tuple[str, int], ChunkPlacement],
     ) -> ManifestCounts:
         """Load the version's structure into ``control.duckdb`` and return the manifest's counts.
-
-        Tasks are passed on as they are written, so a one-shot task stream is read once even though
-        both planes record it.
 
         Args:
             unique_series: The deduped series, in the order the values plane wrote them.
@@ -688,7 +445,7 @@ class TimeFWriter:
             series=unique_series,
             series_to_records=series_to_records,
             values=ValuesPlane(placements=placements, backend=self._values_backend_name),
-            tasks=self._write_tasks(),
+            tasks=self._tasks_to_write(),
         )
         return ManifestCounts(
             records=counts.records,
@@ -710,12 +467,8 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                records=self._file_parts(self._record_parts),
-                annotations=self._file_parts(self._annotation_parts),
-                time_series_index=self._file_parts(self._index_parts),
-                tasks=self._file_parts(self._task_files),
-                time_series=self._file_parts(self._value_files),
                 control_db=self._file_part(CONTROL_DB_FILE),
+                time_series=self._file_parts(self._value_files),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
@@ -726,13 +479,13 @@ class TimeFWriter:
     # ---- helpers -------------------------------------------------------------------------------
 
     def _validate_shared_annotations(self) -> None:
-        """Check annotations sharing an id across records are field-equal, and registered ids are distinct.
+        """Check that annotations that share an id are field-equal, and that registered ids are distinct.
 
         Raises:
             TimeFValidationError: If two annotations share an id but are not equal, or an id is both
-                registered and carried by a record. The reader restores a registered annotation from its
-                empty ``record_ids``, so an id that is also record-carried writes non-empty and is lost on
-                read; reject it here instead of silently dropping it.
+                registered and carried by a record. The reader restores a registered annotation from
+                the dataset attachment table. An id that a record also carries comes back attached
+                to that record instead. The writer rejects it here and does not move it silently.
         """
         record_ann_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
         overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
@@ -782,8 +535,8 @@ def _series_identity(ts: TimeSeries) -> tuple:
     """Return the fields that must agree for two series to be the same signal.
 
     This compares the descriptive fields that the writer persists, not the values. The ``loader`` is a
-    callable, so two equal series built separately compare unequal. Reading every shared series
-    only to compare it defeats the lazy read path on the largest datasets.
+    callable, so two equal series built separately compare unequal. A read of every shared series
+    only for that comparison defeats the lazy read path on the largest datasets.
 
     Args:
         ts: The series to describe.
@@ -792,74 +545,3 @@ def _series_identity(ts: TimeSeries) -> tuple:
         The identifying fields, suitable for equality comparison and for error messages.
     """
     return (ts.spec.spec_type, ts.signal, ts.time_axis, ts.source_id, ts.n_values)
-
-
-def _axis_columns(axis: TimeAxis) -> dict:
-    """Return the shape-specific axis columns. Set every column the shape does not use to null.
-
-    The dispatch is positive and ends in :func:`~typing.assert_never`. A new axis shape fails here at
-    type-check time instead of writing a row of nulls under another shape's tag.
-
-    Args:
-        axis: The series' time axis.
-
-    Returns:
-        The axis columns of the series struct.
-    """
-    empty = {
-        "period_numerator_us": None,
-        "period_denominator": None,
-        "start_index": None,
-        "first_time_offset_us": None,
-        "last_time_offset_us": None,
-    }
-    if isinstance(axis, RegularAxis):
-        return empty | {
-            "period_numerator_us": axis.period_us.numerator,
-            "period_denominator": axis.period_us.denominator,
-            "start_index": axis.start_index,
-        }
-    if isinstance(axis, IrregularAxis):
-        return empty | {"first_time_offset_us": axis.first_us, "last_time_offset_us": axis.last_us}
-    if isinstance(axis, OrdinalAxis):
-        return empty
-    assert_never(axis)
-
-
-def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
-    return {
-        "spec_type": ts.spec.spec_type,
-        "signal": ts.signal,
-        "source_id": codec.encode("source_id", ts.source_id),
-        "time_series_id": codec.encode("time_series_id", ts.time_series_id),
-        "axis_type": str(ts.time_axis.axis_type),
-        **_axis_columns(ts.time_axis),
-        "n_values": ts.n_values,
-    }
-
-
-def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
-    refs = type(task).refs
-    row: dict = {
-        "id": codec.encode("task_id", task.id),
-        "record_ids": codec.encode_list("record_id", task.record_ids),
-        "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
-        "prompt": task.prompt,
-        "scope": codec.encode_span(task.scope),
-        "input_annotation_ids": codec.encode_list("annotation_id", task.input_annotation_ids),
-        "target_annotation_ids": codec.encode_list("annotation_id", task.target_annotation_ids),
-        "rationale": task.rationale,
-    }
-    for name in schema.names:
-        if name in TASK_COMMON_NAMES:
-            continue
-        value = getattr(task, name)
-        if isinstance(value, StrEnum):  # a StrEnum payload (for example localization mode) stores as its value
-            value = str(value)
-        value = list(value) if isinstance(value, tuple) else value
-        row[name] = codec.encode_payload(refs, name, value)
-    return row
-
-
-def _ordered_unique(items: Iterable[str]) -> list[str]:
-    return list(dict.fromkeys(items))
