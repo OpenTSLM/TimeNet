@@ -1,8 +1,7 @@
-"""Read a version's control database: one query per table per batch, never one query per record.
+"""Read a version's control database.
 
-Every call here answers for a whole batch of records, or for the whole version. The database opens
-read-only. A version whose files live on an object store is copied to a local temporary file first,
-and :meth:`ControlPlaneReader.close` removes that copy.
+Every call answers for a whole batch of records, or for the whole version. The database opens
+read-only. A version whose files live on an object store is copied to a local temporary file first.
 """
 
 from collections.abc import Iterator, Sequence
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 
 _RECORDS: Final = """
-SELECT record_id, external_id, start_time_us, time_span_start_us, time_span_end_us, subject_ids
+SELECT record_id, external_id, start_time_us, time_span_start_us, time_span_end_us, subject_ids, task_ids
 FROM records WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id
 """
 
@@ -56,7 +55,7 @@ ORDER BY t.position
 """
 
 # A series shared by several records is stored once, so its chunks are reached through the link
-# table. Ordering by the series id and then by chunk keeps a series' chunks contiguous and in the
+# table. Ordering by the series' own id and then by chunk keeps a series' chunks together, in the
 # order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
 SELECT s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
@@ -182,8 +181,8 @@ class ControlPlaneReader:
         Yields:
             One batch of ids at a time.
         """
-        # The ids stream from their own cursor. Hydrating a batch runs more queries, and a second
-        # query on the same connection would discard the result this one is still reading.
+        # The ids stream from their own cursor, because rebuilding a batch runs more queries, and a
+        # second query on the same connection would discard the result this one is still reading.
         cursor = self.connection.cursor()
         try:
             found = cursor.execute("SELECT record_id FROM records ORDER BY record_id")
@@ -254,8 +253,8 @@ class ControlPlaneReader:
     def record_chunks(self, record_external_id: str) -> list[dict]:
         """Return every chunk locator of one record's series.
 
-        A read walks one record at a time, so the locators come back for the whole record rather
-        than once per series.
+        A read walks one record at a time, so the locators come back once for the whole record
+        rather than once per series.
 
         Args:
             record_external_id: The id the record was built under.

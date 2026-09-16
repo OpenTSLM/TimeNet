@@ -1,14 +1,11 @@
 """``TimeFReader`` reads a TimeF version directory and rebuilds it as a :class:`TimeFDataset`.
 
-The file ``manifest.json`` controls the reader. The reader does not run connector code. When you open
-a version, the reader reads only the manifest. It resolves tasks, records, annotations, and each
-series' values only on first use. The reader rebuilds types from the manifest's flat descriptors and
-the version's control database, and it does not create classes at runtime. As a result, read-back
-objects can pickle, and they match the original objects field for field.
+Opening a version reads only ``manifest.json``, and the reader never runs connector code. Tasks,
+records, annotations, and each series' values resolve on first use. The reader rebuilds types from
+the manifest's flat descriptors and the version's control database. It never creates classes at
+runtime, so read-back objects pickle and match the original objects field for field.
 
-The rebuild is batched. Records come back a batch at a time, and each batch costs one query per
-table for the whole batch rather than one query per record. Measured on a 618,508-record corpus:
-34.49 ms per record one at a time, 0.111 ms per record in batches of a thousand.
+Records come back a batch at a time, with one query per table for the whole batch.
 """
 
 from __future__ import annotations
@@ -55,9 +52,8 @@ if TYPE_CHECKING:
 _RECORD_BATCH_ROWS = 512
 """How many records one round of control-plane queries rebuilds.
 
-Each query in the round scans its table once and answers for the whole batch, so the per-record cost
-falls with the batch size. A few hundred is where the curve flattens and the decoded rows still sit
-comfortably in memory.
+Each query in the round answers for the whole batch. A larger batch costs less per record and holds
+more decoded rows in memory.
 """
 
 _INDEX_ROWS_CACHE_RECORDS = 8
@@ -74,14 +70,13 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Open a committed dataset version through a storage handle.
 
-        This constructor reads nothing. The handle already carries the parsed manifest. The handle
-        also wraps the filesystem and root that every later read uses. The reader resolves tasks,
-        records, annotations, and each series' values only on first use. As a result, the cost to
-        open a version is the same for three records or three million.
+        This constructor reads nothing. The handle already carries the parsed manifest, the
+        filesystem, and the root that every later read uses. Tasks, records, annotations, and each
+        series' values resolve on first use.
 
-        A structurally corrupt or missing file fails on its first access, not here. Examples of a
-        first access are ``.tasks``, the first record, or the first value read. Call :meth:`verify`
-        for a check of the version's integrity at construction time. Build the handle with
+        A corrupt or missing file fails on its first access, not here. A first access is ``.tasks``,
+        the first record, or the first value read. Call :meth:`verify` to check the version's
+        integrity up front. Build the handle with
         :meth:`~timenet.registry.BaseRegistry.open_version` or with
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
@@ -89,17 +84,17 @@ class TimeFReader:
             version: The opened version handle: a manifest plus a filesystem-rooted view of its files.
         """
         self._version = version
-        # These are aliases of the handle's fields, for the read sites below. All three pickle, so a
-        # DataLoader worker can rebuild the reader (and its lazy loaders) from them without reopening
-        # the registry.
+        # Aliases of the handle's fields, for the read sites below. All three pickle, so a
+        # DataLoader worker can rebuild the reader and its lazy loaders without reopening the
+        # registry.
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
 
         self._spec_by_type = {spec.spec_type: spec for spec in self._manifest.schema.time_series_specs}
         self._annotation_descriptors = {d.key: d for d in self._manifest.schema.annotations}
-        # This is per-process scratch space. The reader builds it on demand and drops it on pickle.
-        # ``__getstate__`` must stay in step with these fields.
+        # Per-process scratch space, built on demand and dropped on pickle. Keep ``__getstate__`` in
+        # step with these fields.
         self._control: ControlPlaneReader | None = None
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
@@ -155,14 +150,10 @@ class TimeFReader:
     def verify(self) -> None:
         """Check every file the manifest lists against its recorded ``sha256:`` checksum.
 
-        This method does not run automatically when you open a version. It reads and hashes every
-        file, so it reads the whole dataset. The lazy read design of this class avoids that cost on
-        open.
-
-        When integrity matters more than speed, call this method explicitly. Examples are after a
-        download, before a long training run, or inside a fsck-style command. This method reopens
-        each file through the version's filesystem. As a result, a missing file surfaces here,
-        because ``__init__`` does not stat-sweep the files.
+        Opening a version does not run this check. It hashes every listed file, so it reads the
+        whole dataset. Call it when integrity matters more than speed: after a download, before a
+        long training run, or from a fsck-style command. It reopens each file through the version's
+        filesystem, so a missing file surfaces here.
 
         Raises:
             TimeFFormatError: If a listed file is missing, or its contents do not match the manifest.
@@ -215,10 +206,10 @@ class TimeFReader:
         """
         records = list(self.iter_records())
         tasks = self.tasks
-        # A streamed-written dataset stores empty record.task_ids: its tasks were never held in memory
-        # to populate them. read() materializes every task, so rebuild the reverse map here, or
-        # tasks_for() and the torch view would return no tasks. This is idempotent for a materialized
-        # dataset, whose task_ids already round-trip through the record rows.
+        # A streamed-written dataset stores empty record.task_ids, because its tasks were never held
+        # in memory. read() materializes every task, so rebuild the reverse map here, or tasks_for()
+        # and the torch view return no tasks. A materialized dataset already round-trips its
+        # task_ids through the record rows, so this changes nothing for it.
         by_id = {record.record_id: record for record in records}
         for task in tasks:
             for record_id in task.record_ids:
@@ -241,24 +232,22 @@ class TimeFReader:
     ) -> Iterator[Record]:
         """Yield records lazily without materializing a :class:`TimeFDataset`.
 
-        Records are rebuilt a batch at a time, so the control plane is queried once per batch per
-        table rather than once per record. Records come back in stored order (sorted by
-        ``record_id``), not in the order you asked for them. An id that the dataset does not contain
-        raises ``TimeFValidationError``.
+        Records are rebuilt a batch at a time, with one query per table for the whole batch. They
+        come back in stored order (sorted by ``record_id``), not in the order you asked for them.
 
         Args:
             record_ids: The records to yield, or ``None`` to yield every record.
             with_annotations: Whether to resolve the annotations of each record. ``False`` leaves
-                :attr:`Record.annotations` empty and skips the query and the JSON parse that each
-                one costs. The stored spans are then not checked against the record window.
+                :attr:`Record.annotations` empty, and skips their query, their JSON parse, and the
+                check of each stored span against the record window.
 
         Yields:
             Each reconstructed :class:`Record`.
 
         Raises:
-            TimeFValidationError: If ``record_ids`` names an id that the dataset does not contain,
-                the error raises after the iterator is fully consumed, not at the offending id. An
-                early-stopping consumer is served what exists and never reaches the check.
+            TimeFValidationError: If ``record_ids`` names an id the dataset does not contain. The
+                error raises once the iterator is fully consumed, not at the offending id, so a
+                consumer that stops early never reaches the check.
         """
         with self._as_format_error():
             control = self._control_plane()
@@ -290,11 +279,10 @@ class TimeFReader:
         """Re-raise a decode failure against the manifest's schema as a :class:`TimeFFormatError`.
 
         The loaders rebuild typed objects from the control database and the manifest's schema.
-        Anything they raise means that the artifact is corrupt, or that it disagrees with its
-        manifest. Both cases are a format failure. This context manager stops a bare ``ValueError``
-        from ``TaskType()``, or a ``duckdb.Error`` from a truncated database, from escaping as-is.
-        The reader's contract requires every failure to reach the caller as a
-        :class:`TimeFFormatError`.
+        Anything they raise means the artifact is corrupt, or that it disagrees with its manifest.
+        The reader's contract is that every such failure reaches the caller as a
+        :class:`TimeFFormatError`, so a bare ``ValueError`` from ``TaskType()``, or a
+        ``duckdb.Error`` from a truncated database, must not escape as-is.
 
         Yields:
             Nothing. This context manager only rewrites the exception type.
@@ -422,9 +410,8 @@ class TimeFReader:
     def _read_registered_annotations(self) -> tuple[Annotation, ...]:
         """Rebuild annotations that no record carries: they exist only for tasks to reference.
 
-        :meth:`iter_records` never reaches them, since no record lists them, so :meth:`read` pulls
-        them here. The manifest count gates the query, so a dataset with none (the common case) pays
-        nothing.
+        No record lists them, so :meth:`iter_records` never reaches them and :meth:`read` pulls them
+        here. The manifest count gates the query, so a dataset with none runs none.
 
         Returns:
             The registered annotations, in registration order.
@@ -437,8 +424,8 @@ class TimeFReader:
     def _index_rows(self, record_id: str, time_series_id: str) -> list[dict]:
         """Return one series' chunk locators, in ``chunk_idx`` order.
 
-        One query returns every series of a record, because a read walks one record and then asks for
-        each of its series' values. The result is held for the few records a read has in flight.
+        One query returns the locators of every series of a record. The result is held for the few
+        records a read has in flight.
 
         Args:
             record_id: The owning record's id.
@@ -494,8 +481,8 @@ class TimeFReader:
             )
             for annotation in annotations:
                 if annotation.span is not None:
-                    # A stored span is already written. Refusing to load it hides a dataset that a
-                    # writer accepted on purpose, and the span is still there for a caller to judge.
+                    # The span is already on disk. This warns rather than refuses the load, so the
+                    # caller gets the dataset the writer accepted and can judge the span itself.
                     check_span_within_window(
                         f"annotation {annotation.key!r}", annotation.span, series, record_id, time_span
                     )
@@ -540,14 +527,14 @@ class TimeFReader:
                 n_values=n_values,
             )
         except TimeFValidationError as exc:
-            # A series rebuilt from a corrupt struct (bad n_values, a time offsets/axis mismatch) is a
-            # format failure, not a caller mistake, even though TimeSeries raises the same type for both.
+            # TimeSeries raises the same type for a corrupt row (bad n_values, a time offsets/axis
+            # mismatch) and for a caller mistake. A row read from disk is a format failure.
             raise TimeFFormatError(f"record {record_id!r} has an unbuildable series {time_series_id!r}: {exc}") from exc
 
     def _axis(self, struct: dict, record_id: str) -> TimeAxis:
         """Return a time axis and reuse an existing axis when its stored columns match.
 
-        Axis objects cannot change, so series can share them. Reuse avoids repeated ``Fraction``
+        Axis objects cannot change, so series can share them. Reuse saves repeated ``Fraction``
         arithmetic and validation. The cache holds at most :data:`_AXIS_CACHE_SIZE` distinct axes.
         After that limit, the reader builds other axes without keeping them.
 
@@ -577,8 +564,8 @@ class TimeFReader:
     def _build_axis(struct: dict, record_id: str) -> TimeAxis:
         """Rebuild a series' time axis from the stored discriminator.
 
-        This method reads the tag before any shape-specific column. As a result, a corrupt row
-        raises an error here, not later from an axis inferred from null columns.
+        This method reads the tag before any shape-specific column, so a corrupt row raises here
+        rather than building an axis out of null columns.
 
         Args:
             struct: The stored series row.
@@ -592,9 +579,9 @@ class TimeFReader:
         """
         kind = struct["axis_type"]
         if kind == AxisType.ORDINAL:
-            # An ordinal series has no cadence and no per-value time offsets, so every shape column must
-            # be null. A populated column means that the tag and the columns disagree. This disagreement
-            # is the corruption that this method catches.
+            # An ordinal series has no cadence and no per-value time offsets, so every shape column
+            # must be null. A populated one means the tag and the columns disagree, which is the
+            # corruption this method catches.
             shape_cols = ("period_numerator_us", "period_denominator", "start_index", "first_us", "last_us")
             if any(struct[c] is not None for c in shape_cols):
                 raise TimeFFormatError(
@@ -781,11 +768,11 @@ def _task_payload(
 
 @dataclass(frozen=True)
 class _SeriesLoader:
-    """A picklable lazy loader for one series' values (replaces a per-series closure).
+    """A picklable lazy loader for one series' values.
 
-    A nested closure cannot pickle. This class holds the reader and the series' identity instead of
-    a closure. As a result, a read-back dataset can pickle, and a multi-worker torch ``DataLoader``
-    can use it. The class reads the series' values only when you call it.
+    A nested closure cannot pickle, so this loader holds the reader and the series' identity
+    instead. A read-back dataset therefore pickles, and a multi-worker torch ``DataLoader`` can use
+    it. The loader reads the values only when you call it.
     """
 
     reader: TimeFReader
@@ -825,10 +812,9 @@ class _SeriesLoader:
 class _TimeOffsetsLoader:
     """A picklable lazy loader for an irregular series' per-value time offsets.
 
-    A nested closure cannot pickle, so this loader is a class, not a lambda. A multi-worker torch
-    ``DataLoader`` pickles the series to send it to its workers, and a closure cannot pickle. This
-    class mirrors :class:`_SeriesLoader`, because time offsets and values are separate columns, and
-    each column reads on its own.
+    A nested closure cannot pickle, so this loader is a class, not a lambda. It mirrors
+    :class:`_SeriesLoader`, because time offsets and values are separate columns and each one reads
+    on its own.
     """
 
     reader: TimeFReader
@@ -847,9 +833,8 @@ class _TimeOffsetsLoader:
     def __call__(self) -> pa.Array:
         """Read the series' time offsets, checking them against the axis and value count.
 
-        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. As a
-        result, a corrupt shard can otherwise hand back a decreasing, wrong-length, or off-endpoint
-        stream.
+        The writer checks order, count, and endpoints. Rechecking them here stops a corrupt shard
+        from handing back a decreasing, wrong-length, or off-endpoint stream.
 
         Returns:
             One int64 microsecond time offset per value.
