@@ -75,10 +75,9 @@ def _array_from_values(
 class Signal:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
-    The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
-    across records, or give two instances the same explicit id, they share one chunk on disk. Consumers
-    read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector supplies ``loader`` at
-    build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
+    Each Signal has exactly one owning Source. Several Signals can share an immutable TimeAxis or
+    TimeSeriesSpec. Consumers read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector
+    supplies ``loader`` at build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
     """
 
     spec: TimeSeriesSpec
@@ -100,7 +99,7 @@ class Signal:
     source_id: str | None = None
     """Optional identifier of the raw source recording."""
     id: str = field(default_factory=new_id)
-    """Stable identity used to dedupe and share chunks. Defaults to a UUIDv7."""
+    """Stable Signal identity. Defaults to a UUIDv7."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
     the series counts one value per timestep, not one per scalar. This matches the count a chunk's
