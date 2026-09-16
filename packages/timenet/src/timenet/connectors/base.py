@@ -41,7 +41,7 @@ class BaseConnector(ABC, Generic[TRaw]):
     values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT
     """Default values-plane byte targets for this connector. Declare
     :data:`~timenet.format.layout.WINDOWED_VALUES_LAYOUT` when one item of this corpus is a window
-    of a record, and say in a comment what it buys and what it costs."""
+    of a record rather than a whole record."""
 
     def __init__(self) -> None:
         cls = type(self)

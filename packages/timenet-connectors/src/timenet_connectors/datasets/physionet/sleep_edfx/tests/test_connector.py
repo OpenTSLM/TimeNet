@@ -151,8 +151,7 @@ def _asked(task) -> tuple[str, ...]:
 
 
 def test_the_connector_declares_the_windowed_values_layout():
-    # One item of this corpus is one scored 30 s epoch, not a whole night. The default layout reads
-    # a shuffled epoch in 115 s where this one takes 26.5 s.
+    # One item of this corpus is one scored 30 s epoch, not a whole night.
     assert SleepEdfxConnector.values_layout is WINDOWED_VALUES_LAYOUT
 
 

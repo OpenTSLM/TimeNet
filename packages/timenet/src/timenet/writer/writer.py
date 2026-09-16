@@ -71,10 +71,10 @@ class TimeFWriter:
             dataset: The populated dataset. The writer derives the schema when the dataset has none.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             values_layout: Chunk and row-group byte targets for the values plane.
-            row_group_target_bytes: Flush a row group once buffered values exceed this. ``None``
-                takes the value from ``values_layout``.
-            chunk_max_bytes: Split a series into chunks no larger than this. ``None`` takes the
-                value from ``values_layout``.
+            row_group_target_bytes: Flush a row group once buffered values exceed this, or ``None``
+                to take the target from ``values_layout``.
+            chunk_max_bytes: Split a series into chunks no larger than this, or ``None`` to take the
+                target from ``values_layout``.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned compression level, or ``None`` for the backend default.
             data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` for

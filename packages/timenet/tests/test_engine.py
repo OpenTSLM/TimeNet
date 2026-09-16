@@ -141,7 +141,7 @@ _LAYOUT_SERIES_VALUES = 2 * 2**20 // 4
 
 
 def _wide_dataset() -> TimeFDataset:
-    """Build a dataset with one series long enough to fill several fine-layout row groups.
+    """Build a dataset with one series long enough to fill several windowed-layout row groups.
 
     Returns:
         The populated dataset, carrying the demo card's identity.
@@ -199,7 +199,7 @@ def test_a_connector_that_declares_no_layout_writes_what_it_writes_today(tmp_pat
     assert _WideConnector().values_layout == DEFAULT_VALUES_LAYOUT
 
     declared = run_pipeline(_WideConnector(), tmp_path / "declared", cache_dir=tmp_path / "cache")
-    # The same dataset through store_dataset, which no caller passes a layout to.
+    # The same dataset through store_dataset, called without a layout.
     today = store_dataset(_wide_dataset(), tmp_path / "today")
 
     assert _row_group_shapes(declared) == _row_group_shapes(today)
