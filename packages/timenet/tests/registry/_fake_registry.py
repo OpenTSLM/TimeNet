@@ -18,7 +18,7 @@ from timenet.registry import LocalRegistry
 def _declared_paths(files: dict) -> list[str]:
     """Return every path in a manifest ``files`` block.
 
-    ``control_db`` is one file object rather than a list of parts, so it is pulled out separately.
+    ``control_db`` is one file object, not a list of parts, so it is read separately.
     """
     control = files.get("control_db")
     paths = [] if control is None else [control["path"]]

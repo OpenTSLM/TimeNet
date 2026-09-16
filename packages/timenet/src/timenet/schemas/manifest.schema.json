@@ -207,7 +207,7 @@
     },
     "files": {
       "type": "object",
-      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string, except the control database, which is one file.",
+      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string. The control database is the one exception: a single file.",
       "required": ["records", "annotations", "time_series_index"],
       "properties": {
         "control_db": { "oneOf": [{ "$ref": "#/$defs/filePart" }, { "type": "null" }], "description": "The version's control database: its records, series, annotations, tasks and chunk locators in one embedded DuckDB file." },

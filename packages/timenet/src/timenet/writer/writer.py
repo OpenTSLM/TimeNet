@@ -156,7 +156,7 @@ class TimeFWriter:
     # ---- context manager -----------------------------------------------------------------------
 
     def __enter__(self) -> "TimeFWriter":
-        """Create the staging directory, refusing to overwrite a committed version.
+        """Create the staging directory, and refuse to overwrite a committed version.
 
         Returns:
             This writer.
@@ -577,15 +577,15 @@ class TimeFWriter:
         )
 
     def _write_tasks(self) -> Iterator[Task]:
-        """Write each task's Parquet row and hand the task on to the control database.
+        """Write each task's Parquet row, then yield the task on to the control database.
 
-        Tasks are routed to a byte-budgeted sink per type, created on first sight of a type, so they
-        reach disk in row-group batches without the whole list ever living in memory. ``iter_tasks()``
-        yields a materialized dataset's tasks and a streamed one's identically, so one path serves
-        both, and yielding each task on keeps a one-shot stream read exactly once.
+        Each task type gets its own byte-budgeted sink, created when that type is first seen, so
+        tasks reach disk in row-group batches and the whole list never has to live in memory.
+        ``iter_tasks()`` yields the tasks of a materialized dataset and of a streamed one the same
+        way, so one path serves both.
 
         Yields:
-            Each task, after its row has been written.
+            Each task, after its row is written.
         """
         self._task_files: list[str] = []
         sinks: dict[str, ShardedTableWriter] = {}
@@ -671,8 +671,8 @@ class TimeFWriter:
     ) -> ManifestCounts:
         """Load the version's structure into ``control.duckdb`` and return the manifest's counts.
 
-        The tasks are handed over as they are written, so a one-shot task stream is read exactly
-        once even though two planes record it.
+        Tasks are passed on as they are written, so a one-shot task stream is read once even though
+        both planes record it.
 
         Args:
             unique_series: The deduped series, in the order the values plane wrote them.

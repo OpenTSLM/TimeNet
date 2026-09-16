@@ -38,8 +38,8 @@ class Manifest:
     """
 
     # Version 2 moved the four Parquet control tables into one embedded DuckDB database. There is no
-    # migration: a version 1 directory fails here rather than later with a missing-file error, and a
-    # published dataset is rebuilt from its connector.
+    # migration: a version 1 directory is rejected here instead of failing later on a missing file,
+    # and a published dataset is rebuilt from its connector.
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str

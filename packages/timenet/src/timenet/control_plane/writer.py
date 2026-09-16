@@ -1,18 +1,17 @@
 """Load one dataset version's structure into a fresh embedded DuckDB database.
 
-The database is attached rather than opened, because the block size can only be set when the file is
-created. Everything goes in inside one transaction: the DDL, every table's rows, the join that turns
-the caller's ids into dense ones, then the checks in
+The writer attaches the database rather than opening it, because only a new file can take a block
+size. One transaction holds everything: the DDL, every table's rows, the join that turns the
+caller's ids into surrogate ids, then the checks in
 :data:`~timenet.control_plane.checks.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
 build that does not hold together publishes nothing.
 
-A row that names an entity by the caller's id waits in a staging table while the walk runs, because
-a record can name a task the stream has not reached yet and a task can name a record the same way.
-One join per staged table resolves them all once the walk is over, so the shipped file joins on
-dense ids and never on a string.
+A row that names an entity by the caller's id waits in a staging table while the walk runs. A record
+can name a task the stream reaches later, and a task can name a record the same way. One join per
+staged table resolves them all once the walk is over. The shipped file therefore joins on surrogate
+ids and never on a string.
 
-Rows reach DuckDB one Arrow table per batch, never through ``executemany``. Measured on the ECG-QA
-control plane, 1.35 million rows: 1,674 rows/s row by row against 132,079 rows/s this way.
+Rows reach DuckDB one Arrow table per batch, never through ``executemany``.
 """
 
 from collections.abc import Iterable
@@ -136,8 +135,8 @@ class ValuesPlane:
     """``(time_series_id, chunk_idx)`` mapped to where that chunk landed.
 
     The artifacts are the distinct ``chunk_file`` values these name. A Parquet chunk names a shard
-    and a Zarr chunk names an array, so what an artifact is comes from the locator rather than from
-    the file list the manifest keeps.
+    and a Zarr chunk names an array. The locator therefore says what an artifact is, not the file
+    list the manifest keeps.
     """
     backend: str
     """Which backend wrote them, so a reader knows what the two chunk indexes mean."""
@@ -158,7 +157,7 @@ class ControlPlaneCounts:
     chunks: int
     """How many chunk placements the values plane wrote."""
     record_series_chunks: int
-    """Chunks counted once per referencing record, which is what the old index table held one row per."""
+    """Chunks counted once per referencing record."""
     specs: dict[str, int]
     """How many distinct series carry each spec type."""
 
@@ -219,7 +218,7 @@ def _statements(script: str) -> list[str]:
 
 
 def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
-    """Turn every staged caller id into the dense id of the row it names.
+    """Turn every staged caller id into the surrogate id of the row it names.
 
     One join per staged table, once the walk is over and both sides exist. An id that names nothing
     lands as null, which :data:`~timenet.control_plane.checks.VALIDATIONS` refuses.
@@ -531,8 +530,8 @@ class _Loader:
     def declare(self, schema: DatasetSchema) -> None:
         """Store the dataset's derived type declaration, which every row below references.
 
-        The specs and the annotation descriptors go in in the order the schema derived them, so the
-        ids the rest of the load references run in that order too.
+        The specs and the annotation descriptors go in in the order the schema derived them. The ids
+        the rest of the load references run in that order too.
 
         Args:
             schema: The dataset's derived schema.
@@ -556,7 +555,7 @@ class _Loader:
         """Return the id of the stored spec a series carries.
 
         A million series reference the declaration by id, so the unit and the value type are stored
-        once rather than repeated per row.
+        once rather than per row.
 
         Args:
             spec_type: The spec's stable type tag.
@@ -810,10 +809,10 @@ def _load_record(loader: _Loader, record: Record) -> None:
 
 
 def _load_task(loader: _Loader, task: Task) -> None:
-    """Insert one task: the frame every task shares, then the payload its own class declares.
+    """Insert one task: the frame every task shares, then the payload its own type declares.
 
-    A task's ordered items go in one table whatever they are: the records it is about as input
-    items, and a free-text answer as its target item. ``task_fields`` keeps what is genuinely a named
+    A task's ordered items go in one table, whatever they are. The records it is about go in as
+    input items, and a free-text answer as its target item. ``task_fields`` keeps what is a named
     field of the payload rather than an item of the task.
 
     Args:

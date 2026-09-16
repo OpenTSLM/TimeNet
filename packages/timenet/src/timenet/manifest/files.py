@@ -41,9 +41,9 @@ class ManifestFiles:
     time_series: tuple[FilePart, ...] = ()
     """Parts of the time series data. Each part is also a shard."""
     control_db: FilePart | None = None
-    """The version's control database, one file rather than a list of parts.
+    """The version's control database: one file, not a list of parts.
 
-    DuckDB addresses one database file, so this artifact never shards the way a Parquet table does.
+    A DuckDB database is a single file, so this artifact is never split into shards.
     """
 
     def all_files(self) -> tuple[FilePart, ...]:
