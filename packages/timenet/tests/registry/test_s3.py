@@ -13,6 +13,10 @@ from timenet.registry import S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
 
 
+# Every test here starts and stops a moto server.
+pytestmark = pytest.mark.slow
+
+
 @pytest.fixture
 def s3_root(monkeypatch):
     """Start a local moto S3 endpoint, point boto3 + pyarrow at it, and yield the registry URI."""

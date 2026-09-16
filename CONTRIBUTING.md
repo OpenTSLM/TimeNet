@@ -24,10 +24,15 @@ Run these before you open a pull request, and make them pass:
 
 - `make check` runs `ruff format`, `ruff check`, and `ty check`.
 - `make lint-fix` auto-fixes what ruff can.
-- `make test` runs the core test suite.
+- `make test` runs the core test suite, without the tests marked `slow`.
+- `make test-slow` runs only those, and `make test-all` runs everything.
 - `make test-unit` runs the in-memory part of `make test`, for a fast answer.
 - `make test-connectors` runs each connector's tests and type-check in its own environment.
 - `make license-check` fails the build if a copyleft dependency enters the tree.
+
+A test is `slow` when it spends most of its time outside the code under test: in a moto server, in
+an isolated uv environment, or in a full Zarr round trip. CI runs `make test-all`, so these tests
+still gate every PR.
 
 To mirror the CI quick job, run `make check-ci` and `make test-unit`. `make check-ci` runs the
 hooks over all files, the same way CI does, and adds a `ty` pass against Python 3.11.

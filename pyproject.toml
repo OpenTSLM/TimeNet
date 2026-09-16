@@ -97,10 +97,13 @@ force-sort-within-sections = true
 lines-after-imports = 2
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "--strict-markers"]
+# This deselects the tests marked `slow`, so a bare `pytest` and `make test` leave them out. The
+# last `-m` on the command line wins, so `-m slow` and `-m ""` both select them again.
+# `make test-slow` and `make test-all` do that for you, and CI runs `make test-all`.
+addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not slow"]
 testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
-    "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
+    "slow: spends most of its time outside the code under test, in a moto server, an isolated uv environment, or a full Zarr round trip. Deselected by default; run it with '-m slow'",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
 ]
 

@@ -280,7 +280,9 @@ def test_streaming_writer_writes_a_single_task_from_a_one_shot_source(tmp_path):
     assert len(restored.tasks) == 1
 
 
-@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+# The chunk size here is small enough that the zarr backend writes many store entries, so that
+# half is marked slow. The parquet half keeps the chunk splitting covered in the default run.
+@pytest.mark.parametrize("backend", ["parquet", pytest.param("zarr", marks=pytest.mark.slow)])
 def test_round_trip_with_chunk_splitting(tmp_path, backend):
     original = make_dataset()
     version_dir = _write(

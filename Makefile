@@ -1,4 +1,4 @@
-.PHONY: sync test test-unit test-connectors check check-ci install-hooks lint-fix build license-check docs docs-serve docs-preview docs-datasets docs-api clean
+.PHONY: sync test test-slow test-all test-unit test-connectors check check-ci install-hooks lint-fix build license-check docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
 	uv sync --all-groups --all-extras
@@ -6,8 +6,20 @@ sync:
 # Core tests in the dev environment. Each connector declares its own dependencies in a
 # requirements.txt, so a connector's tests do not run here. They run in per-connector environments
 # through `make test-connectors`.
+#
+# The `-m "not slow"` in pyproject's addopts deselects the tests marked `slow`. Those tests spend
+# most of their time in a moto server, an isolated uv environment or a full Zarr round trip. Run
+# them with `make test-slow`, or run everything with `make test-all`, which is what CI does.
+PYTEST_CORE = uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
+
 test:
-	uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
+	$(PYTEST_CORE)
+
+test-slow:
+	$(PYTEST_CORE) -m slow
+
+test-all:
+	$(PYTEST_CORE) -m ''
 
 # The in-memory part of `make test`, for the CI job that has to answer in under a minute. This is a
 # preview of the suite, not a partition of it: every test listed here runs again under `make test`.
