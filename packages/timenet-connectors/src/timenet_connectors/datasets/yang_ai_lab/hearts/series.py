@@ -1,11 +1,10 @@
 """Turning one HEARTS payload into time series: the specs, the axis rule, and the lazy loaders.
 
-The axis is decided per series from that series' own time column, never per corpus. HARESPOD frames
-step at a constant 10 ms or 1 s and get a :class:`~timenet.dataset.axis.RegularAxis`. CGMacros
-windows are not uniform: a single reference window carries two-, three- and seven-minute steps
-among its one-minute ones, so those get an :class:`~timenet.dataset.axis.IrregularAxis` and an
-explicit stream of microsecond offsets. Audio buffers carry no time column and take their rate from
-the payload, or from the reference implementation where the release ships none.
+The axis is decided per series from that series' own time column, never per corpus. A HARESPOD frame
+steps at a constant rate and gets a :class:`~timenet.dataset.axis.RegularAxis`. A CGMacros window
+mixes step sizes, so it gets an :class:`~timenet.dataset.axis.IrregularAxis` and an explicit stream
+of microsecond offsets. Audio buffers carry no time column and take their rate from the payload, or
+from the reference implementation where the release ships none.
 """
 
 from collections.abc import Callable, Iterator
@@ -142,7 +141,7 @@ def axis_for(offsets: np.ndarray) -> TimeAxis:
     """Return the axis that describes a stream of offsets.
 
     A stream whose steps are all equal is a cadence and needs no stored offsets. Anything else keeps
-    its offsets, because no formula places its values.
+    its offsets.
 
     Args:
         offsets: The per-row microsecond offsets.
@@ -274,8 +273,7 @@ def _audio_rate_hz(source: str, payload: dict[str, Any], keys: tuple[str, ...]) 
 def _check_restated_time(path: Path, keys: tuple[str, ...], column: str, values: Any, offsets: np.ndarray) -> None:
     """Check a column that restates the time column says what the axis already says.
 
-    The column is read as part of the axis rather than stored, so it has to agree with the axis. A
-    column that counts from somewhere else carries a fact the axis does not.
+    The column is read as part of the axis rather than stored, so it has to agree with the axis.
 
     Args:
         path: The test-case file.

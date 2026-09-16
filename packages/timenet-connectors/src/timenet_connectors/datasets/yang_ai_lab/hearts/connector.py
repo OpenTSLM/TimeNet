@@ -5,11 +5,10 @@ The public artifact is the benchmark's frozen test cases, one Python pickle per 
 carrying the signals the reference harness hands its agent, plus one task holding the question and
 the ground truth.
 
-``download`` fetches the twenty-one task directories in scope at the pinned revision, then checks
-the tree still holds the test cases this connector was written against. ``convert`` reads each
-payload once, reads the shapes off it, and attaches loaders that re-read the file later, so no
-values plane is ever held in memory. The tasks stream: they are read off a second walk of the tree,
-after ``convert`` returns.
+``download`` fetches the task directories in scope at the pinned revision, then checks that the tree
+still holds the test cases this connector was written against. ``convert`` reads each payload once
+for its shapes and attaches loaders that read the file again later, so no values are held in memory.
+The tasks stream from a second walk of the tree, after ``convert`` returns.
 """
 
 from collections.abc import Iterator
@@ -36,10 +35,10 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import (
 
 HF_REPO = "yang-ai-lab/HEARTS"
 HF_REVISION = "7c18df521ae36cbc6b61e17782f1ac08dc378ea1"
-"""A commit, never a branch: a branch would let the same connector code read different bytes."""
+"""The pinned commit that every read of the repo uses."""
 
 _ID_PREFIX = "hearts"
-"""Every id this connector writes is built on this, record ids and vocabulary ids alike."""
+"""Every id this connector writes is built on this."""
 
 _PROVENANCE = f"{_ID_PREFIX}:provenance"
 _AGENT_INPUT = f"{_ID_PREFIX}:agent_input"
@@ -53,7 +52,7 @@ _NORMALIZED_DESCRIPTION = (
 
 @dataclass(frozen=True)
 class HeartsSource:
-    """A handle to the downloaded test-case tree, so ``convert`` opens files rather than holding them."""
+    """A handle to the downloaded test-case tree. ``convert`` opens the files through it."""
 
     root: Path
     """The directory holding the ``<corpus>/<task>/<index>.pkl`` tree."""
@@ -124,8 +123,6 @@ def _subject_ids(source: str, payload: dict[str, Any]) -> tuple[str, ...]:
 def _record_id(definition: TaskDefinition, index: int) -> str:
     """Build the id of the record one test case becomes.
 
-    The record loop and the task stream both walk the tree, so both read the id from here.
-
     Args:
         definition: The task directory's definition.
         index: The test-case index.
@@ -139,7 +136,7 @@ def _record_id(definition: TaskDefinition, index: int) -> str:
 def _agent_input_id(record_id: str, key: str) -> str:
     """Build the id of one agent-input annotation.
 
-    The record carries the annotation and a streamed task names it, so both read the id from here.
+    The record carries the annotation and its streamed task names it, so both build the id here.
 
     Args:
         record_id: The owning record's id.
@@ -212,10 +209,8 @@ def _annotations_for(
 def _iter_tasks(source: HeartsSource) -> Iterator[Task]:
     """Yield the task of every test case, in the order ``convert`` built the records.
 
-    This walks the tree again and reads each payload for its answer. A pickle states nothing until
-    the whole object is rebuilt, so an answer cannot be reached without its file. The writer reads
-    the stream after ``convert`` returns, and can read it more than once, so this keeps nothing
-    between calls.
+    This walks the tree again and reads each payload for its answer. It keeps nothing between calls,
+    so the writer can read the stream more than once.
 
     Args:
         source: The handle to the downloaded tree.
@@ -241,8 +236,8 @@ class HeartsConnector(BaseConnector[HeartsSource]):
     def download(self, cache_dir: Path) -> list[HeartsSource]:  # noqa: PLR6301 (the base declares it)
         """Fetch the in-scope test cases at the pinned revision.
 
-        The nine out-of-scope task directories are not fetched. What arrives is checked against
-        the case counts this connector was written against, before ``convert`` walks it.
+        The out-of-scope task directories are not fetched. What arrives is checked against the case
+        counts this connector was written against, before ``convert`` walks it.
 
         Args:
             cache_dir: The directory downloads land in.
@@ -257,9 +252,8 @@ class HeartsConnector(BaseConnector[HeartsSource]):
                 was written against.
         """  # noqa: DOC502 (TimeNetDownloadError comes from _check_case_counts, not directly here)
         # discovery.available() imports every connector module to read its CONNECTOR, and
-        # huggingface_hub is declared in this connector's requirements.txt rather than by the
-        # package. A module-level import would break dataset listing for every connector in an
-        # environment without it.
+        # huggingface_hub is declared in this connector's requirements.txt, not by the package. A
+        # module-level import would break dataset listing where huggingface_hub is not installed.
         try:
             from huggingface_hub import snapshot_download  # noqa: PLC0415 (see the comment above)
         except ImportError as exc:
@@ -283,10 +277,9 @@ class HeartsConnector(BaseConnector[HeartsSource]):
     def convert(self, raw_refs: list[HeartsSource]) -> TimeFDataset:
         """Build one record per test case and stream one task per case.
 
-        Each payload is read once here, to learn its signals, lengths and time axes. The values
-        themselves stay on disk behind per-signal loaders. The tasks come from
-        :func:`_iter_tasks`, which walks the tree again, so a task carries its own record id and
-        none reaches ``Record.task_ids``.
+        Each payload is read once here, to learn its signals, lengths and time axes. The values stay
+        on disk behind per-signal loaders. The tasks come from :func:`_iter_tasks`, which walks the
+        tree again, so each task carries its own record id.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.

@@ -21,8 +21,8 @@ _EEG = TimeSeriesSpec(spec_type="eeg", name="EEG", unit_value=ureg.microvolt, da
 _EOG = TimeSeriesSpec(spec_type="eog", name="EOG", unit_value=ureg.microvolt, data_source=_SOURCE)
 _EMG = TimeSeriesSpec(spec_type="emg", name="EMG", unit_value=ureg.microvolt, data_source=_SOURCE)
 
-# The cassette recorder rectified its submental EMG and low-passed the result at 0.7 Hz, so a
-# cassette value is an amplitude and not a potential. The telemetry recorder did neither.
+# The cassette recorder rectified its submental EMG and low-passed the result, so a cassette
+# value is an amplitude rather than a potential. The telemetry recorder did neither.
 _EMG_ENVELOPE = TimeSeriesSpec(
     spec_type="emg_envelope", name="EMG envelope", unit_value=ureg.microvolt, data_source=_SOURCE
 )

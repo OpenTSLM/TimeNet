@@ -5,18 +5,13 @@ series or a set of series, four captions of it, and the name of the corpus it wa
 ``meta.csv`` describes those corpora, and the ``dataset`` column joins to it, which is how a row
 recovers its sampling rate.
 
-Nothing here holds values, because the corpus is far larger than the records built from it.
-``download`` gives back one handle naming the shards, ``convert`` walks them, every series reads its
-own values when asked, and the tasks stream off the records ``convert`` built. The README states the
-sizes. ``BaseHuggingFaceConnector`` is the base for a Hub release, and it does not fit this one: its
-``download`` gives back every row as a dict, and this release holds more values than a process can
-hold at once.
+Nothing here holds values. The corpus is far larger than the records built from it. ``download``
+gives back one handle that names the shards, ``convert`` walks them, every series reads its own
+values when asked, and the tasks stream off the records ``convert`` built.
 
-``convert`` reads the values once more than the writer needs: it decodes every value to find the
-series that hold no number at all, which no length and no header states. Each record's series carry
-the record id as their ``source_id``, so the writer asks for the values in the order this connector
-built them, which is the order the shards are already in. The README states what the extra pass
-costs.
+``convert`` decodes every value once to find the series that hold no number at all, which no length
+and no header states. Each record's series carry the record id as their ``source_id``, so the writer
+asks for the values in the order the shards already hold them.
 """
 
 from __future__ import annotations
@@ -65,10 +60,9 @@ _ENDS_A_SENTENCE = (".", "!", "?", '"')
 
 
 class _Tally:
-    """Counts one kind of thing the release ships, so the build warns once about it and not once each.
+    """Counts one kind of thing the release ships, so the build warns about it once.
 
-    A property shared by thousands of records is one fact about the release, so the report gives a
-    count and one example rather than a line per record.
+    The report gives a count and one example, not a line per record.
     """
 
     def __init__(self) -> None:
@@ -89,7 +83,7 @@ class _Tally:
         """Log this kind once, with its count and its example. Silent when nothing was counted.
 
         Args:
-            what: The sentence naming the kind, e.g. "captions stop mid-sentence".
+            what: The sentence that names the kind, for example "captions stop mid-sentence".
         """
         if self.seen:
             _LOG.warning("%d %s; the first is %s", self.seen, what, self.first)
@@ -97,7 +91,7 @@ class _Tally:
 
 @dataclass(frozen=True)
 class SlipSource:
-    """What ``download`` hands ``convert``: paths, and no rows."""
+    """The paths ``download`` hands ``convert``. It holds no rows."""
 
     shards: tuple[Path, ...]  # the data/train-*.parquet files, in name order
     meta_csv: Path  # the table describing the corpora the rows were drawn from
@@ -120,8 +114,7 @@ class _SignalRef:
     """Where one signal's values sit, so a loader can find them again without holding them.
 
     The row group and the offset within it are resolved when the reference is built, so reading a
-    signal is one row-group read and no lookup. Resolving them per read would be a scan per signal,
-    and a build calls the loaders once per signal of the release.
+    signal is one row-group read and no lookup.
     """
 
     shard: Path  # the parquet file
@@ -134,12 +127,10 @@ class _SignalRef:
 def _row_group(shard: Path, group: int) -> pa.ChunkedArray:
     """Give one row group's ``time_series`` column, decoding it only when it is not the one held.
 
-    Every series reads its values through a loader. The writer sorts the series by ``spec_type``,
-    then ``source_id``, then ``signal``, and every record states its own id as the ``source_id`` of
-    each of its series. So the writer asks for the values in the order this connector built the
-    records, and holding one row group is enough to decode each of them once. Without the
-    ``source_id`` the order would be signal-major and every row group of a multivariate row would
-    be decoded again for each of its signals.
+    The writer sorts the series by ``spec_type``, then ``source_id``, then ``signal``, and every
+    record states its own id as the ``source_id`` of each of its series. The writer therefore asks
+    for the values in the order this connector built the records, and holding one row group is
+    enough to decode each of them once.
 
     Args:
         shard: The parquet file.
@@ -173,8 +164,7 @@ def _shard_number(shard: Path) -> str:
         The five-digit number, as the name writes it.
 
     Raises:
-        TimeFFormatError: If the shard's name states no number. A record id is built from that
-            number, so a release that renames its shards would renumber every record.
+        TimeFFormatError: If the shard's name states no number.
     """
     match = _SHARD_NAME.match(shard.stem)
     if match is None:
@@ -187,7 +177,7 @@ def _shard_number(shard: Path) -> str:
 def _record_id(shard: Path, row: int) -> str:
     """Give a record's id: which shard it came from, and where in it.
 
-    The release ships no id of its own, so the id is positional. Two builds of one release agree; a
+    The release ships no id of its own, so the id is positional. Two builds of one release agree. A
     new release does not.
 
     Args:
@@ -206,8 +196,7 @@ def _record_id(shard: Path, row: int) -> str:
 def _caption_id(record_id: str, index: int) -> str:
     """Give the id of one caption annotation of a record.
 
-    A streamed task answers by reference, so the id has to be built the same way in ``convert`` and
-    in the task stream. Both call this.
+    ``convert`` and the task stream both build caption ids here, so the two always agree.
 
     Args:
         record_id: The record the caption belongs to.
@@ -243,9 +232,8 @@ class SlipConnector(BaseConnector[SlipSource]):
             TimeNetDownloadError: If the fetch returned no shards.
         """
         # discovery.available() imports every connector module to read its CONNECTOR, and
-        # huggingface_hub is declared in this connector's requirements.txt rather than by the
-        # package. A module-level import would break dataset listing for every connector in an
-        # environment without it.
+        # huggingface_hub is declared in this connector's requirements.txt, not by the package. A
+        # module-level import would break dataset listing where huggingface_hub is not installed.
         try:
             from huggingface_hub import snapshot_download  # noqa: PLC0415 (see the comment above)
         except ImportError as exc:
@@ -285,8 +273,7 @@ class SlipConnector(BaseConnector[SlipSource]):
                 states no number; or if a row states no caption.
         """  # noqa: DOC502 (raised by the helpers below, not directly here)
         source = raw_refs[0]
-        # Checked over every shard before any row is read, so a renamed shard stops the build in
-        # milliseconds rather than after the shards before it have been converted.
+        # Check every shard name before any row is read, so a renamed shard stops the build at once.
         for shard in source.shards:
             _shard_number(shard)
         corpora = tables.corpora(_read_meta(source.meta_csv))
@@ -351,8 +338,7 @@ def _corpus(corpora: dict[str, tables.SourceCorpus], name: str, shard: Path, row
         That corpus.
 
     Raises:
-        TimeFFormatError: If the table names no such corpus, which means the release grew one and
-            its rate and its source are unknown rather than absent.
+        TimeFFormatError: If the table names no such corpus.
     """
     corpus = corpora.get(name)
     if corpus is None:
@@ -374,8 +360,7 @@ def _captions(row: SlipRow, shard: Path) -> list[str]:
         The four captions, as the release wrote them.
 
     Raises:
-        TimeFFormatError: If a caption column states nothing. Every row of this release states four
-            captions, so a null means the release changed.
+        TimeFFormatError: If a caption column states nothing.
     """
     captions = []
     for column in _CAPTION_COLUMNS:
@@ -391,9 +376,6 @@ def _captions(row: SlipRow, shard: Path) -> list[str]:
 
 def _count_captions(captions: Sequence[str], record_id: str, stubs: _Tally, truncated: _Tally) -> None:
     """Count the captions of one row that are not captions.
-
-    ``convert`` reads the captions, so it counts them. The task stream names a caption by its id and
-    never reads its text.
 
     Args:
         captions: The row's four captions, in column order.
@@ -438,9 +420,8 @@ def _iter_rows(shard: Path) -> Iterator[SlipRow]:
     """Walk one shard, giving each row's scalars, the lengths of its series, and where it sits.
 
     The walk goes row group by row group, so each row knows which group holds it and where in that
-    group it is. A loader built from that reads one row group and looks nothing up. The
-    ``time_series`` column is read for its list lengths and for whether a series holds any number at
-    all; no values are kept.
+    group it is. The ``time_series`` column is read for its list lengths, and to see whether a
+    series holds any number at all. No values are kept.
 
     Args:
         shard: The parquet file to walk.
@@ -486,7 +467,7 @@ def _iter_tasks(records: Sequence[Record]) -> Iterator[AnswerTask]:
     """Yield one unprompted :class:`AnswerTask` per caption, for every record.
 
     The captions are annotations of the record, so a task answers by reference and the stream reads
-    no shard again. It counts nothing: ``convert`` reads every caption once and reports there.
+    no shard again.
 
     Args:
         records: The records :meth:`SlipConnector.convert` built, in the order it built them.

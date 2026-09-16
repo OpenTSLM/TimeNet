@@ -29,11 +29,10 @@ source wins for a named reason, and the connector keeps the other beside it.**
 The subject table wins for the facts about a person because it is the registry of the study, and
 published work joins against it.
 
-The signal table wins for the unit because the header does not always state one. It is not a free
-choice: the build refuses any file whose header declares a dimension that the release does not
-declare for that signal. That check reads the dimension string alone. It cannot see a scale, which
-EDF states in the physical range, and the rectal temperature section below states where that
-matters.
+The signal table wins for the unit because the header does not always state one. The build then
+refuses any file whose header declares a dimension that the release does not declare for that
+signal. That check reads the dimension string alone. It cannot see a scale, which EDF states in the
+physical range, and the rectal temperature section below states where that matters.
 
 ## The tasks this connector builds
 
@@ -155,8 +154,7 @@ to say things that no other field says. The cassette recorder rectified its subm
 low-passed the result at 0.7 Hz, so a cassette EMG value is an amplitude envelope. The telemetry
 recorder passed the same muscle through 0.03 to 800 Hz and rectified nothing, so a telemetry EMG
 value is a potential. The rates follow the filtering: the cassette EMG runs at 1 Hz and the
-telemetry EMG at 100 Hz *(measured)*. The EEG and EOG signals differ too, though less deeply:
-cassette states `HP:0.5Hz LP:100Hz [enhanced cassette BW]` and telemetry states
+telemetry EMG at 100 Hz *(measured)*. The EEG and EOG signals differ too, but less: cassette states `HP:0.5Hz LP:100Hz [enhanced cassette BW]` and telemetry states
 `LP:800Hz HP:0.03Hz`, over the same 100 Hz sampling. Each string is constant inside its study, on
 all 153 cassette and all 44 telemetry files *(measured)*.
 
@@ -169,14 +167,14 @@ The release card states the cassette processing in its own words, in the
 The spec type takes its name from that sentence.
 
 **Decision.** The cassette EMG signal gets the spec type `emg_envelope` and the telemetry one
-keeps `emg`, because two spec types is the only thing that stops a filter from returning both.
+keeps `emg`, because one spec type would let a filter return both.
 Every record also carries a `prefiltering` annotation, from a signal name to the string that
 signal's own header states. Both studies state the same strings on every recording, so the release
 stores two of those annotations *(measured)*.
 
 **Consequence.** A consumer who filters on the spec type `emg` gets the 44 telemetry signals and
-not the 153 cassette ones, so pooling an envelope with a broadband signal now takes a deliberate
-step. `spec_type` is the writer's primary sort key, so the cassette EMG signals sit elsewhere in
+not the 153 cassette ones, so pooling an envelope with a broadband signal takes a deliberate step.
+`spec_type` is the writer's primary sort key, so the cassette EMG signals sit elsewhere in
 the written order than they did. A consumer who wants what the header states about any other
 signal reads the annotation and joins it on the signal name.
 
@@ -260,12 +258,12 @@ before compression, against 8,714,278,888 B of PSG file on disk *(measured)*.
 other 58 declare a range that reaches a body temperature, 47 of them `(34, 40)` and the rest one of
 six wider ranges. Decoded through each file's own gain, the 95 have per-file medians from 3.57 to
 14.47 and the 58 from 35.14 to 37.62 *(measured)*. The header dimension does not predict the split:
-40 of the 95 declare `DegC`. The 85-stated and 68-unstated split of the section above is about the
-unit and this one is about the scale, so neither predicts the other.
+40 of the 95 declare `DegC`. The split in the section above is about the unit, and this one is about
+the scale. Neither predicts the other.
 
 **Decision.** The connector applies the range each file declares and corrects nothing, so those 95
 signals are written in degrees Celsius that are not a body temperature. Every EDF reader produces
-the same values from the same files. To correct here is to invent a calibration that the release
+the same values from the same files. Correcting here would invent a calibration that the release
 does not state.
 
 **Consequence.** A consumer who pools rectal temperature across the cassette study gets two

@@ -51,11 +51,10 @@ lists, and no source states their code order.
 source states a rate. The artifact states no cadence and no timestamp at all.
 
 The first and the third go to the artifact, for one reason: a reader can re-measure it and cannot
-re-measure a sentence. The cadence is the opposite case and is worth reading twice. The artifact
-states nothing at all about time, so a derived fact does not displace a stated one there; it fills a
-hole. No cadence in `specs.py` is a reading of these bytes: two are quoted from the paper, `ETTm1`
-is arithmetic on two numbers the paper states, and the `BlindWays` rate is an inference. See the two
-cadence entries below.
+re-measure a sentence. The cadence is the opposite case. The artifact states nothing at all about
+time, so a derived fact displaces no stated one. It fills a hole. No cadence in `specs.py` is a
+reading of these bytes: two are quoted from the paper, `ETTm1` is arithmetic on two numbers the
+paper states, and the `BlindWays` rate is an inference. See the two cadence entries below.
 
 ## What the description states
 
@@ -187,8 +186,8 @@ records as open.
 | `<slug>_<attribute>` | one int64 code per attribute | `{split}_attrs_idx.npy`, by column |
 | `<slug>_<attribute>_options` | how many codes it takes | `meta.json`, once per corpus |
 
-The slug carries the component (`weather_season`, `ettm1_season`), and that prefix is load-bearing.
-Weather's `season` is one of four calendar seasons and ETTm1's is a code for the dominant
+The slug carries the component (`weather_season`, `ettm1_season`), and that prefix decides what the
+key means. Weather's `season` is one of four calendar seasons and ETTm1's is a code for the dominant
 periodicity, of which `meta.json` declares nine. There are 26 attributes over the six components
 *(measured)*, so 26 record keys and 26 corpus-level keys. Each attribute keeps the name the release
 writes it under, including the truncated `atmospher`, so Weather's atmospheric-pressure attribute
@@ -226,8 +225,7 @@ real-world ones per variable against their own train split and published neither
 standard deviation vector, so no cell of the release is in a physical unit.
 
 **Decision.** Every spec declares `ureg.dimensionless` and the shipped float64 is stored unchanged.
-Rescaling toward the original instrument is impossible without the constants, and guessing them
-would invent data twice over.
+Rescaling to the original instrument is impossible without the constants.
 
 **Consequence.** No card, paper or downstream table may claim this dataset carries real weather,
 load, congestion or motion measurements. The names `p (mbar)` and `T (degC)` are labels for which
@@ -240,10 +238,9 @@ upstream column a signal came from, and nothing more.
 
 **Decision.** Keep float64.
 
-**Consequence.** The values plane is about 280 MB larger than a float32 one would be. In exchange
-the stored values are bit-identical to the release, which is what makes an exact value comparison
-against the source possible at all. A narrowing would make that check impossible rather than merely
-lossy.
+**Consequence.** The values plane is about 280 MB larger than a float32 one would be. The stored
+values are bit-identical to the release, so a value comparison against the source is exact.
+Narrowing to float32 would end that check.
 
 ### `BlindWays` runs at 60 Hz, and no sentence states that — **Open**
 
@@ -298,8 +295,8 @@ replacement character U+FFFD instead.
 
 **Consequence.** Those three names spell their unit differently from the paper, and so does `rho
 (g/m**3)`, which keeps the Jena header's ASCII spelling of a cube where the paper prints `g/m³`.
-None of the four differs in which variable it names. A replacement character carries no information
-and would follow every reader of the artifact around.
+None of the four differs in which variable it names. A replacement character carries no information,
+and every reader of the artifact would have to carry it.
 
 ### The `BlindWays` axis letters and the synthetic names are this connector's — **Handled**
 
@@ -350,7 +347,7 @@ counts do corroborate the appendix: `Weather`'s seven attributes declare 4, 4, 6
 options and Table 10 prints exactly that many labels for each, and `BlindWays`' 2 and 3 match
 Table 8 *(measured)*. What no source states is which label a code stands for, so anyone who needs
 one has to bring the appendix and confirm the code order themselves. Writing 26 unconfirmed
-vocabularies into the artifact would have looked like evidence.
+vocabularies into the artifact would state more than any source does.
 
 ### Four `ETTm1` windows carry a `season` code the release does not declare — **Handled**
 
@@ -560,8 +557,8 @@ own nine arrays.
 The type is named after what it holds, the way `timenet/hello_world`'s `HelloWorldRecording` is. Six
 is the release's own division into folders, not one handle per record.
 
-**Consequence.** `convert` reads six `meta.json` files and needs no folder-name arithmetic, and a
-reviewer reading the checklist finds the divergence stated here rather than having to spot it.
+**Consequence.** `convert` reads six `meta.json` files and needs no folder-name arithmetic. The
+difference from the house shape is stated here, so a reviewer does not have to find it.
 
 ### The six components hold six licence positions — **Open**
 
@@ -570,9 +567,9 @@ primary source. `Weather` is CC BY 4.0 data with Apache-2.0 captions. `istanbul_
 asserted by a third-party uploader over municipal data. The card has one licence field.
 
 **Decision.** Declare `other` with `license_url` pointing at the VerbalTS code repository, which is
-the only URL any primary source offers. Build for measurement.
+the only URL any primary source offers. Build it for measurement only.
 
-**Consequence.** **Do not redistribute the converted bytes.** Three of the six components have no
+**Consequence.** **Do not redistribute the converted bytes.** Three of the six components state no
 licence at all, which is not the same as permissive. Somebody has to write to the authors before
 this dataset is published anywhere. A per-component licence field would be the real fix, and TimeF
 has no such field today.
@@ -639,5 +636,5 @@ Neither is in the release.
 **The window-overlap relation**, for the reason in "Window overlap is not recorded".
 
 TimeF also adds a control plane the NPY release has none of: a records table, a series index, an
-annotations table, a tasks table and a manifest. That is not a subtraction, but it is the one part
-of the output that has no counterpart in the source.
+annotations table, a tasks table and a manifest. It is the one part of the output that has no
+counterpart in the source.

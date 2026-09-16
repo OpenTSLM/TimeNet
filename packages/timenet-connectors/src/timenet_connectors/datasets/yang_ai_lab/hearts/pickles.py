@@ -1,11 +1,11 @@
 """Reading the HEARTS payloads: a restricted unpickler and a two-file cache.
 
 A pickle has no header. Nothing about a payload, not its length, not its rate, not its axis, is
-known until the whole object is rebuilt. So ``convert`` reads every file once, the task stream reads
-it again to reach its answer, and the writer reads it a third time when it drains the loaders.
-Reading is narrow on purpose: :class:`_RestrictedUnpickler` allows only the globals the release's
-own files ask for and refuses anything else by name. The cache holds two payloads, so a loader can
-re-read its file while the resident set stays small.
+known until the whole object is rebuilt. ``convert`` reads every file once, the task stream reads it
+again to reach its answer, and the writer reads it a third time when it drains the loaders.
+:class:`_RestrictedUnpickler` allows only the globals the release's own files ask for and refuses
+anything else by name. The cache holds two payloads, so a loader can read its file again while the
+resident set stays small.
 """
 
 from collections.abc import Sequence
@@ -36,12 +36,10 @@ _ALLOWED_GLOBALS: frozenset[tuple[str, str]] = frozenset(
         ("pandas.core.internals.managers", "BlockManager"),
     }
 )
-"""The globals the released files ask for, recorded from every file this connector reads at the
-pinned revision. This connector's README says what that measurement covered."""
+"""The globals the released files ask for at the pinned revision."""
 
 _PAYLOAD_CACHE_SIZE = 2
-"""How many payloads stay resident. Two let one read serve every series of a file that shares a
-spec type."""
+"""How many payloads stay resident. Two let one read serve every series of a file."""
 
 
 class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301 - this class is the guard S301 asks for

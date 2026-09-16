@@ -15,11 +15,10 @@ from timenet.errors import TimeFFormatError
 
 _US_PER_S = 1_000_000
 # RegularAxis holds the period as an int64 numerator of microseconds, so this is the coarsest period
-# TimeF addresses. The bound is checked here so a Freq at either end of the range fails with the
-# cell named, rather than at the axis, whose message knows nothing about meta.csv.
+# TimeF addresses. Checking the bound here lets the error name the meta.csv cell.
 _MAX_PERIOD_US = 2**63 - 1
 
-# Freq is prose, not a number. Every form the release actually uses, measured over its 37 rows.
+# Freq is prose, not a number. These are the forms the release writes.
 _WORD_PERIODS_US: dict[str, int] = {
     "hourly": 3600 * _US_PER_S,
     "daily": 86400 * _US_PER_S,
@@ -55,11 +54,9 @@ def parse_period_us(freq: str | None) -> Fraction | None:
         The period in microseconds, or ``None`` where the release states no rate.
 
     Raises:
-        TimeFFormatError: If the row states no ``Freq`` at all, or if the cell is a form the release
-            has not used before, since a new form means the table changed and guessing at it would
-            invent a rate. Also if it states a period TimeF cannot address: zero, one finer than a
-            microsecond, or one coarser than :data:`_MAX_PERIOD_US` of them. Those bounds are the
-            format's, not SLIP's.
+        TimeFFormatError: If the row states no ``Freq`` at all, or if the cell holds a form this
+            function does not read. Also if the cell states a period TimeF cannot address: zero, one
+            finer than a microsecond, or one coarser than :data:`_MAX_PERIOD_US` microseconds.
     """
     if freq is None:
         raise TimeFFormatError("meta.csv states no Freq for a row; every row of this release states one")
@@ -80,9 +77,8 @@ def parse_period_us(freq: str | None) -> Fraction | None:
             f"meta.csv Freq holds {freq!r}, a period of {float(period_us):g} us; TimeF addresses "
             f"no finer than one microsecond and no coarser than {_MAX_PERIOD_US} of them"
         )
-    # Not a duplicate of the test above: RegularAxis bounds the fraction's numerator rather than its
-    # value, and a rate written with about thirteen decimal places separates the two. 0.0000000000003
-    # Hz is a period of 3.3e18 us, inside the range, whose numerator is 1e19 and is not. Keep both.
+    # Not a duplicate of the test above: RegularAxis bounds the fraction's numerator, not its value.
+    # A period can sit inside the range above while its numerator does not. Keep both tests.
     if period_us.numerator > _MAX_PERIOD_US:
         raise TimeFFormatError(
             f"meta.csv Freq holds {freq!r}, a period of {period_us.numerator}/{period_us.denominator} us; "
@@ -94,9 +90,8 @@ def parse_period_us(freq: str | None) -> Fraction | None:
 def _cell(row: dict[str, str], column: str) -> str:
     """Give one cell of a ``meta.csv`` row, stripped.
 
-    ``csv.DictReader`` states ``None`` for a column the header does not name and for a row that ends
-    before it, so a table missing a column would otherwise reach the caller as a bare ``KeyError`` or
-    ``AttributeError`` rather than as a corrupt file.
+    ``csv.DictReader`` gives ``None`` for a column the header does not name and for a row that ends
+    before it. This function turns both into a format error that names the column.
 
     Args:
         row: The parsed row.
@@ -125,8 +120,8 @@ def corpora(rows: list[dict[str, str]]) -> dict[str, SourceCorpus]:
 
     Raises:
         TimeFFormatError: If the table states none of the four columns this reads, or a row states
-            none of one of them; if two rows name the same corpus, since a shard row would then have
-            two rates and no way to choose; or if :func:`parse_period_us` cannot read a ``Freq``.
+            none of one of them, or two rows name the same corpus, or :func:`parse_period_us` cannot
+            read a ``Freq``.
     """
     found: dict[str, SourceCorpus] = {}
     for row in rows:

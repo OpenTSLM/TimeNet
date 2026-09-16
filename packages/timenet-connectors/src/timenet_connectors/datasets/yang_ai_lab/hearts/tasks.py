@@ -1,8 +1,8 @@
 """The task table: one row per released task directory that this connector converts.
 
-Nine of the thirty released directories are out of scope and :data:`EXCLUDED` records why. The
-twenty-one that remain map to the task type that matches the answer the reference harness scores: a
-label to :class:`~timenet.types.ClassificationTask`, a number with a unit to
+Some released directories are out of scope, and :data:`EXCLUDED` records why. Each directory that
+remains maps to the task type that matches the answer the reference harness scores: a label to
+:class:`~timenet.types.ClassificationTask`, a number with a unit to
 :class:`~timenet.types.ScalarPredictionTask`, a moment on the timeline to
 :class:`~timenet.types.TemporalLocalizationTask`, and everything whose answer is a JSON object or a
 list to :class:`~timenet.types.AnswerTask`.
@@ -439,8 +439,7 @@ def _plain_scalar(value: np.generic) -> Any:
     """Rebuild one NumPy scalar as the Python value that serializes to the same number.
 
     A float keeps the shortest decimal text that reads back as the same value at its own dtype,
-    which is the text ``str`` gives for a NumPy scalar. Widening a float32 with ``item`` instead
-    would print the float32 representation error as digits the source never held.
+    which is the text ``str`` gives for a NumPy scalar.
 
     Args:
         value: A NumPy scalar read out of a payload.
@@ -483,10 +482,9 @@ def plain(value: Any) -> Any:
 def _answer_text(answer: Any) -> str:
     """Serialize a structured answer to the one string an answer task holds.
 
-    NumPy scalars are rebuilt as Python numbers first. ``np.float32`` and ``np.int64`` are not
-    instances of ``float`` or ``int``, so :func:`json.dumps` cannot encode them as numbers and
-    would write each one as a quoted string instead. A number is written at the shortest text
-    that reads back as the source value at its source dtype.
+    NumPy scalars are rebuilt as Python numbers first, because :func:`json.dumps` writes a NumPy
+    scalar as a quoted string. A number is written at the shortest text that reads back as the
+    source value at its source dtype.
 
     Args:
         answer: The payload's ``GT`` value.

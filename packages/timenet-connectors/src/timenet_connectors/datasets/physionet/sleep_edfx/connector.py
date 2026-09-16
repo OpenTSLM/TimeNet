@@ -8,8 +8,8 @@ recorded each subject at home, on a cassette recorder. ``sleep-telemetry`` measu
 of temazepam. It recorded each subject in hospital, on a telemetry system.
 
 The two studies used different equipment. As a result, their signal sets differ, and their
-submental EMG signals are not one measurement: the cassette recorder rectified that signal and
-low-passed it at 0.7 Hz, and the telemetry recorder did neither. Their spans differ too. A
+submental EMG signals are not the same measurement: the cassette recorder rectified and
+low-passed that signal, and the telemetry recorder did neither. Their spans differ too. A
 cassette recording covers about a day, and a telemetry recording about ten hours.
 
 The loop that walks the release is in ``convert``, so one place states what a record is made of.

@@ -1,8 +1,7 @@
 """The annotation keys this connector writes.
 
-``connector.py`` is the only module that writes them, so bare literals would be allowed. They are
-named here because four keys spelled across one long function is where one of them drifts, and
-because the README's table of what a record carries is checked against this enum by eye.
+``connector.py`` is the only module that writes them. They are named here so that each key has one
+spelling, and so the README's table of what a record carries has something to match.
 
 A caption annotation is not here. Its key is the shard column the caption came from, so
 ``connector.py`` writes it from the same tuple it reads the columns with.

@@ -76,8 +76,8 @@ One record is one row of one shard.
 so on in the order the row states. Every series in a row has the same length *(measured: 0 ragged
 rows)*. Lengths run from 64 to 96,424 and are constant per source corpus for 31 of the 37 corpora.
 
-The corpus states **no unit for anything**, so every series is dimensionless. It is not that the
-values have no unit; it is that the release does not say what it is.
+The corpus states **no unit for anything**, so every series is dimensionless. The values have a
+unit. The release does not state it.
 
 **The time axis** comes from `meta.csv`, joined on the row's `dataset` column. That join is exact
 and total: all 37 corpus names match a `meta.csv` row, covering every one of the 618,508 rows
@@ -124,17 +124,17 @@ number in that name.
 
 Four tasks per record over 618,508 records, one per caption column *(measured)*. A task's answer is
 the caption annotation the record carries, named through `target_annotation_ids`, and not a second
-copy of the text. So a caption is reachable from the record it describes: a streamed task never
-reaches `Record.task_ids`, so a caption held only by a task could be found from the task and never
-from the record. The cost is that a build holds the captions in memory until the writer has walked
-them.
+copy of the text. A caption is therefore reachable from the record it describes. A streamed task
+never reaches `Record.task_ids`, so a caption held only by a task would be reachable from the task
+and not from the record. The cost is that a build holds the captions in memory until the writer has
+walked them.
 
-They are flat: nothing records that `caption1` to `caption3` are rewrites of `caption0`. That
+The tasks are flat: nothing records that `caption1` to `caption3` are rewrites of `caption0`. That
 relation is real for most of the corpus and empty for the 105,085 `ChatTS` rows whose four captions
-are byte-identical, so recording it would be true and uninformative for a sixth of the release.
+are byte-identical.
 
-The tasks are streamed rather than listed. Two and a half million tasks is not a list. The stream
-walks the records the conversion already built, so it re-reads no shard.
+The tasks are streamed rather than listed, because a list of two and a half million tasks would not
+fit in memory. The stream walks the records the conversion already built, so it re-reads no shard.
 
 ## Inconsistencies and decisions
 
@@ -168,10 +168,10 @@ who wants to trace a row back to the corpus it came from has `source_dataset`, a
 ### Four caption fields, three caption levels — **Handled**
 
 **Problem.** The card describes three levels of granularity, statistical, structural and semantic.
-The schema declares four caption fields. The values are neither: in every sampled row all four state
-the same trend segments, the same cycle period, the same rounded mean, standard deviation, minimum
-and maximum, and the same subject label, with `caption1` to `caption3` being `caption0` rewritten in
-fluent prose *(measured)*.
+The schema declares four caption fields. The values match neither: in every sampled row all four
+state the same trend segments, the same cycle period, the same rounded mean, standard deviation,
+minimum and maximum, and the same subject label, with `caption1` to `caption3` being `caption0`
+rewritten in fluent prose *(measured)*.
 
 **Decision.** Carry all four as annotations under the column names the release gives them, and build
 one task per field. The keys state where each caption came from and claim nothing about a level.
@@ -227,8 +227,8 @@ column, where it is a document-paste artifact, and the caption generator copied 
 **Decision.** Keep it, unchanged.
 
 **Consequence.** 10% of captions carry a character that means nothing, and 41% of records hold at
-least one. Stripping it would make the conversion differ from the release with nothing saying why;
-this entry says why it is there.
+least one. Stripping it would make the conversion differ from the release. This entry records why
+the character is there.
 
 ### 96 rows ship a series that is entirely NaN — **Handled**
 

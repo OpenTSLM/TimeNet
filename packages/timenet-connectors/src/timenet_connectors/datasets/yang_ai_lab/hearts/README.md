@@ -218,8 +218,7 @@ The two scalar directories predict in `mg/dL` and in `mg*min/dL`.
 
 A `ClassificationTask` carries the answer vocabulary of its directory through
 `input_annotation_ids`, and its `target_schema` is the id of that same registered annotation, so the
-field resolves to the set rather than naming a string nothing holds. One function builds the id and
-both ends read it from there.
+field resolves to the set. One function builds the id and both ends read it from there.
 
 An answer that is not already text is mapped to the form the harness scores: a boolean becomes
 `"true"` or `"false"` (172 answers), the VCTK direction index 0 or 1 becomes `"forward"` or
@@ -230,8 +229,8 @@ that changes its wording stops the build instead of storing a label nothing acce
 
 **The tasks stream, and the connector holds none of them.** `set_task_stream` gets them, so each
 task carries its own `record_ids` and the stored record rows carry no `task_ids`. A consumer who
-reads the whole dataset loses nothing by it: `TimeFReader.read()` rebuilds that reverse map from the
-task rows. One who walks the records without their tasks reads the field empty. 1,005 tasks would
+reads the whole dataset loses nothing: `TimeFReader.read()` rebuilds that reverse map from the task
+rows. One who walks the records without their tasks reads the field empty. 1,005 tasks would
 fit in a list, so this follows the repo's convention rather than a memory limit. The stream walks
 the tree a second time and reads each payload again for its answer, which is why the read count
 below is three and not two.
@@ -309,7 +308,7 @@ NonCommercial-ShareAlike terms.
 
 **Consequence.** 283 of the 333 CGMacros frames carry a 19-character `Timestamp` string on each of
 2,061,436 rows, and none of that text is converted *(measured)*. The other 50 count minutes from the
-meal and state no calendar day. This is a real content difference and not only a smaller file: the
+meal and state no calendar day. The difference is in content and not only in file size: the
 release's own loader writes the absolute timestamps into the agent's CSV, so a consumer of this
 dataset cannot recover the calendar day a window came from.
 
@@ -414,10 +413,10 @@ run the same deserializer.
 **Consequence.** The allowlist is measured, not sampled. All 1,005 in-scope files were read with an
 unpickler that recorded every pair it resolved: they ask for exactly these 15 pairs, every entry is
 used by at least one file, none is missing, and all 1,005 are pickle protocol 4 *(measured)*. The
-measurement covers those 1,005 files and nothing else. It is still a record and not a proof: a file
-written by a different pandas or numpy build can name a pair that belongs there, and it will stop
-the build after a 1.26 GB download. The refusal names the file and the pair, says the list is a
-record of the pin, and says where to add the pair.
+measurement covers those 1,005 files and nothing else. The list is a record of the pin and not a
+proof: a file written by a different pandas or numpy build can name a pair that belongs there, and
+it will stop the build after a 1.26 GB download. The refusal names the file and the pair, says the
+list is a record of the pin, and says where to add the pair.
 
 ### A list, a tuple or a bare Series is dropped without a word — **Open**
 
@@ -457,8 +456,8 @@ the whole payload.
 
 **Decision.** Read each file once in `convert` to learn the shapes, once more in the task stream to
 reach its answer, and let the per-series loaders re-read it when the writer drains them, backed by a
-two-entry payload cache. The cache is small on purpose: the writer walks series in spec-type order,
-so every series of one file that shares a spec type is contiguous in that walk and two entries serve
+two-entry payload cache. The cache is small because the writer walks series in spec-type order, so
+every series of one file that shares a spec type is contiguous in that walk and two entries serve
 all of them.
 
 **Consequence.** A build reads about 4.0 GB over 1.26 GB of files: every file three times, plus a
@@ -466,8 +465,8 @@ fourth read of `harespod/hr_resp_pairing` and `harespod/spo2_resp_pairing`, whic
 bytes *(measured)* and spread their signals over two spec types each, so the loaders unpickle them
 twice rather than once. Closing the loader gap needs about 50 resident payloads, which would hold 50
 audio buffers at 48 kHz while the audio blocks are written, so the second read of a small HARESPOD
-frame is the cheaper of the two. The stream's own pass is what streaming the tasks costs here; the
-alternative is to keep 1,005 answers in memory from `convert` until the writer walks them.
+frame is the cheaper of the two. The stream's own pass is what streaming the tasks costs here. The
+alternative is to hold 1,005 answers in memory from `convert` until the writer walks them.
 
 ### No non-finite value was found — **Handled**
 
@@ -482,8 +481,8 @@ nothing in the build would warn.
 
 ## Warnings this build emits
 
-`None.` Every surprise this connector can meet is a fact about a case it cannot place, so each one
-stops the build and says which: a file not named after its test-case index, a payload that is not a
+`None.` Every problem this connector can meet is a case it cannot place, so each one stops the build
+and says which: a file not named after its test-case index, a payload that is not a
 dict, an unlisted pickle global, a missing key on a path a loader follows, a frame with no time
 column, a frame with no rows, a time column whose dtype this connector does not read, an unknown
 value column, a `timestamp_min` that is not the frame's own time column in whole minutes, an array

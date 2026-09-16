@@ -1,20 +1,19 @@
 """The ARFBench connector: anomaly question answering over Datadog observability metrics.
 
-Source repo ``Datadog/ARFBench`` on the HuggingFace Hub, read at a pinned commit. It ships one QA
-table, ``arfbench-qa.csv``, and 748 Parquet files under ``arfbench-ts-data/``. A Parquet file is one
+The source is the Hub repo ``Datadog/ARFBench``, read at a pinned commit. It holds one QA table,
+``arfbench-qa.csv``, and a set of Parquet files under ``arfbench-ts-data/``. One file holds one
 metric at one sampling interval, named ``{incident}_{index}_{interval_seconds}.parquet``, in long
-form: one row per (epoch, tag group) observation. The filename is the only correct join key to the QA
-table's ``query_group``; the file's own ``query_name`` column names a different series on most files.
+form: one row per (epoch, tag group) observation. The filename is the join key to the QA table's
+``query_group`` column.
 
-Each of the 750 questions becomes one record that carries the one or two metrics the question cites,
-one signal per tag group, plus an :class:`~timenet.types.AnswerTask` holding the question and its
-answer. The release publishes each metric at up to six intervals and no interval covers every metric,
-so a record uses the finest interval published for every series it cites. That keeps all 750
-questions and opens 205 of the 748 files, which is also the scope this connector downloads.
+Each question becomes one record. The record carries the metrics the question cites, one signal per
+tag group, plus an :class:`~timenet.types.AnswerTask` that holds the question and its answer. A
+metric is published at several intervals, so a record uses the finest interval that every series it
+cites publishes. Only the files those questions cite are downloaded.
 
-A row whose value is null is carried as a missing timestep, and a signal that skips a step of its
-file's grid carries its own time offsets. The README beside this module records what the release
-states inconsistently and what this connector did about it.
+A null value is carried as a missing timestep. A signal that skips a step of its file's grid carries
+its own time offsets. The README beside this module describes the release and the choices this
+connector makes.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -40,22 +39,21 @@ from timenet.types import Annotation, AnswerTask, DataSource, TimeSeriesSpec, ur
 
 REPO = "Datadog/ARFBench"
 REVISION = "1cc8ae54e9633f596b755f7c4bce54ccb0cb9f5a"
-"""The pinned commit. A branch name would let the same code read different bytes later."""
+"""The pinned commit that every read of the repo uses."""
 
 QA_CSV = "arfbench-qa.csv"
 TS_DIR = "arfbench-ts-data"
 
 ANCHOR_US = 1_741_305_600_000_000
-"""A derived origin: 2025-03-07T00:00:00Z, the UTC day boundary the corpus starts in. The release
-states no zero of its own. Every record shares this one, so a metric that two questions cite has one
-set of time offsets and is stored once."""
+"""The time origin of every record, 2025-03-07T00:00:00Z. The release states no origin of its own,
+so all time offsets are measured from this one."""
 
 US_PER_S = 1_000_000
 _EMPTY_SIGNAL = "value"
 """Stands in for the empty tag label the release writes for a metric with no grouping."""
 
 _ID_PREFIX = "arfbench"
-"""The one prefix every id this connector states is built from."""
+"""The prefix of every id this connector builds."""
 
 _SOURCE = DataSource(data_source_type="huggingface", name="ARFBench", provider="Datadog")
 _METRIC = TimeSeriesSpec(
@@ -70,7 +68,7 @@ _METRIC = TimeSeriesSpec(
 
 @dataclass(frozen=True)
 class ARFBenchSource:
-    """The fetched sources: two paths and the interval listing, never any rows."""
+    """The fetched sources: two paths and the interval listing. It holds no rows."""
 
     qa_csv: Path
     """The QA table."""
@@ -119,9 +117,6 @@ def _published_intervals(paths: Sequence[str]) -> dict[str, tuple[int, ...]]:
 def _interval_for(cited: Sequence[str], published: Mapping[str, tuple[int, ...]]) -> int:
     """Choose a question's sampling interval: the finest one every series it cites publishes.
 
-    The release publishes a metric at up to six intervals and not every metric publishes all six, so
-    no single interval answers every question. This rule keeps all 750.
-
     Args:
         cited: The series ids the question cites.
         published: The intervals each series publishes.
@@ -158,8 +153,7 @@ def _cited_series(row: Mapping[str, str]) -> tuple[str, ...]:
 def _options_id(options: Sequence[str]) -> str:
     """Build the id of the annotation holding one candidate-answer list.
 
-    The id comes from the value, so the questions that offer the same options reference one shared
-    annotation instead of each carrying a copy.
+    The id comes from the value, so questions that offer the same options share one annotation.
 
     Args:
         options: The candidate answers.
@@ -174,9 +168,6 @@ def _options_id(options: Sequence[str]) -> str:
 def _record_id(index: int) -> str:
     """Build the record id of one question, from its row number in the QA table.
 
-    The record loop and the task stream both name a record through this function, so a streamed task
-    names the record the loop built.
-
     Args:
         index: The question's row number.
 
@@ -187,13 +178,13 @@ def _record_id(index: int) -> str:
 
 
 def _iter_qa_rows(qa_csv: Path) -> Iterator[dict[str, str]]:
-    """Stream the QA table, so its rows never sit in a list.
+    """Stream the rows of the QA table, one at a time.
 
     Args:
         qa_csv: The QA table.
 
     Yields:
-        Each row as a dict. The ``question`` field spans two physical lines.
+        Each row as a dict.
     """
     with qa_csv.open(newline="", encoding="utf-8") as handle:
         yield from csv.DictReader(handle)
@@ -204,12 +195,8 @@ def _read_file(path: str) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]
     """Decode one series file into per-signal time offsets, values and a missing mask.
 
     A row whose value is null keeps its place and is marked missing, so the stored series holds every
-    row the release publishes. The rows are sorted by (tag group, epoch): row order in the release is
-    arbitrary, and the pandas index the files carry does not restore it. Time offsets are measured
-    from :data:`ANCHOR_US`, the zero every record shares.
-
-    Two files stay decoded at once. The writer sorts the series it writes by ``source_id``, which is
-    the file, so it asks for one file's signals in a run and this cache answers them from one decode.
+    row the release publishes. The rows are sorted by (tag group, epoch). Time offsets are measured
+    from :data:`ANCHOR_US`.
 
     Args:
         path: The series file.
@@ -335,8 +322,8 @@ def _signals_for(path: str, series_id: str, interval_s: int) -> tuple[TimeSeries
 def _record_annotations(row: Mapping[str, str], cited: Sequence[str], interval_s: int) -> list[Annotation]:
     """Build one question's record annotations.
 
-    The two interpolation flags ride only on the rows that set them, because this connector
-    interpolates nothing either way.
+    The two interpolation flags are attached only to the rows that set them. This connector
+    interpolates nothing.
 
     Args:
         row: The QA row.
@@ -366,9 +353,8 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
     def download(self, cache_dir: Path) -> list[ARFBenchSource]:  # noqa: PLR6301 (BaseConnector override)
         """Fetch the QA table and the series files the questions resolve to.
 
-        Only the 205 series files the questions cite are fetched, so the cache on disk is exactly what
-        ``convert`` reads. Picking those 205 needs the ``query_group`` column, so this method reads
-        that one column of the QA table it has just fetched.
+        Only the series files that the questions cite are fetched. To find them, this method reads
+        the ``query_group`` column of the QA table it fetched first.
 
         Args:
             cache_dir: The directory that holds the downloaded files.
@@ -382,9 +368,8 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
             TimeNetDownloadError: If the pinned revision holds no QA table.
         """
         # discovery.available() imports every connector module to read its CONNECTOR, and
-        # huggingface_hub is declared in this connector's requirements.txt rather than by the
-        # package. A module-level import would break dataset listing for every connector in an
-        # environment without it.
+        # huggingface_hub is declared in this connector's requirements.txt, not by the package. A
+        # module-level import would break dataset listing where huggingface_hub is not installed.
         try:
             from huggingface_hub import list_repo_files, snapshot_download  # noqa: PLC0415 (see the comment above)
         except ImportError as exc:
@@ -393,8 +378,8 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
                 "requirements.txt. Run the build without --no-isolation, or install it yourself"
             ) from exc
 
-        # The listing comes before any fetch: the interval rule is decidable only once every
-        # interval each metric publishes is known, and the file names are what state that.
+        # List the files before any fetch: the interval rule needs every interval each metric
+        # publishes, and only the file names state that.
         published = _published_intervals(list_repo_files(REPO, repo_type="dataset", revision=REVISION))
         root = Path(
             snapshot_download(
@@ -418,13 +403,11 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
     def convert(self, raw_refs: list[ARFBenchSource]) -> TimeFDataset:
         """Build one record per question, sharing the signals of a metric that several cite.
 
-        A first pass registers one annotation per distinct candidate-answer list, so the tasks
-        reference shared lists instead of each carrying its own. The second pass builds the records. A
-        metric is read once per interval and its signals are reused, so a metric several questions
-        cite is stored once.
+        A first pass registers one annotation per distinct candidate-answer list, so the tasks share
+        those lists. The second pass builds the records. A metric is read once per interval and its
+        signals are reused, so a metric that several questions cite is stored once.
 
-        The tasks are not built here. They stream from the QA table through :meth:`_iter_tasks`, so
-        no record carries the id of its task.
+        The tasks are not built here. They stream from the QA table through :meth:`_iter_tasks`.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.
@@ -461,8 +444,7 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
     def _iter_tasks(source: ARFBenchSource) -> Iterator[AnswerTask]:
         """Yield one :class:`AnswerTask` per QA row, on the record that row built.
 
-        The QA table is read again here rather than held, so the stream answers the same rows every
-        time the writer asks for them.
+        The QA table is read again here, so the stream yields the same tasks every time.
 
         Args:
             source: The download handle naming the QA table.

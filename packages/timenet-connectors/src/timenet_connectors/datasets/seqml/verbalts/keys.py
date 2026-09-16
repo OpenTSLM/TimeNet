@@ -1,9 +1,8 @@
 """The ids and the annotation keys this connector writes. Pure functions, no I/O.
 
-Every attribute key carries its component as a prefix. That prefix is load-bearing: Weather's
-``season`` is one of four calendar seasons and ETTm1's is a code for the dominant periodicity.
-Schema derivation refuses one key that yields two descriptors, so the unprefixed keys would fail a
-build after the download and the whole conversion had already run.
+Every attribute key carries its component as a prefix. Two components can give one attribute name
+two meanings: Weather's ``season`` is a calendar season, and ETTm1's is a code for the dominant
+periodicity. Schema derivation refuses one key that yields two descriptors, so the prefix is needed.
 """
 
 from enum import StrEnum
@@ -36,8 +35,8 @@ def record_id(component: str, split: str, row: int) -> str:
     """Build the id of one window.
 
     The row index is padded to five digits, so lexicographic order equals numeric order. The writer
-    sorts series by ``source_id``, and every series of a window carries the window's id. The padding
-    is therefore what makes the writer walk each values file front to back.
+    sorts series by ``source_id``, and every series of a window carries the window's id, so the
+    writer walks each values file front to back.
 
     Args:
         component: The component name.
@@ -79,8 +78,8 @@ def codebook_key(component: str, attribute: str) -> str:
 def codebook_id(component: str, attribute: str) -> str:
     """Build the id of the corpus-level codebook annotation for one attribute.
 
-    Every generation task of a component lists these ids, so the id has to be stable and derived
-    from the same two names at both ends.
+    Every generation task of a component lists these ids, so both ends build the id from the same
+    two names.
 
     Args:
         component: The component name.

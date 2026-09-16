@@ -8,13 +8,12 @@ options, clinical context) is stored once as value-deduped annotations the tasks
 recording carries its dataset split. The ~230k tasks stream to disk, so they never all live in memory.
 
 Every question is a two-way choice. The two candidates it offers are stated only inside the CoT row's
-``prompt`` column. On most templates the pair is narrower than the template's whole vocabulary, so a
-task that carried the vocabulary alone would pose a wider question than the benchmark does. This
-connector reads the pair out of the prompt and stores it under ``answer_options``, while the
+``prompt`` column, and on most templates that pair is narrower than the template's whole vocabulary.
+This connector reads the pair out of the prompt and stores it under ``answer_options``. The
 template's whole vocabulary stays under ``template_answer_options``. The rest of the prompt is not
 stored: it is a constant preamble, the clinical context, the question, the pair, and a constant
-instruction that quotes the gold answer. The README beside this module holds the measured evidence
-for these decisions, and for what the release states inconsistently.
+instruction that quotes the gold answer. The README beside this module describes the release and the
+choices this connector makes.
 
 Sources come from three places. The signals come from PhysioNet PTB-XL. The per-template answer options
 come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows (question, answer, rationale,
@@ -169,8 +168,7 @@ def _candidate_pair(row: Mapping[str, str]) -> tuple[str, ...]:
 
     Raises:
         TimeFFormatError: If the prompt states no candidate list, or states a number of candidates
-            other than two. Every question in the release is a two-way choice, and a task built from
-            a wider or narrower list would not pose the question the benchmark poses.
+            other than two.
     """
     match = _CANDIDATES_RE.search(row.get("prompt") or "")
     if match is None:
@@ -258,9 +256,9 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         A first pass over the CoT CSVs collects each recording's split and the distinct question
         metadata, including the candidate pair every question offers. It then builds a record per
         recording (its 12 leads with lazy loaders) and registers the deduped metadata annotations.
-        The pairs have to be collected here, because the task stream is set up after registration and
-        a task can only reference an annotation that is already registered. The tasks themselves
-        stream from :meth:`_iter_tasks`, so the ~230k questions never all live in memory.
+        The pairs are collected here because a task can only reference an annotation that is already
+        registered. The tasks themselves stream from :meth:`_iter_tasks`, so the questions never all
+        live in memory.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.

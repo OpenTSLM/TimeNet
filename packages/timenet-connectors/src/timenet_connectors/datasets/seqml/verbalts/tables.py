@@ -66,7 +66,7 @@ def signal_names(component: str, attributes: Sequence[int], n_signals: int) -> t
 
     Raises:
         TimeFFormatError: If the signal count or the ``var_id`` code disagrees with what the
-            component declares. A release that changed shape must fail loudly.
+            component declares.
     """
     variables = VARIABLES_BY_COMPONENT.get(component)
     if variables is not None:

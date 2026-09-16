@@ -2,11 +2,11 @@
 
 Only :func:`check_drive_body` opens a file here. Nothing in this module decodes an array.
 
-Drive states no revision and no digest of its own. So every file is pinned by its Drive id, its
-byte count and its SHA-256. The 60 digests come from one full download of the release on 2026-09-06.
+Drive states no revision and no digest of its own, so every file is pinned by its Drive id, its byte
+count and its SHA-256.
 
 The download layer checks a digest only for a file it fetched, so a warm cache skips that check.
-:func:`check_drive_body` re-reads every file after the download instead. It checks the byte count,
+:func:`check_drive_body` reads every file back after the download instead. It checks the byte count,
 the NPY magic number and the digest.
 """
 
@@ -466,13 +466,12 @@ _HASH_CHUNK_BYTES = 1 << 22
 def check_drive_body(path: Path, expected_bytes: int, expected_sha256: str) -> None:
     """Check one downloaded file against its pinned size, NPY magic and SHA-256.
 
-    Drive answers a large-file download without ``confirm=t`` with a small HTML page under HTTP 200.
-    The download layer sees a success and writes that page to disk. The size check catches it, and
-    the NPY magic number catches any other body that is not an array. The digest catches what those
-    two cannot see: bytes replaced in place at the same Drive id and the same length.
+    Drive answers a large-file download without ``confirm=t`` with a small HTML page under HTTP 200,
+    and the download layer writes that page to disk. The size check catches it, and the NPY magic
+    number catches any other body that is not an array. The digest catches bytes replaced in place
+    at the same Drive id and the same length.
 
-    The digest is checked here and not left to the download layer. That layer skips a file that is
-    already on disk, so a warm cache never re-reads it.
+    The digest is checked here and not in the download layer, which skips a file already on disk.
 
     Args:
         path: The downloaded file.

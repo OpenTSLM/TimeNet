@@ -1,13 +1,14 @@
 """The VerbalTS connector: six caption-paired corpora released with the VerbalTS ICML 2025 paper.
 
-Google Drive holds 60 files: 54 NPY arrays and 6 ``meta.json``. Every component ships three splits,
-and every split ships three arrays. ``{split}_ts.npy`` holds ``(n_windows, n_steps, n_signals)``
-float64 windows. ``{split}_text_caps.npy`` holds one or three fixed-width UTF-32 captions per
-window. ``{split}_attrs_idx.npy`` holds one int64 code per attribute that ``meta.json`` names.
+Google Drive holds the release as NPY arrays and one ``meta.json`` per component. Every component
+ships three splits, and every split ships three arrays. ``{split}_ts.npy`` holds
+``(n_windows, n_steps, n_signals)`` float64 windows. ``{split}_text_caps.npy`` holds one or three
+fixed-width UTF-32 captions per window. ``{split}_attrs_idx.npy`` holds one int64 code per attribute
+that ``meta.json`` names.
 
 One record is one window. Every signal of a window becomes a :class:`~timenet.dataset.TimeSeries`
-with a lazy loader that slices a memory-mapped array. So ``convert`` reads the NPY headers and the
-attribute codes, and not one byte of the 560 MB values plane.
+with a lazy loader that slices a memory-mapped array, so ``convert`` reads the NPY headers and the
+attribute codes and none of the values.
 
 Every caption becomes the prompt of a :class:`~timenet.types.TSGenerationTask` whose
 ``target_record_id`` is the window. That is the text-to-series direction the release supervises.
@@ -59,8 +60,8 @@ _PLANE_DIMS = 2
 class VerbalTsComponent:
     """One of the six Drive folders, as paths only.
 
-    ``download`` gives these back instead of arrays, so ``convert`` opens every NPY through a
-    memory map and the values plane is never resident.
+    ``download`` gives back paths, not arrays. ``convert`` opens every NPY through a memory map, so
+    the values are never held.
     """
 
     name: str
@@ -92,9 +93,8 @@ class VerbalTsComponent:
 def _open_npy(path: str) -> np.ndarray:
     """Memory-map one NPY file.
 
-    The 128-byte header states the shape and the dtype. No page of the body is read until a loader
-    slices it. The cache holds the arrays open across the writer's series-ordered walk, so a file is
-    mapped one time and not once per window.
+    The NPY header states the shape and the dtype. No page of the body is read until a loader slices
+    it. The cache holds the arrays open, so a file is mapped once and not once per window.
 
     Args:
         path: The file to map, as a string so the cache key stays stable.
@@ -159,11 +159,10 @@ class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
     """Connector for the VerbalTS corpus: six caption-paired components on Google Drive."""
 
     async def download_async(self, cache_dir: Path) -> list[VerbalTsComponent]:  # noqa: PLR6301 (override: the file table is a constant)
-        """Fetch the 60 pinned Drive files and give back one handle per component.
+        """Fetch the pinned Drive files and give back one handle per component.
 
-        Every file is re-read after the download and checked against its pinned byte count, its NPY
-        magic number and its SHA-256. Drive serves its virus-scan interstitial under a success
-        status, and the download layer checks a digest only for a file it fetched.
+        Drive can serve its virus-scan page under a success status, so every file is read back and
+        checked against its pinned size, its NPY magic number and its SHA-256.
 
         Args:
             cache_dir: The directory that holds the downloaded files.
@@ -274,8 +273,7 @@ def _check_var_id_is_first(component: str, attribute_names: tuple[str, ...]) -> 
     """Check that a component whose signal name needs ``var_id`` states it first.
 
     :func:`~timenet_connectors.datasets.seqml.verbalts.tables.signal_names` reads the code from
-    attribute 0. A release that moved it would mislabel every window whose code still lands inside
-    the column list, and raise for the rest, so the position is checked before any row is read.
+    attribute 0, so the position is checked before any row is read.
 
     Args:
         component: The component name.
@@ -301,8 +299,7 @@ def _warn_on_undeclared_codes(
 ) -> None:
     """Warn one time for each attribute that holds a code ``meta.json`` does not declare.
 
-    A code outside the declared range is an inconsistency the release ships, not a corrupt file, so
-    it is written as the release states it. This is the only warning the build emits.
+    A code outside the declared range is written as the release states it.
 
     Args:
         component: The component name.
@@ -370,7 +367,7 @@ def _codebook_annotations(component: str, names: Sequence[str], counts: Sequence
     """Build one component's corpus-level codebook annotations.
 
     Each attribute gets one annotation that carries the number of codes it takes. ``meta.json``
-    states that count and states no label for any code, so the count is what the artifact knows.
+    states that count and no label for any code.
 
     Args:
         component: The component name.
@@ -399,9 +396,8 @@ def _iter_tasks(components: Sequence[VerbalTsComponent]) -> Iterator[TSGeneratio
 
     The caption is the prompt and the window is the answer, so each caption is one specification of
     the series to synthesize. A window with three captions gets three tasks over one target. The
-    stream keeps no task: it re-opens the caption planes on every call, so that every call gives the
-    same tasks. :meth:`timenet.dataset.TimeFDataset.iter_tasks` is public and any consumer may read
-    it again.
+    stream keeps no task. It re-opens the caption planes on every call, so every call gives the same
+    tasks.
 
     Args:
         components: The component handles :meth:`VerbalTsConnector.convert` walked, in the release's

@@ -1,13 +1,13 @@
 """The five specs and the six time axes of the VerbalTS release. Values only, no I/O.
 
-The paper states that VerbalTS z-scored each of the four real-world components per variable against
-that component's own train split, and it published neither the mean nor the standard deviation
-vector. The two synthetic sets are generated, so they carry no instrument reading either. No spec
-can state a physical unit, every spec is dimensionless, and the physical signal names are labels.
+The paper states that VerbalTS z-scored each real-world component per variable against that
+component's own train split, and it publishes neither the mean nor the standard deviation. The two
+synthetic sets are generated, so they carry no instrument reading either. No spec can state a
+physical unit, so every spec is dimensionless and the physical signal names are labels.
 
 No component ships a timestamp, so an axis states a cadence and nothing else. The real-world
-cadences come from the paper that released the data, not from the artifact. The paper does not state
-the BlindWays frame rate, and the README records that axis as open. The two synthetic sets have no
+cadences come from the paper that released the data, not from the artifact. The paper states no
+BlindWays frame rate, and the README records that axis as open. The two synthetic sets have no
 clock, so they take an ordinal axis.
 """
 
@@ -64,7 +64,7 @@ SPEC_BY_COMPONENT: dict[str, TimeSeriesSpec] = {
     "istanbul_traffic": _TRAFFIC,
 }
 """The spec every series of a component carries. One spec covers both synthetic sets, which differ
-only in their signal count, so the release declares five spec types and not six."""
+only in their signal count."""
 
 AXIS_BY_COMPONENT: dict[str, TimeAxis] = {
     "synthetic_u": OrdinalAxis(),
@@ -75,4 +75,4 @@ AXIS_BY_COMPONENT: dict[str, TimeAxis] = {
     "istanbul_traffic": RegularAxis.from_rate_hz(Fraction(1, 600)),
 }
 """The time axis every series of a component carries. The README states where each cadence comes
-from and what the evidence for it is."""
+from."""

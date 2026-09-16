@@ -158,16 +158,15 @@ equals the `answer` column on every row *(measured)*. Storing it puts the label 
 input.
 
 **Consequence.** A consumer who wants the released prompt text rebuilds it from the stored pieces,
-the two constant blocks and the target. Nothing is lost, but it is not one field to read.
+the two constant blocks and the target. Nothing is lost, and no single field holds the prompt.
 
 ### A prompt that is not a two-way choice raises — **Handled**
 
 **Problem.** The pair is parsed out of prose. A re-release that rewords the heading, drops the
 list, or offers three answers leaves the connector without the choice the question poses.
 
-**Decision.** Raise `TimeFFormatError`, and name the `ecg_id` in the message. A question converted
-as something the release does not contain is the larger error, and the vocabulary is not a safe
-substitute.
+**Decision.** Raise `TimeFFormatError`, and name the `ecg_id` in the message. Converting a question
+the release does not contain is the larger error, and the vocabulary is not a safe substitute.
 
 **Consequence.** A reworded release fails the build rather than converting to a wider task. All
 231,543 rows of this release parse, and each offers exactly two answers *(measured)*.
@@ -206,8 +205,8 @@ that share those seven ids are 14 tasks.
 of the 1,184 distinct contexts. No context states an age between 90 and 299 *(measured)*.
 
 **Decision.** Keep the text as the release states it. The PTB-XL page quotes above explains the
-number: an age of more than 89 appears as 300 for privacy. It is a convention, not a fault, and
-the connector repairs no stated value.
+number: an age of more than 89 appears as 300 for privacy. It is a convention, and the connector
+repairs no stated value.
 
 **Consequence.** A consumer who reads an age out of the context text reads 300 for those patients.
 It means older than 89.

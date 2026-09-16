@@ -50,8 +50,8 @@ through the `query_name` column inside the file.
 > Time Series data: for each query group there are up to 6 different intervals of the same data.
 > — the release's dataset card, "Dataset Structure"
 
-Decides that "up to" is load-bearing. 69 of the 142 metrics publish all six intervals *(measured)*,
-so an interval has to be chosen per question rather than pinned once for the dataset.
+Decides that "up to" is exact. 69 of the 142 metrics publish all six intervals *(measured)*, so the
+interval is chosen per question rather than pinned once for the dataset.
 
 > Interpolation flags: whether visualizations were interpolated in the original time series seen by
 > incident engineers.
@@ -111,8 +111,7 @@ Values keep the source's `float64`. The largest in scope is about **6.1e10** *(m
 `float32` carries about seven significant digits, so casting would halve the values plane (about
 22 MB before compression) and quantize the largest values to steps of roughly 4,000.
 
-Every signal is **dimensionless**. It is not that these numbers have no unit; it is that the release
-does not say what it is.
+Every signal is **dimensionless**. The values have a unit. The release does not state it.
 
 **The time axis** comes from the file name's interval and the `epoch` column. A signal that holds
 every step of its file's grid gets a `RegularAxis` at that interval, placed on the grid by its first
@@ -216,9 +215,8 @@ it sorts.
 
 **Decision.** Sort by tag group, then by epoch, once at build time.
 
-**Consequence.** The sort is charged to whoever reads the raw files on every read, and to this
-connector once. Any comparison of the two that does not charge both sides is not measuring the
-format.
+**Consequence.** Whoever reads the raw files sorts them on every read. This connector sorts once, at
+build time. A comparison of the two has to count the sort on both sides.
 
 ### `__index_level_0__` does not restore that order, and 5 files ship none — **Handled**
 
@@ -230,9 +228,9 @@ epoch order on **6** *(measured)*. **5 of the 205** files carry no such column a
 **Decision.** Do not read it. The connector asks Parquet for `epoch`, `group` and `value` and
 nothing else, so the column is never read and the five files without it need no special case.
 
-**Consequence.** The largest single saving in this conversion, and the largest bias in any
-comparison against the raw files: `__index_level_0__` is **27,542,982 B, 51.42%** of the
-column-chunk bytes of the 205 files *(measured)*.
+**Consequence.** `__index_level_0__` is **27,542,982 B, 51.42%** of the column-chunk bytes of the
+205 files *(measured)*. It is the largest single saving in this conversion, and the largest bias in
+a comparison against the raw files.
 
 ### `query_name` names a different metric than the file it sits in — **Handled**
 
@@ -240,7 +238,7 @@ column-chunk bytes of the 205 files *(measured)*.
 **177 of the 205** files in scope *(measured)*, and the card says a question finds its series
 through `query_group`, which matches the file name.
 
-**Decision.** Drop it. Carrying it would invite a wrong join.
+**Decision.** Drop it. Carrying it would let a reader join on the wrong name.
 
 **Consequence.** **16,704 B, 0.03%** of the column-chunk bytes *(measured)*. Nothing in the
 converted dataset records the release's other name for a metric.
@@ -265,8 +263,8 @@ value.
 becomes a signal name, each stated once.
 
 **Consequence.** `epoch` is **7,531,283 B (14.06%)** and `group` is **5,509,527 B (10.29%)** of the
-column-chunk bytes, 24.35% together *(measured)*. This is the mechanism behind those two savings and
-belongs beside them.
+column-chunk bytes, 24.35% together *(measured)*. Those two columns are what the long format
+repeats.
 
 ### The shared anchor is a derived origin — **Handled**
 
@@ -294,8 +292,8 @@ that cites it. The shared anchor is what makes this legal: two records with the 
 about what a time offset means.
 
 **Consequence.** **10,556 stored series and 5,518,548 stored values**, a factor of **6.34**
-*(measured)*. On a full-read throughput comparison this one decision can account for most of a win,
-so a comparison lane needs the same per-file cache to be fair.
+*(measured)*. A read-throughput comparison against another reader has to use the same per-file
+cache.
 
 ### A signal name is the metric id and the tag label joined — **Handled**
 
@@ -320,8 +318,8 @@ files.
 
 **Consequence.** The raw tree on disk is **55,164,608 B** and is exactly what the loaders read
 *(measured)*. **16,878,158 B** of unopened Parquet and **31,302,963 B** of images stay in the
-repository. This makes the raw side of any comparison **23 percent smaller** than counting all 748
-Parquet files would, and the smaller number is the honest one: it is the bytes something opens.
+repository. The raw side of a comparison is therefore **23 percent smaller** than counting all 748
+Parquet files. Use the smaller number: it is the bytes something opens.
 
 ### The candidate answers are stored once per distinct list — **Handled**
 
@@ -378,7 +376,7 @@ closer entry.
 **Decision.** `observability`. The alternative was the catch-all `general`.
 
 **Consequence.** It sets the one domain all 750 records are filed under, so it decides which domain
-filter finds this dataset. `general` would be a filter nobody can narrow with.
+filter finds this dataset. `general` would narrow nothing.
 
 ### A comparison lane must derive the interval map the same way — **Open**
 

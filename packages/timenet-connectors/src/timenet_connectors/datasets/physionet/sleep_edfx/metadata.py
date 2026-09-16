@@ -142,10 +142,9 @@ def build_recording_start_local(record_id: str, start_time: datetime) -> Annotat
 def build_prefiltering(metadata_annotation: MetadataAnnotation, header: reader.EdfHeader) -> tuple[Annotation, ...]:
     """Give the annotation that keeps the EDF prefiltering field of each signal.
 
-    EDF states one prefiltering string for each signal, and this release uses that field to say
-    what no other field says: which study rectified its submental EMG, and what analog filter a
-    signal passed through. A marker signal states an instruction for its button there, so not
-    every string of the map is a filter.
+    EDF states one prefiltering string for each signal. In this release that field states which
+    study rectified its submental EMG, and what analog filter a signal passed through. A marker
+    signal states an instruction for its button there, so not every string in the map is a filter.
 
     Every recording of a study states the same strings, so the annotation is shared. The map is
     keyed in signal-name order, so the sharing does not depend on the order a header lists its
