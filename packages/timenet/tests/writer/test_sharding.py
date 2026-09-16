@@ -64,9 +64,11 @@ def _write(tmp_path, dataset, **targets):
 def _index_rows(version_dir):
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         rows = connection.execute(
-            """SELECT signal_id, chunk_index, value_path, chunk_major_index,
-                      chunk_minor_index, n_values
-               FROM signal_chunks ORDER BY signal_id, chunk_index"""
+            """SELECT signals.signal_id, chunks.chunk_index, chunks.value_path,
+                          chunks.chunk_major_index, chunks.chunk_minor_index, chunks.n_values
+                   FROM signal_chunks chunks
+                   JOIN signals USING (signal_key)
+                   ORDER BY signals.signal_id, chunks.chunk_index"""
         ).fetchall()
     return [
         {

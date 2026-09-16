@@ -12,7 +12,7 @@ from timenet.errors import TimeFFormatError
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 2
+CONTROL_SCHEMA_VERSION = 5
 """Schema version written into :data:`CONTROL_FILE`."""
 
 
@@ -22,8 +22,20 @@ CREATE TABLE control_metadata (
     value VARCHAR NOT NULL
 );
 
+CREATE SEQUENCE object_key_sequence START 1;
+CREATE SEQUENCE axis_key_sequence START 1;
+CREATE SEQUENCE content_key_sequence START 1;
+CREATE SEQUENCE occurrence_key_sequence START 1;
+CREATE SEQUENCE target_item_key_sequence START 1;
+
+CREATE TABLE datasets (
+    dataset_key BIGINT PRIMARY KEY DEFAULT nextval('object_key_sequence'),
+    dataset_id VARCHAR NOT NULL UNIQUE
+);
+
 CREATE TABLE records (
-    record_id VARCHAR PRIMARY KEY,
+    record_key BIGINT PRIMARY KEY DEFAULT nextval('object_key_sequence'),
+    record_id VARCHAR NOT NULL UNIQUE,
     start_time_us BIGINT,
     time_span_start_us BIGINT,
     time_span_end_us BIGINT,
@@ -31,16 +43,18 @@ CREATE TABLE records (
 );
 
 CREATE TABLE sources (
-    source_id VARCHAR PRIMARY KEY,
-    record_id VARCHAR NOT NULL REFERENCES records(record_id),
-    parent_source_id VARCHAR REFERENCES sources(source_id),
+    source_key BIGINT PRIMARY KEY DEFAULT nextval('object_key_sequence'),
+    source_id VARCHAR NOT NULL UNIQUE,
+    record_key BIGINT NOT NULL REFERENCES records(record_key),
+    parent_source_key BIGINT REFERENCES sources(source_key),
     name VARCHAR NOT NULL,
     metadata JSON NOT NULL,
-    CHECK (parent_source_id IS NULL OR parent_source_id <> source_id)
+    CHECK (parent_source_key IS NULL OR parent_source_key <> source_key)
 );
 
 CREATE TABLE axes (
-    axis_id VARCHAR PRIMARY KEY,
+    axis_key BIGINT PRIMARY KEY DEFAULT nextval('axis_key_sequence'),
+    axis_id VARCHAR NOT NULL UNIQUE,
     axis_type VARCHAR NOT NULL,
     period_numerator_us BIGINT,
     period_denominator BIGINT,
@@ -50,17 +64,18 @@ CREATE TABLE axes (
 );
 
 CREATE TABLE axis_offsets (
-    axis_id VARCHAR NOT NULL REFERENCES axes(axis_id),
+    axis_key BIGINT NOT NULL REFERENCES axes(axis_key),
     position BIGINT NOT NULL,
     offset_us BIGINT NOT NULL,
-    PRIMARY KEY (axis_id, position)
+    PRIMARY KEY (axis_key, position)
 );
 
 CREATE TABLE signals (
-    signal_id VARCHAR PRIMARY KEY,
-    source_id VARCHAR NOT NULL REFERENCES sources(source_id),
+    signal_key BIGINT PRIMARY KEY DEFAULT nextval('object_key_sequence'),
+    signal_id VARCHAR NOT NULL UNIQUE,
+    source_key BIGINT NOT NULL REFERENCES sources(source_key),
     name VARCHAR NOT NULL,
-    axis_id VARCHAR NOT NULL REFERENCES axes(axis_id),
+    axis_key BIGINT NOT NULL REFERENCES axes(axis_key),
     spec_type VARCHAR NOT NULL,
     spec_name VARCHAR NOT NULL,
     unit VARCHAR,
@@ -74,17 +89,18 @@ CREATE TABLE signals (
 );
 
 CREATE TABLE signal_chunks (
-    signal_id VARCHAR NOT NULL REFERENCES signals(signal_id),
+    signal_key BIGINT NOT NULL REFERENCES signals(signal_key),
     chunk_index BIGINT NOT NULL,
     value_path VARCHAR NOT NULL,
     chunk_major_index BIGINT NOT NULL,
     chunk_minor_index BIGINT,
     n_values BIGINT NOT NULL CHECK (n_values > 0),
-    PRIMARY KEY (signal_id, chunk_index)
+    PRIMARY KEY (signal_key, chunk_index)
 );
 
 CREATE TABLE annotation_contents (
-    content_id VARCHAR PRIMARY KEY,
+    content_key BIGINT PRIMARY KEY DEFAULT nextval('content_key_sequence'),
+    content_id VARCHAR NOT NULL UNIQUE,
     name VARCHAR NOT NULL,
     value JSON,
     unit VARCHAR,
@@ -92,14 +108,15 @@ CREATE TABLE annotation_contents (
 );
 
 CREATE TABLE annotation_occurrences (
-    occurrence_id VARCHAR PRIMARY KEY,
-    content_id VARCHAR NOT NULL REFERENCES annotation_contents(content_id),
+    occurrence_key BIGINT PRIMARY KEY DEFAULT nextval('occurrence_key_sequence'),
+    occurrence_id VARCHAR NOT NULL UNIQUE,
+    content_key BIGINT NOT NULL REFERENCES annotation_contents(content_key),
     object_type VARCHAR NOT NULL,
-    object_id VARCHAR NOT NULL,
+    object_key BIGINT NOT NULL,
     span_type VARCHAR NOT NULL,
     start_us BIGINT,
     end_us BIGINT,
-    signal_ids JSON,
+    signal_keys BIGINT[],
     provenance JSON,
     confidence DOUBLE,
     metadata JSON NOT NULL,
@@ -108,7 +125,8 @@ CREATE TABLE annotation_occurrences (
 );
 
 CREATE TABLE tasks (
-    task_id VARCHAR PRIMARY KEY,
+    task_key BIGINT PRIMARY KEY DEFAULT nextval('object_key_sequence'),
+    task_id VARCHAR NOT NULL UNIQUE,
     task_type VARCHAR NOT NULL,
     prompt VARCHAR,
     scope JSON,
@@ -118,61 +136,83 @@ CREATE TABLE tasks (
     metadata JSON NOT NULL
 );
 
-CREATE SEQUENCE target_key_sequence START 1;
-
-CREATE TABLE task_targets (
-    target_key BIGINT DEFAULT nextval('target_key_sequence'),
-    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
-    position BIGINT NOT NULL,
+CREATE TABLE target_items (
+    target_item_key BIGINT PRIMARY KEY DEFAULT nextval('target_item_key_sequence'),
     target_kind VARCHAR NOT NULL,
-    text_value VARCHAR,
-    integer_value BIGINT,
-    float_value DOUBLE,
-    boolean_value BOOLEAN,
-    record_id VARCHAR REFERENCES records(record_id),
-    signal_id VARCHAR REFERENCES signals(signal_id),
-    span_start BIGINT,
-    span_end BIGINT,
-    span_signal_ids JSON,
-    PRIMARY KEY (target_key),
-    UNIQUE (task_id, position),
     CHECK (target_kind IN (
         'text', 'integer', 'float', 'boolean', 'record', 'signal',
         'time_point', 'time_interval', 'step_point', 'step_interval'
     ))
 );
 
-CREATE TABLE task_record_refs (
-    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
-    field VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    record_id VARCHAR NOT NULL REFERENCES records(record_id),
-    PRIMARY KEY (task_id, field, position)
+CREATE TABLE target_text_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    value VARCHAR NOT NULL
 );
 
-CREATE TABLE task_signal_refs (
-    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
+CREATE TABLE target_integer_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    value BIGINT NOT NULL
+);
+
+CREATE TABLE target_float_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    value DOUBLE NOT NULL
+);
+
+CREATE TABLE target_boolean_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    value BOOLEAN NOT NULL
+);
+
+CREATE TABLE target_record_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    record_key BIGINT NOT NULL REFERENCES records(record_key)
+);
+
+CREATE TABLE target_signal_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    signal_key BIGINT NOT NULL REFERENCES signals(signal_key)
+);
+
+CREATE TABLE target_span_values (
+    target_item_key BIGINT PRIMARY KEY REFERENCES target_items(target_item_key),
+    span_start BIGINT NOT NULL,
+    span_end BIGINT,
+    signal_keys BIGINT[]
+);
+
+CREATE TABLE task_targets (
+    task_key BIGINT NOT NULL REFERENCES tasks(task_key),
+    position BIGINT NOT NULL,
+    target_item_key BIGINT NOT NULL UNIQUE REFERENCES target_items(target_item_key),
+    PRIMARY KEY (task_key, position)
+);
+
+CREATE TABLE task_record_refs (
+    task_key BIGINT NOT NULL REFERENCES tasks(task_key),
     field VARCHAR NOT NULL,
     position BIGINT NOT NULL,
-    signal_id VARCHAR NOT NULL REFERENCES signals(signal_id),
-    PRIMARY KEY (task_id, field, position)
+    record_key BIGINT NOT NULL REFERENCES records(record_key),
+    PRIMARY KEY (task_key, field, position)
 );
 
 CREATE TABLE task_annotation_refs (
-    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
+    task_key BIGINT NOT NULL REFERENCES tasks(task_key),
     field VARCHAR NOT NULL,
     position BIGINT NOT NULL,
-    occurrence_id VARCHAR NOT NULL REFERENCES annotation_occurrences(occurrence_id),
-    PRIMARY KEY (task_id, field, position)
+    occurrence_key BIGINT NOT NULL REFERENCES annotation_occurrences(occurrence_key),
+    PRIMARY KEY (task_key, field, position)
 );
 
 CREATE TABLE task_dependencies (
-    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
+    task_key BIGINT NOT NULL REFERENCES tasks(task_key),
     position BIGINT NOT NULL,
-    parent_task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
-    PRIMARY KEY (task_id, position),
-    CHECK (task_id <> parent_task_id)
+    parent_task_key BIGINT NOT NULL REFERENCES tasks(task_key),
+    PRIMARY KEY (task_key, position),
+    CHECK (task_key <> parent_task_key)
 );
+
 """
 
 
