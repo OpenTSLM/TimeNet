@@ -5,8 +5,7 @@ created. Everything goes in inside one transaction: the DDL, every table's rows,
 :data:`~timenet.control_plane.schema.VALIDATIONS`. A failed check aborts before ``COMMIT``, so a
 build that does not hold together publishes nothing.
 
-Rows reach DuckDB one Arrow table per batch, never through ``executemany``. Measured on the ECG-QA
-control plane, 1.35 million rows: 1,674 rows/s row by row against 132,079 rows/s this way.
+Rows reach DuckDB one Arrow table per batch, never through ``executemany``.
 """
 
 from collections.abc import Iterable
@@ -74,7 +73,7 @@ class ControlPlaneCounts:
     chunks: int
     """How many chunk placements the values plane wrote."""
     record_series_chunks: int
-    """Chunks counted once per referencing record, which is what the old index table held one row per."""
+    """Chunks counted once per record that references them."""
     specs: dict[str, int]
     """How many distinct series carry each spec type."""
 
@@ -402,8 +401,8 @@ class _Loader:
     def spec(self, spec_type: str) -> int:
         """Return a spec type's id, storing it the first time a series uses it.
 
-        The manifest's schema block owns the full :class:`~timenet.types.TimeSeriesSpec`; the control
-        plane stores only the reference, so a million series join on four bytes instead of repeating
+        The manifest's schema block owns the full :class:`~timenet.types.TimeSeriesSpec`. The
+        control plane stores only the reference, so a series joins on an id instead of repeating
         the name.
 
         Args:
@@ -543,8 +542,7 @@ def _load(  # noqa: PLR0913, PLR0917
         )
         specs[ts.spec.spec_type] = specs.get(ts.spec.spec_type, 0) + 1
 
-    # Records take their ids in sorted order, so the reader walks them in the order the Parquet
-    # control plane sorted them into and a caller sees the same sequence as before.
+    # Records take their ids in sorted order, so every reader walks them in the same sequence.
     for record in sorted(dataset.records, key=lambda r: r.record_id):
         _load_record(loader, record)
     for position, annotation in enumerate(dataset.registered_annotations):

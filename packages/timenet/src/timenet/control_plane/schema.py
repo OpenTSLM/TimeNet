@@ -1,56 +1,46 @@
 """The control-plane schema, as DuckDB DDL, plus the checks a build must pass before it publishes.
 
-The tables hold the same model the Parquet control tables held: a flat :class:`~timenet.dataset.Record`
-with its list of :class:`~timenet.dataset.TimeSeries`, the annotations a record carries, the ones
-registered for tasks to reference, and the ten fields every :class:`~timenet.types.Task` shares plus
-the payload its own class declares. Nothing about the authoring model changes; only where it is
-stored does.
+The tables hold the same model as before: a flat :class:`~timenet.dataset.Record` with its list of
+:class:`~timenet.dataset.TimeSeries`, the annotations a record carries, the ones registered for
+tasks to reference, and the fields every :class:`~timenet.types.Task` shares plus the payload its
+own class declares. Only the storage changes, not the authoring model.
 
-**Every join runs on a dense integer key, and the caller's name is kept once.** A record, a series,
-an annotation and a task each carry a surrogate id assigned in walk order, and every link row names
-that. The id the caller chose survives as ``external_id`` on the entity that owns it, which is what
-the reader hands back and what stays stable across a rebuild. Surrogate ids are assigned per build,
-so nothing outside the file should quote one.
+Every join runs on a dense integer key. A record, a series, an annotation and a task each carry a
+surrogate id assigned in walk order, and every link row names that id. The id the caller chose
+survives as ``external_id`` on the entity that owns it. That is what the reader hands back, and what
+stays stable across a rebuild. Surrogate ids are assigned per build, so nothing outside the file
+should quote one.
 
-**A type declaration is stored once, with its columns spelled out.** ``specs`` carries the whole
+A type declaration is stored once, with its columns spelled out. ``specs`` carries the whole
 :class:`~timenet.types.TimeSeriesSpec` and ``annotation_descriptors`` the whole
-:class:`~timenet.types.AnnotationDescriptor`, so the database says what dtype, unit and value shape a
-signal carries without the manifest beside it. A client can attach the file over HTTP and answer that
-from SQL. A million series still reference the declaration by id, so the unit and the value type are
-stored once rather than repeated per row. The manifest keeps the same block as a projection, so a
-registry can filter datasets without downloading the database, but the reader types its rows against
-the database.
+:class:`~timenet.types.AnnotationDescriptor`, so the database says what dtype, unit and value shape
+a signal carries without the manifest beside it. Every series references the declaration by id
+rather than repeating it. The manifest keeps the same block as a projection, so a registry can
+filter datasets without downloading the database, but the reader types its rows against the
+database.
 
-**An annotation is attached through one table per target kind.** A polymorphic
-``(object_type, object_id)`` table was measured at 55.7 MB against 50.2 MB for one table per kind on
-a 3.06M-attachment corpus, and the query that gathers everything for one object ran 25.50 ms against
-21.24 ms. Every target column is ``NOT NULL``, there is no discriminator to store or branch on, and
-each validation is a bare anti-join. There are three kinds because main's model has three: a record
-carries annotations, a task references them as input or as its answer, and the dataset holds the
-registered ones that no record carries.
+An annotation is attached through one table per target kind. There are three kinds: a record carries
+annotations, a task references them as input or as its answer, and the dataset holds the registered
+ones that no record carries. Every target column is ``NOT NULL``, so there is no discriminator to
+store or branch on and each validation is a bare anti-join.
 
-**The shipped database declares no primary or foreign keys.** Measured on ECG-QA (1.35M control
-rows): plain tables are 19.7 MB, the same content with keys and indexes is 189.0 MB, and the write
-takes 3.9 s against 11.9 s. A version is written once by one process and is immutable afterwards, so
-a constraint carried in the file would re-check, for the rest of the dataset's life, something that
-cannot change. :data:`VALIDATIONS` checks each invariant once, as a bulk anti-join, inside the load
-transaction.
+The shipped database declares no primary or foreign keys. A version is written once by one process
+and is immutable afterwards, so a constraint carried in the file would re-check, for the rest of the
+dataset's life, something that cannot change. :data:`VALIDATIONS` checks each invariant once, as a
+bulk anti-join, inside the load transaction.
 
-**A chunk locator names an artifact and two integers, not a Parquet row group.** The columns are
+A chunk locator names an artifact and two integers, not a Parquet row group. The columns are
 ``(artifact_id, chunk_major_idx, chunk_minor_idx)`` and the backend that wrote the artifact says
 what they mean: Parquet reads them as a row group and a row inside it, Zarr reads the major index as
 an element offset and leaves the minor index null. ``values_artifacts`` lists every file the values
 plane wrote and which backend wrote it, so a chunk row can be checked against a declared artifact at
 write time.
 
-**There is no axis-offsets table, and that is deliberate.** An irregular axis stores one microsecond
-offset per value, so the offsets are as long as the values themselves and are read exactly when the
-values are read. They stay in the values plane, in a column beside the values of the same chunk, as
-they do on main: one chunk locator finds both, one read returns both, and the control plane keeps
-only the endpoints (``axes.first_us`` and ``axes.last_us``) that a query filters on. Putting them in
-a table here would move a per-value column into the database that every structural query then has to
-step over, and it would split one series' read across two planes. The next reader looking for the
-proposal's ``axis_offsets`` table should look in the values plane instead.
+There is no axis-offsets table. An irregular axis stores one microsecond offset per value, so the
+offsets are as long as the values themselves and are read exactly when the values are read. They
+stay in the values plane, in a column beside the values of the same chunk: one chunk locator finds
+both, and one read returns both. The control plane keeps only the endpoints (``axes.first_us`` and
+``axes.last_us``) that a query filters on.
 """
 
 from collections.abc import Sequence
@@ -68,12 +58,8 @@ SCHEMA_VERSION: Final = 1
 ID_TYPE: Final = "UINTEGER"
 """The DuckDB type of every surrogate id column.
 
-Width costs less than it first appears. At ``BLOCK_SIZE`` 16 KiB, DuckDB's minimum, it refuses to
-bitpack these columns, so 64-bit looks like a flat 2x. Raise the block size and the premium
-disappears: on a SLIP-shape control plane, ``UINTEGER`` against ``UBIGINT`` is 147.6 MB against
-228.4 MB at 16 KiB, but 48.6 MB against 48.6 MB at 64 KiB. 64-bit still costs 9 to 12% on the hot
-joins, which is why the declared type stays 32-bit. Exhausting it means 4.29 billion records in one
-version, which needs a sharded control plane long before it needs a wider id.
+32 bits is enough for 4.29 billion records in one version. A corpus that large needs a sharded
+control plane long before it needs a wider id, and a narrower id keeps the joins faster.
 """
 
 MAX_ID: Final = 2**32 - 1
@@ -83,22 +69,8 @@ BLOCK_SIZE: Final = 65_536
 """The database block size, set when the file is created and never changeable afterwards.
 
 DuckDB claims at least one block per table, so a large block sets a floor of a few megabytes on a
-database holding a few hundred rows. At 16 KiB it refuses to bitpack the id columns, so a large
-corpus pays roughly double for them. Measured on a SLIP-shape control plane:
-
-===========  =========  =========  =========
-records        16 KiB     64 KiB    256 KiB
-===========  =========  =========  =========
-        100    0.47 MB    0.73 MB    2.11 MB
-      1,000    0.65 MB    0.80 MB    2.11 MB
-      5,000    1.47 MB    1.13 MB    2.37 MB
-     20,000    4.73 MB    3.16 MB    3.94 MB
-    100,000   21.97 MB   13.25 MB   14.43 MB
-    400,000   87.31 MB   54.34 MB   54.80 MB
-===========  =========  =========  =========
-
-64 KiB wins everywhere above a few thousand records and 256 KiB never wins. Below the crossover
-16 KiB is better by 0.26 MB, which is not worth choosing a block size per corpus.
+database holding a few hundred rows. At DuckDB's 16 KiB minimum it does not bitpack the id columns.
+This value trades that floor for smaller id columns, and one block size serves every corpus.
 """
 
 
@@ -306,9 +278,8 @@ of the published file.
 STAGING_DDL: Final = _STAGING_DDL_TEMPLATE.format(id=ID_TYPE)
 """The staging tables, created beside the real ones inside the load transaction."""
 
-# Each resolve sorts on the column its reads filter by, because the join that resolves the ids is
-# free to hand its rows back in any order and an unsorted table loses the zone map that prunes the
-# scan.
+# Each resolve sorts on the column its reads filter by. The join is free to hand its rows back in
+# any order, and an unsorted table loses the zone map that prunes the scan.
 RESOLVE: Final = (
     (
         "record_tasks",
@@ -416,12 +387,12 @@ class PayloadField:
     kind: PayloadKind
     """Which table holds the value."""
     is_list: bool = False
-    """Whether the field holds a tuple rather than a single value. Only a ref or a span field may.
+    """Whether the field holds a tuple rather than a single value. Only a ref or a span field can.
 
-    A list field distinguishes ``None`` from ``()``, and both mean something: a localization target
-    of ``None`` says the answer is stored by reference, ``()`` says the task looked and found
-    nothing. Zero element rows cannot tell them apart, so every payload field that is not ``None``
-    gets one ``task_fields`` row whatever its kind, and that row alone says the field is set.
+    A list field tells ``None`` apart from ``()``, and both mean something: a localization target of
+    ``None`` says the answer is stored by reference, ``()`` says the task looked and found nothing.
+    Zero element rows cannot tell them apart, so every payload field that is not ``None`` gets one
+    ``task_fields`` row whatever its kind, and that row alone says the field is set.
     """
 
     @property
@@ -466,7 +437,7 @@ TASK_PAYLOAD: Final[dict[TaskType, tuple[PayloadField, ...]]] = {
 The frame (``id``, ``record_ids``, ``from_task_ids``, ``prompt``, ``scope``, the annotation id
 tuples and ``rationale``) is handled by the writer and the reader directly, so it is not listed
 here. :func:`task_payload` checks this declaration against the live dataclass, so a field added to a
-task type fails loudly rather than being dropped on write.
+task type raises rather than being dropped on write.
 """
 
 _TASK_FRAME: Final = frozenset(
@@ -542,7 +513,7 @@ def required_payload_fields(task_type: TaskType) -> tuple[str, ...]:
 
     A field the dataclass gives no default is one its constructor demands, so a stored task without
     it cannot be rebuilt. The list comes from the dataclass rather than from a second declaration,
-    which is what keeps it in step with the class.
+    so it stays in step with the class.
 
     Args:
         task_type: The task type to describe.
@@ -561,9 +532,8 @@ def required_payload_fields(task_type: TaskType) -> tuple[str, ...]:
 def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
-    Density is not cosmetic. A reader that partitions a corpus across workers with
-    ``id % num_workers = worker_index`` covers every row exactly once only while the ids run without
-    gaps, and a gap would show up as a worker silently seeing fewer records.
+    A reader that splits a corpus across workers with ``id % num_workers = worker_index`` covers
+    every row exactly once only while the ids run without gaps.
 
     Args:
         table: The table to check.
@@ -574,7 +544,7 @@ def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """
     return (
         f"{table}.{column} is not dense",
-        # Counting distinct ids catches a repeat; comparing the row count against the largest id
+        # Counting distinct ids catches a repeat. Comparing the row count with the largest id
         # catches a gap. Both are needed: one repeat plus one gap leaves the row count unchanged.
         f"SELECT count(*) FROM {table} HAVING count(*) <> count(DISTINCT {column}) "  # noqa: S608
         f"OR count(*) - 1 <> max({column}) OR min({column}) <> 0",
@@ -657,11 +627,10 @@ def _rows(rows: Sequence[tuple[str, ...]]) -> str:
 def _typed_task_payload() -> tuple[tuple[str, str], ...]:
     """Return the checks that each task's stored payload is the one its class declares.
 
-    Main enforced the typing with one table per task type: a column per field, and the database
-    refused a row that did not fit. An entity-attribute-value payload buys a stable set of tables at
-    the cost of that refusal, so these checks put it back. They compare the stored rows against the
-    declaration in one pass each, joining on a rendered ``VALUES`` list rather than scanning the
-    payload tables once per task type.
+    A payload stored as ``(field, value)`` rows cannot refuse a field the task type does not
+    declare, the way one typed table per task type could. These checks put that refusal back. Each
+    compares the stored rows against the declaration in one pass, joining on a rendered ``VALUES``
+    list rather than scanning the payload tables once per task type.
 
     Returns:
         One description and query per check. Each must return no rows.
@@ -884,15 +853,15 @@ VALIDATIONS: Final = (
         "SELECT annotation_id FROM annotations WHERE span_start_us IS NULL AND span_end_us IS NOT NULL",
     ),
 )
-"""Every invariant the dropped key constraints used to enforce, as a query that must return no rows.
+"""Every invariant the database declares no constraint for, as a query that must return no rows.
 
 The writer runs these against the loaded database before it commits, which is the only moment they
 can be violated: a version is written once by one process and is immutable afterwards. Each check is
 one bulk anti-join rather than a lookup per row.
 
-``task_from_tasks`` is deliberately unchecked, and is why that one table still keeps the caller's
-string id. A streamed task skips the cross-task checks that
-:meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation can reach the writer.
-Refusing it here would reject a write main accepted, and resolving it to a dense id would leave a
-null that no longer says which task is missing. The reader reports it by name instead.
+``task_from_tasks`` is unchecked, and is why that one table still keeps the caller's string id. A
+streamed task skips the cross-task checks that :meth:`~timenet.dataset.TimeFDataset.add_task` runs,
+so a dangling derivation can reach the writer. Rejecting it here would refuse a dataset the
+authoring API accepts, and resolving it to a dense id would leave a null that no longer says which
+task is missing. The reader reports it by name instead.
 """

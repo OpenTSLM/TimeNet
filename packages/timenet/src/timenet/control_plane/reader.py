@@ -1,13 +1,8 @@
 """Read a version's control database: one query per table per batch, never one query per record.
 
-Every call here answers for a whole batch of records or for the whole version. Hydrating a record at
-a time costs 34 ms on a 618,508-record corpus, because each query scans its table; asking for a
-thousand records at once costs 0.111 ms per record, because the same scan answers all of them.
-
-The database opens read-only, so no write-ahead log appears beside a file the manifest has already
-checksummed. A version whose files live on an object store is copied to a local temporary file
-first: DuckDB reads a database through its own filesystem layer, not through the pyarrow one the
-rest of the reader uses.
+Every call here answers for a whole batch of records, or for the whole version. The database opens
+read-only. A version whose files live on an object store is copied to a local temporary file first,
+and :meth:`ControlPlaneReader.close` removes that copy.
 """
 
 from collections.abc import Iterator, Sequence
@@ -61,8 +56,8 @@ ORDER BY t.position
 """
 
 # A series shared by several records is stored once, so its chunks are reached through the link
-# table. Ordering by the series' own id and then by chunk keeps a series' chunks contiguous and in
-# the order the values plane concatenates them.
+# table. Ordering by the series id and then by chunk keeps a series' chunks contiguous and in the
+# order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
 SELECT s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
        c.chunk_major_idx, c.chunk_minor_idx, c.n_values
@@ -187,8 +182,8 @@ class ControlPlaneReader:
         Yields:
             One batch of ids at a time.
         """
-        # The ids stream from their own cursor, because hydrating a batch runs more queries and a
-        # second query on the same connection would discard the result this one is still reading.
+        # The ids stream from their own cursor. Hydrating a batch runs more queries, and a second
+        # query on the same connection would discard the result this one is still reading.
         cursor = self.connection.cursor()
         try:
             found = cursor.execute("SELECT record_id FROM records ORDER BY record_id")
@@ -259,8 +254,8 @@ class ControlPlaneReader:
     def record_chunks(self, record_external_id: str) -> list[dict]:
         """Return every chunk locator of one record's series.
 
-        A read walks one record at a time and then asks for each of its series' values, so the
-        locators are fetched once for the whole record rather than once per series.
+        A read walks one record at a time, so the locators come back for the whole record rather
+        than once per series.
 
         Args:
             record_external_id: The id the record was built under.
@@ -293,8 +288,8 @@ class ControlPlaneReader:
     def _rows(self, query: str, parameters: list[Any]) -> list[dict]:
         """Run one query and return its rows as dicts.
 
-        The result comes back through Arrow rather than row by row, so a batch of a thousand records
-        crosses the boundary once.
+        The result comes back through Arrow rather than row by row, so the whole batch crosses the
+        boundary once.
 
         Args:
             query: The SQL to run.
