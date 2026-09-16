@@ -82,5 +82,6 @@ class Source:
         Returns:
             The attached annotation.
         """
-        self.annotations = (*self.annotations, annotation)
-        return annotation
+        attached = annotation._new_occurrence()
+        self.annotations = (*self.annotations, attached)
+        return attached
