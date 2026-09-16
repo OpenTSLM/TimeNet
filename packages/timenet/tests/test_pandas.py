@@ -138,7 +138,7 @@ def test_a_record_becomes_one_row_with_a_column_per_signal():
 
 
 def test_a_cell_keeps_the_stored_dtype_and_the_signals_stay_ragged():
-    # The whole point of array cells: two signals of different length and dtype in one row, uncast.
+    # Array cells put two signals of different length and dtype in one row, with no cast.
     fast = TimeSeries.from_values(
         np.ones(100, dtype=np.float32),
         spec=_spec(),
@@ -156,7 +156,7 @@ def test_a_cell_keeps_the_stored_dtype_and_the_signals_stay_ragged():
     dataset = _dataset("timenet/rates", "Two signals at 100 Hz and 1 Hz.")
     record = dataset.add_record(time_series=(fast, slow), record_id="night-0")
     row = record_array_frame(record).iloc[0]
-    # 100 and 3, not 100 and 100: nothing was padded or resampled to the record's highest rate.
+    # 100 and 3, not 100 and 100: nothing is padded or resampled to the record's highest rate.
     assert (len(row["eeg"]), len(row["temp"])) == (100, 3)
     assert (row["eeg"].dtype, row["temp"].dtype) == (np.float32, np.int16)
 

@@ -78,12 +78,11 @@ class TimeFTorchDataset(Dataset):
 def record_item(record: Record) -> dict[str, Any]:
     """Return one record as an item of tensors, without resolving its tasks.
 
-    This is what :meth:`TimeFTorchDataset.__getitem__` builds before it adds the resolved tasks, and
-    it is the whole item for a caller walking a reader rather than a materialized dataset. Resolving
-    a task needs the dataset's task table, which a streaming walk does not hold.
+    The ``tasks`` field comes back empty. :meth:`TimeFTorchDataset.__getitem__` fills it from the
+    dataset's task table, which a caller who walks a reader does not have.
 
     Args:
-        record: The record to convert. Its values load here rather than before.
+        record: The record to convert. Its values load here.
 
     Returns:
         A dict with ``record_id``, ``series``, ``series_masks``, ``annotations``, and an empty

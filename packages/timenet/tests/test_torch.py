@@ -103,8 +103,8 @@ def test_str_series_has_no_tensor_representation():
 
 
 def test_record_item_carries_the_series_without_resolving_tasks():
-    # What a streaming walk gets: tensors and masks, and an empty tasks tuple, because resolving a
-    # task needs the dataset's task table that a walk off a reader does not hold.
+    # A streaming walk gets tensors and masks, and an empty tasks tuple. The task table lives on the
+    # dataset, not on the reader.
     dataset = make_dataset()
     record = dataset.records[0]
     item = record_item(record)

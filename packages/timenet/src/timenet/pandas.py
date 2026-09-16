@@ -1,23 +1,15 @@
 """Deliver a record as an array-cell pandas frame.
 
-The shape is one row per record: ``record_id``, ``time_axis``, then one column per signal whose cell
-holds that signal's whole value array with the dtype it was stored in. The signals of one record
-need not share a length or a dtype, and nothing here pads, resamples, reindexes or casts. A 500 Hz
-ECG lead of 1,000 float32 values sits beside a 1 Hz temperature of 10 float64 values in the same row,
-because the cells are separate arrays rather than columns of one table.
+A frame holds one row per record: ``record_id``, ``time_axis``, then one column per signal. Each
+signal cell holds that signal's whole value array, in the dtype it was stored in. The signals of one
+record can differ in length and in dtype, and nothing here pads, resamples, reindexes or casts.
 
-Time rides as one :data:`TIME_AXIS_COLUMN` cell keyed by column name, not as an offset per value.
-Ragged signals cannot share one offset column, and one offset column per signal would cost more bytes
-than the values do. An axis is two numbers whatever the length of the series.
-
-A long frame, one row per value, was the earlier shape here. It is not the default any more, and the
-reason is measured: restating the record id, the series id and the signal name on every row costs
-2.35 GB on one Sleep-EDF record against 96 MB of values, and building it was 99.7 per cent of what a
-pandas read measured. It also refused a record whose series disagree on dtype. :func:`series_frame`
-still returns that shape for one series, where none of those costs apply.
+Time is one :data:`TIME_AXIS_COLUMN` cell keyed by column name, not one offset per value. An axis is
+two numbers whatever the length of the series. For a single series, :func:`series_frame` returns the
+long shape instead: one row per value, with a time offset on each row.
 
 pandas is not an SDK dependency. It is imported inside the functions that build a frame, so a caller
-without it can still import this module and everything else in ``timenet``.
+without pandas can still import this module and the rest of ``timenet``.
 """
 
 from collections import Counter
@@ -41,10 +33,10 @@ RECORD_ID_COLUMN = "record_id"
 """Which record a row came from."""
 
 TIME_AXIS_COLUMN = "time_axis"
-"""Per signal, the axis its values sit on, as one dict cell keyed by the signal's column name."""
+"""One dict cell, keyed by signal column name, that holds the axis of each signal."""
 
 ARRAY_META_COLUMNS: tuple[str, ...] = (RECORD_ID_COLUMN, TIME_AXIS_COLUMN)
-"""The columns of an array-cell frame that are not a signal. Every column after them is one."""
+"""The columns of an array-cell frame that are not signals. Every column after them is a signal."""
 
 TIME_COLUMN = "time_us"
 """Microseconds from the record's relative zero. An ordinal series has none, so the column is null."""
@@ -56,17 +48,16 @@ VALUE_COLUMN = "value"
 def record_array_frame(record: Record) -> "pd.DataFrame":
     """Return one record as a single row, one column per signal, each cell a whole value array.
 
-    A column is named after its signal. A record can hold the same signal name twice, at two rates or
-    over two windows, and those two need two columns, so a name the record repeats carries the
-    series id as well: ``I (record-000-lead-i)``.
+    A column takes the name of its signal. If the record repeats a signal name, the column name also
+    carries the series id: ``I (record-000-lead-i)``.
 
     Args:
-        record: The record to lay out. Its signals are taken in stored order, and their values load
-            here rather than before.
+        record: The record to lay out. Its signals keep their stored order, and their values load
+            here.
 
     Returns:
         A one-row frame: ``record_id``, ``time_axis``, then one object-typed column per signal
-        holding that signal's values. A nullable signal holds zero where a value is missing; read it
+        holding that signal's values. A nullable signal holds zero where a value is missing. Read it
         with :meth:`~timenet.dataset.TimeSeries.to_arrow` to tell those apart from observations.
 
     Raises:
@@ -93,8 +84,8 @@ def iter_record_frames(
 ) -> Iterator[tuple[str, "pd.DataFrame"]]:
     """Stream a dataset's records as array-cell frames, without materializing the dataset.
 
-    The reader loads each record's values as the frame is built and drops them when the caller moves
-    on, so the resident set holds one record rather than the corpus.
+    The reader loads a record's values as it builds that record's frame, then drops them when the
+    caller moves on. One record is in memory at a time.
 
     Args:
         reader: An open reader.
@@ -111,14 +102,13 @@ def iter_record_frames(
 def series_frame(series: TimeSeries) -> "pd.DataFrame":
     """Return one series as a long frame of its time offsets and its values.
 
-    This is the shape to reach for when a caller wants one signal aligned to a timeline. It costs one
-    time offset per value, which is why :func:`record_array_frame` does not use it for a whole record.
+    Use this shape for one signal aligned to a timeline. It holds one time offset per value.
 
-    A regular axis computes its offsets from the cadence, an irregular one reads its stored stream,
-    and an ordinal one has no timeline at all, so its time column is null.
+    A regular axis computes its offsets from the cadence. An irregular axis reads its stored offsets.
+    An ordinal axis has no timeline, so its time column is null.
 
     Args:
-        series: The series to read. Its values load here, not before.
+        series: The series to read. Its values load here.
 
     Returns:
         A frame with ``time_us`` and either ``value`` or ``value_0 .. value_n``.
@@ -143,7 +133,7 @@ def _column_names(record: Record, series: Sequence[TimeSeries]) -> tuple[str, ..
         series: The record's series, in stored order.
 
     Returns:
-        The signal name, or ``signal (series id)`` where the record repeats a signal name.
+        The signal name, or ``signal (series id)`` if the record repeats a signal name.
 
     Raises:
         TimeFValidationError: If the names still collide, or one of them is a meta column.
@@ -165,8 +155,8 @@ def _dense_values(series: TimeSeries) -> np.ndarray:
         series: The series to read.
 
     Returns:
-        The values. A nullable series holds zero where a value is missing. A free-form string series
-        comes back as an object array, since it has no numeric dtype.
+        The values. A nullable series holds zero where a value is missing. A string series comes
+        back as an object array, because it has no numeric dtype.
     """
     if series.spec.dtype == "str":
         return series.to_arrow().to_numpy(zero_copy_only=False)
@@ -183,7 +173,7 @@ def _time_offsets(series: TimeSeries) -> np.ndarray:
         Int64 microseconds, or an all-null float array for an ordinal series, which has no timeline.
 
     Raises:
-        TimeFValidationError: If the axis is a shape this module does not know.
+        TimeFValidationError: If the axis is of a type this module does not know.
     """
     axis = series.time_axis
     if isinstance(axis, RegularAxis):
@@ -197,7 +187,7 @@ def _time_offsets(series: TimeSeries) -> np.ndarray:
 
 
 def _pandas() -> Any:
-    """Import pandas, with the message that names the extra.
+    """Import pandas, or raise an error that names the extra to install.
 
     Returns:
         The ``pandas`` module.

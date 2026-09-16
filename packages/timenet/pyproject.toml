@@ -64,8 +64,8 @@ build = [
 zarr = [
     "zarr>=3",
 ]
-# The pandas view (timenet.pandas). The core reader never imports pandas; the module imports it
-# lazily and raises a clear "install timenet[pandas]" message when the extra is absent.
+# The pandas view (timenet.pandas). The core reader never imports pandas. The module imports it
+# lazily and raises an "install timenet[pandas]" message when the extra is absent.
 pandas = [
     "pandas>=2",
 ]
