@@ -46,3 +46,13 @@ docs/api/
 
 # Local superpowers planning artifacts, not part of the repo
 docs/superpowers/
+
+# Local connector discovery notes: plans, heads, surveys. The add-dataset-connector
+# skill writes these and states they are never committed.
+docs/notes/
+
+# Local spec drafts, not part of the repo
+docs/openspec/
+
+# Build output: `timenet-build build <id> --out ./out`
+out/
