@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 _RECORDS: Final = """
-SELECT record_id, external_id, start_time_us, time_span_start_us, time_span_end_us, subject_ids, task_ids
+SELECT record_id, external_id, start_time_us, time_span_start_us, time_span_end_us, subject_ids
 FROM records WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id
 """
 
