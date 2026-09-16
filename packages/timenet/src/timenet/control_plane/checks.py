@@ -2,16 +2,14 @@
 
 These are not tests. They run inside the load transaction, against the loaded tables, in the moment
 between the last insert and ``COMMIT``, and they stand in for the primary and foreign keys the
-shipped database does not declare. That trade is measured: on ECG-QA (1.35M control rows) plain
-tables are 19.7 MB and the same content with keys and indexes is 189.0 MB, and the write takes 3.9 s
-against 11.9 s. A version is written once by one process and is immutable afterwards, so a
-constraint carried in the file would re-check, for the rest of the dataset's life, something that
-cannot change. Checking each invariant once, here, costs the load one bulk anti-join per check and
-costs every later reader nothing.
+shipped database does not declare. A version is written once by one process and is immutable
+afterwards, so a constraint carried in the file would re-check, for the rest of the dataset's life,
+something that cannot change. Each invariant is checked once, here: one bulk anti-join per check at
+write time, and nothing at read time.
 
 A failed check aborts the transaction, so a build that does not hold together publishes nothing and
-leaves no file behind. Each check reports every offending row it found rather than dying on the
-first, which is why a resolved id that names nothing is stored as null and caught here instead of
+leaves no file behind. Each check reports every offending row it found rather than stopping at the
+first. That is why a resolved id that names nothing is stored as null and caught here, instead of
 failing its insert.
 
 The builders below generate the repetitive checks: the same density check for every keyed table, the
@@ -35,9 +33,9 @@ from timenet.control_plane.schema import ANNOTATION_TABLES, EXTERNAL_IDS, KEYED_
 def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """Return the check that one table's ids are 0, 1, 2, with no gap and no repeat.
 
-    Density is not cosmetic. A reader that partitions a corpus across workers with
-    ``id % num_workers = worker_index`` covers every row exactly once only while the ids run without
-    gaps, and a gap would show up as a worker silently seeing fewer records.
+    A reader that splits a corpus across workers with ``id % num_workers = worker_index`` covers
+    every row exactly once only while the ids run without gaps. A gap would show up as a worker
+    quietly seeing fewer records.
 
     Args:
         table: The table to check.
@@ -48,8 +46,8 @@ def _dense_ids(table: str, column: str) -> tuple[str, str]:
     """
     return (
         f"{table}.{column} is not dense",
-        # Counting distinct ids catches a repeat; comparing the row count against the largest id
-        # catches a gap. Both are needed: one repeat plus one gap leaves the row count unchanged.
+        # A distinct count catches a repeat. Comparing the row count against the largest id catches
+        # a gap. Both are needed, because one repeat plus one gap leaves the row count unchanged.
         f"SELECT count(*) FROM {table} HAVING count(*) <> count(DISTINCT {column}) "  # noqa: S608
         f"OR count(*) - 1 <> max({column}) OR min({column}) <> 0",
     )
@@ -73,8 +71,8 @@ def _unique_external_id(table: str) -> tuple[str, str]:
 def _attachment_targets() -> tuple[tuple[str, str], ...]:
     """Return the reference checks for every attachment table.
 
-    Each is a bare anti-join with no ``WHERE``, because a table-per-kind layout makes every target
-    column ``NOT NULL``.
+    Each is a bare anti-join with no ``WHERE``, because one table per kind makes every target column
+    ``NOT NULL``.
 
     Returns:
         One description and query per check.
@@ -131,11 +129,10 @@ def _rows(rows: Sequence[tuple[str, ...]]) -> str:
 def _typed_task_payload() -> tuple[tuple[str, str], ...]:
     """Return the checks that each task's stored payload is the one its class declares.
 
-    Main enforced the typing with one table per task type: a column per field, and the database
-    refused a row that did not fit. An entity-attribute-value payload buys a stable set of tables at
-    the cost of that refusal, so these checks put it back. They compare the stored rows against the
-    declaration in one pass each, joining on a rendered ``VALUES`` list rather than scanning the
-    payload tables once per task type.
+    A payload is stored as rows keyed by field name, so no column type can refuse a field that the
+    task type does not declare. These checks refuse it instead. Each one compares the stored rows
+    against the declaration in a single pass, joining on a rendered ``VALUES`` list rather than
+    scanning the payload tables once per task type.
 
     Returns:
         One description and query per check. Each must return no rows.
@@ -280,9 +277,8 @@ VALIDATIONS: Final = (
         "chunk names an artifact the values plane did not declare",
         "SELECT c.artifact_id FROM time_series_chunks c ANTI JOIN values_artifacts a ON a.artifact_id = c.artifact_id",
     ),
-    # The backend-neutral locator cannot say in its column types that a Parquet chunk needs both
-    # indexes and a Zarr chunk needs only one. The artifact's backend says it instead, once the rows
-    # are in.
+    # The locator's column types cannot say that a Parquet chunk needs both indexes and a Zarr chunk
+    # only one. The artifact's backend says it here instead, once the rows are in.
     (
         "parquet chunk without a row offset",
         "SELECT a.chunk_file FROM time_series_chunks c JOIN values_artifacts a ON a.artifact_id = c.artifact_id "
@@ -358,7 +354,7 @@ VALIDATIONS: Final = (
         "SELECT annotation_id FROM annotations WHERE span_start_us IS NULL AND span_end_us IS NOT NULL",
     ),
 )
-"""Every invariant the dropped key constraints used to enforce, as a query that must return no rows.
+"""Every invariant a primary or foreign key would enforce, as a query that must return no rows.
 
 The writer runs these against the loaded database before it commits, which is the only moment they
 can be violated: a version is written once by one process and is immutable afterwards. Each check is
@@ -366,7 +362,7 @@ one bulk anti-join rather than a lookup per row.
 
 ``task_from_tasks`` is deliberately unchecked, and is why that one table still keeps the caller's
 string id. A streamed task skips the cross-task checks that
-:meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a dangling derivation can reach the writer.
-Refusing it here would reject a write main accepted, and resolving it to a dense id would leave a
-null that no longer says which task is missing. The reader reports it by name instead.
+:meth:`~timenet.dataset.TimeFDataset.add_task` runs, so a task can name a derivation the file does
+not hold. A dense id would store that as a null, which no longer says which task is missing, so the
+table keeps the name and the reader reports it.
 """

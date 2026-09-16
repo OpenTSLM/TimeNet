@@ -2,32 +2,27 @@
 
 The tables hold the same model the Parquet control tables held: a flat :class:`~timenet.dataset.Record`
 with its list of :class:`~timenet.dataset.TimeSeries`, the annotations a record carries, the ones
-registered for tasks to reference, and the ten fields every :class:`~timenet.types.Task` shares plus
-the payload its own class declares. Nothing about the authoring model changes; only where it is
-stored does.
+registered for tasks to reference, and the fields every :class:`~timenet.types.Task` shares plus the
+payload its own class declares. Only the place the model is stored changes, not the model.
 
 **Every join runs on a dense integer key, and the caller's name is kept once.** A record, a series,
 an annotation and a task each carry a surrogate id assigned in walk order, and every link row names
-that. The id the caller chose survives as ``external_id`` on the entity that owns it, which is what
-the reader hands back and what stays stable across a rebuild. Surrogate ids are assigned per build,
-so nothing outside the file should quote one.
+that id. The id the caller chose survives as ``external_id`` on the entity that owns it, which is
+what the reader hands back and what stays stable across a rebuild. Surrogate ids are assigned per
+build, so nothing outside the file should quote one.
 
 **A type declaration is stored once, with its columns spelled out.** ``specs`` carries the whole
 :class:`~timenet.types.TimeSeriesSpec` and ``annotation_descriptors`` the whole
 :class:`~timenet.types.AnnotationDescriptor`, so the database says what dtype, unit and value shape a
 signal carries without the manifest beside it. A client can attach the file over HTTP and answer that
-from SQL. A million series still reference the declaration by id, so the unit and the value type are
-stored once rather than repeated per row. The manifest keeps the same block as a projection, so a
-registry can filter datasets without downloading the database, but the reader types its rows against
-the database.
+from SQL. Every series names its declaration by id, so the unit and the value type are stored once
+rather than repeated per row. The manifest keeps the same block as a projection, so a registry can
+filter datasets without downloading the database, but the reader types its rows against the database.
 
-**An annotation is attached through one table per target kind.** A polymorphic
-``(object_type, object_id)`` table was measured at 55.7 MB against 50.2 MB for one table per kind on
-a 3.06M-attachment corpus, and the query that gathers everything for one object ran 25.50 ms against
-21.24 ms. Every target column is ``NOT NULL``, there is no discriminator to store or branch on, and
-each check is a bare anti-join. There are three kinds because main's model has three: a record
-carries annotations, a task references them as input or as its answer, and the dataset holds the
-registered ones that no record carries.
+**An annotation is attached through one table per target kind.** Every target column is ``NOT NULL``,
+there is no discriminator to store or branch on, and each check is a bare anti-join. There are three
+kinds: a record carries annotations, a task references them as input or as its answer, and the
+dataset holds the registered ones that no record carries.
 
 **A chunk locator names an artifact and two integers, not a Parquet row group.** The columns are
 ``(artifact_id, chunk_major_idx, chunk_minor_idx)`` and the backend that wrote the artifact says
@@ -36,18 +31,14 @@ an element offset and leaves the minor index null. ``values_artifacts`` lists ev
 plane wrote and which backend wrote it, so a chunk row can be checked against a declared artifact at
 write time.
 
-**There is no axis-offsets table, and that is deliberate.** An irregular axis stores one microsecond
-offset per value, so the offsets are as long as the values themselves and are read exactly when the
-values are read. They stay in the values plane, in a column beside the values of the same chunk, as
-they do on main: one chunk locator finds both, one read returns both, and the control plane keeps
-only the endpoints (``axes.first_us`` and ``axes.last_us``) that a query filters on. Putting them in
-a table here would move a per-value column into the database that every structural query then has to
-step over, and it would split one series' read across two planes. The next reader looking for the
-proposal's ``axis_offsets`` table should look in the values plane instead.
+**There is no table of axis offsets.** An irregular axis stores one microsecond offset per value, so
+the offsets are as long as the values themselves and are read exactly when the values are read. They
+live in the values plane, in a column beside the values of the same chunk: one chunk locator finds
+both, and one read returns both. The control plane keeps only the two endpoints a query filters on,
+``axes.first_us`` and ``axes.last_us``.
 
-Nothing below declares a primary or a foreign key. That is a measured trade, not an oversight;
-:mod:`timenet.control_plane.checks` holds the checks that stand in for them and the numbers that
-decided it.
+Nothing below declares a primary or a foreign key. :mod:`timenet.control_plane.checks` holds the
+checks that stand in for them.
 """
 
 from typing import Final
@@ -59,12 +50,8 @@ SCHEMA_VERSION: Final = 1
 ID_TYPE: Final = "UINTEGER"
 """The DuckDB type of every surrogate id column.
 
-Width costs less than it first appears. At ``BLOCK_SIZE`` 16 KiB, DuckDB's minimum, it refuses to
-bitpack these columns, so 64-bit looks like a flat 2x. Raise the block size and the premium
-disappears: on a SLIP-shape control plane, ``UINTEGER`` against ``UBIGINT`` is 147.6 MB against
-228.4 MB at 16 KiB, but 48.6 MB against 48.6 MB at 64 KiB. 64-bit still costs 9 to 12% on the hot
-joins, which is why the declared type stays 32-bit. Exhausting it means 4.29 billion records in one
-version, which needs a sharded control plane long before it needs a wider id.
+32 bits hold 4.29 billion records in one version. A corpus that large needs a sharded control plane
+long before it needs a wider id.
 """
 
 MAX_ID: Final = 2**32 - 1
@@ -73,23 +60,8 @@ MAX_ID: Final = 2**32 - 1
 BLOCK_SIZE: Final = 65_536
 """The database block size, set when the file is created and never changeable afterwards.
 
-DuckDB claims at least one block per table, so a large block sets a floor of a few megabytes on a
-database holding a few hundred rows. At 16 KiB it refuses to bitpack the id columns, so a large
-corpus pays roughly double for them. Measured on a SLIP-shape control plane:
-
-===========  =========  =========  =========
-records        16 KiB     64 KiB    256 KiB
-===========  =========  =========  =========
-        100    0.47 MB    0.73 MB    2.11 MB
-      1,000    0.65 MB    0.80 MB    2.11 MB
-      5,000    1.47 MB    1.13 MB    2.37 MB
-     20,000    4.73 MB    3.16 MB    3.94 MB
-    100,000   21.97 MB   13.25 MB   14.43 MB
-    400,000   87.31 MB   54.34 MB   54.80 MB
-===========  =========  =========  =========
-
-64 KiB wins everywhere above a few thousand records and 256 KiB never wins. Below the crossover
-16 KiB is better by 0.26 MB, which is not worth choosing a block size per corpus.
+DuckDB claims at least one block per table, so a database holding a few hundred rows still takes a
+few megabytes on disk. Smaller blocks stop DuckDB from bitpacking the id columns.
 """
 
 

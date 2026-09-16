@@ -55,7 +55,7 @@ def test_an_empty_database_passes_every_validation(db):
 
 
 def test_no_table_ships_a_key_constraint(db):
-    # VALIDATIONS checks the invariants once at write time instead.
+    # The checks in VALIDATIONS stand in for them, so nothing here may declare one.
     constraints = db.execute("SELECT constraint_type FROM duckdb_constraints()").fetchall()
     assert not [kind for (kind,) in constraints if kind in {"PRIMARY KEY", "FOREIGN KEY", "UNIQUE"}]
 
@@ -213,8 +213,8 @@ def test_a_text_item_carrying_a_record_is_rejected(db):
 
 
 def test_a_dangling_derivation_is_not_checked(db):
-    # A streamed task skips the cross-task checks add_task runs, so a dangling derivation reaches
-    # the writer and the reader reports it. Checking here would refuse a dataset the API accepts.
+    # A streamed task skips the cross-task checks add_task runs, so a dangling derivation reaches the
+    # writer and the reader is what reports it. Checking here would reject a write main accepted.
     _insert_task(db)
     db.execute("INSERT INTO task_from_tasks VALUES (0, 0, 'missing')")
     assert _failing(db) == []
@@ -237,8 +237,8 @@ def test_an_annotation_end_without_a_start_is_rejected(db):
 
 # ---- the stored payload against the class that declares it --------------------------------------
 #
-# One typed table per task type would refuse a payload that does not fit. A payload stored as
-# (field, value) rows cannot, so these are the checks that put that refusal back.
+# One typed table per task type used to refuse a payload that did not fit. An entity-attribute-value
+# payload cannot, so these are the checks that put that refusal back.
 
 
 def test_a_field_the_type_does_not_declare_is_rejected(db):
