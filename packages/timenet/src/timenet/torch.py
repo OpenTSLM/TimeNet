@@ -16,7 +16,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import Task
 
@@ -52,14 +52,8 @@ class TimeFTorchDataset(Dataset):
 
     def __getitem__(self, index: int) -> Any:
         record = self._records[index]
-        pairs = tuple(_series_tensor_and_mask(ts) for ts in record.time_series)
-        item: dict[str, Any] = {
-            "record_id": record.record_id,
-            "series": tuple(values for values, _ in pairs),
-            "series_masks": tuple(mask for _, mask in pairs),
-            "tasks": tuple(self._resolve_task(task_id, record.record_id) for task_id in record.task_ids),
-            "annotations": record.annotations,
-        }
+        item = record_item(record)
+        item["tasks"] = tuple(self._resolve_task(task_id, record.record_id) for task_id in record.task_ids)
         return self._transform(item) if self._transform is not None else item
 
     def _resolve_task(self, task_id: str, record_id: str) -> Task:
@@ -79,6 +73,29 @@ class TimeFTorchDataset(Dataset):
         if task is None:
             raise TimeFValidationError(f"record {record_id!r} references unknown task id {task_id!r}")
         return task
+
+
+def record_item(record: Record) -> dict[str, Any]:
+    """Return one record as an item of tensors, without resolving its tasks.
+
+    The ``tasks`` field comes back empty. :meth:`TimeFTorchDataset.__getitem__` fills it from the
+    dataset's task table, which a caller who walks a reader does not have.
+
+    Args:
+        record: The record to convert. Its values load here.
+
+    Returns:
+        A dict with ``record_id``, ``series``, ``series_masks``, ``annotations``, and an empty
+        ``tasks``. Each mask is ``True`` where the timestep is present.
+    """
+    pairs = tuple(_series_tensor_and_mask(ts) for ts in record.time_series)
+    return {
+        "record_id": record.record_id,
+        "series": tuple(values for values, _ in pairs),
+        "series_masks": tuple(mask for _, mask in pairs),
+        "tasks": (),
+        "annotations": record.annotations,
+    }
 
 
 def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:

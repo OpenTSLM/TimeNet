@@ -9,7 +9,7 @@ from timenet.dataset import TimeFDataset, TimeSeries  # noqa: E402
 from timenet.dataset.axis import RegularAxis  # noqa: E402
 from timenet.errors import TimeFValidationError  # noqa: E402
 from timenet.testing import make_dataset  # noqa: E402
-from timenet.torch import TimeFTorchDataset  # noqa: E402
+from timenet.torch import TimeFTorchDataset, record_item  # noqa: E402
 from timenet.types import (  # noqa: E402
     DatasetMetadata,
     Domain,
@@ -100,3 +100,24 @@ def test_str_series_has_no_tensor_representation():
     dataset = _typed_dataset("str", ["awake", "deep"])
     with pytest.raises(TimeFValidationError, match="no tensor representation"):
         TimeFTorchDataset(dataset)[0]
+
+
+def test_record_item_carries_the_series_without_resolving_tasks():
+    # A streaming walk gets tensors and masks, and an empty tasks tuple. The task table lives on the
+    # dataset, not on the reader.
+    dataset = make_dataset()
+    record = dataset.records[0]
+    item = record_item(record)
+    assert item["record_id"] == record.record_id
+    assert len(item["series"]) == len(record.time_series)
+    assert len(item["series_masks"]) == len(record.time_series)
+    assert item["tasks"] == ()
+    assert item["series"][0].shape[0] == record.time_series[0].n_values
+
+
+def test_the_dataset_resolves_the_tasks_record_item_leaves_empty():
+    dataset = make_dataset()
+    view = TimeFTorchDataset(dataset)
+    record = dataset.records[0]
+    if record.task_ids:
+        assert len(view[0]["tasks"]) == len(record.task_ids)
