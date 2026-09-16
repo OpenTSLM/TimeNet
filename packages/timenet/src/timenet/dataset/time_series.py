@@ -131,8 +131,9 @@ class Signal:
         Returns:
             The attached annotation.
         """
-        object.__setattr__(self, "annotations", (*self.annotations, annotation))  # noqa: PLC2801
-        return annotation
+        attached = annotation._new_occurrence()
+        object.__setattr__(self, "annotations", (*self.annotations, attached))  # noqa: PLC2801
+        return attached
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
