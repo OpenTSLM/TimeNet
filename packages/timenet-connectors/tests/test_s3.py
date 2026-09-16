@@ -82,15 +82,15 @@ def test_download_s3_object_writes_atomically(monkeypatch, tmp_path):
 
 
 def test_s3_client_signs_nothing_when_asked_for_anonymous(monkeypatch):
-    # The retry path asks for a client that skips credential resolution entirely.
+    # The retry path asks for a client that does not resolve credentials at all.
     captured = _spy_session(monkeypatch, credentials=object())
     _s3_client(anonymous=True)
     assert captured["kwargs"]["config"].signature_version is UNSIGNED
 
 
 def test_download_s3_object_retries_anonymously_when_the_bucket_refuses_a_signed_request(monkeypatch, tmp_path):
-    # An EC2 instance role signs a request that physionet-open refuses. The same request unsigned
-    # succeeds, so a 403 on the signed attempt must fall back rather than fail the build.
+    # The bucket refuses the signed request but answers the same one unsigned. A 403 must therefore
+    # start the anonymous retry, not fail the build.
     signed = ClientError({"Error": {"Code": "403"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "HeadObject")
     clients = []
 
@@ -114,7 +114,7 @@ def test_download_s3_object_retries_anonymously_when_the_bucket_refuses_a_signed
 
 
 def test_download_s3_object_does_not_retry_a_missing_object(monkeypatch, tmp_path):
-    # A 404 is not an access denial. Retrying it unsigned would only hide the real error.
+    # A 404 is not an access denial. An unsigned retry would only hide the real error.
     missing = ClientError({"Error": {"Code": "404"}, "ResponseMetadata": {"HTTPStatusCode": 404}}, "HeadObject")
     calls = []
 

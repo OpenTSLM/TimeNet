@@ -3,10 +3,9 @@
 This helper downloads an ``s3://bucket/key`` object to a local path with boto3, which runs the transfer
 in parallel with multipart downloads. When AWS credentials are configured (environment, ``AWS_PROFILE``
 / the shared ``~/.aws`` config / SSO, container and instance roles), the client uses them, so a private
-source stays reachable. When none are configured, it reads anonymously, which is what a public bucket
-such as physionet-open needs. Credentials that resolve but grant nothing on the bucket get the same
-treatment after the fact: a refused signed request is retried unsigned. The code imports ``boto3``
-lazily, so users who build only offline datasets do not need it.
+source stays reachable. When none are configured, it reads anonymously, so a public bucket stays
+readable too. When the bucket refuses a signed request, the download runs again unsigned. The code
+imports ``boto3`` lazily, so users who build only offline datasets do not need it.
 """
 
 import logging
@@ -31,11 +30,10 @@ def _s3_client(*, anonymous: bool = False) -> Any:
     shared ``~/.aws`` config (including SSO), and container or instance roles. When that yields
     credentials, the client uses them, so a private source stays reachable. When no credentials are
     configured, or the provider chain fails to load (for example an SSO profile missing an optional
-    dependency), the client falls back to anonymous access, which is what a public bucket such as
-    physionet-open needs.
+    dependency), the client reads anonymously instead.
 
     Args:
-        anonymous: Skip credential resolution and sign nothing.
+        anonymous: Build an anonymous client without resolving credentials at all.
 
     Returns:
         A boto3 S3 client.
@@ -70,13 +68,13 @@ def _s3_client(*, anonymous: bool = False) -> Any:
 
 
 def _is_access_denied(exc: Any) -> bool:
-    """Return whether a boto3 error is the bucket refusing a signed request.
+    """Return whether S3 refused the request because it denied access.
 
     Args:
         exc: The ``ClientError`` boto3 raised.
 
     Returns:
-        Whether the error is an access denial rather than a missing object or a transport fault.
+        True for an access denial, False for a missing object or a transport error.
     """
     response = getattr(exc, "response", None) or {}
     code = (response.get("Error") or {}).get("Code")
@@ -97,7 +95,7 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
 
     Raises:
         TimeFValidationError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
-        ClientError: If S3 refuses the read, both signed and, where that was denied, unsigned.
+        ClientError: If the read fails for a reason the anonymous retry does not fix.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
@@ -133,9 +131,8 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
         except ClientError as exc:
             if not _is_access_denied(exc):
                 raise
-            # Credentials that the chain resolved, but that grant nothing on this bucket, sign a
-            # request the bucket refuses. A public bucket answers the same request unsigned, so
-            # retry that way: an EC2 instance role reaches physionet-open no other way.
+            # The resolved credentials grant nothing on this bucket, so it refuses the signed
+            # request. A public bucket answers the same request unsigned, so ask again that way.
             _LOG.info("signed request to %s was refused; retrying anonymously", s3_url)
             fetch(_s3_client(anonymous=True))
         part.replace(dest)
