@@ -1,7 +1,7 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec.
 
-The manifest is pure data. It has no file I/O. The writer and the reader do the read and write
-operations for the file. The ``schema`` block is a direct serialization of
+The manifest is pure data. It has no file I/O. The writer and the reader read and write the file
+themselves. The ``schema`` block is a direct serialization of
 :class:`~timenet.types.DatasetSchema` (flat descriptors). No separate set of "entry" types exists to
 keep in sync.
 """
@@ -38,8 +38,8 @@ class Manifest:
     """
 
     # Version 2 moved the four Parquet control tables into one embedded DuckDB database. There is no
-    # migration: a version 1 directory is rejected here instead of failing later on a missing file,
-    # and a published dataset is rebuilt from its connector.
+    # migration: a version 1 directory fails here rather than later with a missing-file error, and a
+    # published dataset is rebuilt from its connector.
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str

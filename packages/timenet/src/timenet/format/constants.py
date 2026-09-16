@@ -24,12 +24,12 @@ DEFAULT_COMPRESSION = "zstd"
 
 
 def check_relative_path(name: str, path: str) -> None:
-    """Reject a path that would resolve outside the dataset root it is meant to stay under.
+    """Reject a path that resolves outside the dataset root it must stay under.
 
     Callers join a manifest file entry and a registry handle's ``relpath`` onto a root directory
-    (or filesystem prefix) as-is. An absolute path or a ``..`` segment would escape that root instead
-    of raising. This would let a crafted manifest or caller read or write outside the intended
-    directory.
+    (or filesystem prefix) as-is. Without this check, an absolute path or a ``..`` segment escapes
+    that root instead of raising. A crafted manifest or caller then reads or writes outside the
+    dataset root.
 
     Args:
         name: The name of the field to check. It appears in the error message.
@@ -43,12 +43,12 @@ def check_relative_path(name: str, path: str) -> None:
 
 
 def part_path(template: str, index: int, **fields: str) -> str:
-    """Render a numbered part/shard path, refusing an index that would overflow the fixed width.
+    """Render a numbered part path and refuse an index that overflows the fixed width.
 
     The reader visits parts in the order the manifest lists them. The zero-padded names keep an
     ``ls`` or a prefix listing in that same order. That order only holds while every number fits in
-    ``PART_INDEX_DIGITS``. A ninth digit sorts before the eighth and silently breaks it. Routing
-    every part name through here turns that overflow into a loud error instead.
+    ``PART_INDEX_DIGITS``. A ninth digit sorts before the eighth and silently breaks it. Every part
+    name goes through this function, which turns that overflow into a loud error.
 
     Args:
         template: A layout template whose part number is the ``{:08d}`` field, for example

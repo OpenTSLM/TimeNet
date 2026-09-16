@@ -1,6 +1,6 @@
 """Stream Arrow row groups into byte-budgeted parquet parts.
 
-:class:`RotatingPartWriter` is what the Parquet values plane shards through (see
+The Parquet values plane shards through :class:`RotatingPartWriter` (see
 ``values_backends.parquet.writer``).
 """
 
@@ -13,12 +13,12 @@ import pyarrow.parquet as pq
 
 
 class RotatingPartWriter:
-    """Writes caller-provided row groups into byte-budgeted parquet parts, rotating parts by budget.
+    """Writes caller-provided row groups into byte-budgeted parquet parts. It rotates them by budget.
 
-    The caller decides each row group's content (one Arrow table per :meth:`write`) and its size. This
-    opens a :class:`pyarrow.parquet.ParquetWriter` per part and writes each table as one row group.
-    It rotates to a new numbered part once the current part's accumulated size exceeds the target,
-    and it reports where each row group landed.
+    The caller decides each row group's content (one Arrow table per :meth:`write`) and its size.
+    Each part gets its own :class:`pyarrow.parquet.ParquetWriter`, and each table becomes one row
+    group. When a part's accumulated size passes the target, the next write opens a new numbered
+    part. Every write reports where its row group landed.
     """
 
     def __init__(  # noqa: PLR0913
@@ -53,10 +53,10 @@ class RotatingPartWriter:
         self.parts: list[str] = []
 
     def write(self, table: pa.Table, size_bytes: int) -> tuple[str, int]:
-        """Append ``table`` as one row group, opening a new part first if the current one is full.
+        """Append ``table`` as one row group, and open a new part first when the current one is full.
 
         Args:
-            table: The row group's content, matching the schema.
+            table: The row group's content, which matches the schema.
             size_bytes: The row group's uncompressed size, charged against the part budget.
 
         Returns:
@@ -76,7 +76,7 @@ class RotatingPartWriter:
 
         Args:
             write_empty_part: If the caller never wrote a row group, still write one empty part so
-                the schema stays on disk. The control tables need this. The values plane does not.
+                the schema stays on disk.
 
         Returns:
             The relative paths of the parts written.
