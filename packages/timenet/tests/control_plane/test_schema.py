@@ -55,7 +55,7 @@ def test_an_empty_database_passes_every_validation(db):
 
 
 def test_no_table_ships_a_key_constraint(db):
-    # The measured case for dropping them: ECG-QA is 19.7 MB plain and 189.0 MB with keys and indexes.
+    # The checks in VALIDATIONS stand in for them, so nothing here may declare one.
     constraints = db.execute("SELECT constraint_type FROM duckdb_constraints()").fetchall()
     assert not [kind for (kind,) in constraints if kind in {"PRIMARY KEY", "FOREIGN KEY", "UNIQUE"}]
 
@@ -84,8 +84,7 @@ def test_a_failure_message_names_the_check_the_count_and_the_remedy():
 
 
 def test_a_check_counts_every_offending_row_but_names_only_a_few(db):
-    # A corpus of three million rows can break one invariant in every row. The message needs the
-    # total and the first few offenders, so the error path must never materialize the rest.
+    # A failure message needs the total and the first few offending rows, never the whole set.
     check = next(check for check in VALIDATIONS if check.name == "record_time_series_record_exists")
     for time_series_id in range(SAMPLE_ROWS + 2):
         db.execute("INSERT INTO record_time_series VALUES (9, ?, 0)", [time_series_id])

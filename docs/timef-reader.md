@@ -47,8 +47,7 @@ does not build a `TimeFDataset`.
 
 `TimeFReader` keeps the index as Arrow data and searches it per lookup. It does not expand the index
 into one Python object per row. As a result, when a large dataset opens, the memory it uses stays
-proportional to the size of the index file. It does not grow to a multiple of that size. Each index
-row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple.
+proportional to the size of the index file. It does not grow to a multiple of that size.
 
 ## Type reconstruction
 

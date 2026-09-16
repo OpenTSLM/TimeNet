@@ -103,10 +103,10 @@ sequences. Recordings can have different durations. Every series that shares a `
 the same dtype and trailing shape.
 
 The Parquet backend stores scalar values of every spec dtype: `float32`/`float64`, the integer
-types, `bool`, `str`, and `enum`. Parquet deliberately rejects N-D specs, which stay on Zarr. The
-Zarr backend stores every scalar dtype **except `str`**. Zarr has no dictionary layer, so free-form
-string signals inflate on disk and read slowly. The writer rejects them. An `enum` signal stores
-int32 codebook indices compactly.
+types, `bool`, `str`, and `enum`. It rejects N-D specs, which stay on Zarr. The Zarr backend stores
+every scalar dtype **except `str`**. Zarr has no dictionary layer, so free-form string signals
+inflate on disk and read slowly. The writer rejects them. An `enum` signal stores int32 codebook
+indices compactly.
 
 A dataset's values plane uses **one** backend for the whole dataset, named by the manifest's single
 `values_backend` field. A dataset with a `str` signal must therefore be entirely Parquet. A dataset
@@ -144,7 +144,7 @@ Re-built versions therefore stay stable:
 - id columns -> plain. If every value in the space for that id is a canonical UUID (see below), the
   writer stores the id column as **`binary(16)`**. Otherwise, it stores the column as a UTF-8
   string.
-- `values.list.element` -> measured, not pinned (see below).
+- `values.list.element` -> chosen from the data, not pinned (see below).
 
 The writer turns on `write_statistics`, `write_page_index`, `write_page_checksum`, and
 **`use_content_defined_chunking`** for every file. Content-defined chunking aligns data pages to
@@ -154,15 +154,8 @@ Parquet.
 
 ### Values encoding
 
-No single encoding is right for every waveform. So the writer measures the data rather than pin one
-encoding. The table below shows measurements from real sources, at zstd level 3, for the values
-column only:
-
-| Encoding | PTB-XL ECG (quantized, 11k distinct in 69M) | TSQA (continuous, 10.5M distinct in 11.5M) |
-| --- | --- | --- |
-| `dictionary` | **71.1 MB** | 42.9 MB |
-| `plain` | 85.1 MB | 42.3 MB |
-| `byte_stream_split` | 127.8 MB | **37.6 MB** |
+No single encoding is right for every waveform. So the writer reads the data rather than pin one
+encoding.
 
 BYTE_STREAM_SPLIT transposes each float into four byte planes and compresses each plane apart. It
 wins on smooth, high-cardinality signals, where the sign and high-mantissa planes stay nearly
@@ -177,18 +170,18 @@ the writer selects `dictionary`. With more distinct values than that, floats sel
 strings and integers. Two dtypes skip the count: bool signals always select `plain`, and enum
 signals always select `dictionary`. For floats, the writer never selects `plain` automatically.
 
-The sample is the values already buffered for the first row group of a modality. The decision
-therefore costs only a distinct-value count, with no extra reads. The writer makes one decision per
-`spec_type`, before it opens the first shard for that type. The decision is deterministic in the
-data, so a re-build of an unchanged source reaches the same encoding.
+The sample is the values already buffered for the first row group of a modality, so the decision
+reads nothing extra. The writer makes one decision per `spec_type`, before it opens the first shard
+for that type. The decision is deterministic in the data, so a re-build of an unchanged source
+reaches the same encoding.
 
 The manifest records the choice as `value_encoding`, a `spec_type` -> encoding map. This record is
 provenance, not a contract. Parquet records the applied encoding in the footer of every file. So a
 reader resolves the encoding without the manifest.
 
 The `TimeFWriter(value_encoding=...)` argument controls this choice. It defaults to `auto`, the
-measured selection described earlier. To force one encoding for every modality, set a concrete
-value: `dictionary`, `byte_stream_split`, or `plain`.
+selection rule described earlier. To force one encoding for every modality, set a concrete value:
+`dictionary`, `byte_stream_split`, or `plain`.
 
 High-cardinality *quantized* data, such as a 24-bit integer-scaled signal, needs a forced encoding.
 This kind of data suits neither branch. It has too many distinct values for a dictionary and too

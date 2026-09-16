@@ -128,9 +128,8 @@ class ZarrValuesReader(BaseValuesReader):
     ) -> pa.Array:
         """Read only the storage chunks that a step window crosses.
 
-        The window's index rows come from a bisection of the series' offsets. This method trims the
-        rows it found and then merges them. It does not merge every row of the series and then walk
-        the result.
+        The window's index rows come from a bisection of the series' offsets. This method trims
+        those rows to the window, then merges the contiguous ones into as few ranges as possible.
 
         Returns:
             The requested steps in their canonical Arrow representation.
@@ -284,7 +283,7 @@ def _trimmed_ranges(  # noqa: PLR0913, PLR0917
     start: int,
     bounded_stop: int,
 ) -> Iterator[tuple[str, int, int]]:
-    """Cut ``rows[first:last]`` down to the part of each that the window covers.
+    """Cut ``rows[first:last]`` down to the part of each row that the window covers.
 
     Args:
         rows: The series' index rows, sorted by ``chunk_idx``.
@@ -295,7 +294,7 @@ def _trimmed_ranges(  # noqa: PLR0913, PLR0917
         bounded_stop: One past the window's last step, already clamped to the series' length.
 
     Yields:
-        One ``(array path, start, stop)`` range per crossed row, in order, empty ones left out.
+        One ``(array path, start, stop)`` range per crossed row, in order. Empty ranges are left out.
     """
     for index in range(first, last):
         row = rows[index]

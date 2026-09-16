@@ -6,7 +6,7 @@ Nothing ties the two together at write time, so these checks tie them together b
 
 A locator is backend-neutral: an artifact and two integers. Its column types cannot say that a
 Parquet chunk needs both integers and a Zarr chunk needs only one. The backend of the artifact says
-it instead, once the rows are in.
+it instead, after the rows are loaded.
 """
 
 from typing import Final

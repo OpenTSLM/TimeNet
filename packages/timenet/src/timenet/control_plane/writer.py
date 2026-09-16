@@ -11,8 +11,7 @@ can name a task the stream reaches later, and a task can name a record the same 
 staged table resolves them all once the walk is over. The shipped file therefore joins on surrogate
 ids and never on a string.
 
-Rows reach DuckDB one Arrow table per batch, never through ``executemany``. On the ECG-QA control
-plane of 1.35 million rows, this way loads 132,079 rows/s against 1,674 rows/s row by row.
+Rows reach DuckDB one Arrow table per batch, never through ``executemany``.
 """
 
 from collections.abc import Iterable
@@ -158,7 +157,7 @@ class ControlPlaneCounts:
     chunks: int
     """How many chunk placements the values plane wrote."""
     record_series_chunks: int
-    """Chunks counted once per referencing record. The old index table held one row for each."""
+    """Chunks counted once per referencing record."""
     specs: dict[str, int]
     """How many distinct series carry each spec type."""
 
@@ -232,11 +231,10 @@ def _resolve(connection: duckdb.DuckDBPyConnection) -> None:
 
 
 def _validate(connection: duckdb.DuckDBPyConnection) -> None:
-    """Check every invariant the dropped key constraints used to enforce.
+    """Check every invariant that stands in for a key constraint.
 
-    A check runs as a count, not as a row scan. A corpus of three million rows can break an
-    invariant in every one of them, and the message needs the total and the first few offenders
-    only. The second query runs on the failure path alone.
+    Each check runs as a count, not as a row scan. The second query names the first few offending
+    rows, and it runs only after a count finds a breach.
 
     Args:
         connection: The connection holding the loaded, not yet committed database.

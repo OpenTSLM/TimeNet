@@ -21,15 +21,11 @@ type are stored once rather than per row. The manifest keeps the same block as a
 registry can filter datasets without downloading the database. The reader still types its rows
 against the database.
 
-**An annotation is attached through one table per target kind.** On a 3.06M-attachment corpus, a
-polymorphic ``(object_type, object_id)`` table measured 55.7 MB against 50.2 MB for one table per
-kind. The query that gathers everything for one entity ran 25.50 ms against 21.24 ms. Every target
-column is ``NOT NULL``. There is no discriminator to store or branch on, and each check is a bare
-anti-join.
+**An annotation is attached through one table per target kind.** Every target column is ``NOT
+NULL``. There is no discriminator to store or branch on, and each check is a bare anti-join.
 
-There are three kinds because main's model has three. A record carries annotations. A task
-references them as input or as its answer. The dataset holds the registered ones that no record
-carries.
+There are three kinds. A record carries annotations. A task references them as input or as its
+answer. The dataset holds the registered ones that no record carries.
 
 **A chunk locator names an artifact and two integers, not a Parquet row group.** The columns are
 ``(artifact_id, chunk_major_idx, chunk_minor_idx)``, and the backend that wrote the artifact says
@@ -38,19 +34,13 @@ an element offset and leaves the minor index null. ``values_artifacts`` lists ev
 plane wrote and the backend that wrote it. The writer therefore checks each chunk row against a
 declared artifact.
 
-**There is no axis-offsets table, and that is deliberate.** An irregular axis stores one microsecond
-offset per value. The offsets are as long as the values themselves, and a read of the values reads
-them too. They stay in the values plane, in a column beside the values of the same chunk, as they do
-on main. One chunk locator finds both, and one read returns both. The control plane keeps only the
-endpoints (``axes.first_us`` and ``axes.last_us``) that a query filters on.
+**There is no axis-offsets table.** An irregular axis stores one microsecond offset per value. The
+offsets stay in the values plane, in a column beside the values of the same chunk. One chunk locator
+finds both, and one read returns both. The control plane keeps only the endpoints
+(``axes.first_us`` and ``axes.last_us``) that a query filters on.
 
-A table here moves a per-value column into the database, which every structural query then steps
-over. It also splits the read of one series across two planes. A reader that looks for the
-proposal's ``axis_offsets`` table finds the offsets in the values plane.
-
-Nothing below declares a primary or a foreign key. That is a measured trade, not an oversight.
-:mod:`timenet.control_plane.checks` holds the checks that stand in for them, and the numbers that
-decided it.
+Nothing below declares a primary or a foreign key. :mod:`timenet.control_plane.checks` holds the
+checks that stand in for them.
 """
 
 from typing import Final
@@ -62,14 +52,7 @@ SCHEMA_VERSION: Final = 1
 ID_TYPE: Final = "UINTEGER"
 """The DuckDB type of every surrogate id column.
 
-Width costs less than it first appears. At ``BLOCK_SIZE`` 16 KiB, DuckDB's minimum, it refuses to
-bitpack these columns, so 64-bit looks like a flat 2x. A larger block size removes that premium. On
-a SLIP-shape control plane, ``UINTEGER`` against ``UBIGINT`` is 147.6 MB against 228.4 MB at 16 KiB,
-but 48.6 MB against 48.6 MB at 64 KiB.
-
-64-bit still costs 9 to 12% on the hot joins, which is why the declared type stays 32-bit. To
-exhaust it needs 4.29 billion records in one version. A corpus that large needs a sharded control
-plane long before it needs a wider id.
+The type is 32-bit. A version that exhausts it needs a sharded control plane, not a wider id.
 """
 
 MAX_ID: Final = 2**32 - 1
@@ -78,23 +61,7 @@ MAX_ID: Final = 2**32 - 1
 BLOCK_SIZE: Final = 65_536
 """The database block size, set when the file is created and fixed afterwards.
 
-DuckDB claims at least one block per table. A large block therefore sets a floor of a few megabytes
-on a database of a few hundred rows. At 16 KiB it refuses to bitpack the id columns, so a large
-corpus pays roughly double for them. Measured on a SLIP-shape control plane:
-
-===========  =========  =========  =========
-records        16 KiB     64 KiB    256 KiB
-===========  =========  =========  =========
-        100    0.47 MB    0.73 MB    2.11 MB
-      1,000    0.65 MB    0.80 MB    2.11 MB
-      5,000    1.47 MB    1.13 MB    2.37 MB
-     20,000    4.73 MB    3.16 MB    3.94 MB
-    100,000   21.97 MB   13.25 MB   14.43 MB
-    400,000   87.31 MB   54.34 MB   54.80 MB
-===========  =========  =========  =========
-
-64 KiB wins for every corpus of more than a few thousand records, and 256 KiB never wins. Under the
-crossover 16 KiB is better by 0.26 MB. That difference does not justify a block size per corpus.
+Every database the writer creates uses this one size, whatever the size of the corpus.
 """
 
 

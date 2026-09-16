@@ -7,8 +7,7 @@ declaration, and it does not create classes at runtime. As a result, read-back o
 and they match the original objects field for field.
 
 The rebuild is batched. Records come back a batch at a time. Each batch costs one query per table
-for the whole batch, not one query per record. Measured on a 618,508-record corpus:
-34.49 ms per record one at a time, 0.111 ms per record in batches of a thousand.
+for the whole batch, not one query per record.
 """
 
 from __future__ import annotations
@@ -61,16 +60,15 @@ _RECORD_BATCH_ROWS = 512
 """How many records one round of control-database queries rebuilds.
 
 Each query in the round scans its table once and answers for the whole batch, so the per-record cost
-falls with the batch size. A few hundred is where the curve flattens and the decoded rows still fit
-in memory.
+falls with the batch size. A few hundred records keep that cost low and still fit in memory.
 """
 
 _INDEX_ROWS_CACHE_RECORDS = 2 * _RECORD_BATCH_ROWS
 """How many records keep their index rows.
 
 The rows are fetched a batch at a time, so the cache holds the batch a read is walking and the one
-before it. A cache smaller than a batch drops rows that the same batch asks for again. The next
-record then pays another statement for them.
+before it. A smaller cache drops rows that the same batch asks for again, and the next record pays
+another statement for them.
 """
 
 _AXIS_CACHE_SIZE = 1024
@@ -89,12 +87,10 @@ class TimeFReader:
         records, annotations, and each series' values only on first use. As a result, the cost to
         open a version is the same for three records or three million.
 
-        A structurally corrupt or missing file fails on its first access, not here. Examples of a
-        first access are ``.tasks``, the first record, or the first value read. The failure reaches
-        the caller as :class:`~timenet.errors.TimeFFormatError`, not as the ``FileNotFoundError``
-        the filesystem raised under it. :meth:`verify` raises that same type for the same file. One
-        unreadable artifact reported with two types makes a caller catch both to cover one
-        condition.
+        A structurally corrupt or missing file fails on its first access, not here. A first access
+        is ``.tasks``, the first record, or the first value read. The failure reaches the caller as
+        :class:`~timenet.errors.TimeFFormatError`, not as the ``FileNotFoundError`` the filesystem
+        raised under it. :meth:`verify` raises that same type for the same file.
 
         Call :meth:`verify` for a check of the version's integrity at construction time. Build the
         handle with :meth:`~timenet.registry.BaseRegistry.open_version` or with
@@ -508,11 +504,11 @@ class TimeFReader:
     def _chunks(self, record_key: int, time_series_id: str, batch_keys: tuple[int, ...] | None = None) -> SeriesChunks:
         """Return one series' index rows and chunk offsets, in ``chunk_idx`` order.
 
-        One query returns every series of a whole batch of records. A read walks a batch and then
-        asks each of its records for its series' values. A record built by :meth:`_build_batch`
-        carries the batch it belongs to, so the first series that wants its rows fetches the batch's.
-        The cache holds the rows for the batch a read is walking and the one before it. A series'
-        chunk offsets sit with its rows, so every window of that series reuses one build.
+        One query returns every series of a whole batch of records. A record built by
+        :meth:`_build_batch` carries the batch it belongs to, so the first series that wants its
+        rows fetches the batch's. The cache holds the rows for the batch a read is walking and the
+        one before it. A series' chunk offsets are held with its rows, so every window of that
+        series reuses them.
 
         Args:
             record_key: The owning record's surrogate id. The control database joins its rows on it.
@@ -1064,9 +1060,8 @@ class _TimeOffsetsLoader:
     def __call__(self) -> pa.Array:
         """Read the series' time offsets and check them against the axis and value count.
 
-        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. As a
-        result, a corrupt shard can otherwise hand back a decreasing, wrong-length, or off-endpoint
-        stream.
+        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. Without
+        this check, a corrupt shard hands back a decreasing, wrong-length, or off-endpoint stream.
 
         Returns:
             One int64 microsecond time offset per value.

@@ -1,4 +1,4 @@
-"""The round trip that decides the swap: write a dataset, read it back, assert it is the same one.
+"""The control plane's round trip: write a dataset, read it back, assert it is the same one.
 
 ``assert_datasets_equal`` compares the metadata, every record's fields and values, every annotation
 and every task field for field. The per-field assertions below then name what the control plane has
@@ -370,8 +370,8 @@ def test_the_database_carries_each_annotation_key_once_with_its_unit(stored):
 
 
 def test_the_reader_takes_its_schema_from_the_database(stored, tmp_path):
-    # Emptying the manifest's projection leaves the reader answering from the database, which is the
-    # copy its rows are typed against.
+    # With the manifest's projection emptied, the reader can only answer from the database, which
+    # is the copy its rows are typed against.
     shutil.copytree(stored, tmp_path / "version")
     manifest_path = tmp_path / "version" / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -455,8 +455,8 @@ def test_a_failed_validation_publishes_nothing_and_leaves_no_staging_directory(t
 
 
 def test_a_version_on_a_non_local_filesystem_reads_through_a_local_copy(tmp_path):
-    # DuckDB opens a database through its own filesystem layer, not the pyarrow one the rest of the
-    # reader uses, so an object-store version is copied down once and removed again on close.
+    # A version whose files are not local is copied to a local file once, and that copy is removed
+    # again when the reader closes.
     import pyarrow.fs as pafs  # noqa: PLC0415
 
     dataset = make_dataset()
@@ -477,8 +477,8 @@ def test_a_version_on_a_non_local_filesystem_reads_through_a_local_copy(tmp_path
 
 
 def test_a_read_that_spans_several_batches_keeps_stored_order(tmp_path, monkeypatch):
-    # A batch answers for many records at once, so a corpus larger than one batch has to stitch the
-    # batches back together in order. Shrinking the batch makes a three-record fixture do that.
+    # A read longer than one batch has to stitch its batches back together in stored order.
+    # Shrinking the batch makes a three-record fixture cross several of them.
     import timenet.reader.reader as reader_module  # noqa: PLC0415
 
     monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", 1)

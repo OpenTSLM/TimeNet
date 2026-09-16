@@ -74,8 +74,7 @@ what a reader hands back, and it stays stable across a rebuild.
 The database ships no primary or foreign keys. The writer validates every invariant those keys
 enforce, once, as a bulk anti-join, inside the load transaction. The writer writes a version one
 time, and the version is immutable afterwards. A shipped constraint therefore re-checks something
-that cannot change. On ECG-QA, with 1.35M control rows, plain tables measure 19.7 MB against
-189.0 MB with keys and indexes. The write takes 3.9 s against 11.9 s.
+that cannot change, in a file that is larger for carrying it.
 
 ### `meta`, `specs`, `annotation_descriptors`
 
@@ -120,9 +119,8 @@ the JSON-encoded `value`, the optional `source`, and its span as `span_start_us`
 
 One attachment table per target kind says what carries an annotation. `record_annotations` is for an
 annotation on a record. `dataset_annotations` is for an annotation that tasks reference and that no
-record carries. `task_annotations` is for an annotation a task holds as input or as its answer. On a
-3.06M-attachment corpus, a polymorphic `(object_type, object_id)` table measured 55.7 MB against
-50.2 MB for one table per kind. The gather query took 25.50 ms against 21.24 ms.
+record carries. `task_annotations` is for an annotation a task holds as input or as its answer. Each
+target column is `NOT NULL`, so no row carries a discriminator and no query branches on one.
 
 ### `values_artifacts`, `time_series_chunks`
 
@@ -218,27 +216,19 @@ re-stores only the pages that changed on a deduplicating backend such as Xet.
 
 ### Choosing the values encoding
 
-No single encoding is best for every waveform, so the writer measures the data rather than pin one.
-It samples the values it already buffered for a modality, counts the distinct values (bit patterns
-for floats), and picks:
+No single encoding is best for every waveform, so the writer reads the data rather than pin one. It
+samples the values it already buffered for a modality, counts the distinct values (bit patterns for
+floats), and picks:
 
 - **dictionary** at **65,536** distinct values or fewer,
 - **BYTE_STREAM_SPLIT** for floats with more distinct values than that,
 - **plain** for strings and integers with more distinct values than that
   (byte-plane splitting has no meaning for these types).
 
-Bool signals always use plain and enum signals always use dictionary. The writer measures neither.
-It takes one decision per `spec_type`, before that modality's first shard opens. The decision reads
+Bool signals always use plain and enum signals always use dictionary. The rule runs on neither. It
+takes one decision per `spec_type`, before that modality's first shard opens. The decision reads
 only buffered data. A re-build of an unchanged source therefore reaches the same encoding and writes
 the same bytes.
-
-The rule follows the measurements. On real data, at zstd level 3, the values column measures:
-
-| Encoding | PTB-XL ECG (quantized, ~11k distinct in 69M) | TSQA (continuous, 10.5M distinct in 11.5M) |
-| --- | --- | --- |
-| `dictionary` | **71.1 MB** | 42.9 MB |
-| `plain` | 85.1 MB | 42.3 MB |
-| `byte_stream_split` | 127.8 MB | **37.6 MB** |
 
 BYTE_STREAM_SPLIT transposes each float into four byte planes and compresses each plane apart. It
 wins on smooth, high-cardinality signals, where the sign and high-mantissa planes are near constant.

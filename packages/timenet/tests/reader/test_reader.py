@@ -256,8 +256,7 @@ def test_streaming_tasks_round_trip(tmp_path):
     assert task.record_ids == ("rec-0",)
     assert task.input_annotation_ids == ("opts-yesno",)
     assert [ann.id for ann in restored.registered_annotations] == ["opts-yesno"]
-    # After read(), streamed tasks back-populate their records, so tasks_for() resolves them (this is
-    # what tasks_for and the torch view rely on).
+    # After read(), streamed tasks back-populate their records, so tasks_for() resolves them.
     rec0 = restored.records[0]
     expected = {t.id for t in restored.tasks if rec0.record_id in t.record_ids}
     assert expected  # the record really does carry streamed tasks
@@ -281,7 +280,9 @@ def test_streaming_writer_writes_a_single_task_from_a_one_shot_source(tmp_path):
     assert len(restored.tasks) == 1
 
 
-@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+# The chunk size here is small enough that the zarr backend writes many store entries, so that
+# half is marked slow. The parquet half keeps the chunk splitting covered in the default run.
+@pytest.mark.parametrize("backend", ["parquet", pytest.param("zarr", marks=pytest.mark.slow)])
 def test_round_trip_with_chunk_splitting(tmp_path, backend):
     original = make_dataset()
     version_dir = _write(
@@ -418,8 +419,8 @@ def test_values_are_lazy(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_read_back_dataset_is_picklable(tmp_path, backend):
-    # A multi-worker torch DataLoader pickles the dataset to each worker, so lazy loaders must pickle
-    # even after values (and thus the backend's handles/caches) have been touched.
+    # A multi-worker torch DataLoader pickles the dataset to each worker, so lazy loaders must
+    # pickle even after a read has opened the backend's handles and filled its caches.
     version_dir = _write(tmp_path, values_backend=backend)
     dataset = TimeFReader(DatasetVersion.open_local(version_dir)).read()
     first = dataset.records[0].time_series[0]
@@ -479,8 +480,8 @@ def test_iter_records_with_an_empty_id_list_yields_nothing(tmp_path):
 
 
 def test_iter_records_unknown_id_raises_on_full_consumption(tmp_path):
-    # The guarantee holds when the iterator is drained; an early-stopping consumer is served what
-    # exists and never reaches the check, which the docstring states explicitly.
+    # The check runs when the iterator is drained. A consumer that stops early is served what
+    # exists and never reaches it.
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         got = next(reader.iter_records(record_ids=["record-0", "no-such-record"]))
@@ -518,8 +519,8 @@ def test_annotations_are_read_only_when_a_record_resolves_them(tmp_path, monkeyp
 
 
 def test_a_values_only_read_resolves_no_annotation(tmp_path, monkeypatch):
-    # A caller that reads values pays a query and a JSON parse per annotation for data it never
-    # touches. with_annotations=False must leave the annotations table unread.
+    # with_annotations=False must leave the annotations table unread, so a values-only read pays no
+    # query and no JSON parse for data it never touches.
     version_dir = _write(tmp_path)
     queries = _spy(monkeypatch, "record_annotations")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -550,7 +551,7 @@ def test_a_values_only_read_keeps_every_other_record_field(tmp_path):
 
 
 def test_a_record_reads_its_chunk_locators_once_for_all_of_its_series(tmp_path, monkeypatch):
-    # One query returns every locator of a record, so a per-series lookup would pay a scan each.
+    # One query returns every locator of a record. A per-series lookup would cost one query each.
     version_dir = _write(tmp_path)
     queries = _spy(monkeypatch, "record_chunks")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -563,9 +564,9 @@ def test_a_record_reads_its_chunk_locators_once_for_all_of_its_series(tmp_path, 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 3, _BATCHED_RECORDS])
 def test_a_walk_reads_one_statement_of_chunk_locators_per_batch(tmp_path, monkeypatch, batch_size):
-    # Locators fetched one record at a time cost one statement per record, whatever the batch size.
-    # That is the N+1 this counts against. The count is tied to the batch size, so a lookup that
-    # went back to one record at a time cannot pass by being small enough.
+    # A walk must cost one locator statement per batch, not one per record. The expected count
+    # follows the batch size, so a lookup that went back to one record at a time fails at every
+    # size tested here.
     version_dir = _write(tmp_path, dataset=_batched_records())
     monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
     queries = _spy(monkeypatch, "record_chunks")
@@ -579,7 +580,7 @@ def test_a_walk_reads_one_statement_of_chunk_locators_per_batch(tmp_path, monkey
 
 def test_shuffled_record_access_does_not_thrash_the_locator_memo(tmp_path, monkeypatch):
     # A read that touches its records out of order must cost what an in-order read costs. Each
-    # record is served from the batch it was built in, so a shuffled pass pays no lookup of its own.
+    # record is served from the batch it was built in, so a shuffled pass asks for no extra query.
     batch_size = 2
     version_dir = _write(tmp_path, dataset=_batched_records())
     monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
@@ -595,7 +596,7 @@ def test_shuffled_record_access_does_not_thrash_the_locator_memo(tmp_path, monke
     assert len(queries) == math.ceil(_BATCHED_RECORDS / batch_size)
 
 
-# A lookup keyed on the (record, series) pair, which is not the per-batch query that fills the memo.
+# An oracle keyed on the (record, series) pair. It is not the per-batch query that fills the memo.
 _ONE_SERIES_LOCATORS = """
 SELECT c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values, sp.spec_type
 FROM time_series s
@@ -610,9 +611,9 @@ _LOCATOR_COLUMNS = ("chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_i
 
 
 def test_the_locator_memo_returns_what_the_control_plane_holds(tmp_path):
-    # A small chunk cap splits one series across many chunks. The oracle asks the database for one
-    # (record, series) pair, so a memo keyed on the wrong record, or stitched from another record's
-    # rows in the same batch, fails here rather than being compared against its own filling call.
+    # A small chunk cap splits one series across many chunks. The oracle reads one (record, series)
+    # pair straight from the database, so a memo keyed on the wrong record, or stitched from another
+    # record's rows in the same batch, fails here.
     version_dir = _write(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     widest = 0
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -696,8 +697,8 @@ def test_corrupt_chunk_locator_has_series_context(tmp_path):
 
 
 def test_a_truncated_control_database_raises_format_error(tmp_path):
-    # A file that is no longer a database: the lazy open must surface as TimeFFormatError, not a raw
-    # duckdb.Error, or a caller catching corruption misses it.
+    # A file that is no longer a database must surface as TimeFFormatError on the lazy open. A raw
+    # duckdb.Error would slip past a caller that catches corruption.
     version_dir = _write(tmp_path)
     db_path = version_dir / "control.duckdb"
     db_path.write_bytes(db_path.read_bytes()[: 1 << 12])
@@ -706,8 +707,8 @@ def test_a_truncated_control_database_raises_format_error(tmp_path):
 
 
 def test_missing_listed_file_fails_lazily_on_first_access(tmp_path):
-    # __init__ does not stat-sweep (an O(files) HEAD storm on an object store); a missing file
-    # surfaces on the first read that touches it, which the lazy stack already accepts.
+    # __init__ does not stat every listed file, so a missing one surfaces on the first read that
+    # touches it.
     version_dir = _write(tmp_path)
     (version_dir / "control.duckdb").unlink()
     reader = TimeFReader(DatasetVersion.open_local(version_dir))  # open is happy: it never touches it
@@ -755,8 +756,8 @@ def test_verify_detects_a_deleted_file(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         rel = next(p.path for p in reader._manifest.files.time_series if p.path.startswith("time_series/part-"))
     (version_dir / rel).unlink()
-    # A value shard is read lazily, so __init__ no longer stat-sweeps it; verify() reopens every listed
-    # file through the handle and is where a deleted one now surfaces.
+    # A value shard is read lazily, so __init__ never opens it. verify() reopens every listed file
+    # through the handle, so a deleted one surfaces there.
     with (
         TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="missing file"),
@@ -766,8 +767,8 @@ def test_verify_detects_a_deleted_file(tmp_path):
 
 def test_unknown_stored_task_type_raises_format_error_on_first_task_access(tmp_path):
     # An unknown task type is corrupt on-disk data, so it must surface as TimeFFormatError rather
-    # than the bare ValueError that TaskType() happens to raise. Tasks decode on first access, so
-    # that is where it surfaces; construction never touches the task tables.
+    # than the bare ValueError that TaskType() raises. Tasks decode on first access, so that is
+    # where it surfaces. Construction never touches the task tables.
     version_dir = _write(tmp_path)
     with _control_db(version_dir) as db:
         db.execute("UPDATE tasks SET task_type = 'not_a_real_task_type'")
@@ -804,7 +805,7 @@ def test_ordinal_row_carrying_regular_columns_raises_format_error(tmp_path):
 
 
 def test_regular_row_with_a_zero_denominator_raises_format_error(tmp_path):
-    # A zero denominator would raise a raw ZeroDivisionError from Fraction; it must surface as format error.
+    # A zero denominator raises a raw ZeroDivisionError from Fraction. It must surface as a format error.
     version_dir = _write(tmp_path)
     _corrupt_axes(version_dir, "period_denominator", 0)
     with (
@@ -888,8 +889,8 @@ def _corrupt_time_span(version_dir, start_us, end_us):
 
 
 def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
-    # A stored time_span whose end is not past its start fails Span validation on decode; it must surface
-    # as a format error, not the raw ValueError that validation raises.
+    # A stored time_span whose end is not past its start fails Span validation on decode. It must
+    # surface as a format error, not the raw ValueError that validation raises.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_time_span(version_dir, 6_000_000, 5_000_000)
     with (
@@ -900,8 +901,9 @@ def test_time_span_with_reversed_bounds_raises_format_error(tmp_path):
 
 
 def test_point_shaped_time_span_raises_format_error(tmp_path):
-    # A time_span must be an interval covering the whole record. A corrupt point-shaped one (no end) is
-    # rejected as a format error, not left to reach the unscoped-span check and raise a bare TypeError.
+    # A time_span must be an interval covering the whole record. A corrupt point-shaped one (no end)
+    # is rejected as a format error, not left to reach the unscoped-span check and raise a bare
+    # TypeError.
     version_dir = _time_span_dataset(tmp_path)
     _corrupt_time_span(version_dir, 0, None)
     with (
@@ -914,9 +916,9 @@ def test_point_shaped_time_span_raises_format_error(tmp_path):
 def test_task_payload_field_written_before_it_existed_reads_as_none(tmp_path):
     """A task written before an optional payload field existed reads back with that field None.
 
-    A payload field is one row per field, so a version written before the field existed simply has
-    no row for it. Deleting the row is what an older build looks like, and the reader must fall back
-    to the dataclass default rather than raise, so additive task fields never force a recuration.
+    A payload is one row per field, so a version written before the field existed has no row for it.
+    Deleting the row reproduces that. The reader must fall back to the dataclass default rather than
+    raise, so a new optional task field never forces a recuration.
     """
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -958,10 +960,10 @@ def test_task_payload_field_written_before_it_existed_reads_as_none(tmp_path):
 def test_a_control_table_missing_a_declared_column_is_corruption(tmp_path, table_column):
     """A column the schema declares is not optional: a database without it is a corrupt artifact.
 
-    A task's optional payload field is a row, so an absent one reads as the dataclass default. A
-    record's or an annotation's field is a column of a table the DDL creates whole, so a database
-    that answers ``meta.schema_version`` and then lacks the column was damaged after it was written.
-    Reading it as ``None`` would hand the caller a record that silently lost its start time.
+    A task's optional payload field is a row, so an absent row reads as the dataclass default. A
+    record's or an annotation's field is a column the DDL always creates, so a database that still
+    answers ``meta.schema_version`` but lacks the column was damaged after it was written. Reading
+    it as ``None`` would hand the caller a record that silently lost its start time.
     """
     table, column = table_column
     version_dir = _write(tmp_path)

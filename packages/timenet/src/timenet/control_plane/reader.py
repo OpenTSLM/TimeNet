@@ -1,13 +1,7 @@
 """Read a version's control database: one query per table per batch, never one query per record.
 
-Every call here answers for a whole batch of records, or for the whole version. One record at a time
-costs 34 ms on a 618,508-record corpus, because each query scans its table. A thousand records at
-once costs 0.111 ms per record, because the same scan answers all of them.
-
-The database opens read-only, so no write-ahead log appears beside a file the manifest already
-checksummed. The reader copies a version whose files live on an object store to a local temporary
-file first. DuckDB reads a database through its own filesystem layer, not through the pyarrow one
-the rest of the reader uses.
+Every call here answers for a whole batch of records, or for the whole version. The database opens
+read-only. A version whose files live on an object store is copied to a local temporary file first.
 """
 
 from collections.abc import Iterator, Sequence
@@ -79,10 +73,8 @@ ORDER BY t.position
 """
 
 # A series shared by several records is stored once, so its chunks are reached through the link
-# table. The filter is on the record's dense surrogate, which is also the order the link table was
-# written in, so the scan prunes on its zone map instead of comparing the caller's id string on
-# every row. Ordering by the record, then by the series' own id, then by chunk keeps a series'
-# chunks contiguous and in the order the values plane concatenates them.
+# table. Ordering by the record, then by the series' own id, then by chunk keeps a series' chunks
+# contiguous and in the order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
 SELECT l.record_id, s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
        c.chunk_major_idx, c.chunk_minor_idx, c.n_values
@@ -323,8 +315,7 @@ class ControlPlaneReader:
     def record_chunks(self, record_ids: Sequence[int]) -> list[dict]:
         """Return every chunk locator of a batch of records' series.
 
-        One statement answers for the whole batch, like every other query here. A read of one record
-        at a time paid a scan per record, and this batching removes that cost.
+        One statement answers for the whole batch, like every other query here.
 
         Args:
             record_ids: The surrogate ids of the records to read, as :meth:`records` reports them.
