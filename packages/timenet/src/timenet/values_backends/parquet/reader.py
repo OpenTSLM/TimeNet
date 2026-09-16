@@ -167,8 +167,7 @@ class ParquetValuesReader(BaseValuesReader):
         """Read one window of a scalar series, and trim its end chunks at the window boundaries.
 
         The window's chunks come from a bisection of the series' offsets, so this method touches
-        only the chunks it reads. A walk over every chunk instead puts the whole of a finely chunked
-        signal in the path of each window.
+        only the chunks it reads.
 
         Returns:
             The requested scalar values in the spec's canonical Arrow type.
@@ -202,8 +201,8 @@ class ParquetValuesReader(BaseValuesReader):
         """Return a shard row group's values and time offsets together, decoded at most once.
 
         Both columns come back in one read because pyarrow decodes a row group's columns in a single
-        pass. The extra time offsets cost almost nothing. Two separate reads cost about 26% more
-        when a caller wants both, and a caller of an irregular series nearly always wants both.
+        pass. The extra time offsets cost almost nothing, and a caller of an irregular series
+        nearly always wants both.
 
         Chunks of different series can share a row group. Without this cache, every per-series read
         decodes the whole column again. That makes value materialization quadratic in chunks per group.

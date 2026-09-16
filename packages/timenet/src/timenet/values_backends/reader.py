@@ -7,8 +7,8 @@ picks the backend from the manifest's ``values_backend`` tag. It never imports a
 itself. Concrete readers live in their own modules: :mod:`timenet.values_backends.parquet.reader` (the
 default) and :mod:`timenet.values_backends.zarr.reader`.
 
-A windowed read locates its chunks through :class:`SeriesChunks` and :func:`window_chunks`. Every backend
-shares them, because the offsets come from the index rows and not from the stored values.
+A windowed read finds its chunks with :class:`SeriesChunks` and :func:`window_chunks`. Every backend shares
+them, because the offsets come from the index rows and not from the stored values.
 """
 
 from __future__ import annotations
@@ -35,11 +35,9 @@ class SeriesChunks:
     """One series' index rows, plus the chunk offsets a windowed read bisects.
 
     :class:`~timenet.reader.reader.TimeFReader` holds one of these per series for as long as it
-    holds the rows. The offsets are built once, and every window of that series reuses them. A sum
-    of ``n_values`` per window instead visits every chunk. A finely chunked signal has thousands of
-    chunks, so an overnight recording read epoch by epoch walks its whole index once per epoch.
+    holds the rows. The offsets are built once, and every window of that series reuses them.
 
-    A full read takes the rows alone. Only a windowed read has to find where in the series it is.
+    A full read takes the rows alone. Only a windowed read needs the offsets.
     """
 
     rows: list[dict]
@@ -50,10 +48,10 @@ class SeriesChunks:
     def offsets(self) -> Int64[np.ndarray, " boundary"]:
         """Return the value index each chunk starts at, then the series' total.
 
-        This method builds the offsets once and holds them for later windows.
+        This method builds the offsets on the first call and keeps them for later windows.
 
         Returns:
-            ``len(rows) + 1`` offsets. The last is the series' length, so no caller has to sum.
+            ``len(rows) + 1`` offsets. The last one is the series' length.
         """
         if self._offsets is None:
             offsets = np.zeros(len(self.rows) + 1, dtype=np.int64)
@@ -64,10 +62,10 @@ class SeriesChunks:
 
 
 def window_chunks(offsets: Int64[np.ndarray, " boundary"], start: int, stop: int) -> tuple[int, int, int]:
-    """Locate the chunks a step window crosses, by bisecting a series' chunk offsets.
+    """Find the chunks a step window crosses, by bisecting a series' chunk offsets.
 
     A ``stop`` past the last step clamps to it. A ``start`` at or past the last step crosses no
-    chunk, so a caller that reads past the end gets nothing back.
+    chunk.
 
     Args:
         offsets: The series' chunk offsets, from :meth:`SeriesChunks.offsets`.
@@ -112,8 +110,8 @@ class BaseValuesReader(ABC):
 
         Args:
             version: The opened version handle. Reads flow through its filesystem/store.
-            chunks: The series' index rows and their chunk offsets. The caller holds these across
-                windows, so a read bisects the offsets instead of walking the rows.
+            chunks: The series' index rows and their chunk offsets. The read bisects the offsets to
+                find the chunks it needs.
             start: First step of the window, inclusive.
             stop: One past the window's last step. A ``stop`` past the last step clamps to it.
             spec: The series' spec, for backends whose decoding depends on shape/dtype.
