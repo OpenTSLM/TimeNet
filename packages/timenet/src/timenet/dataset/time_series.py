@@ -1,4 +1,4 @@
-"""The :class:`TimeSeries` reference type: one logical stream with a lazy Arrow loader."""
+"""The :class:`Signal` leaf type: one logical stream with a lazy Arrow loader."""
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
-from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import Annotation, Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
 def _validate_enum_values(
@@ -72,7 +72,7 @@ def _array_from_values(
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
-class TimeSeries:
+class Signal:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
     The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
@@ -107,6 +107,32 @@ class TimeSeries:
     ``n_values`` reports.
 
     """
+    annotations: tuple[Annotation, ...] = ()
+    """Annotations attached directly to this signal."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible signal metadata."""
+
+    @property
+    def id(self) -> str:
+        """Return the signal's stable public identifier."""
+        return self.time_series_id
+
+    @property
+    def name(self) -> str:
+        """Return the signal's human-readable name."""
+        return self.signal
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one annotation and return it.
+
+        Args:
+            annotation: The annotation to attach.
+
+        Returns:
+            The attached annotation.
+        """
+        object.__setattr__(self, "annotations", (*self.annotations, annotation))  # noqa: PLC2801
+        return annotation
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
@@ -408,3 +434,8 @@ class TimeSeries:
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)
+
+
+# Transitional alias for the lower commits in the stack. The final API-removal commit deletes it
+# after the bundled connectors and consumers use ``Signal``.
+TimeSeries = Signal
