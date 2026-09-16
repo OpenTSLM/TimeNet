@@ -7,8 +7,7 @@ declaration, and it does not create classes at runtime. As a result, read-back o
 and they match the original objects field for field.
 
 The rebuild is batched. Records come back a batch at a time, and each batch costs one query per
-table for the whole batch rather than one query per record. Measured on a 618,508-record corpus:
-34.49 ms per record one at a time, 0.111 ms per record in batches of a thousand.
+table for the whole batch rather than one query per record.
 """
 
 from __future__ import annotations
@@ -60,17 +59,14 @@ if TYPE_CHECKING:
 _RECORD_BATCH_ROWS = 512
 """How many records one round of control-plane queries rebuilds.
 
-Each query in the round scans its table once and answers for the whole batch, so the per-record cost
-falls with the batch size. A few hundred is where the curve flattens and the decoded rows still sit
-comfortably in memory.
+Each query in the round scans its table once and answers for the whole batch.
 """
 
 _INDEX_ROWS_CACHE_RECORDS = 2 * _RECORD_BATCH_ROWS
 """How many records keep their chunk locators.
 
-The locators are fetched a batch at a time, so the memo holds the batch a read is walking and the
-one before it. A memo smaller than a batch would drop rows the same batch is about to ask for, and
-the next record would pay another statement for them.
+The locators are fetched a batch at a time, so the cache holds the batch a read is walking and the
+one before it. It must stay at least one batch wide.
 """
 
 _AXIS_CACHE_SIZE = 1024
@@ -86,16 +82,14 @@ class TimeFReader:
 
         This constructor reads nothing. The handle already carries the parsed manifest. The handle
         also wraps the filesystem and root that every later read uses. The reader resolves tasks,
-        records, annotations, and each series' values only on first use. As a result, the cost to
-        open a version is the same for three records or three million.
+        records, annotations, and each series' values only on first use. As a result, opening a
+        version costs the same whatever its size.
 
-        A structurally corrupt or missing file fails on its first access, not here. Examples of a
-        first access are ``.tasks``, the first record, or the first value read. The failure reaches
-        the caller as :class:`~timenet.errors.TimeFFormatError`, which is what :meth:`verify` raises
-        for the same file, and not as the ``FileNotFoundError`` the filesystem raised under it. One
-        unreadable artifact reported with two types would make a caller catch both to cover one
-        condition. Call :meth:`verify` for a check of the version's integrity at construction time.
-        Build the handle with
+        A corrupt or missing file fails on its first access, not here. Examples of a first access are
+        ``.tasks``, the first record, or the first value read. The failure reaches the caller as
+        :class:`~timenet.errors.TimeFFormatError`, the same type :meth:`verify` raises for that file,
+        and not as the ``FileNotFoundError`` the filesystem raised under it. To check the version's
+        integrity when you open it, call :meth:`verify`. Build the handle with
         :meth:`~timenet.registry.BaseRegistry.open_version` or with
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
@@ -110,9 +104,9 @@ class TimeFReader:
         self._root = version.root
         self._manifest = version.manifest
 
-        # The schema types the rows, and the rows are in the control database, so that is where the
-        # reader reads it from. The manifest carries the same block as a projection a registry can
-        # filter on without downloading the database.
+        # The schema types the rows, and the rows live in the control database, so the reader reads
+        # the schema from there. The manifest carries the same block as a projection, so a registry
+        # can filter on it without downloading the database.
         self._schema: DatasetSchema | None = None
         self._spec_by_type: dict[str, TimeSeriesSpec] = {}
         self._annotation_descriptors: dict[str, AnnotationDescriptor] = {}
@@ -213,8 +207,8 @@ class TimeFReader:
 
         Returns:
             The specs and annotation descriptors the database declares, with the task classes the
-            manifest names. A task class is code rather than data, so the version declares which ones
-            it holds and the reader resolves them against the built-in registry.
+            manifest names. A task class is code rather than data, so the reader resolves the named
+            classes against the built-in registry.
         """
         return self._declaration()
 
@@ -389,8 +383,8 @@ class TimeFReader:
         series = _by_record(control.record_series(record_ids))
         tasks = _by_record(control.record_tasks(record_ids))
         annotations = _by_record(control.record_annotations(record_ids)) if with_annotations else {}
-        # The batch travels with the records it built, so the first series that reads its values
-        # fetches the locators of the whole batch instead of its own record's.
+        # Each record carries the ids of its batch, so the first series that reads its values
+        # fetches the locators of the whole batch.
         batch_keys = tuple(record_ids)
         for row in control.records(record_ids):
             key = row["record_id"]
@@ -494,10 +488,10 @@ class TimeFReader:
     ) -> list[dict]:
         """Return one series' chunk locators, in ``chunk_idx`` order.
 
-        One query returns every series of a whole batch of records, because a read walks a batch and
-        then asks each of its records for its series' values. A record built by :meth:`_build_batch`
-        carries the batch it belongs to, so the first series that wants its locators fetches the
-        batch's. The rows are held for the batch a read is walking and the one before it.
+        One query fetches the locators of a whole batch of records. A record built by
+        :meth:`_build_batch` carries the ids of its batch, so the first series that asks for its
+        locators fetches the whole batch's. The rows stay cached for that batch and the one before
+        it.
 
         Args:
             record_key: The owning record's surrogate id, which the control plane joins on.
@@ -515,7 +509,7 @@ class TimeFReader:
             return by_series.get(time_series_id, [])
 
     def _fetch_locators(self, record_key: int, batch_keys: tuple[int, ...]) -> dict[str, list[dict]]:
-        """Read one batch's chunk locators with a single statement and memo them per record.
+        """Read one batch's chunk locators with a single statement and cache them per record.
 
         Args:
             record_key: The record whose locators the caller asked for.
@@ -971,11 +965,11 @@ def _task_payload(
 
 @dataclass(frozen=True)
 class _SeriesLoader:
-    """A picklable lazy loader for one series' values (replaces a per-series closure).
+    """A picklable lazy loader for one series' values.
 
-    A nested closure cannot pickle. This class holds the reader and the series' identity instead of
-    a closure. As a result, a read-back dataset can pickle, and a multi-worker torch ``DataLoader``
-    can use it. The class reads the series' values only when you call it.
+    The loader holds the reader and the series' identity, not a closure, so a read-back dataset can
+    pickle and a multi-worker torch ``DataLoader`` can use it. The values are read only when you
+    call the loader.
     """
 
     reader: TimeFReader
@@ -1019,10 +1013,9 @@ class _SeriesLoader:
 class _TimeOffsetsLoader:
     """A picklable lazy loader for an irregular series' per-value time offsets.
 
-    A nested closure cannot pickle, so this loader is a class, not a lambda. A multi-worker torch
-    ``DataLoader`` pickles the series to send it to its workers, and a closure cannot pickle. This
-    class mirrors :class:`_SeriesLoader`, because time offsets and values are separate columns, and
-    each column reads on its own.
+    A multi-worker torch ``DataLoader`` pickles the series to send it to its workers, so this loader
+    is a class and not a closure. It mirrors :class:`_SeriesLoader`, because time offsets and values
+    are separate columns and each one reads on its own.
     """
 
     reader: TimeFReader
@@ -1045,9 +1038,8 @@ class _TimeOffsetsLoader:
     def __call__(self) -> pa.Array:
         """Read the series' time offsets, checking them against the axis and value count.
 
-        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. As a
-        result, a corrupt shard can otherwise hand back a decreasing, wrong-length, or off-endpoint
-        stream.
+        The writer checks the ordering, the count, and the endpoints. Nothing else rechecks them on
+        read, so this method does.
 
         Returns:
             One int64 microsecond time offset per value.

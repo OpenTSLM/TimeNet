@@ -549,7 +549,7 @@ def test_a_values_only_read_keeps_every_other_record_field(tmp_path):
 
 
 def test_a_record_reads_its_chunk_locators_once_for_all_of_its_series(tmp_path, monkeypatch):
-    # One query returns every locator of a record, so a per-series lookup would pay a scan each.
+    # One query returns every locator of a record. A per-series lookup would cost one query each.
     version_dir = _write(tmp_path)
     queries = _spy(monkeypatch, "record_chunks")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -562,9 +562,9 @@ def test_a_record_reads_its_chunk_locators_once_for_all_of_its_series(tmp_path, 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 3, _BATCHED_RECORDS])
 def test_a_walk_reads_one_statement_of_chunk_locators_per_batch(tmp_path, monkeypatch, batch_size):
-    # Locators fetched one record at a time cost one statement per record, whatever the batch size.
-    # That is the N+1 this counts against. The count is tied to the batch size, so a lookup that
-    # went back to one record at a time cannot pass by being small enough.
+    # A walk must cost one locator statement per batch, not one per record. The expected count
+    # follows the batch size, so a lookup that went back to one record at a time fails at every
+    # size tested here.
     version_dir = _write(tmp_path, dataset=_batched_records())
     monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
     queries = _spy(monkeypatch, "record_chunks")
@@ -578,7 +578,7 @@ def test_a_walk_reads_one_statement_of_chunk_locators_per_batch(tmp_path, monkey
 
 def test_shuffled_record_access_does_not_thrash_the_locator_memo(tmp_path, monkeypatch):
     # A read that touches its records out of order must cost what an in-order read costs. Each
-    # record is served from the batch it was built in, so a shuffled pass pays no lookup of its own.
+    # record is served from the batch it was built in, so a shuffled pass asks for no extra query.
     batch_size = 2
     version_dir = _write(tmp_path, dataset=_batched_records())
     monkeypatch.setattr(reader_module, "_RECORD_BATCH_ROWS", batch_size)
@@ -594,7 +594,7 @@ def test_shuffled_record_access_does_not_thrash_the_locator_memo(tmp_path, monke
     assert len(queries) == math.ceil(_BATCHED_RECORDS / batch_size)
 
 
-# A lookup keyed on the (record, series) pair, which is not the per-batch query that fills the memo.
+# An oracle keyed on the (record, series) pair. It is not the per-batch query that fills the memo.
 _ONE_SERIES_LOCATORS = """
 SELECT c.chunk_idx, v.chunk_file, c.chunk_major_idx, c.chunk_minor_idx, c.n_values, sp.spec_type
 FROM time_series s
@@ -609,9 +609,9 @@ _LOCATOR_COLUMNS = ("chunk_idx", "chunk_file", "chunk_major_idx", "chunk_minor_i
 
 
 def test_the_locator_memo_returns_what_the_control_plane_holds(tmp_path):
-    # A small chunk cap splits one series across many chunks. The oracle asks the database for one
-    # (record, series) pair, so a memo keyed on the wrong record, or stitched from another record's
-    # rows in the same batch, fails here rather than being compared against its own filling call.
+    # A small chunk cap splits one series across many chunks. The oracle reads one (record, series)
+    # pair straight from the database, so a memo keyed on the wrong record, or stitched from another
+    # record's rows in the same batch, fails here.
     version_dir = _write(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     widest = 0
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -958,10 +958,10 @@ def test_task_payload_field_written_before_it_existed_reads_as_none(tmp_path):
 def test_a_control_table_missing_a_declared_column_is_corruption(tmp_path, table_column):
     """A column the schema declares is not optional: a database without it is a corrupt artifact.
 
-    A task's optional payload field is a row, so an absent one reads as the dataclass default. A
-    record's or an annotation's field is a column of a table the DDL creates whole, so a database
-    that answers ``meta.schema_version`` and then lacks the column was damaged after it was written.
-    Reading it as ``None`` would hand the caller a record that silently lost its start time.
+    A task's optional payload field is a row, so an absent row reads as the dataclass default. A
+    record's or an annotation's field is a column the DDL always creates, so a database that still
+    answers ``meta.schema_version`` but lacks the column was damaged after it was written. Reading
+    it as ``None`` would hand the caller a record that silently lost its start time.
     """
     table, column = table_column
     version_dir = _write(tmp_path)
