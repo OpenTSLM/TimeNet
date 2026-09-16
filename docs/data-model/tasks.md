@@ -69,8 +69,8 @@ StepInterval(time_series_id="tsqa", start=132, stop=144)
 ```
 
 The series' **axis** decides which frame fits, not the caller. A timeline axis (regular or irregular)
-takes a time span. An ordinal axis takes a step span. `add_task` checks a span against the axis of every
-series it names, and rejects a mismatch.
+takes a time span. An ordinal axis takes a step span. `add_task` validates a span against the axis
+of every series it names, and rejects a mismatch.
 
 Spans cover both directions of time localization. A `scope` is a region **given** to the model. A
 `TemporalLocalizationTask` target is a region the model must **find**.

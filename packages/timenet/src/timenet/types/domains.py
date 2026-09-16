@@ -5,7 +5,7 @@ from enum import StrEnum, unique
 
 @unique
 class Domain(StrEnum):
-    """Describes what kind of data a dataset contains. A dataset may declare more than one."""
+    """Describes what kind of data a dataset contains. A dataset can declare more than one."""
 
     HEALTH = "health"
     CARDIOLOGY = "cardiology"

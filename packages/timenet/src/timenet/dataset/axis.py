@@ -3,8 +3,9 @@
 TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
 offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
 placements that no formula produces. It writes down every time offset beside the values.
-:class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
-one does not type-check.
+
+:class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question
+about one does not type-check.
 
 This module uses two words that are not interchangeable, because the format names two different things:
 
@@ -111,10 +112,10 @@ class RegularAxis:
 
         This method does not accept a float. Every real sampling rate is a whole number of values per
         second, so write ``500.0`` as ``500``. A rate that is not whole has no single reading: 29.97
-        fps is 2997/100 by its spelling and 30000/1001 by its intent. Those two drift 3.6 ms apart
-        over an hour. State which one with a :class:`~fractions.Fraction`, and build the Fraction from
-        a string, not a float. ``Fraction(29.97)`` is the binary expansion
-        (1054475631502295/35184372088832), and ``Fraction("29.97")`` is 2997/100.
+        fps is 2997/100 by its spelling and 30000/1001 by its intent. State which one with a
+        :class:`~fractions.Fraction`, and build the Fraction from a string, not a float.
+        ``Fraction(29.97)`` is the binary expansion (1054475631502295/35184372088832), and
+        ``Fraction("29.97")`` is 2997/100.
 
         Args:
             rate_hz: Values per second.
@@ -178,12 +179,12 @@ class RegularAxis:
 def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarray:
     """Normalize a stream of per-value time offsets to int64 microseconds.
 
-    Every irregular stream passes through this strict gate. It refuses the two inputs that are wrong
+    Every irregular stream passes through this strict gate. It rejects the two inputs that are wrong
     by a constant factor, with nothing downstream to notice.
 
-    This function refuses a ``datetime64`` array, it does not convert it. ``pandas.DatetimeIndex.values``
+    This function rejects a ``datetime64`` array. It does not convert it. ``pandas.DatetimeIndex.values``
     is ``datetime64[ns]``, and reading it as int64 gives nanoseconds, so every time offset lands a
-    thousandfold out but still looks plausible. It refuses floats for the same reason: ``1.5`` reads as
+    thousandfold out but still looks plausible. It rejects floats for the same reason: ``1.5`` reads as
     both seconds and microseconds.
 
     Args:
@@ -235,7 +236,7 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
 def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: datetime | int | None) -> np.ndarray:
     """Convert wall-clock moments to time offsets on a record's recording timeline.
 
-    This is the safe path from calendar time, and the reason :func:`to_time_offsets_us` refuses a
+    This is the safe path from calendar time, and the reason :func:`to_time_offsets_us` rejects a
     ``datetime64`` array outright. This function measures each moment against the record's anchor.
     The result lands in the same frame as a span's bounds and a regular axis' computed time offsets.
 
@@ -256,9 +257,9 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 class IrregularAxis:
     """A placement no formula produces, so this axis writes down every time offset beside the values.
 
-    This axis holds only the pair a builder can state and the writer can verify without a read. That
-    pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
-    them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
+    This axis holds only the pair a builder can state and the writer can check without a read. That
+    pair is the first and the last stored time offset. The time offsets themselves ride the values
+    plane. Reach them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
     identity and round-trips as a value through the records struct. An axis holding the array does
@@ -279,7 +280,7 @@ class IrregularAxis:
     """Time offset of the first value, in microseconds from the record's relative zero."""
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
-    verified metadata, not an unbacked claim."""
+    checked metadata, not an unbacked claim."""
 
     def __post_init__(self) -> None:
         """Reject non-integral or backwards endpoints.
@@ -319,7 +320,7 @@ class IrregularAxis:
 
 @dataclass(frozen=True, kw_only=True)
 class OrdinalAxis:
-    """An Axis to indicate an order without a cadence, time offsets, or place on any timeline."""
+    """An axis that gives order only: no cadence, no time offsets, no place on any timeline."""
 
     axis_type: ClassVar[AxisType] = AxisType.ORDINAL
     """The stored discriminator."""

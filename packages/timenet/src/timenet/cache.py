@@ -74,8 +74,8 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
 
     Returns:
         A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone when this
-        returns. This raises an ``OSError`` if it cannot fully remove a tree. This stops the caller from
-        reporting space it never freed.
+        returns. If it cannot fully remove a tree, this raises an ``OSError``. This stops the caller
+        from reporting space it never freed.
     """
     config = settings()
     targets = [config.storage_dir, config.cache_dir]

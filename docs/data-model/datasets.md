@@ -35,7 +35,7 @@ back to the exact TimeF bytes of one version, not a moving target.
 
 ## Where a dataset lives
 
-A [registry](../registry.md) serves a dataset. It hands the compiled manifests and parquet to the
+A [registry](../registry.md) serves a dataset. It hands the compiled manifests and Parquet to the
 [SDK](../client.md). A registry never runs connector code. It can be a local directory, an S3 prefix,
 or a remote host. The output of [build](../build.md) is itself a valid registry. The same
 `org/name` id resolves across all of them.

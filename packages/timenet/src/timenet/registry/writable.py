@@ -16,7 +16,7 @@ from timenet.writer import WriteProgressEvent
 
 
 class WritableRegistry(BaseRegistry, ABC):
-    """A registry that build can publish datasets into, not just read from."""
+    """A registry that serves datasets and that build can publish into."""
 
     @abstractmethod
     def store(

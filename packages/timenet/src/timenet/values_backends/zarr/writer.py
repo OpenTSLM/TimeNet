@@ -3,14 +3,14 @@
 This backend is an alternative to the default Parquet shard store. It uses Zarr's own layout:
 
 - The writer appends every series of a modality along time to one typed array in a ``time_series.zarr``
-  group. Zarr chunks the storage itself, so a series is one index row (one placement spanning its full
-  length), not a run of ``chunk_max_bytes`` logical chunks.
+  group. Zarr chunks the storage itself. A series is therefore one index row, one placement that spans
+  its full length, and not a run of ``chunk_max_bytes`` logical chunks.
 - The writer partitions arrays by ``(spec_type, stores_time_offsets)``, not by ``spec_type`` alone. A series
   that stores time offsets writes its values under ``_irregular/`` and its int64 time offsets under
   ``_time_offsets/``. The two arrays advance together because every series in that partition writes to
-  both. That is what lets the index's single ``chunk_major_idx`` element offset address either one.
-  Partitioning by ``spec_type`` alone gives the time offsets array only some of the series, so the two
-  arrays drift apart with nothing to notice.
+  both. The index's single ``chunk_major_idx`` element offset then addresses either one. A partition by
+  ``spec_type`` alone gives the time offsets array only some of the series. The two arrays then drift
+  apart with nothing to notice.
 - The writer buffers appends per partition and flushes them at shard-aligned boundaries, so it writes
   every Zarr shard object exactly once. A ``resize()``-per-series append rewrites the trailing shard for
   every series.
@@ -18,7 +18,7 @@ This backend is an alternative to the default Parquet shard store. It uses Zarr'
   keeps its values appender and its time offsets appender open together, so it buffers near two shards.
 
 The ``(array path, element start)`` pair locates a chunk. The shared index carries that location in its
-backend-agnostic ``chunk_file`` / ``chunk_major_idx`` locator (``chunk_minor_idx`` is unused).
+backend-agnostic ``chunk_file`` and ``chunk_major_idx`` columns (``chunk_minor_idx`` is unused).
 
 This backend needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). This module imports zarr lazily,
 so the Parquet core never needs it.
@@ -63,7 +63,7 @@ _IRREGULAR_GROUP = "_irregular"
 #: Group that holds those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
 _TIME_OFFSETS_GROUP = "_time_offsets"
 #: Group that stores one boolean array for each nullable values array.
-#: Each boolean marks whether the corresponding timestep is present.
+#: Each boolean marks whether the corresponding step is present.
 #: Zarr does not represent nulls directly. A non-nullable spec writes nothing here.
 _VALIDITY_GROUP = "_validity"
 
@@ -147,10 +147,10 @@ _NULL_PLACEHOLDER: dict[str, object] = {"bool": False, "str": "", "enum": 0}
 def _dense_and_validity(
     arrow_values: pa.Array, spec: TimeSeriesSpec
 ) -> tuple[Shaped[np.ndarray, " time *value"], np.ndarray | None]:
-    """Return values and, for nullable specs, a mask that marks present timesteps.
+    """Return values and, for nullable specs, a mask that marks present steps.
 
-    Missing timesteps still occupy space in Zarr. Their fill values are not observations.
-    The validity array marks which timesteps are present. Nullable series always return this array,
+    Missing steps still occupy space in Zarr. Their fill values are not observations.
+    The validity array marks which steps are present. Nullable series always return this array,
     even without nulls. Values and validity arrays have the same length, with matching positions.
 
     Args:
@@ -250,9 +250,8 @@ class ZarrValuesBackend(BaseValuesBackend):
     def _time_offsets_appender(self, group: Any, spec_type: str, codec: Any, delta: Any) -> "_ArrayAppender":
         """Create the time offsets array parallel to a partition's values, and wrap it in an appender.
 
-        The Delta filter makes stored time offsets cheap. Time offsets are monotonic, so the deltas are
-        small and the Blosc bitshuffle then has little left to do. This saves 15-17% over bitshuffle
-        alone on realistic irregular spacing.
+        The array carries a Delta filter. Time offsets are monotonic, so the deltas are small and the
+        Blosc bitshuffle then has little left to do.
 
         Args:
             group: The open Zarr group.
@@ -282,9 +281,9 @@ class ZarrValuesBackend(BaseValuesBackend):
         )
 
     def _validity_appender(self, group: Any, array_path: str, codec: Any) -> "_ArrayAppender":
-        """Create an array that marks present timesteps and return its appender.
+        """Create an array that marks present steps and return its appender.
 
-        Each boolean is ``True`` where the timestep is present. Missing positions still occupy
+        Each boolean is ``True`` where the step is present. Missing positions still occupy
         space in the values array, so the two arrays have matching positions.
         Non-nullable series do not use this array.
 
@@ -327,8 +326,8 @@ class ZarrValuesBackend(BaseValuesBackend):
             read_and_validate: Loads and validates one series against its dtype and shape contract.
             read_time_offsets: Loads an irregular series' int64 time offsets, or ``None`` for other shapes.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
-            on_file_done: Progress callback invoked ``(arrays_finalized)`` as each partition closes,
-                counting a partition's values array plus its time offsets array when it has one.
+            on_file_done: Progress callback invoked ``(arrays_finalized)`` as each partition closes.
+                The count holds a partition's values array and its time offsets array when it has one.
 
         Returns:
             The placements and the Zarr store's files (relative to the staging directory).
@@ -425,7 +424,7 @@ class _Partition:
         Args:
             values: The series values.
             time_offsets: Its int64 time offsets, or ``None`` for a partition that stores none.
-            validity: Its per-timestep validity, or ``None`` for a non-nullable partition.
+            validity: Its per-step validity, or ``None`` for a non-nullable partition.
 
         Returns:
             The element offset the values were written at.
@@ -487,7 +486,7 @@ class _ArrayAppender:
         return self._written + self._buffer_len
 
     def append(self, values: Shaped[np.ndarray, " time *value"]) -> None:
-        """Buffer one series' values, flushing every completed shard.
+        """Buffer one series' values and flush every completed shard.
 
         Args:
             values: The series values with their per-step dimensions.

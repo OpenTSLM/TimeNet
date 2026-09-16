@@ -1,7 +1,8 @@
 """A registry backed by the hosted TimeNet HTTP service.
 
-Talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`. It lists and
-searches the catalog, fetches manifests, streams files, downloads versions, and publishes datasets.
+This module talks to ``timenet-registry`` through :class:`~timenet.registry._http.RegistryHttpClient`.
+It lists and searches the catalog, fetches manifests, streams files, downloads versions, and
+publishes datasets.
 Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
@@ -40,10 +41,10 @@ class RemoteRegistry(WritableRegistry):
         """Open a remote registry.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.timenet.ai``.
+            base_url: The service root, for example ``https://registry.timenet.ai``.
             token: Bearer token. Defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
-            cache_dir: Where downloads are cached; defaults to the configured storage directory.
-            transport: An httpx transport for testing; ``None`` uses the network.
+            cache_dir: Where downloads are cached. The default is the configured storage directory.
+            transport: An httpx transport for testing. ``None`` uses the network.
         """
         cfg = settings()
         self._base_url = base_url
@@ -108,8 +109,8 @@ class RemoteRegistry(WritableRegistry):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local handle, materializing it on first use.
 
-        A remote version is downloaded in full and then read from local disk, like the local and S3
-        backends. On-demand range reads are a separate follow-up.
+        This backend downloads a remote version in full, then reads it from local disk, like the
+        local and S3 backends. On-demand range reads are a separate follow-up.
 
         Args:
             dataset_id: The ``org/name`` id.
@@ -143,7 +144,7 @@ class RemoteRegistry(WritableRegistry):
             version: The version string.
             dest_dir: The target ``<...>/<id>/<version>`` directory.
             force: Re-download even if a copy already exists.
-            manifest: The already-parsed manifest, passed to avoid re-fetching it; fetched if ``None``.
+            manifest: The already-parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
             progress_cb: Called with each chunk's byte count as it is written, for a progress display.
         """
         if manifest is None:
@@ -162,9 +163,9 @@ class RemoteRegistry(WritableRegistry):
     ) -> str:
         """Compile a dataset locally and publish it to the remote registry.
 
-        Compiles to a temporary directory, then runs the service publish flow: POST the manifest, PUT
-        each declared file to its presigned URL, and finalize. An already-committed version is skipped
-        unless ``force``.
+        This method compiles to a temporary directory. Then it runs the service publish flow: POST
+        the manifest, PUT each declared file to its presigned URL, and finalize. It skips an
+        already-committed version unless the caller sets ``force``.
 
         Args:
             dataset: The populated dataset to store.

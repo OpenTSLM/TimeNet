@@ -39,8 +39,9 @@ class LocalRegistry(WritableRegistry):
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
-        Search at any depth. This finds both flat (``hello_world``) and namespaced (``org/name``)
-        layouts. A dataset id is the path from the root to a version directory's parent.
+        This method searches at any depth. It finds both flat (``hello_world``) and namespaced
+        (``org/name``) layouts. A dataset id is the path from the root to a version directory's
+        parent.
 
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.

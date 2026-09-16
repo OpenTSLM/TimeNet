@@ -39,7 +39,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
       convex hull of the series never masks a hole in the data. Timeless (ordinal) series carry no
       window and drop out.
 
-    Shared by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
+    Shared by a task's ``scope`` and an annotation so the two never disagree about what a span can cover.
 
     Args:
         label: Human-readable label for the span, used in the error message.
@@ -47,7 +47,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
         time_series: The series the span is checked against.
         record_id: The owning record's id, for the error message.
         time_span: The record's declared session span, if any, consulted only for an unscoped span.
-        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+        warn_when_outside: When the span leaves its window, warn and keep it rather than raise.
 
     Raises:
         TimeFValidationError: If a series id is unknown. If a scoped span names a timeless series
@@ -127,7 +127,7 @@ def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
         start: The first microsecond of the window.
         end: One microsecond past the window.
         record_id: The owning record's id, for the message.
-        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+        warn_when_outside: When the span leaves its window, warn and keep it rather than raise.
 
     Raises:
         TimeFValidationError: If the span starts before ``start`` or ends after ``end``, and
@@ -164,7 +164,7 @@ def _reject_outside_union(
         span: The span to check.
         windows: The windows of the timed series, sorted by start.
         record_id: The owning record's id, for the message.
-        warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+        warn_when_outside: When the span leaves its window, warn and keep it rather than raise.
 
     Raises:
         TimeFValidationError: If the span runs past the windows or falls in a gap between them, and
@@ -228,7 +228,7 @@ class Record:
     """
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
-    covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
+    covering the whole record, or ``None``. Declare it when the series have gaps and an event can fall in
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
@@ -313,16 +313,16 @@ class Record:
 
         Args:
             annotation: The annotation to attach.
-            warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+            warn_when_outside: When the span leaves its window, warn and keep it rather than raise.
 
         Returns:
             The attached annotation (the same instance).
 
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this record. If a
-                scoped span names a timeless series. If the span falls outside the window its scope
-                selects: the intersection of named series, the record's ``time_span``, or the union of
-                the series' windows and ``warn_when_outside`` is False.
+                scoped span names a timeless series. If ``warn_when_outside`` is False and the span
+                falls outside the window its scope selects. That window is the intersection of named
+                series, the record's ``time_span``, or the union of the series' windows.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         self.annotations = (*self.annotations, annotation)
@@ -333,9 +333,9 @@ class Record:
     ) -> tuple[Annotation, ...]:
         """Attach several annotations to the record, all together or not at all.
 
-        The whole batch is validated before any of it is attached: if one annotation fails a check, the
-        call raises and leaves the record unchanged. To keep the annotations before a failure attached,
-        loop :meth:`add_annotation` instead.
+        This method validates the whole batch before it attaches any of it. If one annotation fails a
+        check, the call raises and leaves the record unchanged. To keep the annotations before a
+        failure attached, loop :meth:`add_annotation` instead.
 
         Args:
             annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.

@@ -3,9 +3,11 @@
 TimeF versions are immutable. To remove a row, you must write a new version without that row.
 The cheap method is copy-on-write. This method reads the base version into memory. The values
 stay lazy and come from the base shards. The method removes the records, repairs each
-cross-reference, and writes a new version with the normal atomic-commit writer. Ids are stable
-and the system never reuses them, so surviving references stay valid without renumbering. On a
-content-addressed or deduplicating backend, the rewrite stores only the chunks that changed.
+cross-reference, and writes a new version with the normal atomic-commit writer.
+
+Ids are stable and the system never reuses them, so surviving references stay valid without
+renumbering. On a content-addressed or deduplicating backend, the rewrite stores only the chunks
+that changed.
 """
 
 from collections.abc import Iterable, Mapping
@@ -29,11 +31,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
     The method repairs every surviving cross-reference. It strips each removed record id from
     every task's ``record_ids``. It removes a task id from each surviving record when the task
     id no longer resolves. It removes ``input_annotation_ids`` from each task when the task's
-    surviving records no longer carry them. A task can lose a required reference: a forecasting
-    ``target_record_id`` or ``context_record_ids``, its last surviving record, or an annotation
-    that holds its answer. A task can also lose a required reference through a ``from_task``
-    edge to a removed task. If ``cascade`` is set, the method removes such a task. If ``cascade``
-    is not set, the method rejects the edit, so a committed version never dangles.
+    surviving records no longer carry them.
+
+    A task can lose a required reference: a forecasting ``target_record_id`` or
+    ``context_record_ids``, its last surviving record, or an annotation that holds its answer. A
+    task can also lose a required reference through a ``from_task`` edge to a removed task. If
+    ``cascade`` is set, the method removes such a task. If ``cascade`` is not set, the method
+    rejects the edit, so a committed version never dangles.
 
     Args:
         dataset: The base dataset. This is typically read back from a committed version.
@@ -174,7 +178,7 @@ def _task_invalidated(
     removed.
 
     ``target_annotation_ids`` is required for the same reason: it is the answer. An unreachable
-    entry does more than dangle: it rewrites the ground truth. For example, a localization task
+    entry dangles, and it also rewrites the ground truth. For example, a localization task
     that loses one of two target regions still reads back as a complete answer.
     ``input_annotation_ids`` is context given to the model, not the answer. So
     :func:`_rebuild_tasks` strips unreachable entries from it instead, the same way it already
