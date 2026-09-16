@@ -1,0 +1,6 @@
+# The released test cases are pandas 2.x pickles. They name pandas internals
+# (pandas._libs.internals._unpickle_block, pandas._libs.arrays.__pyx_unpickle_NDArrayBacked) that
+# pandas 3 does not provide, so rebuilding one needs a 2.x reader.
+pandas>=2.2,<3
+# huggingface_hub fetches the test cases from the Hub at the pinned revision.
+huggingface_hub>=0.24

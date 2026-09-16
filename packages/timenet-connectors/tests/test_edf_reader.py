@@ -27,6 +27,7 @@ def _signals() -> list[edfio.EdfSignal]:
             _FAST_RATE,
             label="EEG Fpz-Cz",
             physical_dimension="uV",
+            prefiltering="HP:0.5Hz LP:100Hz",
             physical_range=(-192.0, 192.0),
             digital_range=(-2048, 2047),
         ),
@@ -101,6 +102,7 @@ def test_open_edf_reads_every_header_field(tmp_path):
     assert header.record_duration == Fraction(1)
     assert header.signals == ("EEG Fpz-Cz", "Resp oro-nasal")
     assert header.units == ("uV", "V")
+    assert header.prefiltering == ("HP:0.5Hz LP:100Hz", "")
     assert header.samples_per_record == (100, 1)
 
 
@@ -288,6 +290,7 @@ def test_compute_signal_end_microseconds_refuses_a_part_of_a_microsecond():
         record_duration=Fraction(1, 3),
         signals=("EEG",),
         units=("uV",),
+        prefiltering=("",),
         samples_per_record=(1,),
     )
     with pytest.raises(TimeFFormatError, match="not a whole number of microseconds"):
