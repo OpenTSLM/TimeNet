@@ -112,10 +112,10 @@ class RegularAxis:
 
         This method does not accept a float. Every real sampling rate is a whole number of values per
         second, so write ``500.0`` as ``500``. A rate that is not whole has no single reading: 29.97
-        fps is 2997/100 by its spelling and 30000/1001 by its intent. Those two drift 3.6 ms apart
-        over an hour. State which one with a :class:`~fractions.Fraction`, and build the Fraction from
-        a string, not a float. ``Fraction(29.97)`` is the binary expansion
-        (1054475631502295/35184372088832), and ``Fraction("29.97")`` is 2997/100.
+        fps is 2997/100 by its spelling and 30000/1001 by its intent. State which one with a
+        :class:`~fractions.Fraction`, and build the Fraction from a string, not a float.
+        ``Fraction(29.97)`` is the binary expansion (1054475631502295/35184372088832), and
+        ``Fraction("29.97")`` is 2997/100.
 
         Args:
             rate_hz: Values per second.

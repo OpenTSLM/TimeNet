@@ -250,9 +250,8 @@ class ZarrValuesBackend(BaseValuesBackend):
     def _time_offsets_appender(self, group: Any, spec_type: str, codec: Any, delta: Any) -> "_ArrayAppender":
         """Create the time offsets array parallel to a partition's values, and wrap it in an appender.
 
-        The Delta filter makes stored time offsets cheap. Time offsets are monotonic, so the deltas are
-        small and the Blosc bitshuffle then has little left to do. This saves 15-17% over bitshuffle
-        alone on realistic irregular spacing.
+        The array carries a Delta filter. Time offsets are monotonic, so the deltas are small and the
+        Blosc bitshuffle then has little left to do.
 
         Args:
             group: The open Zarr group.

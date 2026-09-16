@@ -209,10 +209,10 @@ class TimeFDataset:
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
-        For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records
-        and registered annotations, then hands the tasks over through ``source``. The writer streams
-        them to disk without a list.
+        A dataset with far more tasks than records (many questions over few recordings) cannot hold
+        every task in memory. A streaming connector builds the records and the registered
+        annotations, then passes the tasks through ``source``. The writer writes them to disk one at
+        a time, without a list.
 
         Streamed tasks are trusted, not validated the way :meth:`add_task` validates them. Each must
         already have its ``record_ids`` set. Each must reference only registered annotations and
