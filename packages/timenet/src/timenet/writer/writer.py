@@ -24,12 +24,11 @@ from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     CONTROL_DB_FILE,
-    DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
-    DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     MANIFEST_FILE,
 )
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.format.schemas import LOGICAL_IDS, UUID16, IdCodec, IdTypes
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
@@ -55,8 +54,9 @@ class TimeFWriter:
         dataset: TimeFDataset,
         *,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
-        row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
-        chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
+        values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
+        row_group_target_bytes: int | None = None,
+        chunk_max_bytes: int | None = None,
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int | None = None,
         data_page_size: int | None = None,
@@ -70,8 +70,11 @@ class TimeFWriter:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
             dataset: The populated dataset. The writer derives the schema when the dataset has none.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
-            row_group_target_bytes: Flush a row group once buffered values exceed this.
-            chunk_max_bytes: Split a series into chunks no larger than this.
+            values_layout: Chunk and row-group byte targets for the values plane.
+            row_group_target_bytes: Flush a row group once buffered values exceed this, or ``None``
+                to take the target from ``values_layout``.
+            chunk_max_bytes: Split a series into chunks no larger than this, or ``None`` to take the
+                target from ``values_layout``.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned compression level, or ``None`` for the backend default.
             data_page_size: Target uncompressed bytes per Parquet data page, or ``None`` for
@@ -109,8 +112,10 @@ class TimeFWriter:
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
-        self._row_group_target_bytes = row_group_target_bytes
-        self._chunk_max_bytes = chunk_max_bytes
+        self._row_group_target_bytes = (
+            values_layout.row_group_target_bytes if row_group_target_bytes is None else row_group_target_bytes
+        )
+        self._chunk_max_bytes = values_layout.chunk_max_bytes if chunk_max_bytes is None else chunk_max_bytes
         self._compression = compression
         self._compression_level = compression_level
         self._data_page_size = data_page_size

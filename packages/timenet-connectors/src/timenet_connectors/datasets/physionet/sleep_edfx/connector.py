@@ -33,6 +33,7 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.format.layout import WINDOWED_VALUES_LAYOUT
 from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
@@ -218,6 +219,10 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
 
 class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
     """Connector for Sleep-EDF (PhysioNet ``sleep-edfx``)."""
+
+    # One item of this corpus is one scored 30 s epoch, a window of a whole-night recording, so a
+    # reader must be able to decode an epoch without decoding the night around it.
+    values_layout = WINDOWED_VALUES_LAYOUT
 
     # Each study with the subject table that describes it. The order keeps record ids stable.
     _STUDIES: ClassVar[tuple[tuple[str, tables.SheetShape], ...]] = (

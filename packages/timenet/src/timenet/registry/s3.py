@@ -27,6 +27,7 @@ from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
@@ -161,6 +162,7 @@ class S3Registry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
@@ -175,6 +177,7 @@ class S3Registry(WritableRegistry):
             dataset: The populated dataset to store.
             force: Publish even if the version is already committed.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
+            values_layout: Chunk and row-group byte targets for the values plane.
             progress_cb: Optional writer progress callback.
 
         Returns:
@@ -191,7 +194,13 @@ class S3Registry(WritableRegistry):
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
-            with TimeFWriter(staging, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging,
+                dataset,
+                values_backend=values_backend,
+                values_layout=values_layout,
+                progress_cb=progress_cb,
+            ) as writer:
                 writer.write()
             version_dir = staging / dataset_id / version
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix

@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.registry.base import BaseRegistry
 from timenet.writer import WriteProgressEvent
 
@@ -25,6 +26,7 @@ class WritableRegistry(BaseRegistry, ABC):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and publish it to this registry.
@@ -36,6 +38,7 @@ class WritableRegistry(BaseRegistry, ABC):
             dataset: The populated dataset to store.
             force: Overwrite an already-committed version instead of skipping it.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
+            values_layout: Chunk and row-group byte targets for the values plane.
             progress_cb: Optional writer progress callback.
 
         Returns:

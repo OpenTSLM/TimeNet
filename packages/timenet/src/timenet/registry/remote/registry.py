@@ -18,6 +18,7 @@ from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.format.layout import DEFAULT_VALUES_LAYOUT, ValuesLayout
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
@@ -159,6 +160,7 @@ class RemoteRegistry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        values_layout: ValuesLayout = DEFAULT_VALUES_LAYOUT,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and publish it to the remote registry.
@@ -171,6 +173,7 @@ class RemoteRegistry(WritableRegistry):
             dataset: The populated dataset to store.
             force: Publish even if the version is already committed.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
+            values_layout: Chunk and row-group byte targets for the values plane.
             progress_cb: Optional writer progress callback.
 
         Returns:
@@ -187,7 +190,13 @@ class RemoteRegistry(WritableRegistry):
             return version
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
-            with TimeFWriter(staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging_root,
+                dataset,
+                values_backend=values_backend,
+                values_layout=values_layout,
+                progress_cb=progress_cb,
+            ) as writer:
                 writer.write()
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
