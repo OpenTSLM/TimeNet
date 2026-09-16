@@ -366,7 +366,7 @@ class Record:
             warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
         Returns:
-            The attached annotation (the same instance).
+            A new occurrence that shares the input annotation's reusable content.
 
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this record. If a
@@ -375,8 +375,9 @@ class Record:
                 the series' windows and ``warn_when_outside`` is False.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        self.annotations = (*self.annotations, annotation)
-        return annotation
+        attached = annotation._new_occurrence()
+        self.annotations = (*self.annotations, attached)
+        return attached
 
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
@@ -392,7 +393,7 @@ class Record:
             warn_when_outside: As on :meth:`add_annotation`.
 
         Returns:
-            The attached annotations (the same instances), in the order given.
+            New occurrences that share the input annotations' reusable content, in the order given.
 
         Raises:
             TimeFValidationError: as documented on :meth:`add_annotation`.
@@ -400,8 +401,9 @@ class Record:
         batch = tuple(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        self.annotations = (*self.annotations, *batch)
-        return batch
+        attached = tuple(annotation._new_occurrence() for annotation in batch)
+        self.annotations = (*self.annotations, *attached)
+        return attached
 
     def _validate_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> None:
         """Run :meth:`add_annotation`'s checks without attaching it.

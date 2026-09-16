@@ -170,7 +170,7 @@ def make_dataset() -> TimeFDataset:
         subject_ids=("subj-1",),
         record_id="record-1",
     )
-    record1.add_annotation(cohort)  # same instance and id, so two records share it
+    record1.add_annotation(cohort)  # A new occurrence shares the cohort content across both records.
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
     record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
