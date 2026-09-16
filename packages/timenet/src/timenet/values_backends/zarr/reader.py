@@ -4,9 +4,11 @@ This module resolves index rows to values through per-``spec_type`` Zarr arrays.
 :class:`timenet.values_backends.zarr.writer.ZarrValuesBackend`. Each index row locates a run of values by
 ``(chunk_file = array path, chunk_major_idx = element start)``. A series usually has one row, so a read is
 one contiguous range. For a series with multiple rows, the reader merges the contiguous rows into as few
-ranges as possible. The reader serves ranges from an LRU cache of decoded storage chunks. Neighboring
-series share storage chunks. Without the cache, each read decodes its full chunks again. This is the same
-reason the Parquet reader caches decoded row groups. The reader caches opened arrays for its own lifetime.
+ranges as possible.
+
+The reader serves ranges from an LRU cache of decoded storage chunks. Neighboring series share storage
+chunks. Without the cache, each read decodes its full chunks again. This is the same reason the Parquet
+reader caches decoded row groups. The reader caches opened arrays for its own lifetime.
 
 This module needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). The module imports it lazily.
 """
@@ -14,14 +16,15 @@ This module needs the ``zarr`` extra (``pip install 'timenet[zarr]'``). The modu
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
-from jaxtyping import Shaped
+from jaxtyping import Int64, Shaped
 import numpy as np
 import pyarrow as pa
 
 from timenet.errors import TimeFFormatError
-from timenet.values_backends.reader import BaseValuesReader
+from timenet.values_backends.reader import BaseValuesReader, SeriesChunks, window_chunks
 
 
 if TYPE_CHECKING:
@@ -33,7 +36,7 @@ _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
 #: Mirrors the group names in the writer module. See timenet.values_backends.zarr.writer.
 _IRREGULAR_GROUP = "_irregular"
 _TIME_OFFSETS_GROUP = "_time_offsets"
-#: Group that marks present timesteps in nullable series. It matches the writer's layout.
+#: Group that marks present steps in nullable series. It matches the writer's layout.
 _VALIDITY_GROUP = "_validity"
 
 
@@ -110,7 +113,7 @@ class ZarrValuesReader(BaseValuesReader):
             spec: The series' spec. Only a nullable one has a validity array.
 
         Returns:
-            The per-timestep validity (``True`` = present), or ``None``.
+            The per-step validity (``True`` = present), or ``None``.
         """
         if not spec.nullable:
             return None
@@ -121,37 +124,32 @@ class ZarrValuesReader(BaseValuesReader):
         return combined.astype(bool, copy=False)
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, chunks: SeriesChunks, start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
-        """Read only the storage chunks that intersect a temporal step range.
+        """Read only the storage chunks that a step window crosses.
+
+        The window's index rows come from a bisection of the series' offsets. This method trims
+        those rows to the window, then merges the contiguous ones into as few ranges as possible.
 
         Returns:
             The requested steps in their canonical Arrow representation.
         """
-        total = sum(row["n_values"] for row in rows)
-        bounded_stop = min(stop, total)
-        if start >= bounded_stop:
+        rows, offsets = chunks.rows, chunks.offsets()
+        first, last, bounded_stop = window_chunks(offsets, start, stop)
+        if first == last:
             if spec.dtype == "enum":
                 return pa.DictionaryArray.from_arrays(
                     pa.array([], type=pa.int32()), pa.array(spec.categories, type=pa.string())
                 )
             empty = np.empty((0, *spec.value_shape), dtype=spec.dtype)
             return _to_arrow(empty, spec)
-        runs = _coalesce_runs(rows)
+        runs = _merge_runs(_trimmed_ranges(rows, offsets, first, last, start, bounded_stop))
         parts = []
         validity_parts = []
-        cursor = 0
         for rel, run_start, run_stop in runs:
-            run_len = run_stop - run_start
-            if cursor + run_len > start and cursor < bounded_stop:
-                lo = max(start - cursor, 0)
-                hi = min(bounded_stop - cursor, run_len)
-                parts.append(self._read_range(version, rel, run_start + lo, run_start + hi))
-                if spec.nullable:
-                    validity_parts.append(
-                        self._read_range(version, _validity_path(rel), run_start + lo, run_start + hi)
-                    )
-            cursor += run_len
+            parts.append(self._read_range(version, rel, run_start, run_stop))
+            if spec.nullable:
+                validity_parts.append(self._read_range(version, _validity_path(rel), run_start, run_stop))
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
         validity = None
         if validity_parts:
@@ -272,9 +270,52 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
     Returns:
         The minimal list of ranges covering the rows, in order.
     """
+    return _merge_runs(
+        (row["chunk_file"], row["chunk_major_idx"], row["chunk_major_idx"] + row["n_values"]) for row in rows
+    )
+
+
+def _trimmed_ranges(  # noqa: PLR0913, PLR0917
+    rows: list[dict],
+    offsets: Int64[np.ndarray, " boundary"],
+    first: int,
+    last: int,
+    start: int,
+    bounded_stop: int,
+) -> Iterator[tuple[str, int, int]]:
+    """Cut ``rows[first:last]`` down to the part of each row that the window covers.
+
+    Args:
+        rows: The series' index rows, sorted by ``chunk_idx``.
+        offsets: The series' chunk offsets.
+        first: First index row the window crosses.
+        last: One past the last index row the window crosses.
+        start: First step of the window, inclusive.
+        bounded_stop: One past the window's last step, already clamped to the series' length.
+
+    Yields:
+        One ``(array path, start, stop)`` range per crossed row, in order. Empty ranges are left out.
+    """
+    for index in range(first, last):
+        row = rows[index]
+        cursor = int(offsets[index])
+        lo = max(start - cursor, 0)
+        hi = min(bounded_stop - cursor, row["n_values"])
+        if hi > lo:  # an empty row inside the window covers nothing
+            yield row["chunk_file"], row["chunk_major_idx"] + lo, row["chunk_major_idx"] + hi
+
+
+def _merge_runs(ranges: Iterable[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
+    """Merge contiguous ``(array path, start, stop)`` ranges of one array into single ranges.
+
+    Args:
+        ranges: The ranges to merge, in order.
+
+    Returns:
+        The minimal list of ranges covering the input, in order.
+    """
     runs: list[tuple[str, int, int]] = []
-    for row in rows:
-        rel, start, stop = row["chunk_file"], row["chunk_major_idx"], row["chunk_major_idx"] + row["n_values"]
+    for rel, start, stop in ranges:
         if runs and runs[-1][0] == rel and runs[-1][2] == start:
             runs[-1] = (rel, runs[-1][1], stop)
         else:
@@ -290,13 +331,13 @@ def _to_arrow(
     Args:
         values: The dense values read from the store.
         spec: The series' spec.
-        validity: Per-timestep validity (``True`` = present), or ``None`` for a non-nullable spec.
+        validity: Per-step validity (``True`` = present), or ``None`` for a non-nullable spec.
             Zarr stores values densely, so this is what turns a stored placeholder back into an
             Arrow null.
 
     Returns:
         A primitive array for scalar values or a fixed-shape tensor array for multidimensional values.
-        Each absent timestep contains a null.
+        Each absent step contains a null.
     """
     absent = None if validity is None else ~validity
     if spec.dtype == "str":

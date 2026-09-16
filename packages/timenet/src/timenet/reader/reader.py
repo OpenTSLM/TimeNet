@@ -6,8 +6,8 @@ and each series' values only on first use. The reader rebuilds types from the co
 declaration, and it does not create classes at runtime. As a result, read-back objects can pickle,
 and they match the original objects field for field.
 
-The rebuild is batched. Records come back a batch at a time, and each batch costs one query per
-table for the whole batch rather than one query per record.
+The rebuild is batched. Records come back a batch at a time. Each batch costs one query per table
+for the whole batch, not one query per record.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from timenet.types import (
     ureg,
     value_type_of,
 )
-from timenet.values_backends.reader import BaseValuesReader, make_values_reader
+from timenet.values_backends.reader import BaseValuesReader, SeriesChunks, make_values_reader
 
 
 if TYPE_CHECKING:
@@ -57,16 +57,18 @@ if TYPE_CHECKING:
 
 
 _RECORD_BATCH_ROWS = 512
-"""How many records one round of control-plane queries rebuilds.
+"""How many records one round of control-database queries rebuilds.
 
-Each query in the round scans its table once and answers for the whole batch.
+Each query in the round scans its table once and answers for the whole batch, so the per-record cost
+falls with the batch size. A few hundred records keep that cost low and still fit in memory.
 """
 
 _INDEX_ROWS_CACHE_RECORDS = 2 * _RECORD_BATCH_ROWS
-"""How many records keep their chunk locators.
+"""How many records keep their index rows.
 
-The locators are fetched a batch at a time, so the cache holds the batch a read is walking and the
-one before it. It must stay at least one batch wide.
+The rows are fetched a batch at a time, so the cache holds the batch a read is walking and the one
+before it. A smaller cache drops rows that the same batch asks for again, and the next record pays
+another statement for them.
 """
 
 _AXIS_CACHE_SIZE = 1024
@@ -82,15 +84,16 @@ class TimeFReader:
 
         This constructor reads nothing. The handle already carries the parsed manifest. The handle
         also wraps the filesystem and root that every later read uses. The reader resolves tasks,
-        records, annotations, and each series' values only on first use. As a result, opening a
-        version costs the same whatever its size.
+        records, annotations, and each series' values only on first use. As a result, the cost to
+        open a version is the same for three records or three million.
 
-        A corrupt or missing file fails on its first access, not here. Examples of a first access are
-        ``.tasks``, the first record, or the first value read. The failure reaches the caller as
-        :class:`~timenet.errors.TimeFFormatError`, the same type :meth:`verify` raises for that file,
-        and not as the ``FileNotFoundError`` the filesystem raised under it. To check the version's
-        integrity when you open it, call :meth:`verify`. Build the handle with
-        :meth:`~timenet.registry.BaseRegistry.open_version` or with
+        A structurally corrupt or missing file fails on its first access, not here. A first access
+        is ``.tasks``, the first record, or the first value read. The failure reaches the caller as
+        :class:`~timenet.errors.TimeFFormatError`, not as the ``FileNotFoundError`` the filesystem
+        raised under it. :meth:`verify` raises that same type for the same file.
+
+        Call :meth:`verify` for a check of the version's integrity at construction time. Build the
+        handle with :meth:`~timenet.registry.BaseRegistry.open_version` or with
         :meth:`~timenet.registry.version.DatasetVersion.open_local`.
 
         Args:
@@ -104,9 +107,9 @@ class TimeFReader:
         self._root = version.root
         self._manifest = version.manifest
 
-        # The schema types the rows, and the rows live in the control database, so the reader reads
-        # the schema from there. The manifest carries the same block as a projection, so a registry
-        # can filter on it without downloading the database.
+        # The schema types the rows, and the rows are in the control database, so that is where the
+        # reader reads it from. The manifest carries the same block as a projection a registry can
+        # filter on without downloading the database.
         self._schema: DatasetSchema | None = None
         self._spec_by_type: dict[str, TimeSeriesSpec] = {}
         self._annotation_descriptors: dict[str, AnnotationDescriptor] = {}
@@ -116,7 +119,7 @@ class TimeFReader:
         self._tasks: tuple[Task, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._axis_cache: dict[tuple, TimeAxis] = {}
-        self._index_rows_cache: OrderedDict[int, dict[str, list[dict]]] = OrderedDict()
+        self._index_rows_cache: OrderedDict[int, dict[str, SeriesChunks]] = OrderedDict()
 
     # ---- pickling ------------------------------------------------------------------------------
 
@@ -153,7 +156,7 @@ class TimeFReader:
         self.close()
 
     def close(self) -> None:
-        """Close the values backend and the control database, releasing their caches."""
+        """Close the values backend and the control database, and release their caches."""
         if self._values is not None:
             self._values.close()
             self._values = None
@@ -207,8 +210,8 @@ class TimeFReader:
 
         Returns:
             The specs and annotation descriptors the database declares, with the task classes the
-            manifest names. A task class is code rather than data, so the reader resolves the named
-            classes against the built-in registry.
+            manifest names. A task class is code rather than data, so the version declares which ones
+            it holds and the reader resolves them against the built-in registry.
         """
         return self._declaration()
 
@@ -259,8 +262,8 @@ class TimeFReader:
     ) -> Iterator[Record]:
         """Yield records lazily without materializing a :class:`TimeFDataset`.
 
-        Records are rebuilt a batch at a time, so the control plane is queried once per batch per
-        table rather than once per record. Records come back in stored order (sorted by
+        Records are rebuilt a batch at a time, so the reader queries the control database once per
+        batch per table, not once per record. Records come back in stored order (sorted by
         ``record_id``), not in the order you asked for them. An id that the dataset does not contain
         raises ``TimeFValidationError``.
 
@@ -334,7 +337,7 @@ class TimeFReader:
         return self._annotation_descriptors
 
     def _control_plane(self) -> ControlPlaneReader:
-        """Return the open control-plane view, built on first use.
+        """Return the open view of the control database, built on first use.
 
         Returns:
             The cached view.
@@ -383,8 +386,8 @@ class TimeFReader:
         series = _by_record(control.record_series(record_ids))
         tasks = _by_record(control.record_tasks(record_ids))
         annotations = _by_record(control.record_annotations(record_ids)) if with_annotations else {}
-        # Each record carries the ids of its batch, so the first series that reads its values
-        # fetches the locators of the whole batch.
+        # The batch travels with the records it built, so the first series that reads its values
+        # fetches the locators of the whole batch instead of its own record's.
         batch_keys = tuple(record_ids)
         for row in control.records(record_ids):
             key = row["record_id"]
@@ -486,42 +489,60 @@ class TimeFReader:
     def _index_rows(
         self, record_key: int, time_series_id: str, batch_keys: tuple[int, ...] | None = None
     ) -> list[dict]:
-        """Return one series' chunk locators, in ``chunk_idx`` order.
-
-        One query fetches the locators of a whole batch of records. A record built by
-        :meth:`_build_batch` carries the ids of its batch, so the first series that asks for its
-        locators fetches the whole batch's. The rows stay cached for that batch and the one before
-        it.
+        """Return one series' index rows, in ``chunk_idx`` order.
 
         Args:
-            record_key: The owning record's surrogate id, which the control plane joins on.
+            record_key: The owning record's surrogate id. The control database joins its rows on it.
+            time_series_id: The series id.
+            batch_keys: The surrogate ids of the batch ``record_key`` was built in.
+
+        Returns:
+            The series' index rows, empty if it has none.
+        """
+        return self._chunks(record_key, time_series_id, batch_keys).rows
+
+    def _chunks(self, record_key: int, time_series_id: str, batch_keys: tuple[int, ...] | None = None) -> SeriesChunks:
+        """Return one series' index rows and chunk offsets, in ``chunk_idx`` order.
+
+        One query returns every series of a whole batch of records. A record built by
+        :meth:`_build_batch` carries the batch it belongs to, so the first series that wants its
+        rows fetches the batch's. The cache holds the rows for the batch a read is walking and the
+        one before it. A series' chunk offsets are held with its rows, so every window of that
+        series reuses them.
+
+        Args:
+            record_key: The owning record's surrogate id. The control database joins its rows on it.
             time_series_id: The series id.
             batch_keys: The surrogate ids of the batch ``record_key`` was built in. ``None`` fetches
                 that record alone, which is what a caller outside the batched walk gets.
 
         Returns:
-            The series' chunk locator rows, empty if it has none.
+            The series' index rows and chunk offsets, with no rows if it has none.
         """
         with self._as_format_error():
             by_series = self._index_rows_cache.get(record_key)
             if by_series is None:
                 by_series = self._fetch_locators(record_key, batch_keys or (record_key,))
-            return by_series.get(time_series_id, [])
+            return by_series.get(time_series_id) or SeriesChunks(rows=[])
 
-    def _fetch_locators(self, record_key: int, batch_keys: tuple[int, ...]) -> dict[str, list[dict]]:
-        """Read one batch's chunk locators with a single statement and cache them per record.
+    def _fetch_locators(self, record_key: int, batch_keys: tuple[int, ...]) -> dict[str, SeriesChunks]:
+        """Read one batch's index rows with a single statement and cache them per record.
 
         Args:
-            record_key: The record whose locators the caller asked for.
+            record_key: The record whose index rows the caller asked for.
             batch_keys: The batch to fetch, which contains ``record_key``.
 
         Returns:
-            ``record_key``'s locators, keyed by series id, empty if the record has no series.
+            ``record_key``'s index rows, keyed by series id, empty if the record has no series.
         """
         wanted = [key for key in batch_keys if key not in self._index_rows_cache]
-        fetched: dict[int, dict[str, list[dict]]] = {key: {} for key in wanted}
+        grouped: dict[int, dict[str, list[dict]]] = {key: {} for key in wanted}
         for row in self._control_plane().record_chunks(wanted):
-            fetched[row["record_id"]].setdefault(row["time_series_id"], []).append(row)
+            grouped[row["record_id"]].setdefault(row["time_series_id"], []).append(row)
+        fetched = {
+            key: {series_id: SeriesChunks(rows=rows) for series_id, rows in by_series.items()}
+            for key, by_series in grouped.items()
+        }
         self._index_rows_cache.update(fetched)
         while len(self._index_rows_cache) > _INDEX_ROWS_CACHE_RECORDS:
             self._index_rows_cache.popitem(last=False)
@@ -545,7 +566,7 @@ class TimeFReader:
             task_rows: Its task links, in task order.
             annotation_rows: Its annotation rows, in the record's own annotation order.
             batch_keys: The surrogate ids of the batch this record was read in, which its series'
-                loaders fetch their chunk locators with.
+                loaders fetch their index rows with.
 
         Returns:
             The rebuilt record.
@@ -590,7 +611,7 @@ class TimeFReader:
             record_id: The owning record's id, which the loaders report errors against.
             struct: The stored series row, with its spec and axis columns joined in.
             batch_keys: The surrogate ids of the batch the owning record was read in, which the
-                loaders fetch their chunk locators with.
+                loaders fetch their index rows with.
 
         Returns:
             The rebuilt series.
@@ -727,13 +748,13 @@ class TimeFReader:
             record_key: The owning record's surrogate id.
             record_id: The owning record's id, for the error message.
             time_series_id: The series id to read.
-            batch_keys: The batch the owning record was read in, which the locators are fetched for.
+            batch_keys: The batch the owning record was read in, which the index rows are fetched for.
 
         Returns:
             One int64 microsecond time offset per value.
 
         Raises:
-            TimeFFormatError: If the series has no chunk locator or its time offsets cannot be read.
+            TimeFFormatError: If the series has no index row or its time offsets cannot be read.
         """
         rows = self._index_rows(record_key, time_series_id, batch_keys)
         if not rows:
@@ -756,13 +777,13 @@ class TimeFReader:
             record_key: The owning record's surrogate id.
             record_id: The owning record's id, for the error message.
             time_series_id: The series id to read.
-            batch_keys: The batch the owning record was read in, which the locators are fetched for.
+            batch_keys: The batch the owning record was read in, which the index rows are fetched for.
 
         Returns:
             The series values in the spec's canonical Arrow representation.
 
         Raises:
-            TimeFFormatError: If the series has no chunk locator or a chunk cannot be read.
+            TimeFFormatError: If the series has no index row or a chunk cannot be read.
         """
         rows = self._index_rows(record_key, time_series_id, batch_keys)
         if not rows:
@@ -822,7 +843,7 @@ def _descriptor(row: dict) -> AnnotationDescriptor:
 
 
 def _by_record(rows: Iterable[dict]) -> dict[int, list[dict]]:
-    """Group a batch's rows by the record they belong to, keeping their stored order.
+    """Group a batch's rows by the record they belong to, and keep their stored order.
 
     Args:
         rows: The rows to group, already ordered by record and then by position.
@@ -834,7 +855,7 @@ def _by_record(rows: Iterable[dict]) -> dict[int, list[dict]]:
 
 
 def _grouped(rows: Iterable[dict], column: str) -> dict[Any, list[dict]]:
-    """Group rows by one column, keeping their stored order within each group.
+    """Group rows by one column, and keep their stored order within each group.
 
     Args:
         rows: The rows to group.
@@ -965,17 +986,17 @@ def _task_payload(
 
 @dataclass(frozen=True)
 class _SeriesLoader:
-    """A picklable lazy loader for one series' values.
+    """A picklable lazy loader for one series' values (replaces a per-series closure).
 
-    The loader holds the reader and the series' identity, not a closure, so a read-back dataset can
-    pickle and a multi-worker torch ``DataLoader`` can use it. The values are read only when you
-    call the loader.
+    A nested closure cannot pickle. This class holds the reader and the series' identity instead of
+    a closure. As a result, a read-back dataset can pickle, and a multi-worker torch ``DataLoader``
+    can use it. The class reads the series' values only when you call it.
     """
 
     reader: TimeFReader
     """The reader that reads and decodes the series' values."""
     record_key: int
-    """The owning record's surrogate id, which the control plane joins on."""
+    """The owning record's surrogate id. The control database joins its rows on it."""
     record_id: str
     """The owning record's id, which errors are reported against."""
     time_series_id: str
@@ -998,30 +1019,31 @@ class _SeriesLoader:
             The requested steps in their canonical Arrow representation.
 
         Raises:
-            TimeFFormatError: If this series has no chunk locator.
+            TimeFFormatError: If this series has no index row.
         """
-        rows = self.reader._index_rows(self.record_key, self.time_series_id, self.batch_keys)
-        if not rows:
+        chunks = self.reader._chunks(self.record_key, self.time_series_id, self.batch_keys)
+        if not chunks.rows:
             raise TimeFFormatError(f"no index entry for record {self.record_id!r} series {self.time_series_id!r}")
         if self.reader._values is None:
             self.reader._values = make_values_reader(self.reader._manifest.values_backend)
-        spec = self.reader._specs()[rows[0]["spec_type"]]
-        return self.reader._values.load_range(self.reader._version, rows, start, stop, spec)
+        spec = self.reader._specs()[chunks.rows[0]["spec_type"]]
+        return self.reader._values.load_range(self.reader._version, chunks, start, stop, spec)
 
 
 @dataclass(frozen=True)
 class _TimeOffsetsLoader:
     """A picklable lazy loader for an irregular series' per-value time offsets.
 
-    A multi-worker torch ``DataLoader`` pickles the series to send it to its workers, so this loader
-    is a class and not a closure. It mirrors :class:`_SeriesLoader`, because time offsets and values
-    are separate columns and each one reads on its own.
+    A nested closure cannot pickle, so this loader is a class, not a lambda. A multi-worker torch
+    ``DataLoader`` pickles the series to send it to its workers, and a closure cannot pickle. This
+    class mirrors :class:`_SeriesLoader`, because time offsets and values are separate columns, and
+    each column reads on its own.
     """
 
     reader: TimeFReader
     """The reader that reads and decodes the series' time offsets."""
     record_key: int
-    """The owning record's surrogate id, which the control plane joins on."""
+    """The owning record's surrogate id. The control database joins its rows on it."""
     record_id: str
     """The owning record's id, which errors are reported against."""
     time_series_id: str
@@ -1036,10 +1058,10 @@ class _TimeOffsetsLoader:
     """The declared value count, checked against the stored stream's length."""
 
     def __call__(self) -> pa.Array:
-        """Read the series' time offsets, checking them against the axis and value count.
+        """Read the series' time offsets and check them against the axis and value count.
 
-        The writer checks the ordering, the count, and the endpoints. Nothing else rechecks them on
-        read, so this method does.
+        The writer checks ordering, count, and endpoints, but nothing rechecks them on read. Without
+        this check, a corrupt shard hands back a decreasing, wrong-length, or off-endpoint stream.
 
         Returns:
             One int64 microsecond time offset per value.
