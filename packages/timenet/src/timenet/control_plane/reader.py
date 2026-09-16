@@ -96,7 +96,7 @@ class ControlPlaneReader:
     """An open, read-only view of one version's control database."""
 
     def __init__(self, version: "DatasetVersion") -> None:
-        """Bind the view to a version. Nothing is opened until the first query.
+        """Bind the view to a version. The database opens on the first query.
 
         Args:
             version: The opened version handle, for its filesystem and root.
@@ -107,7 +107,7 @@ class ControlPlaneReader:
 
     @property
     def connection(self) -> duckdb.DuckDBPyConnection:
-        """The open connection, opened on first use and checked against this reader's schema version.
+        """The connection, opened on first use and checked against this reader's schema version.
 
         Returns:
             The connection, with the control database as its default catalog.
@@ -136,7 +136,7 @@ class ControlPlaneReader:
         return connection
 
     def _database_path(self) -> Path:
-        """Return a local path to the control database, copying it down when it is not local already.
+        """Return a local path to the control database, copied down first when it is remote.
 
         Returns:
             The path DuckDB opens.
@@ -163,7 +163,7 @@ class ControlPlaneReader:
         return self._materialized
 
     def close(self) -> None:
-        """Close the connection and drop any local copy. Safe to call more than once."""
+        """Close the connection and remove any local copy. Safe to call more than once."""
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -193,7 +193,7 @@ class ControlPlaneReader:
             cursor.close()
 
     def resolve_record_ids(self, external_ids: Sequence[str]) -> tuple[list[int], list[str]]:
-        """Turn the caller's record ids into surrogates with one query.
+        """Turn the caller's record ids into surrogate ids with one query.
 
         Args:
             external_ids: The ids the caller asked for.

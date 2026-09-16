@@ -1,13 +1,11 @@
 """Payload: a typed task holds what its class declares, and nothing else.
 
-Main enforced the typing with one table per task type. Each field had its own column, and the
-database refused a row that did not fit. An entity-attribute-value payload buys a stable set of
-tables at the cost of that refusal. These checks put the refusal back.
+The payload tables hold one row per field, so their column types say nothing about which fields a
+task type has. These checks say it instead.
 
 The rules come from :mod:`timenet.control_plane.payload`, which says which table holds each field
 of each task type. A field added to a task class therefore changes these checks with it. Each check
-compares the stored rows against the declaration in one pass, and joins on a rendered ``VALUES``
-list rather than scanning the payload tables one time per task type.
+compares the stored rows against the declaration in one pass, over a rendered ``VALUES`` list.
 """
 
 from collections.abc import Sequence
@@ -40,8 +38,8 @@ def _typed_task_payload() -> tuple[Check, ...]:
     """Return the checks that each task's stored payload is the one its class declares.
 
     Returns:
-        The named checks. A type that declares no reference or no required field drops the check
-        that would have no rows to compare against.
+        The named checks. A check is left out when no task type declares the payload it compares
+        against, because it would have nothing to compare.
     """
     field_rows: list[tuple[str, ...]] = []
     ref_rows: list[tuple[str, ...]] = []
@@ -52,7 +50,7 @@ def _typed_task_payload() -> tuple[Check, ...]:
         answer = text_answer(task_type)
         if answer is not None:
             answering_types.append(str(task_type))
-        # Every task may carry a scope, stored in task_spans under its own field name.
+        # Every task can carry a scope, stored in task_spans under its own field name.
         span_rows.append((str(task_type), "scope"))
         for name in required_payload_fields(task_type):
             required_rows.append((str(task_type), name))

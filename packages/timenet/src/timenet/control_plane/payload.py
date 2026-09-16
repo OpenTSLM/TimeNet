@@ -1,17 +1,18 @@
 """How a typed task maps to rows: which table holds each payload field, and under what name.
 
-Every task carries the same frame, whatever its class: its id, the records it names, the tasks it
-derives from, its prompt, its scope, the annotations it takes as input or gives as its answer, and
-its rationale. The writer and the reader handle the frame directly. What differs per class is the
-payload. The control plane stores a payload as rows keyed by field name rather than as a column per
-field, so something has to say which table a given field's value belongs in. This module declares
-that, one entry per built-in task class.
+Every task carries the same frame, whatever its type. The frame is its id, the records it names, the
+tasks it derives from, and its prompt. It also holds its scope, its input and answer annotations,
+and its rationale. The writer and the reader handle the frame directly.
 
-This is knowledge about the task classes, not about the database. The tables it names are defined in
-:mod:`timenet.control_plane.schema`, and :mod:`timenet.control_plane.checks` turns the same
-declaration into the queries that refuse a task whose stored payload is not the one its class
-declares. :func:`task_payload` compares the declaration against the live dataclass on every read, so
-a field added to a task class fails loudly rather than being dropped on write.
+The payload is what differs per type. The control plane stores a payload as rows keyed by field
+name, not as a column per field. Something must therefore say which table holds a given field's
+value. This module declares that, one entry per built-in task type.
+
+This is knowledge about the task types, not about the database. :mod:`timenet.control_plane.schema`
+defines the tables it names. :mod:`timenet.control_plane.checks` turns the same declaration into the
+queries that refuse a task whose stored payload is not the one its type declares.
+:func:`task_payload` checks the declaration against the live dataclass on every read. A field added
+to a task type therefore fails loudly rather than disappearing on write.
 """
 
 from dataclasses import MISSING, dataclass, fields
@@ -24,7 +25,7 @@ from timenet.types import TASKS, TaskType
 
 @unique
 class PayloadKind(StrEnum):
-    """How one task payload field is stored, which says which table holds its value."""
+    """How one task payload field is stored, and so which table holds its value."""
 
     TEXT = "text"
     """A string, in ``task_fields.text_value``. A ``StrEnum`` payload stores as its value."""
@@ -47,12 +48,13 @@ class PayloadField:
     kind: PayloadKind
     """Which table holds the value."""
     is_list: bool = False
-    """Whether the field holds a tuple rather than a single value. Only a ref or a span field may.
+    """Whether the field holds a tuple rather than a single value. Only a ref or a span field can.
 
-    ``None`` and ``()`` mean different things: a localization target of ``None`` says the answer is
-    stored by reference, and ``()`` says the task looked and found nothing. Zero element rows cannot
-    tell the two apart. So every payload field that is not ``None`` gets one ``task_fields`` row,
-    whatever its kind, and that row alone says the field is set.
+    A list field distinguishes ``None`` from ``()``, and both mean something. A localization target
+    of ``None`` says the answer is stored by reference. ``()`` says the task looked and found
+    nothing. Zero element rows cannot tell the two apart. Every payload field that is not ``None``
+    therefore gets one ``task_fields`` row, whatever its kind, and that row alone says the field is
+    set.
     """
 
     @property
@@ -94,10 +96,10 @@ TASK_PAYLOAD: Final[dict[TaskType, tuple[PayloadField, ...]]] = {
 }
 """The payload fields of each task type, beyond the frame every task shares.
 
-The writer and the reader handle the frame (``id``, ``record_ids``, ``from_task_ids``, ``prompt``,
-``scope``, the annotation id tuples and ``rationale``) directly, so it is not listed here.
-:func:`task_payload` compares this declaration against the live dataclass, so a field added to a
-task type fails loudly rather than being dropped on write.
+The writer and the reader handle the frame directly, so it is not listed here. The frame is ``id``,
+``record_ids``, ``from_task_ids``, ``prompt``, ``scope``, the annotation id tuples and
+``rationale``. :func:`task_payload` checks this declaration against the live dataclass. A field
+added to a task type therefore fails loudly rather than disappearing on write.
 """
 
 _TASK_FRAME: Final = frozenset(
@@ -116,7 +118,7 @@ _TASK_FRAME: Final = frozenset(
 
 
 def task_payload(task_type: TaskType) -> tuple[PayloadField, ...]:
-    """Return one task type's payload declaration, compared against its dataclass.
+    """Return one task type's payload declaration, checked against its dataclass.
 
     Args:
         task_type: The task type whose payload to describe.
@@ -125,7 +127,7 @@ def task_payload(task_type: TaskType) -> tuple[PayloadField, ...]:
         The payload fields, in declaration order.
 
     Raises:
-        TimeFValidationError: If the task dataclass and this declaration have drifted apart, or a
+        TimeFValidationError: If the task dataclass and this declaration disagree, or a
             scalar-valued field is declared as a list.
     """
     declared = TASK_PAYLOAD[task_type]
@@ -152,7 +154,7 @@ def task_payload(task_type: TaskType) -> tuple[PayloadField, ...]:
 def text_answer(task_type: TaskType) -> PayloadField | None:
     """Return the payload field a task type answers with in free text, if it has one.
 
-    That answer is an item of the task rather than a named field of its payload, so it is stored in
+    That answer is an item of the task, not a named field of its payload. It is stored in
     ``task_items`` beside the records the task names, not in ``task_fields``.
 
     Args:
@@ -171,9 +173,9 @@ def text_answer(task_type: TaskType) -> PayloadField | None:
 def required_payload_fields(task_type: TaskType) -> tuple[str, ...]:
     """Return the payload fields a task type cannot leave unset.
 
-    A field the dataclass gives no default is one its constructor demands, so a stored task without
-    it cannot be rebuilt. The list comes from the dataclass rather than from a second declaration,
-    so it stays in step with the class.
+    A field the dataclass gives no default is one its constructor demands. A stored task without it
+    cannot be rebuilt. The list comes from the dataclass rather than from a second declaration,
+    which keeps it in step with the dataclass.
 
     Args:
         task_type: The task type to describe.
