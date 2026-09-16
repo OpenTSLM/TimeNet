@@ -8,22 +8,22 @@ tags:
 
 # Architecture
 
-How TimeNet's packages, registries, and build fit together. This page is the map. Follow the links
-for per-component detail.
+How TimeNet's packages, registries, and build fit together. This page gives the overview. Each link
+leads to the detail for one component.
 
 ---
 
 ## The big picture
 
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
-**client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
-The values plane can be Parquet or Zarr. Reading never runs connector code. Against a local registry,
-`load` can first build a dataset that the registry does not have from an installed connector.
+**client** reads its manifest from a **registry** and loads the data. The control plane is DuckDB.
+The values plane can be Parquet or Zarr. A read never runs connector code. Against a local registry,
+`load` can build a missing dataset from an installed connector, then read it.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
 | **`timenet`** | Python package | TimeF format, reader/writer, registry client, engine, `BaseConnector`, SDK, CLI | everyone (`pip install timenet`) |
-| **registry** | a served location | compiled TimeF versions | the SDK reads it and build publishes to it |
+| **registry** | a served location | compiled TimeF versions | the client reads it and build publishes to it |
 | **`timenet-connectors`** | a repo | connector recipes + cards + the `timenet-build` CLI | connector authors (clone it) |
 
 There can be several registries: one public, private internal ones, or a local directory.
@@ -46,10 +46,10 @@ CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` (the card's human-authored metadata plus the schema derived from the data)
-is the single source of truth the SDK reads. `open_version` returns a handle: the manifest plus a
+is the single source of truth the client reads. `open_version` returns a handle: the manifest plus a
 filesystem-rooted view of the version's files. `TimeFReader` reads through this handle. It loads each
-series only on first use, not every file up front. Because the SDK never imports connector code,
-everything a consumer needs to interpret either values backend lives in the manifest.
+series on first use. It does not read every file in advance. Because the client never imports
+connector code, the manifest holds everything a consumer needs to read either values backend.
 
 ---
 
@@ -93,19 +93,19 @@ flow reads it straight back.
 
 ## Design principles
 
-- The manifest is self-describing. The SDK reads schema, counts, and file pointers from
+- The manifest is self-describing. The client reads schema, counts, and file pointers from
   `manifest.json`. It never runs connector code or globs the directory.
 - Types are plain frozen dataclasses. Specs, data sources, and annotations are frozen
   [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
-  synthesis. That keeps multiprocessing `DataLoader` workers safe.
+  synthesis. This makes multiprocessing `DataLoader` workers safe.
 - Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()`,
   `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
   per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
   dtype-preserving multidimensional values.
-- Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
-  and conversion.
+- Units go through [pint](https://pint.readthedocs.io). One shared pint unit registry owns every
+  definition and conversion.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a
-  single atomic rename. Once `manifest.json` is present, the writer commits the version.
+  single atomic rename. When `manifest.json` is present, the writer commits the version.
 - Versions are immutable. Edits are copy-on-write. To remove a row, the writer writes a new version
   through the same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)). Stable
   never-reused ids keep references valid. Content-defined chunking keeps the rewrite cheap on a
@@ -115,9 +115,9 @@ flow reads it straight back.
 
 ## Lifecycle of a dataset
 
-1. **Author** a connector at `datasets/<org>/<name>/` (its `__init__.py` exposes `CONNECTOR`) with its
-   `dataset.yaml` card beside it, in `timenet-connectors`.
+1. **Author** a connector in `timenet-connectors`, at `datasets/<org>/<name>/`, with its
+   `dataset.yaml` card beside it. Its `__init__.py` exposes `CONNECTOR`.
 2. **Build**: `timenet-build build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
-3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
+3. **Check** it locally: point the client at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: `timenet download <id>` reads the manifest and fetches every file it lists.
