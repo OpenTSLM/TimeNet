@@ -1,8 +1,7 @@
 """Read a version's control database: one query per table per batch, never one query per record.
 
 Every call here answers for a whole batch of records, or for the whole version. The database opens
-read-only. A version whose files live on an object store is copied to a local temporary file first,
-and :meth:`ControlPlaneReader.close` removes that copy.
+read-only. A version whose files live on an object store is copied to a local temporary file first.
 """
 
 from collections.abc import Iterator, Sequence
@@ -23,9 +22,27 @@ if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
 
 
+_SPECS: Final = """
+SELECT spec_type, name, unit_value, data_source_type, data_source_name, data_source_provider,
+       dtype, categories, value_shape, dimension_names, nullable
+FROM specs ORDER BY spec_id
+"""
+
+_ANNOTATION_DESCRIPTORS: Final = """
+SELECT key, annotation_type, value_type, unit, description FROM annotation_descriptors ORDER BY descriptor_id
+"""
+
 _RECORDS: Final = """
 SELECT record_id, external_id, start_time_us, time_span_start_us, time_span_end_us, subject_ids
 FROM records WHERE record_id IN (SELECT unnest(?)) ORDER BY record_id
+"""
+
+_RECORD_TASKS: Final = """
+SELECT l.record_id, t.external_id
+FROM record_tasks l
+JOIN tasks t ON t.task_id = l.task_id
+WHERE l.record_id IN (SELECT unnest(?))
+ORDER BY l.record_id, l.task_id
 """
 
 _RECORD_SERIES: Final = """
@@ -56,31 +73,46 @@ ORDER BY t.position
 """
 
 # A series shared by several records is stored once, so its chunks are reached through the link
-# table. Ordering by the series id and then by chunk keeps a series' chunks contiguous and in the
-# order the values plane concatenates them.
+# table. Ordering by the record, then by the series' own id, then by chunk keeps a series' chunks
+# contiguous and in the order the values plane concatenates them.
 _RECORD_CHUNKS: Final = """
-SELECT s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
+SELECT l.record_id, s.external_id AS time_series_id, sp.spec_type, c.chunk_idx, v.chunk_file,
        c.chunk_major_idx, c.chunk_minor_idx, c.n_values
-FROM records r
-JOIN record_time_series l ON l.record_id = r.record_id
+FROM record_time_series l
 JOIN time_series s ON s.time_series_id = l.time_series_id
 JOIN specs sp ON sp.spec_id = s.spec_id
-JOIN signal_chunks c ON c.time_series_id = s.time_series_id
+JOIN time_series_chunks c ON c.time_series_id = s.time_series_id
 JOIN values_artifacts v ON v.artifact_id = c.artifact_id
-WHERE r.external_id = ?
-ORDER BY s.time_series_id, c.chunk_idx
+WHERE l.record_id IN (SELECT unnest(?))
+ORDER BY l.record_id, s.time_series_id, c.chunk_idx
 """
 
 _TASKS: Final = "SELECT task_id, external_id, task_type, prompt, rationale FROM tasks ORDER BY task_id"
 
-_TASK_ITEMS: Final = "SELECT task_id, role, external_id FROM task_items ORDER BY task_id, role, position"
+# A task's items are one ordered list whatever they name, so the text it answers with and the records
+# it is about come back from one query. The record's own id is joined back in, because that is what
+# the task's field holds.
+_TASK_ITEMS: Final = """
+SELECT i.task_id, i.role, i.item_type, i.text_value, r.external_id
+FROM task_items i
+LEFT JOIN records r ON r.record_id = i.record_id
+ORDER BY i.task_id, i.role, i.item_type, i.position
+"""
+
+_TASK_FROM_TASKS: Final = "SELECT task_id, external_id FROM task_from_tasks ORDER BY task_id, position"
 
 _TASK_FIELDS: Final = "SELECT task_id, field, text_value, double_value FROM task_fields"
 
-_TASK_REFS: Final = "SELECT task_id, field, external_id FROM task_refs ORDER BY task_id, field, position"
+_TASK_REFS: Final = """
+SELECT p.task_id, p.field, coalesce(r.external_id, s.external_id) AS external_id
+FROM task_refs p
+LEFT JOIN records r ON p.ref_kind = 'record' AND r.record_id = p.ref_id
+LEFT JOIN time_series s ON p.ref_kind = 'time_series' AND s.time_series_id = p.ref_id
+ORDER BY p.task_id, p.field, p.position
+"""
 
 _TASK_SPANS: Final = """
-SELECT task_id, field, frame, start_us, end_us, time_series_ids
+SELECT task_id, field, frame, start_at, end_at, time_series_ids
 FROM task_spans ORDER BY task_id, field, position
 """
 
@@ -171,6 +203,24 @@ class ControlPlaneReader:
             self._materialized.unlink(missing_ok=True)
             self._materialized = None
 
+    # ---- the type declaration --------------------------------------------------------------
+
+    def specs(self) -> list[dict]:
+        """Return the dataset's time-series specs, in the order the schema derived them.
+
+        Returns:
+            One row per spec, with every column of its descriptor.
+        """
+        return self._rows(_SPECS, [])
+
+    def annotation_descriptors(self) -> list[dict]:
+        """Return the dataset's annotation descriptors, in the order the schema derived them.
+
+        Returns:
+            One row per annotation key.
+        """
+        return self._rows(_ANNOTATION_DESCRIPTORS, [])
+
     # ---- records ---------------------------------------------------------------------------
 
     def record_id_batches(self, batch_size: int) -> Iterator[list[int]]:
@@ -182,8 +232,8 @@ class ControlPlaneReader:
         Yields:
             One batch of ids at a time.
         """
-        # The ids stream from their own cursor. Hydrating a batch runs more queries, and a second
-        # query on the same connection would discard the result this one is still reading.
+        # The ids stream from their own cursor, because hydrating a batch runs more queries and a
+        # second query on the same connection would discard the result this one is still reading.
         cursor = self.connection.cursor()
         try:
             found = cursor.execute("SELECT record_id FROM records ORDER BY record_id")
@@ -221,6 +271,17 @@ class ControlPlaneReader:
         """
         return self._rows(_RECORDS, [list(record_ids)])
 
+    def record_tasks(self, record_ids: Sequence[int]) -> list[dict]:
+        """Return the tasks a batch of records carries, by the caller's task id.
+
+        Args:
+            record_ids: The surrogate ids of the records to read.
+
+        Returns:
+            One row per (record, task) link, in task order within each record.
+        """
+        return self._rows(_RECORD_TASKS, [list(record_ids)])
+
     def record_series(self, record_ids: Sequence[int]) -> list[dict]:
         """Return the series of a batch of records, with their spec and axis resolved.
 
@@ -251,19 +312,19 @@ class ControlPlaneReader:
         """
         return self._rows(_REGISTERED_ANNOTATIONS, [])
 
-    def record_chunks(self, record_external_id: str) -> list[dict]:
-        """Return every chunk locator of one record's series.
+    def record_chunks(self, record_ids: Sequence[int]) -> list[dict]:
+        """Return every chunk locator of a batch of records' series.
 
-        A read walks one record at a time, so the locators come back for the whole record rather
-        than once per series.
+        One statement answers for the whole batch, like every other query here.
 
         Args:
-            record_external_id: The id the record was built under.
+            record_ids: The surrogate ids of the records to read, as :meth:`records` reports them.
 
         Returns:
-            One row per chunk, grouped by series and ordered by ``chunk_idx`` within each.
+            One row per chunk, grouped by record and then by series, and ordered by ``chunk_idx``
+            within each series.
         """
-        return self._rows(_RECORD_CHUNKS, [record_external_id])
+        return self._rows(_RECORD_CHUNKS, [list(record_ids)])
 
     # ---- tasks -----------------------------------------------------------------------------
 
@@ -271,12 +332,14 @@ class ControlPlaneReader:
         """Return every task and its payload, one query per table.
 
         Returns:
-            The ``tasks``, ``items``, ``fields``, ``refs``, ``spans`` and ``annotations`` rows, each
-            ordered so a task's own rows are contiguous and in position order.
+            The ``tasks``, ``items``, ``from_tasks``, ``fields``, ``refs``, ``spans`` and
+            ``annotations`` rows, each ordered so a task's own rows are contiguous and in position
+            order.
         """
         return {
             "tasks": self._rows(_TASKS, []),
             "items": self._rows(_TASK_ITEMS, []),
+            "from_tasks": self._rows(_TASK_FROM_TASKS, []),
             "fields": self._rows(_TASK_FIELDS, []),
             "refs": self._rows(_TASK_REFS, []),
             "spans": self._rows(_TASK_SPANS, []),
@@ -288,8 +351,8 @@ class ControlPlaneReader:
     def _rows(self, query: str, parameters: list[Any]) -> list[dict]:
         """Run one query and return its rows as dicts.
 
-        The result comes back through Arrow rather than row by row, so the whole batch crosses the
-        boundary once.
+        The result comes back through Arrow rather than row by row, so a batch of a thousand records
+        crosses the boundary once.
 
         Args:
             query: The SQL to run.
@@ -298,4 +361,4 @@ class ControlPlaneReader:
         Returns:
             One dict per row, keyed by column name.
         """
-        return self.connection.execute(query, parameters).arrow().to_pylist()
+        return self.connection.execute(query, parameters).to_arrow_table().to_pylist()
