@@ -7,10 +7,9 @@ sync:
 # requirements.txt, so a connector's tests do not run here. They run in per-connector environments
 # through `make test-connectors`.
 #
-# The slow set is deselected, by the `-m "not slow"` in pyproject's addopts. Those tests spend most
-# of their time in a moto server, an isolated uv environment or a full Zarr round trip: a third of
-# the wall clock for 25 of 1427 tests. Run them with `make test-slow`, or run everything with
-# `make test-all`, which is what CI does.
+# The `-m "not slow"` in pyproject's addopts deselects the tests marked `slow`. Those tests spend
+# most of their time in a moto server, an isolated uv environment or a full Zarr round trip. Run
+# them with `make test-slow`, or run everything with `make test-all`, which is what CI does.
 PYTEST_CORE = uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
 
 test:

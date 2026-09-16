@@ -180,8 +180,8 @@ def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
         _written(tmp_path, dataset)
 
 
-# 64 bytes is the smallest target, so it writes the most Zarr chunks by far. The three larger
-# targets prove the same rounding in a fraction of the time, so only 64 goes to the slow set.
+# 64 bytes is the smallest target, so it writes the most Zarr chunks. The three larger targets
+# cover the same rounding, so only 64 is marked slow.
 @pytest.mark.parametrize("chunk_max_bytes", [pytest.param(64, marks=pytest.mark.slow), 480, 1000, 4096])
 def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes):
     # Zarr requires the shard shape to be a multiple of the chunk shape. The time offsets array has its

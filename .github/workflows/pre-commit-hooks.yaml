@@ -76,7 +76,7 @@ jobs:
     - name: Test with pytest (Python 3.13)
       id: pytest
       continue-on-error: true
-      # test-all, not test: `make test` deselects the slow set, and CI is where it has to run.
+      # `make test` deselects the tests marked `slow`. CI runs them too, so it uses `test-all`.
       run: make test-all
     - name: Test connectors in per-connector environments
       # Each connector's tests and type-check run in an environment built from its own

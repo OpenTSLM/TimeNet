@@ -31,8 +31,8 @@ Run these before you open a pull request, and make them pass:
 - `make license-check` fails the build if a copyleft dependency enters the tree.
 
 A test is `slow` when it spends most of its time outside the code under test: in a moto server, in
-an isolated uv environment, or in a full Zarr round trip. Leaving those out halves what `make test`
-costs. CI runs `make test-all`, so they still gate every PR.
+an isolated uv environment, or in a full Zarr round trip. CI runs `make test-all`, so these tests
+still gate every PR.
 
 To mirror the CI quick job, run `make check-ci` and `make test-unit`. `make check-ci` runs the
 hooks over all files, the same way CI does, and adds a `ty` pass against Python 3.11.

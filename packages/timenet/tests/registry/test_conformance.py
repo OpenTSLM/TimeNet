@@ -91,9 +91,8 @@ def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
     return S3Registry(f"s3://{bucket}/registry", cache_dir=tmp_path / "cache")
 
 
-# The s3 param starts and stops a moto server per test, which costs more than the conformance it
-# proves. The local and remote params cover the same contract in-process, so they stay in the
-# default run and s3 goes to the slow set.
+# The s3 param starts and stops a moto server for each test, so it is marked slow. The local and
+# remote params cover the same contract in-process, so they stay in the default run.
 @pytest.fixture(params=["local", pytest.param("s3", marks=pytest.mark.slow), "remote"])
 def backend(request, tmp_path, monkeypatch) -> Backend:
     """A writable registry of the requested kind, seeded via ``store``.

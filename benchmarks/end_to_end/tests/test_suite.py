@@ -47,8 +47,8 @@ def test_regression_percent():
     assert regression_percent(100.0, 101.0) == pytest.approx(1.0)
 
 
-# Each Zarr case writes and reads a whole Zarr store twice, and together they are most of this
-# module's runtime. The Parquet cases prove the same determinism, so only Zarr goes to the slow set.
+# Each Zarr case writes and reads a whole Zarr store twice. The Parquet cases cover the same
+# determinism, so only the Zarr cases are marked slow.
 @pytest.mark.parametrize(
     "case",
     [pytest.param(case, marks=pytest.mark.slow) if case.values_backend == "zarr" else case for case in MATRIX],

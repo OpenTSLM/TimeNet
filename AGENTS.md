@@ -67,17 +67,17 @@ workspace definition and the shared ruff/ty/pytest config; per-package
 After any change, run these and make them pass before claiming the work is done:
 - `make check` — `ruff format`, `ruff check`, `ty check`
 - `make lint-fix` — auto-fix lint findings
-- `make test` — core tests in the dev environment, without the slow set
+- `make test` — core tests in the dev environment, without the tests marked `slow`
 - `make test-connectors` — each connector's tests and type-check in its own environment
 
-`make test` deselects the tests marked `slow`, so it answers in about a minute instead of nearly
-three. A test is slow when it spends most of its time outside the code under test: in a moto server,
-in an isolated uv environment, or in a full Zarr round trip. Run those with `make test-slow`, and run
-everything with `make test-all`. CI runs `make test-all`, so a slow test still gates every PR.
+`make test` deselects the tests marked `slow`. A test is slow when it spends most of its time
+outside the code under test: in a moto server, in an isolated uv environment, or in a full Zarr
+round trip. Run those with `make test-slow`, and run everything with `make test-all`. CI runs
+`make test-all`, so a slow test still gates every PR.
 
-Mark a new test `@pytest.mark.slow` when it belongs to one of those three groups, and say in a
-comment what covers the same ground in the default run. Where only some parameters are slow, mark
-those with `pytest.param(..., marks=pytest.mark.slow)` rather than the whole test.
+Mark a new test `@pytest.mark.slow` when it fits one of those three cases, and note in a comment
+what covers the same ground in the default run. If only some parameters are slow, mark those with
+`pytest.param(..., marks=pytest.mark.slow)` instead of the whole test.
 
 `make install-hooks` once after cloning to wire up pre-commit. To mirror the CI quick job,
 run `make check-ci` and `make test-unit`. `make check-ci` runs the hooks over all files, the
