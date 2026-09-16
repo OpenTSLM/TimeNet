@@ -65,7 +65,7 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.dataset_id == "timenet/hello-world"
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     assert manifest.counts.records == 3
     assert len(manifest.schema.time_series_specs) == 2
     # files listed in the manifest all exist
