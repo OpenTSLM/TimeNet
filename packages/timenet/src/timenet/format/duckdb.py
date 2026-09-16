@@ -112,9 +112,34 @@ CREATE TABLE tasks (
     task_type VARCHAR NOT NULL,
     prompt VARCHAR,
     scope JSON,
+    has_inline_targets BOOLEAN NOT NULL,
     payload JSON NOT NULL,
     rationale VARCHAR,
     metadata JSON NOT NULL
+);
+
+CREATE SEQUENCE target_key_sequence START 1;
+
+CREATE TABLE task_targets (
+    target_key BIGINT DEFAULT nextval('target_key_sequence'),
+    task_id VARCHAR NOT NULL REFERENCES tasks(task_id),
+    position BIGINT NOT NULL,
+    target_kind VARCHAR NOT NULL,
+    text_value VARCHAR,
+    integer_value BIGINT,
+    float_value DOUBLE,
+    boolean_value BOOLEAN,
+    record_id VARCHAR REFERENCES records(record_id),
+    signal_id VARCHAR REFERENCES signals(signal_id),
+    span_start BIGINT,
+    span_end BIGINT,
+    span_signal_ids JSON,
+    PRIMARY KEY (target_key),
+    UNIQUE (task_id, position),
+    CHECK (target_kind IN (
+        'text', 'integer', 'float', 'boolean', 'record', 'signal',
+        'time_point', 'time_interval', 'step_point', 'step_interval'
+    ))
 );
 
 CREATE TABLE task_record_refs (

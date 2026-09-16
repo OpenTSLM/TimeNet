@@ -82,7 +82,7 @@ class TestMeanConnector(BaseConnector[None]):
             )
             dataset.add_record(record=record)
             label = "above_zero" if offset > 0 else "below_zero"
-            dataset.add_task(task=ClassificationTask(inputs=(record,), target=label, id=f"task-{index}"))
+            dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(label,), id=f"task-{index}"))
         return dataset
 
 
