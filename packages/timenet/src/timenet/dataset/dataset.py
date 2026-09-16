@@ -28,7 +28,7 @@ T = TypeVar("T")
 TTask = TypeVar("TTask", bound=Task)
 
 
-class TimeFDataset:
+class TimeFDataset:  # noqa: PLR0904
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -40,6 +40,7 @@ class TimeFDataset:
         self._metadata = metadata
         self._records: list[Record] = []
         self._tasks: list[Task] = []
+        self._annotations: list[Annotation] = []
         # Annotations that tasks reference but no record carries, deduped by id. A task's metadata
         # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
         # instead of being copied onto every record the tasks are about.
@@ -205,6 +206,21 @@ class TimeFDataset:
                     f"{existing!r} and {annotation!r}"
                 )
             self._registered_annotations[annotation.id] = annotation
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach a static annotation to the dataset.
+
+        Returns:
+            The attached occurrence.
+
+        Raises:
+            TimeFValidationError: If the annotation has a time placement, which is ambiguous across records.
+        """
+        if annotation.span is not None:
+            raise TimeFValidationError("dataset annotations cannot have a time span")
+        attached = annotation._new_occurrence()
+        self._annotations.append(attached)
+        return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
@@ -619,6 +635,11 @@ class TimeFDataset:
     def registered_annotations(self) -> tuple[Annotation, ...]:
         """Annotations registered for tasks to reference, which no record carries (registration order)."""
         return tuple(self._registered_annotations.values())
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return annotations attached to the dataset itself."""
+        return tuple(self._annotations)
 
     @property
     def has_task_stream(self) -> bool:
