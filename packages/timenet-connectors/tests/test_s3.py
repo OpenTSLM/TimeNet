@@ -4,7 +4,7 @@ import threading
 
 import boto3
 from botocore import UNSIGNED
-from botocore.exceptions import BotoCoreError
+from botocore.exceptions import BotoCoreError, ClientError
 import pytest
 
 from timenet.errors import TimeNetBuildError
@@ -79,6 +79,54 @@ def test_download_s3_object_writes_atomically(monkeypatch, tmp_path):
     download_s3_object("s3://bucket/key.bin", dest)
     assert dest.read_bytes() == b"payload"
     assert not (tmp_path / "obj.bin.part").exists()  # renamed into place, temp cleaned up
+
+
+def test_s3_client_signs_nothing_when_asked_for_anonymous(monkeypatch):
+    # The retry path asks for a client that does not resolve credentials at all.
+    captured = _spy_session(monkeypatch, credentials=object())
+    _s3_client(anonymous=True)
+    assert captured["kwargs"]["config"].signature_version is UNSIGNED
+
+
+def test_download_s3_object_retries_anonymously_when_the_bucket_refuses_a_signed_request(monkeypatch, tmp_path):
+    # The bucket refuses the signed request but answers the same one unsigned. A 403 must therefore
+    # start the anonymous retry, not fail the build.
+    signed = ClientError({"Error": {"Code": "403"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "HeadObject")
+    clients = []
+
+    class _Refusing:
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803 (boto3's kwarg names)
+            raise signed
+
+    class _Anonymous:
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803
+            Path(Filename).write_bytes(b"payload")
+
+    def _client(*, anonymous: bool = False):
+        clients.append(anonymous)
+        return _Anonymous() if anonymous else _Refusing()
+
+    monkeypatch.setattr(s3, "_s3_client", _client)
+    dest = tmp_path / "obj.bin"
+    download_s3_object("s3://physionet-open/key.bin", dest)
+    assert dest.read_bytes() == b"payload"
+    assert clients == [False, True]  # signed first, anonymous only after the refusal
+
+
+def test_download_s3_object_does_not_retry_a_missing_object(monkeypatch, tmp_path):
+    # A 404 is not an access denial. An unsigned retry would only hide the real error.
+    missing = ClientError({"Error": {"Code": "404"}, "ResponseMetadata": {"HTTPStatusCode": 404}}, "HeadObject")
+    calls = []
+
+    class _Missing:
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803
+            calls.append(Key)
+            raise missing
+
+    monkeypatch.setattr(s3, "_s3_client", lambda **_: _Missing())
+    with pytest.raises(ClientError):
+        download_s3_object("s3://bucket/gone.bin", tmp_path / "gone.bin")
+    assert len(calls) == 1
 
 
 def test_download_s3_object_cleans_up_part_on_failure(monkeypatch, tmp_path):
