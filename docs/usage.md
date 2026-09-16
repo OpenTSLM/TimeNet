@@ -11,7 +11,7 @@ tags:
 
 # Usage
 
-Every dataset loads the same way. Then it hands off to your framework. There are two entry points:
+Every dataset loads the same way. Then you pass it to your framework. There are two entry points:
 
 - `TimeNet().load("org/name")` returns an in-memory [`TimeFDataset`](timef-dataset.md) with lazy
   per-series values. Use it for single-node work (pandas, polars, torch).
@@ -64,8 +64,8 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
     !!! planned "Planned"
         No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
         directory. Its control plane is a DuckDB database, which DuckDB itself or a JDBC connector
-        can query. Reading series values depends on the manifest's values backend: Parquet values are
-        accessible to Parquet tooling, while Zarr values need a Zarr-aware reader.
+        can query. The values backend in the manifest sets how you read series values: Parquet
+        tooling reads Parquet values, and Zarr values need a Zarr-aware reader.
 
 === "PyTorch"
 
@@ -93,7 +93,7 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 
 One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
 demo is simple. Each record is one noisy signal. The label is `above_zero` or `below_zero`, by the
-sign of the mean. So a classifier only must recover that sign.
+sign of the mean. A classifier must only recover that sign.
 
 ```python
 from sklearn.linear_model import LogisticRegression
@@ -118,17 +118,19 @@ model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
 print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
 ```
 
-`to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
+`to_features_and_targets` defers materialization. `output="arrow"` (the default) returns a
 `FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
-because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
-sequence per record (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
-`test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
-tasks, pass `task=...`.
+because scikit-learn needs it.
+
+The method also takes `features="series"`. This gives one variable-length sequence per record (a
+`ListArray` / object array) instead of the rectangular `"timestep"` matrix. `test-mean` has a
+single task type, so `task` is inferred here. When a dataset carries several tasks, pass
+`task=...`.
 
 The full runnable version is
 [`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
 
 !!! tip "scikit-learn is optional"
-    It backs this example only. It is not a TimeNet dependency. Run `pip install scikit-learn`, then
-    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow. The
-    model on top is your choice.
+    scikit-learn backs this example only. It is not a TimeNet dependency. Run
+    `pip install scikit-learn`, then `python examples/test_mean_classifier.py`. TimeNet gives you
+    the values as NumPy or Arrow. You choose the model.
