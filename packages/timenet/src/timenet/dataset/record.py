@@ -216,6 +216,8 @@ class Record:
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible recording metadata."""
     start_time: datetime | int | None = None
     """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
     and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
