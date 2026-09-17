@@ -12,7 +12,7 @@ from timenet.errors import TimeFFormatError
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 6
+CONTROL_SCHEMA_VERSION = 7
 """Schema version written into :data:`CONTROL_FILE`."""
 
 
@@ -129,11 +129,21 @@ CREATE TABLE tasks (
     task_id VARCHAR NOT NULL UNIQUE,
     task_type VARCHAR NOT NULL,
     prompt VARCHAR,
-    scope JSON,
+    scope_type VARCHAR,
+    scope_start BIGINT,
+    scope_end BIGINT,
+    scope_signal_keys BIGINT[],
     has_inline_targets BOOLEAN NOT NULL,
-    payload JSON NOT NULL,
+    target_schema VARCHAR,
+    prediction_unit VARCHAR,
+    target_name VARCHAR,
+    localization_mode VARCHAR,
     rationale VARCHAR,
-    metadata JSON NOT NULL
+    metadata JSON NOT NULL,
+    CHECK (scope_type IS NULL OR scope_type IN (
+        'time_point', 'time_interval', 'step_point', 'step_interval'
+    )),
+    CHECK ((scope_type IS NULL) = (scope_start IS NULL))
 );
 
 CREATE TABLE target_items (

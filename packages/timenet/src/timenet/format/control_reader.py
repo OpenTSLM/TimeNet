@@ -16,10 +16,11 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_span, decode_target, decode_task_payload
+from timenet.format.task_codec import decode_span, decode_target, decode_task_config
 from timenet.types import (
     TASKS,
     Annotation,
+    Span,
     Task,
     TaskType,
     TimeInterval,
@@ -364,6 +365,13 @@ class DuckDBControlReader:
         annotations = self._read_annotations(annotations_by_occurrence=annotations_by_occurrence)
         record_refs = self._task_record_relationships()
         annotation_refs = self._task_annotation_relationships()
+        task_rows = self.connection.execute(
+            """SELECT task_key, task_id, task_type, prompt,
+                      scope_type, scope_start, scope_end, scope_signal_keys,
+                      has_inline_targets, target_schema, prediction_unit, target_name,
+                      localization_mode, rationale, metadata
+               FROM tasks ORDER BY task_id"""
+        ).fetchall()
 
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         target_rows = self.connection.execute(
@@ -382,11 +390,9 @@ class DuckDBControlReader:
                LEFT JOIN target_span_values span_values USING (target_item_key)
                ORDER BY links.task_key, links.position"""
         ).fetchall()
-        needs_signals = any(row[7] is not None or row[10] for row in target_rows)
+        needs_signals = any(row[7] is not None or row[10] for row in target_rows) or any(row[7] for row in task_rows)
         signals_by_id = (
-            {signal.id: signal for record in hydrated_records for signal in record.signals}
-            if needs_signals
-            else {}
+            {signal.id: signal for record in hydrated_records for signal in record.signals} if needs_signals else {}
         )
         signals_by_key = (
             {
@@ -424,19 +430,21 @@ class DuckDBControlReader:
                 row["signal_id"] = None if not span_signal_ids else span_signal_ids[0]
             targets_by_task[task_key].append(decode_target(row, records=records_by_id, signals=signals_by_id))
 
-        task_rows = self.connection.execute(
-            """SELECT task_key, task_id, task_type, prompt, scope, has_inline_targets, payload, rationale, metadata
-               FROM tasks ORDER BY task_id"""
-        ).fetchall()
         tasks: dict[int, Task] = {}
         for (
             task_key,
             task_id,
             stored_type,
             prompt,
-            scope_data,
+            scope_type,
+            scope_start,
+            scope_end,
+            scope_signal_keys,
             has_inline_targets,
-            payload_data,
+            target_schema,
+            prediction_unit,
+            target_name,
+            localization_mode,
             rationale,
             metadata,
         ) in task_rows:
@@ -452,11 +460,21 @@ class DuckDBControlReader:
                 "inputs": inputs,
                 "targets": tuple(targets_by_task.get(task_key, ())) if has_inline_targets else None,
                 "prompt": prompt,
-                "scope": decode_span(_decode_json(scope_data)),
+                "scope": self._decode_task_scope(
+                    task_id,
+                    (scope_type, scope_start, scope_end, scope_signal_keys),
+                    signals_by_key,
+                ),
                 "rationale": rationale,
                 "annotations": annotations.get(("Task", task_id), ()),
                 "metadata": _decode_json(metadata, default={}),
-                **decode_task_payload(task_type, _decode_json(payload_data, default={})),
+                **decode_task_config(
+                    task_type,
+                    target_schema=target_schema,
+                    prediction_unit=prediction_unit,
+                    target_name=target_name,
+                    localization_mode=localization_mode,
+                ),
             }
             if "candidate_records" in cls.__dataclass_fields__:
                 kwargs["candidate_records"] = self._resolve_records(
@@ -494,6 +512,42 @@ class DuckDBControlReader:
         for task_key, parents in dependencies.items():
             tasks[task_key].from_tasks = tuple(parents)
         return tuple(tasks.values())
+
+    @staticmethod
+    def _decode_task_scope(
+        task_id: str,
+        row: tuple[str | None, int | None, int | None, list[int] | None],
+        signals: dict[int, Signal],
+    ) -> Span | None:
+        """Decode one Task scope and resolve its internal Signal keys.
+
+        Returns:
+            The decoded scope, or ``None``.
+
+        Raises:
+            TimeFFormatError: If the stored scope refers to a missing Signal or has an invalid shape.
+        """
+        scope_type, scope_start, scope_end, scope_signal_keys = row
+        if scope_type is None:
+            return None
+        try:
+            signal_ids = (
+                None if scope_signal_keys is None else tuple(signals[signal_key].id for signal_key in scope_signal_keys)
+            )
+        except KeyError as exc:
+            raise TimeFFormatError(f"task {task_id!r} scope refers to missing Signal key {exc.args[0]!r}") from exc
+        data: dict[str, Any] = {
+            "type": scope_type,
+            "start": scope_start,
+            "end": scope_end,
+        }
+        if scope_type in {"step_point", "step_interval"}:
+            if signal_ids is None or len(signal_ids) != 1:
+                raise TimeFFormatError(f"task {task_id!r} step scope must refer to exactly one Signal")
+            data["signal_id"] = signal_ids[0]
+        else:
+            data["signal_ids"] = signal_ids
+        return decode_span(data)
 
     def _task_record_relationships(self) -> dict[int, dict[str, tuple[int, ...]]]:
         """Read ordered task-to-Record relationships through integer keys.
@@ -767,9 +821,7 @@ class DuckDBControlReader:
             if annotation is None:
                 signal_keys = row[7]
                 scope = (
-                    None
-                    if signal_keys is None
-                    else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
+                    None if signal_keys is None else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
                 )
                 span = None
                 if row[4] == "point":
@@ -777,9 +829,7 @@ class DuckDBControlReader:
                 elif row[4] == "interval":
                     span = TimeInterval(start_us=row[5], end_us=row[6], time_series_ids=scope)
                 elif row[4] != "static":
-                    raise TimeFFormatError(
-                        f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}"
-                    )
+                    raise TimeFFormatError(f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}")
                 content_metadata = _decode_json(row[15], default={})
                 description = content_metadata.pop("description", None)
                 annotation = Annotation(

@@ -14,7 +14,7 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
+from timenet.format.task_codec import encode_span, encode_target, encode_task_config
 from timenet.types import (
     Annotation,
     Task,
@@ -284,15 +284,16 @@ class DuckDBControlWriter:
                 task_keys[task.id] = task_key
                 task_type = str(task.task_type)
                 task_counts[task_type] = task_counts.get(task_type, 0) + 1
+                scope_row = self._task_scope_row(task, signal_keys)
                 task_rows.append(
                     {
                         "task_key": task_key,
                         "task_id": task.id,
                         "task_type": task_type,
                         "prompt": task.prompt,
-                        "scope": None if task.scope is None else _json(encode_span(task.scope)),
+                        **scope_row,
                         "has_inline_targets": task.targets is not None,
-                        "payload": _json(encode_task_payload(task)),
+                        **encode_task_config(task),
                         "rationale": task.rationale,
                         "metadata": _json(task.metadata),
                     }
@@ -351,9 +352,15 @@ class DuckDBControlWriter:
                     "task_id",
                     "task_type",
                     "prompt",
-                    "scope",
+                    "scope_type",
+                    "scope_start",
+                    "scope_end",
+                    "scope_signal_keys",
                     "has_inline_targets",
-                    "payload",
+                    "target_schema",
+                    "prediction_unit",
+                    "target_name",
+                    "localization_mode",
                     "rationale",
                     "metadata",
                 ),
@@ -394,6 +401,39 @@ class DuckDBControlWriter:
             stored_dependencies,
         )
         return annotation_refs, task_counts
+
+    @staticmethod
+    def _task_scope_row(task: Task, signal_keys: dict[str, int]) -> dict[str, object]:
+        """Project one optional Task scope into typed columns.
+
+        Returns:
+            Values for every scope column.
+
+        Raises:
+            TimeFValidationError: If the scope refers to a Signal outside the dataset.
+        """
+        scope = encode_span(task.scope)
+        if scope is None:
+            return {
+                "scope_type": None,
+                "scope_start": None,
+                "scope_end": None,
+                "scope_signal_keys": None,
+            }
+        if "signal_id" in scope:
+            signal_ids: tuple[str, ...] | None = (cast("str", scope["signal_id"]),)
+        else:
+            stored_ids = cast("tuple[str, ...] | None", scope.get("signal_ids"))
+            signal_ids = stored_ids
+        missing = [signal_id for signal_id in signal_ids or () if signal_id not in signal_keys]
+        if missing:
+            raise TimeFValidationError(f"task {task.id!r} scope refers to unknown Signals {missing}")
+        return {
+            "scope_type": scope["type"],
+            "scope_start": scope["start"],
+            "scope_end": scope.get("end"),
+            "scope_signal_keys": (None if signal_ids is None else [signal_keys[signal_id] for signal_id in signal_ids]),
+        }
 
     @staticmethod
     def _target_value_row(

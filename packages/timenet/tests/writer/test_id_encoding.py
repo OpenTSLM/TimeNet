@@ -17,6 +17,8 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     License,
+    LocalizationMode,
+    ScalarPredictionTask,
     StepInterval,
     TemporalLocalizationTask,
     TimeInterval,
@@ -200,12 +202,28 @@ def test_span_series_ids_round_trip(tmp_path):
     series = _series()
     record = dataset.add_record(time_series=(series,))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
+    dataset.add_task(
+        task=ClassificationTask(
+            inputs=(record,),
+            targets=("x",),
+            scope=scope,
+            target_schema="rhythm-label",
+        )
+    )
     dataset.add_task(
         task=TemporalLocalizationTask(
             inputs=(record,),
             prompt="Locate the onsets.",
             targets=(TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),),
+            mode=LocalizationMode.EXHAUSTIVE,
+        )
+    )
+    dataset.add_task(
+        task=ScalarPredictionTask(
+            inputs=(record,),
+            targets=(72.0,),
+            unit="bpm",
+            target_name="heart_rate",
         )
     )
     dataset.derive_schema()
@@ -213,10 +231,18 @@ def test_span_series_ids_round_trip(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
-    assert tasks[ClassificationTask].scope == scope
+    classification = tasks[ClassificationTask]
+    assert isinstance(classification, ClassificationTask)
+    assert classification.scope == scope
+    assert classification.target_schema == "rhythm-label"
     localization = tasks[TemporalLocalizationTask]
     assert isinstance(localization, TemporalLocalizationTask)
+    assert localization.mode is LocalizationMode.EXHAUSTIVE
     assert localization.targets == (TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),)
+    prediction = tasks[ScalarPredictionTask]
+    assert isinstance(prediction, ScalarPredictionTask)
+    assert prediction.unit == "bpm"
+    assert prediction.target_name == "heart_rate"
 
 
 def test_correspondence_record_targets_round_trip(tmp_path):
