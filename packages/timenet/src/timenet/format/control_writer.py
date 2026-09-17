@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from itertools import islice
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, assert_never, cast
 
 import duckdb
+import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
@@ -25,14 +27,15 @@ if TYPE_CHECKING:
     from timenet.values_backends.writer import ChunkPlacement
 
 
-_TARGET_VALUE_INSERTS = {
-    "target_text_values": "INSERT INTO target_text_values VALUES (?, ?)",
-    "target_integer_values": "INSERT INTO target_integer_values VALUES (?, ?)",
-    "target_float_values": "INSERT INTO target_float_values VALUES (?, ?)",
-    "target_boolean_values": "INSERT INTO target_boolean_values VALUES (?, ?)",
-    "target_record_values": "INSERT INTO target_record_values VALUES (?, ?)",
-    "target_signal_values": "INSERT INTO target_signal_values VALUES (?, ?)",
-    "target_span_values": "INSERT INTO target_span_values VALUES (?, ?, ?, ?)",
+_TASK_BATCH_SIZE = 10_000
+_TARGET_VALUE_COLUMNS = {
+    "target_text_values": ("target_item_key", "value"),
+    "target_integer_values": ("target_item_key", "value"),
+    "target_float_values": ("target_item_key", "value"),
+    "target_boolean_values": ("target_item_key", "value"),
+    "target_record_values": ("target_item_key", "record_key"),
+    "target_signal_values": ("target_item_key", "signal_key"),
+    "target_span_values": ("target_item_key", "span_start", "span_end", "signal_keys"),
 }
 
 
@@ -61,6 +64,50 @@ def _returned_key(cursor: duckdb.DuckDBPyConnection) -> int:
     if row is None:
         raise TimeFValidationError("DuckDB did not return a generated internal key")
     return int(row[0])
+
+
+def _task_batches(tasks: Iterable[Task]) -> Iterator[tuple[Task, ...]]:
+    """Yield bounded task batches without materializing a streamed source."""
+    iterator = iter(tasks)
+    while batch := tuple(islice(iterator, _TASK_BATCH_SIZE)):
+        yield batch
+
+
+def _reserve_keys(connection: duckdb.DuckDBPyConnection, sequence: str, count: int) -> list[int]:
+    """Reserve generated integer keys from a known control-schema sequence.
+
+    Returns:
+        The reserved keys in sequence order.
+    """
+    if count == 0:
+        return []
+    return [
+        int(row[0])
+        for row in connection.execute(
+            f"SELECT nextval('{sequence}') FROM range(?)",  # noqa: S608 - sequence is an internal constant
+            [count],
+        ).fetchall()
+    ]
+
+
+def _insert_rows(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: tuple[str, ...],
+    rows: list[dict[str, object]],
+) -> None:
+    """Insert one Arrow batch into a known control-schema table."""
+    if not rows:
+        return
+    relation_name = f"_timenet_{table_name}_batch"
+    names = ", ".join(columns)
+    connection.register(relation_name, pa.Table.from_pylist(rows))
+    try:
+        connection.execute(
+            f"INSERT INTO {table_name} ({names}) SELECT {names} FROM {relation_name}"  # noqa: S608
+        )
+    finally:
+        connection.unregister(relation_name)
 
 
 class DuckDBControlWriter:
@@ -200,7 +247,7 @@ class DuckDBControlWriter:
             ],
         )
 
-    def _write_tasks(
+    def _write_tasks(  # noqa: PLR0912, PLR0914 - one batch projects several normalized tables
         self,
         connection: duckdb.DuckDBPyConnection,
         record_keys: dict[str, int],
@@ -221,88 +268,146 @@ class DuckDBControlWriter:
         annotation_refs: list[tuple[int, str, int, str]] = []
         task_keys: dict[str, int] = {}
         task_counts: dict[str, int] = {}
-        for task in tasks_source:
-            if task.id in task_ids:
-                raise TimeFValidationError(f"task id {task.id!r} is not unique")
-            task_ids.add(task.id)
-            task_type = str(task.task_type)
-            task_counts[task_type] = task_counts.get(task_type, 0) + 1
-            task_key = _returned_key(
-                connection.execute(
-                    """INSERT INTO tasks (
-                           task_id, task_type, prompt, scope, has_inline_targets, payload, rationale, metadata
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING task_key""",
-                    [
-                        task.id,
-                        str(task.task_type),
-                        task.prompt,
-                        None if task.scope is None else _json(encode_span(task.scope)),
-                        task.targets is not None,
-                        _json(encode_task_payload(task)),
-                        task.rationale,
-                        _json(task.metadata),
-                    ],
+        for batch in _task_batches(tasks_source):
+            batch_task_keys = _reserve_keys(connection, "object_key_sequence", len(batch))
+            target_count = sum(len(task.targets or ()) for task in batch)
+            batch_target_keys = iter(_reserve_keys(connection, "target_item_key_sequence", target_count))
+            task_rows: list[dict[str, object]] = []
+            target_rows: list[dict[str, object]] = []
+            target_value_rows: dict[str, list[dict[str, object]]] = {table: [] for table in _TARGET_VALUE_COLUMNS}
+            task_target_rows: list[dict[str, object]] = []
+            record_ref_rows: list[dict[str, object]] = []
+            for task, task_key in zip(batch, batch_task_keys, strict=True):
+                if task.id in task_ids:
+                    raise TimeFValidationError(f"task id {task.id!r} is not unique")
+                task_ids.add(task.id)
+                task_keys[task.id] = task_key
+                task_type = str(task.task_type)
+                task_counts[task_type] = task_counts.get(task_type, 0) + 1
+                task_rows.append(
+                    {
+                        "task_key": task_key,
+                        "task_id": task.id,
+                        "task_type": task_type,
+                        "prompt": task.prompt,
+                        "scope": None if task.scope is None else _json(encode_span(task.scope)),
+                        "has_inline_targets": task.targets is not None,
+                        "payload": _json(encode_task_payload(task)),
+                        "rationale": task.rationale,
+                        "metadata": _json(task.metadata),
+                    }
                 )
-            )
-            task_keys[task.id] = task_key
-            for position, target in enumerate(task.targets or ()):
-                target_item_key = self._write_target_item(
-                    connection,
-                    target_label=f"task {task.id!r} target {position}",
-                    target=target,
-                    record_keys=record_keys,
-                    signal_keys=signal_keys,
-                )
-                connection.execute(
-                    "INSERT INTO task_targets VALUES (?, ?, ?)",
-                    [task_key, position, target_item_key],
-                )
-            annotations.extend(("Task", task_key, annotation) for annotation in task.annotations)
-            record_refs = self._task_record_refs(task)
-            for field, records in record_refs:
-                for position, record_id in enumerate(records):
-                    if record_id not in record_keys:
-                        raise TimeFValidationError(
-                            f"task {task.id!r} field {field!r} refers to unknown record {record_id!r}"
-                        )
-                    connection.execute(
-                        "INSERT INTO task_record_refs VALUES (?, ?, ?, ?)",
-                        [task_key, field, position, record_keys[record_id]],
+                for position, target in enumerate(task.targets or ()):
+                    target_item_key = next(batch_target_keys)
+                    table, value_row, kind = self._target_value_row(
+                        target_item_key=target_item_key,
+                        target_label=f"task {task.id!r} target {position}",
+                        target=target,
+                        record_keys=record_keys,
+                        signal_keys=signal_keys,
                     )
-            for field, values in (
-                ("input_annotations", task.input_annotations),
-                ("target_annotations", task.target_annotations),
-            ):
-                for position, annotation in enumerate(values):
-                    if annotation.occurrence_id is None:
-                        raise TimeFValidationError(f"task {task.id!r} field {field!r} refers to an unbound annotation")
-                    annotation_refs.append((task_key, field, position, annotation.occurrence_id))
-            for position, parent in enumerate(task.from_tasks):
-                dependency_rows.append((task.id, position, parent.id))
+                    target_rows.append({"target_item_key": target_item_key, "target_kind": kind})
+                    target_value_rows[table].append(value_row)
+                    task_target_rows.append(
+                        {
+                            "task_key": task_key,
+                            "position": position,
+                            "target_item_key": target_item_key,
+                        }
+                    )
+                annotations.extend(("Task", task_key, annotation) for annotation in task.annotations)
+                for field, records in self._task_record_refs(task):
+                    for position, record_id in enumerate(records):
+                        if record_id not in record_keys:
+                            raise TimeFValidationError(
+                                f"task {task.id!r} field {field!r} refers to unknown record {record_id!r}"
+                            )
+                        record_ref_rows.append(
+                            {
+                                "task_key": task_key,
+                                "field": field,
+                                "position": position,
+                                "record_key": record_keys[record_id],
+                            }
+                        )
+                for field, values in (
+                    ("input_annotations", task.input_annotations),
+                    ("target_annotations", task.target_annotations),
+                ):
+                    for position, annotation in enumerate(values):
+                        if annotation.occurrence_id is None:
+                            raise TimeFValidationError(
+                                f"task {task.id!r} field {field!r} refers to an unbound annotation"
+                            )
+                        annotation_refs.append((task_key, field, position, annotation.occurrence_id))
+                dependency_rows.extend(
+                    (task.id, position, parent.id) for position, parent in enumerate(task.from_tasks)
+                )
+            _insert_rows(
+                connection,
+                "tasks",
+                (
+                    "task_key",
+                    "task_id",
+                    "task_type",
+                    "prompt",
+                    "scope",
+                    "has_inline_targets",
+                    "payload",
+                    "rationale",
+                    "metadata",
+                ),
+                task_rows,
+            )
+            _insert_rows(connection, "target_items", ("target_item_key", "target_kind"), target_rows)
+            for table, rows in target_value_rows.items():
+                _insert_rows(connection, table, _TARGET_VALUE_COLUMNS[table], rows)
+            _insert_rows(
+                connection,
+                "task_targets",
+                ("task_key", "position", "target_item_key"),
+                task_target_rows,
+            )
+            _insert_rows(
+                connection,
+                "task_record_refs",
+                ("task_key", "field", "position", "record_key"),
+                record_ref_rows,
+            )
+        stored_dependencies: list[dict[str, object]] = []
         for task_id, position, parent_id in dependency_rows:
             if parent_id not in task_ids:
                 raise TimeFValidationError(
                     f"task {task_id!r} depends on task {parent_id!r}, which is not in the dataset"
                 )
-            connection.execute(
-                "INSERT INTO task_dependencies VALUES (?, ?, ?)",
-                [task_keys[task_id], position, task_keys[parent_id]],
+            stored_dependencies.append(
+                {
+                    "task_key": task_keys[task_id],
+                    "position": position,
+                    "parent_task_key": task_keys[parent_id],
+                }
             )
+        _insert_rows(
+            connection,
+            "task_dependencies",
+            ("task_key", "position", "parent_task_key"),
+            stored_dependencies,
+        )
         return annotation_refs, task_counts
 
     @staticmethod
-    def _write_target_item(
-        connection: duckdb.DuckDBPyConnection,
+    def _target_value_row(
         *,
+        target_item_key: int,
         target_label: str,
         target: object,
         record_keys: dict[str, int],
         signal_keys: dict[str, int],
-    ) -> int:
-        """Store one target payload and return its generated integer key.
+    ) -> tuple[str, dict[str, object], str]:
+        """Validate and project one target into its typed value table.
 
         Returns:
-            The key referenced by ``task_targets``.
+            Target value table, row, and target kind.
 
         Raises:
             TimeFValidationError: If the target refers to an object outside the dataset.
@@ -320,24 +425,39 @@ class DuckDBControlWriter:
         if missing_signals:
             raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
 
-        target_item_key = _returned_key(
-            connection.execute(
-                "INSERT INTO target_items (target_kind) VALUES (?) RETURNING target_item_key",
-                [kind],
-            )
-        )
+        values: dict[str, object]
         if kind == "text":
-            table, values = "target_text_values", [target_item_key, row["text_value"]]
+            table, values = "target_text_values", {"target_item_key": target_item_key, "value": row["text_value"]}
         elif kind == "integer":
-            table, values = "target_integer_values", [target_item_key, row["integer_value"]]
+            table, values = (
+                "target_integer_values",
+                {
+                    "target_item_key": target_item_key,
+                    "value": row["integer_value"],
+                },
+            )
         elif kind == "float":
-            table, values = "target_float_values", [target_item_key, row["float_value"]]
+            table, values = "target_float_values", {"target_item_key": target_item_key, "value": row["float_value"]}
         elif kind == "boolean":
-            table, values = "target_boolean_values", [target_item_key, row["boolean_value"]]
+            table, values = (
+                "target_boolean_values",
+                {
+                    "target_item_key": target_item_key,
+                    "value": row["boolean_value"],
+                },
+            )
         elif kind == "record":
-            table, values = "target_record_values", [target_item_key, record_keys[cast("str", record_id)]]
+            table = "target_record_values"
+            values = {
+                "target_item_key": target_item_key,
+                "record_key": record_keys[cast("str", record_id)],
+            }
         elif kind == "signal":
-            table, values = "target_signal_values", [target_item_key, signal_keys[cast("str", signal_id)]]
+            table = "target_signal_values"
+            values = {
+                "target_item_key": target_item_key,
+                "signal_key": signal_keys[cast("str", signal_id)],
+            }
         else:
             table = "target_span_values"
             stored_signal_keys = (
@@ -347,14 +467,13 @@ class DuckDBControlWriter:
                 if row["span_signal_ids"] is None
                 else [signal_keys[item] for item in span_signal_ids]
             )
-            values = [
-                target_item_key,
-                row["span_start"],
-                row["span_end"],
-                stored_signal_keys,
-            ]
-        connection.execute(_TARGET_VALUE_INSERTS[table], values)
-        return target_item_key
+            values = {
+                "target_item_key": target_item_key,
+                "span_start": row["span_start"],
+                "span_end": row["span_end"],
+                "signal_keys": stored_signal_keys,
+            }
+        return table, values, kind
 
     @staticmethod
     def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -379,15 +498,27 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If a referenced occurrence is not attached to a stored object.
         """
-        for task_key, field, position, occurrence_id in rows:
-            occurrence_key = occurrence_keys.get(occurrence_id)
-            if occurrence_key is None:
-                raise TimeFValidationError(
-                    f"task key {task_key} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
+        for start in range(0, len(rows), _TASK_BATCH_SIZE):
+            stored: list[dict[str, object]] = []
+            for task_key, field, position, occurrence_id in rows[start : start + _TASK_BATCH_SIZE]:
+                occurrence_key = occurrence_keys.get(occurrence_id)
+                if occurrence_key is None:
+                    raise TimeFValidationError(
+                        f"task key {task_key} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
+                    )
+                stored.append(
+                    {
+                        "task_key": task_key,
+                        "field": field,
+                        "position": position,
+                        "occurrence_key": occurrence_key,
+                    }
                 )
-            connection.execute(
-                "INSERT INTO task_annotation_refs VALUES (?, ?, ?, ?)",
-                [task_key, field, position, occurrence_key],
+            _insert_rows(
+                connection,
+                "task_annotation_refs",
+                ("task_key", "field", "position", "occurrence_key"),
+                stored,
             )
 
     def _write_record_sources(  # noqa: PLR0913, PLR0917 - hierarchy maps stay explicit
