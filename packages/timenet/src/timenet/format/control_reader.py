@@ -194,7 +194,7 @@ class DuckDBControlReader:
             axis = axes.get(axis_key)
             if axis is None:
                 raise TimeFFormatError(f"signal {signal_id!r} refers to missing axis key {axis_key!r}")
-            spec_key = row[5:13]
+            spec_key = (*row[5:9], tuple(row[9]), tuple(row[10]), tuple(row[11]), row[12])
             spec = specs.get(spec_key)
             if spec is None:
                 spec = self._spec_from_row(row)
@@ -698,9 +698,9 @@ class DuckDBControlReader:
             name=row[6],
             unit_value=ureg.Unit(row[7]),
             dtype=row[8],
-            categories=tuple(_decode_json(row[9], default=[])),
-            value_shape=tuple(_decode_json(row[10], default=[])),
-            dimension_names=tuple(_decode_json(row[11], default=[])),
+            categories=tuple(row[9]),
+            value_shape=tuple(row[10]),
+            dimension_names=tuple(row[11]),
             nullable=row[12],
         )
 

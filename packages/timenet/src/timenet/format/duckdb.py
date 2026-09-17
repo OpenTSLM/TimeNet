@@ -12,7 +12,7 @@ from timenet.errors import TimeFFormatError
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 5
+CONTROL_SCHEMA_VERSION = 6
 """Schema version written into :data:`CONTROL_FILE`."""
 
 
@@ -80,9 +80,9 @@ CREATE TABLE signals (
     spec_name VARCHAR NOT NULL,
     unit VARCHAR,
     dtype VARCHAR NOT NULL,
-    categories JSON NOT NULL,
-    value_shape JSON NOT NULL,
-    dimension_names JSON NOT NULL,
+    categories VARCHAR[] NOT NULL,
+    value_shape BIGINT[] NOT NULL,
+    dimension_names VARCHAR[] NOT NULL,
     nullable BOOLEAN NOT NULL,
     n_values BIGINT NOT NULL CHECK (n_values > 0),
     metadata JSON NOT NULL
