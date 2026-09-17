@@ -340,10 +340,15 @@ def iter_tasks(records: Sequence[Record], id_prefix: str) -> Iterator[Task]:
         non_span_annotations = [one for one in record.annotations if one.span is None]
         stages = [one for one in span_annotations if one.key == AnnotationKey.SLEEP_STAGE]
 
-        yield from build_epoch_tasks(record.record_id, id_prefix, stages)
-        yield from build_record_tasks(record.record_id, id_prefix, non_span_annotations, stages)
+        for task in build_epoch_tasks(record.record_id, id_prefix, stages):
+            task.inputs = (record,)
+            yield task
+        for task in build_record_tasks(record.record_id, id_prefix, non_span_annotations, stages):
+            task.inputs = (record,)
+            yield task
         moment = build_lights_off_task(record.record_id, record.time_span, span_annotations)
         if moment is not None:
+            moment.inputs = (record,)
             yield moment
 
 

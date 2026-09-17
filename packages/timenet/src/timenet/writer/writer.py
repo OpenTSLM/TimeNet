@@ -37,6 +37,8 @@ from timenet.format.constants import (
     TASK_PART_TEMPLATE,
     part_path,
 )
+from timenet.format.control_writer import DuckDBControlWriter
+from timenet.format.duckdb import CONTROL_FILE
 from timenet.format.schemas import (
     LOGICAL_IDS,
     TASK_COMMON_NAMES,
@@ -207,12 +209,24 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
-        unique_series, series_to_records = self._dedupe_series()
+        unique_series, _series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        self._write_records()
-        self._write_annotations()
-        self._write_tasks()
-        self._write_index(placements, series_to_records)
+        tasks = tuple(
+            self._dataset.iter_streamed_tasks_validated()
+            if self._dataset.has_task_stream
+            else self._dataset.iter_tasks()
+        )
+        DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+            self._dataset,
+            placements,
+            tasks=tasks,
+        )
+        self._control_file = CONTROL_FILE
+        self._task_type_counts = {}
+        for task in tasks:
+            task_type = str(task.task_type)
+            self._task_type_counts[task_type] = self._task_type_counts.get(task_type, 0) + 1
+        self._index_rows = 0
         self._counts = self._build_counts(unique_series, placements)
         self._written = True
 
@@ -246,7 +260,7 @@ class TimeFWriter:
         for record in self._dataset.records:
             values["record_id"].append(record.record_id)
             values["subject_id"].extend(record.subject_ids)
-            for ts in record.time_series:
+            for ts in record.signals:
                 values["time_series_id"].append(ts.time_series_id)
                 if ts.source_id is not None:
                     values["source_id"].append(ts.source_id)
@@ -254,15 +268,7 @@ class TimeFWriter:
                 values["annotation_id"].append(ann.id)
         for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
             values["annotation_id"].append(ann.id)
-        if self._dataset.has_task_stream:
-            # Streamed tasks are not materialized; one peeked id decides binary(16)-vs-string storage
-            # without draining millions of tasks. Keep the validating iterator so _write_tasks reuses
-            # it: the source is consumed (and validated) exactly once, even a one-shot generator.
-            self._task_iter = self._dataset.iter_streamed_tasks_validated()
-            self._first_task = next(self._task_iter, None)
-            if self._first_task is not None:
-                values["task_id"].append(self._first_task.id)
-        else:
+        if not self._dataset.has_task_stream:
             for task in self._dataset.tasks:
                 values["task_id"].append(task.id)
 
@@ -297,7 +303,7 @@ class TimeFWriter:
         series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
         for record in self._dataset.records:
-            for ts in record.time_series:
+            for ts in record.signals:
                 existing = unique.get(ts.time_series_id)
                 if existing is None:
                     unique[ts.time_series_id] = ts
@@ -667,11 +673,12 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                records=self._file_parts(self._record_parts),
-                annotations=self._file_parts(self._annotation_parts),
-                time_series_index=self._file_parts(self._index_parts),
-                tasks=self._file_parts(self._task_files),
+                records=(),
+                annotations=(),
+                time_series_index=(),
+                tasks=(),
                 time_series=self._file_parts(self._value_files),
+                control=(self._file_part(self._control_file),),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
