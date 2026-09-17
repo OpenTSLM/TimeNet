@@ -96,6 +96,7 @@ class DuckDBControlReader:
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
+        self._annotations_by_occurrence: dict[int, Annotation] = {}
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -748,31 +749,41 @@ class DuckDBControlReader:
             else {}
         )
         for row in rows:
-            signal_keys = row[7]
-            scope = None if signal_keys is None else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
-            span = None
-            if row[4] == "point":
-                span = TimePoint(start_us=row[5], time_series_ids=scope)
-            elif row[4] == "interval":
-                span = TimeInterval(start_us=row[5], end_us=row[6], time_series_ids=scope)
-            elif row[4] != "static":
-                raise TimeFFormatError(f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}")
-            content_metadata = _decode_json(row[15], default={})
-            description = content_metadata.pop("description", None)
-            annotation = Annotation(
-                occurrence_id=row[1],
-                id=row[11],
-                key=row[12],
-                value=_decode_json(row[13]),
-                unit=row[14],
-                description=description,
-                metadata=content_metadata,
-                span=span,
-                source=_decode_json(row[8]),
-                confidence=row[9],
-                occurrence_metadata=_decode_json(row[10], default={}),
-            )
+            occurrence_key = row[0]
+            annotation = self._annotations_by_occurrence.get(occurrence_key)
+            if annotation is None:
+                signal_keys = row[7]
+                scope = (
+                    None
+                    if signal_keys is None
+                    else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
+                )
+                span = None
+                if row[4] == "point":
+                    span = TimePoint(start_us=row[5], time_series_ids=scope)
+                elif row[4] == "interval":
+                    span = TimeInterval(start_us=row[5], end_us=row[6], time_series_ids=scope)
+                elif row[4] != "static":
+                    raise TimeFFormatError(
+                        f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}"
+                    )
+                content_metadata = _decode_json(row[15], default={})
+                description = content_metadata.pop("description", None)
+                annotation = Annotation(
+                    occurrence_id=row[1],
+                    id=row[11],
+                    key=row[12],
+                    value=_decode_json(row[13]),
+                    unit=row[14],
+                    description=description,
+                    metadata=content_metadata,
+                    span=span,
+                    source=_decode_json(row[8]),
+                    confidence=row[9],
+                    occurrence_metadata=_decode_json(row[10], default={}),
+                )
+                self._annotations_by_occurrence[occurrence_key] = annotation
             grouped[row[2], row[3]].append(annotation)
             if annotations_by_occurrence is not None:
-                annotations_by_occurrence[row[0]] = annotation
+                annotations_by_occurrence[occurrence_key] = annotation
         return {key: tuple(value) for key, value in grouped.items()}
