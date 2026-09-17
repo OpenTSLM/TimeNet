@@ -2,10 +2,15 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, new_id
+
+
+if TYPE_CHECKING:
+    from timenet.dataset.selection import SignalSelection
 
 
 @dataclass(kw_only=True)
@@ -85,3 +90,18 @@ class Source:
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached
+
+    def select(
+        self,
+        *,
+        signals: tuple[Signal, ...] | None = None,
+        signal_names: tuple[str, ...] | None = None,
+    ) -> "SignalSelection":
+        """Select descendant signals by object or by human-readable name.
+
+        Returns:
+            A selection that can be annotated as one declarative operation.
+        """
+        from timenet.dataset.selection import SignalSelection  # noqa: PLC0415
+
+        return SignalSelection.from_source(self, signals=signals, signal_names=signal_names)
