@@ -43,6 +43,10 @@ class TimeFDataset:  # noqa: PLR0904
         """
         self._metadata = metadata
         self._records: list[Record] = []
+        self._records_by_id: dict[str, Record] = {}
+        self._sources_by_id: dict[str, Source] = {}
+        self._signals_by_id: dict[str, TimeSeries] = {}
+        self._signals_by_record_id: dict[str, tuple[TimeSeries, ...]] = {}
         self._tasks: list[Task] = []
         self._annotations: list[Annotation] = []
         # Reusable annotation content that no hierarchy object carries, deduplicated by content ID.
@@ -94,9 +98,8 @@ class TimeFDataset:  # noqa: PLR0904
             raise TimeFValidationError("add_record accepts record= or construction fields, not both")
         if record is None and not sources and not time_series:
             raise TimeFValidationError("add_record requires record=, sources=, or legacy time_series=")
-        series_ids = [signal.id for signal in record.signals] if record is not None else [ts.id for ts in time_series]
-        if len(set(series_ids)) != len(series_ids):
-            duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
+        duplicates = self._duplicate_ids(ts.id for ts in time_series)
+        if record is None and duplicates:
             raise TimeFValidationError(
                 f"add_record requires distinct time_series_ids (signal IDs), got duplicates {duplicates}"
             )
@@ -121,22 +124,66 @@ class TimeFDataset:  # noqa: PLR0904
                 start_time=start_time,
                 time_span=time_span,
             )
-        if any(existing.record_id == registered.record_id for existing in self._records):
+        if registered.record_id in self._records_by_id:
             raise TimeFValidationError(f"record id {registered.record_id!r} is already registered")
-        existing_source_ids = {source.id for item in self._records for source in item.walk_sources()}
-        repeated_sources = sorted(existing_source_ids & {source.id for source in registered.walk_sources()})
+        record_sources, record_signals = self._index_record_hierarchy(registered)
+        repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
         if repeated_sources:
             raise TimeFValidationError(
                 f"source id(s) {repeated_sources} already belong to another record; each Source has one owner"
             )
-        existing_signal_ids = {signal.id for item in self._records for signal in item.signals}
-        repeated_signals = sorted(existing_signal_ids & {signal.id for signal in registered.signals})
+        repeated_signals = sorted(self._signals_by_id.keys() & record_signals.keys())
         if repeated_signals:
             raise TimeFValidationError(
                 f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
             )
         self._records.append(registered)
+        self._records_by_id[registered.record_id] = registered
+        self._sources_by_id.update(record_sources)
+        self._signals_by_id.update(record_signals)
+        self._signals_by_record_id[registered.record_id] = tuple(record_signals.values())
         return registered
+
+    @staticmethod
+    def _duplicate_ids(ids: Iterable[str]) -> list[str]:
+        """Return repeated IDs in sorted order without repeatedly scanning the input."""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for item_id in ids:
+            if item_id in seen:
+                duplicates.add(item_id)
+            else:
+                seen.add(item_id)
+        return sorted(duplicates)
+
+    @classmethod
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, TimeSeries]]:
+        """Collect one record's hierarchy and reject IDs repeated inside it.
+
+        Returns:
+            Sources and Signals keyed by their stable public IDs.
+
+        Raises:
+            TimeFValidationError: If two Sources or Signals in the record share an ID.
+        """
+        sources = tuple(record.walk_sources())
+        source_duplicates = cls._duplicate_ids(source.id for source in sources)
+        if source_duplicates:
+            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate source IDs {source_duplicates}")
+        signals = (
+            tuple(
+                signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
+            )
+            if sources
+            else tuple(record.time_series)
+        )
+        signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
+        if signal_duplicates:
+            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate signal IDs {signal_duplicates}")
+        return (
+            {source.id: source for source in sources},
+            {signal.id: signal for signal in signals},
+        )
 
     def write(
         self,
@@ -540,7 +587,8 @@ class TimeFDataset:  # noqa: PLR0904
             The dataset, built from these parts.
         """
         dataset = cls(metadata=metadata)
-        dataset._records = list(records)
+        for record in records:
+            dataset.add_record(record=record)
         dataset._tasks = list(tasks)
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._annotations = list(annotations)
