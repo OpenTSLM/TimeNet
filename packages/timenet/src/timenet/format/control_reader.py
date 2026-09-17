@@ -6,6 +6,7 @@ from fractions import Fraction
 from functools import partial
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import duckdb
@@ -31,6 +32,9 @@ from timenet.types import (
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
 OffsetsLoader = Callable[[int, str], pa.Array]
+
+_VALIDATED_SCHEMAS: set[tuple[Path, str]] = set()
+_VALIDATED_SCHEMAS_LOCK = Lock()
 
 
 def _decode_json(value: str | None, *, default: Any = None) -> Any:
@@ -75,6 +79,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        schema_cache_key: str | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -83,6 +88,7 @@ class DuckDBControlReader:
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            schema_cache_key: Immutable manifest checksum that permits cached validation.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -90,7 +96,14 @@ class DuckDBControlReader:
         self.path = Path(path)
         try:
             self.connection = connect_control(self.path, read_only=True)
-            check_control_schema(self.connection)
+            if schema_cache_key is None:
+                check_control_schema(self.connection)
+            else:
+                cache_key = (self.path.resolve(), schema_cache_key)
+                with _VALIDATED_SCHEMAS_LOCK:
+                    if cache_key not in _VALIDATED_SCHEMAS:
+                        check_control_schema(self.connection)
+                        _VALIDATED_SCHEMAS.add(cache_key)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         self._value_loader = value_loader or _missing_values

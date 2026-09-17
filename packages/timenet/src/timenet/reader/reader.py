@@ -173,10 +173,13 @@ class TimeFReader:
             The cached control reader.
         """
         if self._control is None:
+            control_path = materialize_control(self._version)
+            control_part = self._manifest.files.control[0]
             self._control = DuckDBControlReader(
-                materialize_control(self._version),
+                control_path,
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
+                schema_cache_key=control_part.checksum,
             )
         return self._control
 

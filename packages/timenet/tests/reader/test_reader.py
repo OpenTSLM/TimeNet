@@ -9,6 +9,7 @@ import pytest
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+import timenet.format.control_reader as control_reader_module
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -39,6 +40,24 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 def _read(version_dir: Path) -> TimeFDataset:
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         return reader.read()
+
+
+def test_reopened_manifest_control_reuses_schema_validation(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    check_control_schema = control_reader_module.check_control_schema
+    calls = 0
+
+    def count_schema_check(connection):
+        nonlocal calls
+        calls += 1
+        check_control_schema(connection)
+
+    monkeypatch.setattr(control_reader_module, "check_control_schema", count_schema_check)
+    for _ in range(2):
+        with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+            next(reader.iter_records())
+
+    assert calls == 1
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
