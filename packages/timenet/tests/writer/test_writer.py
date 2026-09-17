@@ -231,7 +231,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         ),
     )
     record.add_annotation(Annotation(key="k", value=1))
-    dataset.add_task(record, ClassificationTask(target="x"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
     dataset.derive_schema()
 
     with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset) as writer:

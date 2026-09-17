@@ -142,24 +142,31 @@ def make_dataset() -> TimeFDataset:
             ),
         ]
     )
-    classification = ClassificationTask(target="normal", id="task-cls-0")
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
     dataset.add_tasks(
-        record0,
-        [
+        tasks=[
             classification,
             AnswerTask(
+                inputs=(record0,),
                 prompt="What rhythm?",
-                target="Normal.",
+                targets=("Normal.",),
                 rationale="Regular intervals with one peak per cycle.",
                 input_annotations=(record0_cohort,),
                 from_tasks=(classification,),
                 id="task-answer-0",
             ),
-            ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+            ScalarPredictionTask(
+                inputs=(record0,),
+                targets=(62.0,),
+                unit="bpm",
+                target_name="mean_rate",
+                id="task-scalar-0",
+            ),
             TemporalLocalizationTask(
+                inputs=(record0,),
                 prompt="Locate the stimulus and the artifact.",
                 mode=LocalizationMode.SPARSE,
-                target=(
+                targets=(
                     TimePoint.seconds(0.5),
                     TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
                 ),
@@ -193,9 +200,9 @@ def make_dataset() -> TimeFDataset:
         )
     )
     dataset.add_task(
-        record2,
-        ClassificationTask(
-            target="onset",
+        task=ClassificationTask(
+            inputs=(record2,),
+            targets=("onset",),
             id="task-cls-2",
             scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
         ),
