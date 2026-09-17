@@ -22,7 +22,7 @@ from timenet.types.spans import (
     TimePoint,
     TimeSpan,
 )
-from timenet.types.specs import DataSource, TimeSeriesSpec
+from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import (
     TASKS,
     AnswerTask,
@@ -51,7 +51,6 @@ __all__ = [
     "AnnotationType",
     "AnswerTask",
     "ClassificationTask",
-    "DataSource",
     "DatasetMetadata",
     "DatasetSchema",
     "Domain",
