@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+import inspect
 from typing import ClassVar
 
 import pytest
 
+from timenet.dataset import Record, Source
 from timenet.errors import TimeFValidationError
 from timenet.types import (
     AnswerTask,
@@ -35,11 +37,29 @@ def test_task_types():
     assert TSCorrespondenceTask.task_type is TaskType.TS_CORRESPONDENCE
 
 
+def test_task_is_an_abstract_base_class():
+    assert inspect.isabstract(Task)
+    with pytest.raises(TypeError, match="abstract"):
+        Task()
+
+
 def test_series_output_tasks_answer_with_a_record():
     for cls in (ForecastingTask, TSEditingTask, TSGenerationTask):
         assert cls.answer_is_record
     for cls in (ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask):
         assert not cls.answer_is_record
+
+
+def test_series_tasks_resolve_record_objects_to_stable_ids():
+    source = Record(record_id="source", sources=(Source(id="source-device", name="Device"),))
+    target = Record(record_id="target", sources=(Source(id="target-device", name="Device"),))
+
+    edit = TSEditingTask(source_record=source, target_record=target)
+    generation = TSGenerationTask(target_record=target)
+
+    assert edit.source_record_id == source.id
+    assert edit.target_record_id == target.id
+    assert generation.target_record_id == target.id
 
 
 def test_classification_labels_the_whole_record_or_a_scope():
@@ -143,11 +163,6 @@ def test_task_is_mutable_for_post_construction_linking():
     t = ClassificationTask(target="a")
     t.record_ids = ("record-0",)
     assert t.record_ids == ("record-0",)
-
-
-def test_base_task_has_no_task_type():
-    with pytest.raises(AttributeError):
-        _ = Task.task_type
 
 
 def test_registry_rejects_task_type_collision():
