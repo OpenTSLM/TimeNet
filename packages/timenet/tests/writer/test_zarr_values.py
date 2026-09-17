@@ -63,8 +63,10 @@ def test_index_locator_resolves_to_values(tmp_path):
     version_dir = _write(tmp_path, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         row = connection.execute(
-            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
-               FROM signal_chunks ORDER BY signal_id LIMIT 1"""
+            """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
+                      chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               ORDER BY signals.signal_id LIMIT 1"""
         ).fetchone()
     assert row is not None
     value_path, major_index, minor_index, n_values = row
@@ -80,7 +82,10 @@ def test_one_index_row_per_series(tmp_path):
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
-        index = connection.execute("SELECT signal_id, n_values FROM signal_chunks").fetchall()
+        index = connection.execute(
+            """SELECT signals.signal_id, chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+        ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
     long_series = next(row for row in index if row[0] == "ts-long-1")

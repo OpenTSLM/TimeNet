@@ -71,21 +71,64 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
             "Alive?",
             "{}",
         )
-        assert connection.execute("SELECT position, target_kind, text_value FROM task_targets").fetchone() == (
-            0,
-            "text",
-            "Yes",
-        )
-        assert connection.execute("SELECT field, record_id FROM task_record_refs").fetchone() == (
+        assert connection.execute(
+            """SELECT links.position, items.target_kind, text_values.value
+               FROM task_targets links
+               JOIN target_items items USING (target_item_key)
+               JOIN target_text_values text_values USING (target_item_key)"""
+        ).fetchone() == (0, "text", "Yes")
+        assert connection.execute(
+            """SELECT refs.field, records.record_id
+               FROM task_record_refs refs JOIN records USING (record_key)"""
+        ).fetchone() == (
             "inputs",
             "record-1",
         )
-        assert connection.execute("SELECT parent_source_id FROM sources WHERE source_id = 'ecg'").fetchone() == (
-            "monitor",
-        )
+        assert connection.execute("SELECT typeof(record_key) FROM task_record_refs").fetchone() == ("BIGINT",)
         assert connection.execute(
-            "SELECT content_id, object_type, object_id FROM annotation_occurrences"
+            """SELECT parent.source_id
+               FROM sources child
+               JOIN sources parent ON parent.source_key = child.parent_source_key
+               WHERE child.source_id = 'ecg'"""
+        ).fetchone() == ("monitor",)
+        assert connection.execute(
+            """SELECT contents.content_id, occurrences.object_type, records.record_id
+               FROM annotation_occurrences occurrences
+               JOIN annotation_contents contents USING (content_key)
+               JOIN records ON records.record_key = occurrences.object_key
+               WHERE contents.content_id = 'sex-male' AND occurrences.object_type = 'Record'"""
         ).fetchone() == ("sex-male", "Record", "record-1")
+
+
+def test_control_relationships_use_integer_keys(tmp_path):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+
+    relationship_columns = (
+        ("sources", "record_key"),
+        ("sources", "parent_source_key"),
+        ("signals", "source_key"),
+        ("signals", "axis_key"),
+        ("annotation_occurrences", "content_key"),
+        ("annotation_occurrences", "object_key"),
+        ("task_targets", "task_key"),
+        ("task_targets", "target_item_key"),
+        ("target_record_values", "record_key"),
+        ("target_signal_values", "signal_key"),
+        ("task_record_refs", "task_key"),
+        ("task_record_refs", "record_key"),
+    )
+    with connect_control(path, read_only=True) as connection:
+        for table, column in relationship_columns:
+            row = connection.execute(
+                """SELECT data_type
+                   FROM information_schema.columns
+                   WHERE table_name = ? AND column_name = ?""",
+                [table, column],
+            ).fetchone()
+            assert row is not None
+            (stored_type,) = row
+            assert stored_type == "BIGINT", f"{table}.{column} stores {stored_type}"
 
 
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
@@ -130,6 +173,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute(
-            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
-               FROM signal_chunks WHERE signal_id = 'lead-i'"""
+            """SELECT value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
+               FROM signal_chunks JOIN signals USING (signal_key)
+               WHERE signal_id = 'lead-i'"""
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)
