@@ -73,10 +73,22 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
         assert connection.execute("SELECT count(*) FROM sources").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM signals").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
-        assert connection.execute("SELECT task_type, prompt, payload FROM tasks").fetchone() == (
+        assert connection.execute(
+            """SELECT typeof(categories), typeof(value_shape), typeof(dimension_names)
+               FROM signals LIMIT 1"""
+        ).fetchone() == ("VARCHAR[]", "BIGINT[]", "VARCHAR[]")
+        assert connection.execute(
+            """SELECT task_type, prompt, scope_type, target_schema, prediction_unit,
+                      target_name, localization_mode
+               FROM tasks"""
+        ).fetchone() == (
             "answer",
             "Alive?",
-            "{}",
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         assert connection.execute(
             """SELECT links.position, items.target_kind, text_values.value

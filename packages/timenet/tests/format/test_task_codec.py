@@ -1,11 +1,16 @@
-from timenet.format.task_codec import decode_span, encode_span, encode_target, encode_task_payload
+from timenet.format.task_codec import decode_span, encode_span, encode_target, encode_task_config
 from timenet.types import AnswerTask, StepInterval, TemporalLocalizationTask, TimePoint
 
 
-def test_task_payload_keeps_targets_out_of_configuration_json():
+def test_task_config_keeps_targets_out_of_typed_columns():
     task = AnswerTask(prompt="Alive?", targets=("Yes", 1))
 
-    assert encode_task_payload(task) == {}
+    assert encode_task_config(task) == {
+        "target_schema": None,
+        "prediction_unit": None,
+        "target_name": None,
+        "localization_mode": None,
+    }
 
 
 def test_task_span_codec_preserves_frame_shape_and_scope():
@@ -16,7 +21,7 @@ def test_task_span_codec_preserves_frame_shape_and_scope():
     task = TemporalLocalizationTask(targets=(spans[0],))
 
     assert tuple(decode_span(encode_span(span)) for span in spans) == spans
-    assert encode_task_payload(task) == {"mode": "sparse"}
+    assert encode_task_config(task)["localization_mode"] == "sparse"
 
 
 def test_target_codec_keeps_boolean_and_integer_rows_distinct():

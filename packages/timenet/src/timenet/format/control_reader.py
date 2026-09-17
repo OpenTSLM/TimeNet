@@ -6,6 +6,7 @@ from fractions import Fraction
 from functools import partial
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import duckdb
@@ -15,10 +16,11 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_span, decode_target, decode_task_payload
+from timenet.format.task_codec import decode_span, decode_target, decode_task_config
 from timenet.types import (
     TASKS,
     Annotation,
+    Span,
     Task,
     TaskType,
     TimeInterval,
@@ -29,8 +31,11 @@ from timenet.types import (
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[str, TimeSeriesSpec], Callable[[], pa.Array]]
-OffsetsLoader = Callable[[str], pa.Array]
+ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
+OffsetsLoader = Callable[[int, str], pa.Array]
+
+_VALIDATED_SCHEMAS: set[tuple[Path, str]] = set()
+_VALIDATED_SCHEMAS_LOCK = Lock()
 
 
 def _decode_json(value: str | None, *, default: Any = None) -> Any:
@@ -44,6 +49,12 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
     """
     if value is None:
         return default
+    if value == "{}":
+        return {}
+    if value == "[]":
+        return []
+    if value == "null":
+        return None
     try:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -69,6 +80,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        schema_cache_key: str | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -77,6 +89,7 @@ class DuckDBControlReader:
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            schema_cache_key: Immutable manifest checksum that permits cached validation.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -84,12 +97,20 @@ class DuckDBControlReader:
         self.path = Path(path)
         try:
             self.connection = connect_control(self.path, read_only=True)
-            check_control_schema(self.connection)
+            if schema_cache_key is None:
+                check_control_schema(self.connection)
+            else:
+                cache_key = (self.path.resolve(), schema_cache_key)
+                with _VALIDATED_SCHEMAS_LOCK:
+                    if cache_key not in _VALIDATED_SCHEMAS:
+                        check_control_schema(self.connection)
+                        _VALIDATED_SCHEMAS.add(cache_key)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
+        self._annotations_by_occurrence: dict[int, Annotation] = {}
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -107,7 +128,7 @@ class DuckDBControlReader:
         """Close the connection when leaving a context manager."""
         self.close()
 
-    def read_records(  # noqa: PLR0914, PLR0915 - hydration keeps related row sets together
+    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - hydration keeps related row sets together
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -168,18 +189,23 @@ class DuckDBControlReader:
         axes = self._read_axes({row[4] for row in signal_rows})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
+        specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for row in signal_rows:
-            _, signal_id, source_key, name, axis_key = row[:5]
+            signal_key, signal_id, source_key, name, axis_key = row[:5]
             axis = axes.get(axis_key)
             if axis is None:
                 raise TimeFFormatError(f"signal {signal_id!r} refers to missing axis key {axis_key!r}")
-            spec = self._spec_from_row(row)
+            spec_key = (*row[5:9], tuple(row[9]), tuple(row[10]), tuple(row[11]), row[12])
+            spec = specs.get(spec_key)
+            if spec is None:
+                spec = self._spec_from_row(row)
+                specs[spec_key] = spec
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
                 offsets_loader = (
-                    partial(self._offsets_loader, axis.axis_id)
+                    partial(self._offsets_loader, axis_key, axis.axis_id)
                     if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets, axis.axis_id)
+                    else partial(self.load_axis_offsets_by_key, axis_key, axis.axis_id)
                 )
             signals_by_source[source_key].append(
                 Signal(
@@ -189,7 +215,7 @@ class DuckDBControlReader:
                     time_axis=axis,
                     n_values=row[13],
                     loader=(
-                        self._value_loader_factory(signal_id, spec)
+                        self._value_loader_factory(signal_key, signal_id, spec)
                         if self._value_loader_factory is not None
                         else partial(self._value_loader, signal_id, spec)
                     ),
@@ -269,9 +295,6 @@ class DuckDBControlReader:
 
         Returns:
             Chunk rows in chunk-index order.
-
-        Raises:
-            TimeFFormatError: If the signal has no stored chunks.
         """
         rows = self.connection.execute(
             """SELECT c.chunk_index, c.value_path, c.chunk_major_index, c.chunk_minor_index, c.n_values
@@ -280,6 +303,32 @@ class DuckDBControlReader:
                WHERE s.signal_id = ? ORDER BY c.chunk_index""",
             [signal_id],
         ).fetchall()
+        return self._chunk_dicts(rows, signal_id)
+
+    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
+        """Return values-backend chunk locators through an internal integer key.
+
+        Returns:
+            Chunk rows in chunk-index order.
+        """
+        rows = self.connection.execute(
+            """SELECT chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks
+               WHERE signal_key = ? ORDER BY chunk_index""",
+            [signal_key],
+        ).fetchall()
+        return self._chunk_dicts(rows, signal_id)
+
+    @staticmethod
+    def _chunk_dicts(rows: list[tuple[Any, ...]], signal_id: str) -> list[dict[str, Any]]:
+        """Convert stored chunk tuples to the values-backend row contract.
+
+        Returns:
+            Chunk dictionaries in their query order.
+
+        Raises:
+            TimeFFormatError: If the signal has no stored chunks.
+        """
         if not rows:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return [
@@ -307,26 +356,22 @@ class DuckDBControlReader:
         """
         hydrated_records = self.read_records() if records is None else tuple(records)
         records_by_id = {record.id: record for record in hydrated_records}
-        signals_by_id = {signal.id: signal for record in hydrated_records for signal in record.signals}
         records_by_key = {
             key: records_by_id[record_id]
             for key, record_id in self.connection.execute("SELECT record_key, record_id FROM records").fetchall()
             if record_id in records_by_id
         }
-        signals_by_key = {
-            key: signals_by_id[signal_id]
-            for key, signal_id in self.connection.execute("SELECT signal_key, signal_id FROM signals").fetchall()
-            if signal_id in signals_by_id
-        }
-        annotations = self._read_annotations()
-        annotations_by_occurrence = {
-            annotation.occurrence_id: annotation
-            for values in annotations.values()
-            for annotation in values
-            if annotation.occurrence_id is not None
-        }
+        annotations_by_occurrence: dict[int, Annotation] = {}
+        annotations = self._read_annotations(annotations_by_occurrence=annotations_by_occurrence)
         record_refs = self._task_record_relationships()
         annotation_refs = self._task_annotation_relationships()
+        task_rows = self.connection.execute(
+            """SELECT task_key, task_id, task_type, prompt,
+                      scope_type, scope_start, scope_end, scope_signal_keys,
+                      has_inline_targets, target_schema, prediction_unit, target_name,
+                      localization_mode, rationale, metadata
+               FROM tasks ORDER BY task_id"""
+        ).fetchall()
 
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         target_rows = self.connection.execute(
@@ -345,6 +390,19 @@ class DuckDBControlReader:
                LEFT JOIN target_span_values span_values USING (target_item_key)
                ORDER BY links.task_key, links.position"""
         ).fetchall()
+        needs_signals = any(row[7] is not None or row[10] for row in target_rows) or any(row[7] for row in task_rows)
+        signals_by_id = (
+            {signal.id: signal for record in hydrated_records for signal in record.signals} if needs_signals else {}
+        )
+        signals_by_key = (
+            {
+                key: signals_by_id[signal_id]
+                for key, signal_id in self.connection.execute("SELECT signal_key, signal_id FROM signals").fetchall()
+                if signal_id in signals_by_id
+            }
+            if needs_signals
+            else {}
+        )
         target_columns = (
             "target_kind",
             "text_value",
@@ -372,19 +430,21 @@ class DuckDBControlReader:
                 row["signal_id"] = None if not span_signal_ids else span_signal_ids[0]
             targets_by_task[task_key].append(decode_target(row, records=records_by_id, signals=signals_by_id))
 
-        task_rows = self.connection.execute(
-            """SELECT task_key, task_id, task_type, prompt, scope, has_inline_targets, payload, rationale, metadata
-               FROM tasks ORDER BY task_id"""
-        ).fetchall()
         tasks: dict[int, Task] = {}
         for (
             task_key,
             task_id,
             stored_type,
             prompt,
-            scope_data,
+            scope_type,
+            scope_start,
+            scope_end,
+            scope_signal_keys,
             has_inline_targets,
-            payload_data,
+            target_schema,
+            prediction_unit,
+            target_name,
+            localization_mode,
             rationale,
             metadata,
         ) in task_rows:
@@ -394,24 +454,34 @@ class DuckDBControlReader:
             except (ValueError, KeyError) as exc:
                 raise TimeFFormatError(f"task {task_id!r} has unknown type {stored_type!r}") from exc
             refs = record_refs.get(task_key, {})
-            inputs = self._resolve_records(task_id, "inputs", refs, records_by_id)
+            inputs = self._resolve_records(task_id, "inputs", refs, records_by_key)
             kwargs: dict[str, Any] = {
                 "id": task_id,
                 "inputs": inputs,
                 "targets": tuple(targets_by_task.get(task_key, ())) if has_inline_targets else None,
                 "prompt": prompt,
-                "scope": decode_span(_decode_json(scope_data)),
+                "scope": self._decode_task_scope(
+                    task_id,
+                    (scope_type, scope_start, scope_end, scope_signal_keys),
+                    signals_by_key,
+                ),
                 "rationale": rationale,
                 "annotations": annotations.get(("Task", task_id), ()),
                 "metadata": _decode_json(metadata, default={}),
-                **decode_task_payload(task_type, _decode_json(payload_data, default={})),
+                **decode_task_config(
+                    task_type,
+                    target_schema=target_schema,
+                    prediction_unit=prediction_unit,
+                    target_name=target_name,
+                    localization_mode=localization_mode,
+                ),
             }
             if "candidate_records" in cls.__dataclass_fields__:
                 kwargs["candidate_records"] = self._resolve_records(
                     task_id,
                     "candidate_records",
                     refs,
-                    records_by_id,
+                    records_by_key,
                 )
             input_annotations = self._resolve_annotations(
                 task_id,
@@ -443,54 +513,98 @@ class DuckDBControlReader:
             tasks[task_key].from_tasks = tuple(parents)
         return tuple(tasks.values())
 
-    def _task_record_relationships(self) -> dict[int, dict[str, tuple[str, ...]]]:
+    @staticmethod
+    def _decode_task_scope(
+        task_id: str,
+        row: tuple[str | None, int | None, int | None, list[int] | None],
+        signals: dict[int, Signal],
+    ) -> Span | None:
+        """Decode one Task scope and resolve its internal Signal keys.
+
+        Returns:
+            The decoded scope, or ``None``.
+
+        Raises:
+            TimeFFormatError: If the stored scope refers to a missing Signal or has an invalid shape.
+        """
+        scope_type, scope_start, scope_end, scope_signal_keys = row
+        if scope_type is None:
+            return None
+        try:
+            signal_ids = (
+                None if scope_signal_keys is None else tuple(signals[signal_key].id for signal_key in scope_signal_keys)
+            )
+        except KeyError as exc:
+            raise TimeFFormatError(f"task {task_id!r} scope refers to missing Signal key {exc.args[0]!r}") from exc
+        data: dict[str, Any] = {
+            "type": scope_type,
+            "start": scope_start,
+            "end": scope_end,
+        }
+        if scope_type in {"step_point", "step_interval"}:
+            if signal_ids is None or len(signal_ids) != 1:
+                raise TimeFFormatError(f"task {task_id!r} step scope must refer to exactly one Signal")
+            data["signal_id"] = signal_ids[0]
+        else:
+            data["signal_ids"] = signal_ids
+        return decode_span(data)
+
+    def _task_record_relationships(self) -> dict[int, dict[str, tuple[int, ...]]]:
         """Read ordered task-to-Record relationships through integer keys.
 
         Returns:
-            ``task_key -> field -> ordered public Record IDs``.
+            ``task_key -> field -> ordered internal Record keys``.
         """
         rows = self.connection.execute(
-            """SELECT refs.task_key, refs.field, records.record_id
-               FROM task_record_refs refs
-               JOIN records USING (record_key)
-               ORDER BY refs.task_key, refs.field, refs.position"""
+            """SELECT task_key, field, record_key
+               FROM task_record_refs
+               ORDER BY task_key, field, position"""
         ).fetchall()
         return self._group_relationships(rows)
 
-    def _task_annotation_relationships(self) -> dict[int, dict[str, tuple[str, ...]]]:
+    def _task_annotation_relationships(self) -> dict[int, dict[str, tuple[int, ...]]]:
         """Read ordered task-to-annotation relationships through integer keys.
 
         Returns:
-            ``task_key -> field -> ordered public occurrence IDs``.
+            ``task_key -> field -> ordered internal occurrence keys``.
         """
         rows = self.connection.execute(
-            """SELECT refs.task_key, refs.field, occurrences.occurrence_id
-               FROM task_annotation_refs refs
-               JOIN annotation_occurrences occurrences USING (occurrence_key)
-               ORDER BY refs.task_key, refs.field, refs.position"""
+            """SELECT task_key, field, occurrence_key
+               FROM task_annotation_refs
+               ORDER BY task_key, field, position"""
         ).fetchall()
         return self._group_relationships(rows)
 
     @staticmethod
-    def _group_relationships(rows: list[tuple[int, str, str]]) -> dict[int, dict[str, tuple[str, ...]]]:
+    def _group_relationships(rows: list[tuple[int, str, int]]) -> dict[int, dict[str, tuple[int, ...]]]:
         """Group ordered relationship query rows.
 
         Returns:
             Relationship values grouped by task key and field.
         """
-        grouped: dict[int, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        grouped: dict[int, dict[str, tuple[int, ...]]] = {}
+        current_task: int | None = None
+        current_field: str | None = None
+        current_values: list[int] = []
         for task_key, field, value in rows:
-            grouped[task_key][field].append(value)
-        return {
-            task_key: {field: tuple(values) for field, values in fields.items()} for task_key, fields in grouped.items()
-        }
+            if task_key != current_task or field != current_field:
+                if current_task is not None and current_field is not None:
+                    grouped.setdefault(current_task, {})[current_field] = tuple(current_values)
+                current_task = task_key
+                current_field = field
+                current_values = [value]
+            else:
+                current_values.append(value)
+        if current_task is not None and current_field is not None:
+            grouped.setdefault(current_task, {})[current_field] = tuple(current_values)
+        return grouped
 
     @staticmethod
     def _resolve_records(
         task_id: str,
         field: str,
-        refs: dict[str, tuple[str, ...]],
-        records: dict[str, Record],
+        refs: dict[str, tuple[int, ...]],
+        records: dict[int, Record],
     ) -> tuple[Record, ...]:
         """Resolve one ordered record-reference field.
 
@@ -501,18 +615,18 @@ class DuckDBControlReader:
             TimeFFormatError: If an ID is missing.
         """
         try:
-            return tuple(records[record_id] for record_id in refs.get(field, ()))
+            return tuple(records[record_key] for record_key in refs.get(field, ()))
         except KeyError as exc:
             raise TimeFFormatError(
-                f"task {task_id!r} field {field!r} refers to missing record {exc.args[0]!r}"
+                f"task {task_id!r} field {field!r} refers to missing record key {exc.args[0]!r}"
             ) from exc
 
     @staticmethod
     def _resolve_annotations(
         task_id: str,
         field: str,
-        refs: dict[str, tuple[str, ...]],
-        annotations: dict[str, Annotation],
+        refs: dict[str, tuple[int, ...]],
+        annotations: dict[int, Annotation],
     ) -> tuple[Annotation, ...]:
         """Resolve one ordered annotation-reference field.
 
@@ -523,10 +637,10 @@ class DuckDBControlReader:
             TimeFFormatError: If an occurrence is missing.
         """
         try:
-            return tuple(annotations[occurrence_id] for occurrence_id in refs.get(field, ()))
+            return tuple(annotations[occurrence_key] for occurrence_key in refs.get(field, ()))
         except KeyError as exc:
             raise TimeFFormatError(
-                f"task {task_id!r} field {field!r} refers to missing annotation occurrence {exc.args[0]!r}"
+                f"task {task_id!r} field {field!r} refers to missing annotation occurrence key {exc.args[0]!r}"
             ) from exc
 
     def _read_axes(
@@ -579,24 +693,40 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the offsets disagree with the axis or its Signals.
         """
+        axis = self.connection.execute(
+            "SELECT axis_key FROM axes WHERE axis_id = ? AND axis_type = 'irregular'",
+            [axis_id],
+        ).fetchone()
+        if axis is None:
+            raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
+        return self.load_axis_offsets_by_key(axis[0], axis_id)
+
+    def load_axis_offsets_by_key(self, axis_key: int, axis_id: str) -> pa.Array:
+        """Load one shared irregular axis through its internal integer key.
+
+        Returns:
+            The axis offsets as Arrow int64 values.
+
+        Raises:
+            TimeFFormatError: If the offsets disagree with the axis or its Signals.
+        """
         rows = self.connection.execute(
             """SELECT offsets.offset_us
                FROM axis_offsets offsets
-               JOIN axes USING (axis_key)
-               WHERE axes.axis_id = ? ORDER BY offsets.position""",
-            [axis_id],
+               WHERE axis_key = ? ORDER BY offsets.position""",
+            [axis_key],
         ).fetchall()
         offsets = np.asarray([row[0] for row in rows], dtype=np.int64)
         axis = self.connection.execute(
-            "SELECT first_us, last_us, axis_key FROM axes WHERE axis_id = ? AND axis_type = 'irregular'",
-            [axis_id],
+            "SELECT first_us, last_us FROM axes WHERE axis_key = ? AND axis_type = 'irregular'",
+            [axis_key],
         ).fetchone()
         if axis is None:
             raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
         lengths = {
             row[0]
             for row in self.connection.execute(
-                "SELECT DISTINCT n_values FROM signals WHERE axis_key = ?", [axis[2]]
+                "SELECT DISTINCT n_values FROM signals WHERE axis_key = ?", [axis_key]
             ).fetchall()
         }
         if len(lengths) != 1 or len(offsets) not in lengths:
@@ -622,15 +752,17 @@ class DuckDBControlReader:
             name=row[6],
             unit_value=ureg.Unit(row[7]),
             dtype=row[8],
-            categories=tuple(_decode_json(row[9], default=[])),
-            value_shape=tuple(_decode_json(row[10], default=[])),
-            dimension_names=tuple(_decode_json(row[11], default=[])),
+            categories=tuple(row[9]),
+            value_shape=tuple(row[10]),
+            dimension_names=tuple(row[11]),
             nullable=row[12],
         )
 
     def _read_annotations(
         self,
         object_keys: Iterable[int] | None = None,
+        *,
+        annotations_by_occurrence: dict[int, Annotation] | None = None,
     ) -> dict[tuple[str, str], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences for hierarchy objects.
 
@@ -656,7 +788,7 @@ class DuckDBControlReader:
                    UNION ALL
                    SELECT task_key, 'Task', task_id FROM tasks
                )
-               SELECT o.occurrence_id, o.object_type, objects.object_id, o.span_type,
+               SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
                       o.start_us, o.end_us, o.signal_keys, o.provenance, o.confidence,
                       o.metadata, c.content_id, c.name, c.value, c.unit, c.metadata
                FROM annotation_occurrences o
@@ -671,7 +803,7 @@ class DuckDBControlReader:
             query.format(predicate=predicate),
             [] if requested is None else [list(requested)],
         ).fetchall()
-        referenced_signal_keys = sorted({signal_key for row in rows for signal_key in (row[6] or ())})
+        referenced_signal_keys = sorted({signal_key for row in rows for signal_key in (row[7] or ())})
         signal_ids_by_key = (
             dict(
                 self.connection.execute(
@@ -684,30 +816,37 @@ class DuckDBControlReader:
             else {}
         )
         for row in rows:
-            signal_keys = row[6]
-            scope = None if signal_keys is None else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
-            span = None
-            if row[3] == "point":
-                span = TimePoint(start_us=row[4], time_series_ids=scope)
-            elif row[3] == "interval":
-                span = TimeInterval(start_us=row[4], end_us=row[5], time_series_ids=scope)
-            elif row[3] != "static":
-                raise TimeFFormatError(f"annotation occurrence {row[0]!r} has unknown span type {row[3]!r}")
-            content_metadata = _decode_json(row[14], default={})
-            description = content_metadata.pop("description", None)
-            grouped[row[1], row[2]].append(
-                Annotation(
-                    occurrence_id=row[0],
-                    id=row[10],
-                    key=row[11],
-                    value=_decode_json(row[12]),
-                    unit=row[13],
+            occurrence_key = row[0]
+            annotation = self._annotations_by_occurrence.get(occurrence_key)
+            if annotation is None:
+                signal_keys = row[7]
+                scope = (
+                    None if signal_keys is None else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
+                )
+                span = None
+                if row[4] == "point":
+                    span = TimePoint(start_us=row[5], time_series_ids=scope)
+                elif row[4] == "interval":
+                    span = TimeInterval(start_us=row[5], end_us=row[6], time_series_ids=scope)
+                elif row[4] != "static":
+                    raise TimeFFormatError(f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}")
+                content_metadata = _decode_json(row[15], default={})
+                description = content_metadata.pop("description", None)
+                annotation = Annotation(
+                    occurrence_id=row[1],
+                    id=row[11],
+                    key=row[12],
+                    value=_decode_json(row[13]),
+                    unit=row[14],
                     description=description,
                     metadata=content_metadata,
                     span=span,
-                    source=_decode_json(row[7]),
-                    confidence=row[8],
-                    occurrence_metadata=_decode_json(row[9], default={}),
+                    source=_decode_json(row[8]),
+                    confidence=row[9],
+                    occurrence_metadata=_decode_json(row[10], default={}),
                 )
-            )
+                self._annotations_by_occurrence[occurrence_key] = annotation
+            grouped[row[2], row[3]].append(annotation)
+            if annotations_by_occurrence is not None:
+                annotations_by_occurrence[occurrence_key] = annotation
         return {key: tuple(value) for key, value in grouped.items()}

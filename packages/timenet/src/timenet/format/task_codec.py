@@ -90,36 +90,50 @@ def decode_span(data: dict[str, Any] | None) -> Span | None:
         return StepPoint(start=data["start"], time_series_id=data["signal_id"])
     if span_type == "step_interval":
         return StepInterval(start=data["start"], stop=data["end"], time_series_id=data["signal_id"])
-    raise TimeFFormatError(f"task payload has unknown span type {span_type!r}")
+    raise TimeFFormatError(f"task has unknown span type {span_type!r}")
 
 
-def encode_task_payload(task: Task) -> dict[str, Any]:
-    """Encode only configuration owned by the concrete Task class.
+def encode_task_config(task: Task) -> dict[str, str | None]:
+    """Project concrete Task configuration into typed storage columns.
 
     Returns:
-        The task configuration mapping, without targets or relationships.
+        Values for every typed task-configuration column.
     """
+    row: dict[str, str | None] = {
+        "target_schema": None,
+        "prediction_unit": None,
+        "target_name": None,
+        "localization_mode": None,
+    }
     if isinstance(task, ClassificationTask):
-        return {"target_schema": task.target_schema}
-    if isinstance(task, ScalarPredictionTask):
-        return {"unit": task.unit, "target_name": task.target_name}
-    if isinstance(task, TemporalLocalizationTask):
-        return {"mode": str(task.mode)}
-    return {}
+        row["target_schema"] = task.target_schema
+    elif isinstance(task, ScalarPredictionTask):
+        row["prediction_unit"] = cast("str | None", task.unit)
+        row["target_name"] = task.target_name
+    elif isinstance(task, TemporalLocalizationTask):
+        row["localization_mode"] = str(task.mode)
+    return row
 
 
-def decode_task_payload(task_type: TaskType, payload: dict[str, Any]) -> dict[str, Any]:
-    """Decode concrete Task configuration from its canonical mapping.
+def decode_task_config(
+    task_type: TaskType,
+    *,
+    target_schema: str | None,
+    prediction_unit: str | None,
+    target_name: str | None,
+    localization_mode: str | None,
+) -> dict[str, Any]:
+    """Decode concrete Task configuration from typed storage columns.
 
     Returns:
         Keyword arguments for the concrete Task constructor.
     """
     if task_type is TaskType.CLASSIFICATION:
-        return {"target_schema": payload.get("target_schema")}
+        return {"target_schema": target_schema}
     if task_type is TaskType.SCALAR_PREDICTION:
-        return {"unit": payload.get("unit"), "target_name": payload.get("target_name")}
+        return {"unit": prediction_unit, "target_name": target_name}
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
-        return {"mode": LocalizationMode(payload.get("mode", LocalizationMode.SPARSE))}
+        return {"mode": LocalizationMode(localization_mode or LocalizationMode.SPARSE)}
     return {}
 
 
