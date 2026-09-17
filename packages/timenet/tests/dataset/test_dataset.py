@@ -58,6 +58,15 @@ def test_add_record_accepts_a_complete_hierarchy(make_series):
     assert dataset.records == (record,)
 
 
+def test_add_record_rejects_duplicate_source_ids_inside_one_hierarchy(make_series):
+    left = Source(id="sensor", name="Left", signals=(make_series(time_series_id="left"),))
+    right = Source(id="sensor", name="Right", signals=(make_series(time_series_id="right"),))
+    record = Record(record_id="record", sources=(left, right))
+
+    with pytest.raises(TimeFValidationError, match="duplicate source IDs"):
+        _dataset().add_record(record=record)
+
+
 @pytest.mark.parametrize("values_backend", [ValuesBackend.PARQUET, ValuesBackend.ZARR])
 def test_declarative_write_and_open_round_trip(tmp_path, make_series, values_backend):
     dataset = _dataset()
@@ -72,6 +81,13 @@ def test_declarative_write_and_open_round_trip(tmp_path, make_series, values_bac
     restored = TimeFDataset.open(path=version_path)
 
     assert restored.records[0].sources[0].signals[0].to_arrow().equals(signal.to_arrow())
+    with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
+        restored.add_record(
+            record=Record(
+                record_id="other-record",
+                sources=(Source(id="other-source", name="Other", signals=(signal,)),),
+            )
+        )
 
 
 def test_add_record_rejects_a_complete_record_mixed_with_construction_fields(make_series):
@@ -270,9 +286,22 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
         dataset.add_record(
             record=Record(
                 record_id="record-b",
-                sources=(Source(id="source-b", name="B", signals=(signal,)),),
+                sources=(Source(id="unused-source", name="B", signals=(signal,)),),
             )
         )
+
+    dataset.add_record(
+        record=Record(
+            record_id="record-c",
+            sources=(
+                Source(
+                    id="unused-source",
+                    name="C",
+                    signals=(make_series(time_series_id="new-signal"),),
+                ),
+            ),
+        )
+    )
 
 
 def test_add_record_rejects_a_source_owned_by_two_records(make_series):
