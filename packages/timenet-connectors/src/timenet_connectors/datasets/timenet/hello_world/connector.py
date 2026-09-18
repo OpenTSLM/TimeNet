@@ -2,7 +2,7 @@
 
 ``HelloWorldConnector`` needs no network. It creates a fully deterministic dataset. The writer and
 reader test suites use this dataset as a fixture for round-trip tests. The connector covers two
-modalities, a shared data source, a series shared across records, and a windowed record. It also
+modalities, explicit Sources, independent signals, and a windowed record. It also
 covers a longer series. The writer tests split this longer series into chunks under a small chunk
 cap. The connector covers all three annotation shapes, including one shared across records, and a
 task chain.
@@ -17,13 +17,12 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
-    DataSource,
     LocalizationMode,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -36,18 +35,15 @@ from timenet.types import (
 
 _SAMPLING_RATE_HZ = 16.0
 _AXIS = RegularAxis.from_rate_hz(16)
-_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SINE = TimeSeriesSpec(
     spec_type="sine",
     name="Sine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 
 
@@ -125,11 +121,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        short, long = raw_refs[0], raw_refs[1]
 
-        # A series shared across two records. This uses the dedupe-by-id path.
+        # Record 0's sine signal.
         shared = TimeSeries.from_values(
-            _wave_values(np.sin, short.n_values, phase=0.0),
+            _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
             spec=_SINE,
             signal="a",
             time_axis=_AXIS,
@@ -141,14 +136,24 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = TimeSeries.from_values(
-            _wave_values(np.cos, short.n_values, phase=0.0),
+            _wave_values(np.cos, raw_refs[0].n_values, phase=0.0),
             spec=_COSINE,
             signal="b",
             time_axis=_AXIS,
             source_id="rec-0",
             time_series_id="ts-cos-0",
         )
-        record0 = dataset.add_record(time_series=(shared, cosine), subject_ids=("subj-0",), record_id="record-0")
+        record0 = Record(
+            record_id="record-0",
+            sources=(
+                Source(
+                    id="source-record-0",
+                    name="Synthetic generator",
+                    signals=(shared, cosine),
+                ),
+            ),
+        )
+        dataset.add_record(record=record0)
         # These annotations have names. The localization task below can reference them by id instead
         # of repeating the literal values.
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
@@ -157,7 +162,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
             id="art-0",
         )
-        record0.add_annotations(
+        _, record0_cohort, stimulus, artifact = record0.add_annotations(
             [
                 Annotation(key="age", value=64, unit="years", id="age-0"),
                 cohort,
@@ -165,71 +170,112 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 artifact,
             ]
         )
-        classification = ClassificationTask(target="normal", id="task-cls-0")
+        classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
         dataset.add_tasks(
-            record0,
-            [
+            tasks=[
                 classification,
                 AnswerTask(
+                    inputs=(record0,),
                     prompt="What rhythm?",
-                    target="Normal.",
+                    targets=("Normal.",),
                     # Any task can carry a chain of thought. An answer task with a chain of thought is
                     # the old reasoning task.
                     rationale="The peaks repeat once per cycle at a constant interval.",
                     # The cohort annotation gives context to the model. The model does not need to
                     # produce this annotation.
-                    input_annotation_ids=(cohort.id,),
+                    input_annotations=(record0_cohort,),
                     from_tasks=(classification,),
                     id="task-answer-0",
                 ),
-                ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+                ScalarPredictionTask(
+                    inputs=(record0,),
+                    targets=(60.0,),
+                    unit="bpm",
+                    target_name="mean_rate",
+                    id="task-scalar-0",
+                ),
                 # Localization works backward from a normal task. The query is the input, and the
                 # regions are the output. Here, the task stores the answer by reference, so the target
                 # is the two temporal annotations above.
                 TemporalLocalizationTask(
+                    inputs=(record0,),
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
-                    target_annotation_ids=(stimulus.id, artifact.id),
+                    target_annotations=(stimulus, artifact),
                     id="task-localize-0",
                 ),
             ],
         )
 
-        # Record 1: this reuses the shared series and adds a longer series. The writer tests split the
-        # longer series into chunks under a small chunk cap.
+        # Record 1: a short signal and a longer signal. The writer tests split the longer signal into
+        # chunks under a small chunk cap.
         long_series = TimeSeries(
             spec=_SINE,
             signal="a",
             time_axis=_AXIS,
-            loader=_wave(np.sin, long.n_values, phase=1.0),
+            loader=_wave(np.sin, raw_refs[1].n_values, phase=1.0),
             source_id="rec-1",
             time_series_id="ts-long-1",
-            n_values=long.n_values,
+            n_values=raw_refs[1].n_values,
         )
-        record1 = dataset.add_record(time_series=(shared, long_series), subject_ids=("subj-1",), record_id="record-1")
+        record1 = Record(
+            record_id="record-1",
+            sources=(
+                Source(
+                    id="source-record-1",
+                    name="Synthetic generator",
+                    signals=(
+                        TimeSeries.from_values(
+                            _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
+                            spec=_SINE,
+                            signal="a",
+                            time_axis=_AXIS,
+                            source_id="rec-1",
+                            time_series_id="ts-short-1",
+                        ),
+                        long_series,
+                    ),
+                ),
+            ),
+        )
+        dataset.add_record(record=record1)
         record1.add_annotation(cohort)  # same instance and id, so the annotation is shared
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
         # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
         # window.
-        window_start = short.n_values // 2
+        window_start = raw_refs[0].n_values // 2
         window = TimeSeries.from_values(
-            _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
+            _wave_values(
+                np.sin,
+                raw_refs[0].n_values - window_start,
+                phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ,
+            ),
             spec=_SINE,
             signal="a",
             time_axis=_AXIS.at_index(window_start),
             source_id="rec-0",
             time_series_id="ts-window-2",
         )
-        record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+        record2 = Record(
+            record_id="record-2",
+            sources=(
+                Source(
+                    id="source-record-2",
+                    name="Synthetic generator",
+                    signals=(window,),
+                ),
+            ),
+        )
+        dataset.add_record(record=record2)
         # A scope narrows the input to a region. This task has the same task type as the whole-record
         # label above, but it supplies the window. Span times use the source recording timeline, so
         # this task's span sits inside the window's span.
         dataset.add_task(
-            record2,
-            ClassificationTask(
-                target="onset",
+            task=ClassificationTask(
+                inputs=(record2,),
+                targets=("onset",),
                 id="task-cls-2",
                 scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
             ),

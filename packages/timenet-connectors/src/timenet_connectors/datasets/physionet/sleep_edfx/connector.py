@@ -31,7 +31,7 @@ from pathlib import Path
 import re
 from typing import ClassVar
 
-from timenet.dataset import TimeFDataset
+from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
@@ -304,16 +304,24 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
                 record_id, metadata_annotation, recording, file.header
             )
 
-            record = dataset.add_record(
-                time_series=series,
+            record = Record(
                 record_id=record_id,
-                subject_ids=(recording.subject_id,),
+                sources=(
+                    Source(
+                        id=f"{record_id}-source",
+                        name="Sleep-EDF polysomnograph",
+                        signals=series,
+                    ),
+                ),
                 time_span=TimeInterval.micros(0, session_end),
+                metadata={"subject_id": recording.subject_id},
             )
+            dataset.add_record(record=record)
             record.add_annotations(sleep_stages)
             record.add_annotations(recording_metadata)
 
-        dataset.register_annotations(tasks.build_vocabularies(_ID_PREFIX))
+        for vocabulary in tasks.build_vocabularies(_ID_PREFIX):
+            dataset.annotate(vocabulary)
         dataset.set_task_stream(
             [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
             lambda: tasks.iter_tasks(dataset.records, _ID_PREFIX),

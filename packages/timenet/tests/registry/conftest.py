@@ -3,6 +3,8 @@ import sys
 
 import pytest
 
+from timenet.dataset import Record, Source
+
 
 # Make sibling test helpers (e.g. ``_fake_registry``) importable by name under
 # pytest's importlib import mode, which does not add test dirs to ``sys.path``.
@@ -49,9 +51,11 @@ def _ecg_dataset() -> TimeFDataset:
         time_series_id="ecg-ts-0",
         n_values=16,
     )
-    record = dataset.add_record(time_series=(series,), record_id="ecg-record-0")
+    record = dataset.add_record(
+        record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="ecg-record-0")
+    )
     record.add_annotation(Annotation(key="age", value=70, unit="years", id="ecg-age-0"))
-    dataset.add_task(record, ClassificationTask(target="afib", id="ecg-task-0"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id="ecg-task-0"))
     return dataset
 
 
