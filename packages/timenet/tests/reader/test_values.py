@@ -57,7 +57,7 @@ def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
     rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
-    spec = make_dataset().records[0].time_series[0].spec
+    spec = next(signal for record in make_dataset().records for signal in record.signals).spec
 
     # The reader keys its row-group cache on the handle's root, so the same relative path under two
     # different roots must not collide; only version.root is touched here (_shard is stubbed).
@@ -96,7 +96,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.time_series[0]
-        rows = reader._index_rows(record.record_id, series.time_series_id)
+        rows = reader._control_reader().chunk_rows(series.id)
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()

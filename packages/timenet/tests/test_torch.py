@@ -42,7 +42,7 @@ def test_getitem_structure():
 def test_getitem_values_match():
     dataset = make_dataset()
     item = TimeFTorchDataset(dataset)[0]
-    expected = dataset.records[0].time_series[0].to_numpy()
+    expected = dataset.records[0].signals[0].to_numpy()
     assert item["series"][0].numpy().tolist() == expected.tolist()
 
 

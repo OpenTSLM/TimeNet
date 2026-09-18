@@ -290,7 +290,7 @@ def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, 
         tmp_path,
         series,
         values_backend="zarr",
-        leading_series=replace(series, time_series_id="prefix", signal="prefix"),
+        leading_series=replace(series, id="prefix", name="prefix"),
         chunk_max_bytes=4,
         shard_target_bytes=32,
     )
