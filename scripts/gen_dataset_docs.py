@@ -121,7 +121,8 @@ def _schema_html(manifest: Manifest) -> str:
     return (
         '<div class="ds-schema"><table><thead><tr><th>Modality</th><th>Name</th><th>Unit</th></tr></thead>'
         f"<tbody>{rows}</tbody></table>"
-        f"<p><strong>Records:</strong> {counts.records} · <strong>Annotations:</strong> {counts.annotations}"
+        f"<p><strong>Records:</strong> {counts.records} · <strong>Annotations:</strong> "
+        f"{counts.annotation_occurrences}"
         f" · <strong>Tasks:</strong> {tasks}</p></div>"
     )
 
