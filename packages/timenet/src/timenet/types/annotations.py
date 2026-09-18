@@ -11,7 +11,7 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from typing import Any
 
@@ -65,7 +65,15 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     id: str = field(default_factory=new_id)
-    """Unique identifier, a UUIDv7 string by default."""
+    """Reusable content identifier, a UUIDv7 string by default."""
+    occurrence_id: str | None = field(default=None, compare=False)
+    """Identity of one attachment. It is assigned by ``annotate()``."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Optional metadata that is part of the reusable content."""
+    confidence: float | None = field(default=None, compare=False)
+    """Optional confidence for this particular application."""
+    occurrence_metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+    """Optional metadata for this particular application."""
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
@@ -91,6 +99,20 @@ class Annotation:
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
+
+    @property
+    def content_id(self) -> str:
+        """Return the identity of the reusable annotation content."""
+        return self.id
+
+    @property
+    def name(self) -> str:
+        """Return the annotation's public name."""
+        return self.key
+
+    def _new_occurrence(self) -> "Annotation":
+        """Return an internal copy representing one new attachment occurrence."""
+        return replace(self, occurrence_id=new_id())
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:

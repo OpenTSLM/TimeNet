@@ -21,8 +21,9 @@ API.
 ![TimeNet architecture diagram](assets/architecture.svg)
 
 A [connector](connectors.md) turns a raw source into a TimeF version and publishes it to a
-[registry](registry.md). TimeF keeps its control plane in Parquet and stores series values in either
-Parquet or Zarr. The [client](client.md) reads the manifest from the registry and loads the data.
+[registry](registry.md). TimeF keeps its relational control plane in DuckDB and stores signal values
+in either Parquet or Zarr. The [client](client.md) reads the manifest from the registry and loads
+the data.
 Reading never runs connector code. Against a local registry, `load` can first build a dataset that the
 registry does not have from an installed connector (see [Build & publish](build.md)).
 
