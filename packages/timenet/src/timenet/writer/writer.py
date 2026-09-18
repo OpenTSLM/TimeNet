@@ -1,10 +1,4 @@
-"""``TimeFWriter``: serialize a :class:`~timenet.dataset.TimeFDataset` to the TimeF layout on disk.
-
-The writer keeps the Parquet control plane fixed and sends series values to a selected Parquet or
-Zarr backend. The configured chunk, row-group, and shard targets bound the backend buffers.
-The writer stages everything in a temporary directory and publishes it with a single atomic rename.
-A ``manifest.json`` in the version directory marks a committed version.
-"""
+"""Write a TimeF v2 DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
@@ -38,7 +32,7 @@ from timenet.format.constants import (
     part_path,
 )
 from timenet.format.control_writer import DuckDBControlWriter
-from timenet.format.duckdb import CONTROL_FILE
+from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.schemas import (
     LOGICAL_IDS,
     TASK_COMMON_NAMES,
@@ -211,23 +205,18 @@ class TimeFWriter:
 
         unique_series, _series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        tasks = tuple(
+        tasks = (
             self._dataset.iter_streamed_tasks_validated()
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
         )
         self._control_file = CONTROL_FILE
-        self._task_type_counts = {}
-        for task in tasks:
-            task_type = str(task.task_type)
-            self._task_type_counts[task_type] = self._task_type_counts.get(task_type, 0) + 1
-        self._index_rows = 0
-        self._counts = self._build_counts(unique_series, placements)
+        self._counts = self._build_counts()
         self._written = True
 
     def close(self) -> None:
@@ -673,12 +662,8 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                records=(),
-                annotations=(),
-                time_series_index=(),
-                tasks=(),
-                time_series=self._file_parts(self._value_files),
                 control=(self._file_part(self._control_file),),
+                time_series=self._file_parts(self._value_files),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
@@ -713,26 +698,36 @@ class TimeFWriter:
                 )
             seen[ann.id] = ann
 
-    def _build_counts(
-        self,
-        unique_series: list[TimeSeries],
-        placements: dict[tuple[str, int], ChunkPlacement],
-    ) -> ManifestCounts:
-        tasks_by_type = self._task_type_counts  # tallied while streaming/writing the tasks
-        specs_by_type: dict[str, int] = {}
-        for ts in unique_series:
-            specs_by_type[ts.spec.spec_type] = specs_by_type.get(ts.spec.spec_type, 0) + 1
-        annotation_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
-        annotation_ids |= {ann.id for ann in self._dataset.registered_annotations}
-        return ManifestCounts(
-            records=len(self._dataset.records),
-            annotations=len(annotation_ids),
-            registered_annotations=len(self._dataset.registered_annotations),
-            tasks=tasks_by_type,
-            time_series_chunks=len(placements),
-            time_series_index_rows=self._index_rows,
-            time_series_specs=specs_by_type,
-        )
+    def _build_counts(self) -> ManifestCounts:
+        """Read exact entity counts from the completed control database.
+
+        Returns:
+            Counts for the manifest.
+        """
+        with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
+
+            def count(table: str) -> int:
+                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()  # noqa: S608
+                if row is None:
+                    raise TimeFValidationError(f"could not count rows in control table {table!r}")
+                return int(row[0])
+
+            signals_by_spec = dict(
+                connection.execute(
+                    "SELECT spec_type, count(*) FROM signals GROUP BY spec_type ORDER BY spec_type"
+                ).fetchall()
+            )
+            return ManifestCounts(
+                records=count("records"),
+                sources=count("sources"),
+                signals=count("signals"),
+                axes=count("axes"),
+                annotation_contents=count("annotation_contents"),
+                annotation_occurrences=count("annotation_occurrences"),
+                tasks=self._task_type_counts,
+                signal_chunks=count("signal_chunks"),
+                signals_by_spec=signals_by_spec,
+            )
 
     def _file_parts(self, rels: Iterable[str]) -> tuple[FilePart, ...]:
         """Describe each staged artifact by its path, checksum, and size.
