@@ -13,10 +13,25 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.types import Annotation, DataSource, TimeInterval, TimePoint, TimeSeriesSpec, ureg
+from timenet.format.task_codec import decode_span, decode_task_payload
+from timenet.types import (
+    TASKS,
+    Annotation,
+    DataSource,
+    ForecastingTask,
+    Task,
+    TaskType,
+    TimeInterval,
+    TimePoint,
+    TimeSeriesSpec,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
+    ureg,
+)
 
 
-ValueLoader = Callable[[str], pa.Array]
+ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 
 
 def _decode_json(value: str | None, *, default: Any = None) -> Any:
@@ -36,7 +51,7 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
         raise TimeFFormatError(f"control.duckdb contains invalid JSON: {value!r}") from exc
 
 
-def _missing_values(signal_id: str) -> pa.Array:
+def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when metadata-only hydration is asked to load values.
 
     Raises:
@@ -133,7 +148,7 @@ class DuckDBControlReader:
                     spec=spec,
                     time_axis=axis,
                     n_values=row[13],
-                    loader=lambda signal_id=signal_id: self._value_loader(signal_id),
+                    loader=lambda signal_id=signal_id, spec=spec: self._value_loader(signal_id, spec),
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_id), ()),
                     metadata=_decode_json(row[14], default={}),
@@ -188,6 +203,237 @@ class DuckDBControlReader:
                 )
             )
         return tuple(records)
+
+    def chunk_rows(self, signal_id: str) -> list[dict[str, Any]]:
+        """Return values-backend chunk locators for one signal.
+
+        Returns:
+            Chunk rows in chunk-index order.
+
+        Raises:
+            TimeFFormatError: If the signal has no stored chunks.
+        """
+        rows = self.connection.execute(
+            """SELECT chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks WHERE signal_id = ? ORDER BY chunk_index""",
+            [signal_id],
+        ).fetchall()
+        if not rows:
+            raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
+        return [
+            {
+                "chunk_idx": row[0],
+                "chunk_file": row[1],
+                "chunk_major_idx": row[2],
+                "chunk_minor_idx": row[3],
+                "n_values": row[4],
+            }
+            for row in rows
+        ]
+
+    def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:  # noqa: PLR0914
+        """Hydrate concrete tasks and restore all in-memory object references.
+
+        Args:
+            records: Records already hydrated by this reader, or ``None`` to load all records.
+
+        Returns:
+            Concrete tasks in stable ID order.
+
+        Raises:
+            TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
+        """
+        hydrated_records = self.read_records() if records is None else tuple(records)
+        records_by_id = {record.id: record for record in hydrated_records}
+        signals_by_id = {signal.id: signal for record in hydrated_records for signal in record.signals}
+        annotations = self._read_annotations()
+        annotations_by_occurrence = {
+            annotation.occurrence_id: annotation
+            for values in annotations.values()
+            for annotation in values
+            if annotation.occurrence_id is not None
+        }
+        record_refs = self._relationship_rows("task_record_refs", "record_id")
+        signal_refs = self._relationship_rows("task_signal_refs", "signal_id")
+        annotation_refs = self._relationship_rows("task_annotation_refs", "occurrence_id")
+
+        task_rows = self.connection.execute(
+            """SELECT task_id, task_type, prompt, scope, payload, rationale, metadata
+               FROM tasks ORDER BY task_id"""
+        ).fetchall()
+        tasks: dict[str, Task] = {}
+        for task_id, stored_type, prompt, scope_data, payload_data, rationale, metadata in task_rows:
+            try:
+                task_type = TaskType(stored_type)
+                cls = TASKS[task_type]
+            except (ValueError, KeyError) as exc:
+                raise TimeFFormatError(f"task {task_id!r} has unknown type {stored_type!r}") from exc
+            refs = record_refs.get(task_id, {})
+            inputs = self._resolve_records(task_id, "inputs", refs, records_by_id)
+            kwargs: dict[str, Any] = {
+                "id": task_id,
+                "inputs": inputs,
+                "record_ids": tuple(record.id for record in inputs),
+                "prompt": prompt,
+                "scope": decode_span(_decode_json(scope_data)),
+                "rationale": rationale,
+                "annotations": annotations.get(("Task", task_id), ()),
+                "metadata": _decode_json(metadata, default={}),
+                **decode_task_payload(task_type, _decode_json(payload_data, default={})),
+            }
+            self._add_task_record_kwargs(task_id, cls, refs, records_by_id, kwargs)
+            self._add_task_signal_kwargs(task_id, cls, signal_refs.get(task_id, {}), signals_by_id, kwargs)
+            input_annotations = self._resolve_annotations(
+                task_id,
+                "input_annotations",
+                annotation_refs.get(task_id, {}),
+                annotations_by_occurrence,
+            )
+            target_annotations = self._resolve_annotations(
+                task_id,
+                "target_annotations",
+                annotation_refs.get(task_id, {}),
+                annotations_by_occurrence,
+            )
+            kwargs.update(
+                input_annotations=input_annotations,
+                input_annotation_ids=tuple(annotation.content_id for annotation in input_annotations),
+                target_annotations=target_annotations,
+                target_annotation_ids=tuple(annotation.content_id for annotation in target_annotations),
+            )
+            tasks[task_id] = cls(**kwargs)
+
+        dependency_rows = self.connection.execute(
+            "SELECT task_id, parent_task_id FROM task_dependencies ORDER BY task_id, position"
+        ).fetchall()
+        dependencies: dict[str, list[Task]] = defaultdict(list)
+        for task_id, parent_id in dependency_rows:
+            if task_id not in tasks or parent_id not in tasks:
+                raise TimeFFormatError(f"task dependency {task_id!r} -> {parent_id!r} refers to a missing task")
+            dependencies[task_id].append(tasks[parent_id])
+        for task_id, parents in dependencies.items():
+            tasks[task_id].from_tasks = tuple(parents)
+        return tuple(tasks.values())
+
+    def _relationship_rows(self, table: str, value_column: str) -> dict[str, dict[str, tuple[str, ...]]]:
+        """Read one normalized task relationship table in stored order.
+
+        Returns:
+            ``task_id -> field -> ordered object IDs``.
+
+        Raises:
+            AssertionError: If the caller requests a table outside the fixed internal allowlist.
+        """
+        allowed = {
+            ("task_record_refs", "record_id"),
+            ("task_signal_refs", "signal_id"),
+            ("task_annotation_refs", "occurrence_id"),
+        }
+        if (table, value_column) not in allowed:
+            raise AssertionError(f"unsupported relationship table {table!r}")
+        rows = self.connection.execute(
+            f"SELECT task_id, field, {value_column} FROM {table} ORDER BY task_id, field, position"  # noqa: S608
+        ).fetchall()
+        grouped: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        for task_id, field, value in rows:
+            grouped[task_id][field].append(value)
+        return {
+            task_id: {field: tuple(values) for field, values in fields.items()} for task_id, fields in grouped.items()
+        }
+
+    @staticmethod
+    def _resolve_records(
+        task_id: str,
+        field: str,
+        refs: dict[str, tuple[str, ...]],
+        records: dict[str, Record],
+    ) -> tuple[Record, ...]:
+        """Resolve one ordered record-reference field.
+
+        Returns:
+            The referenced records.
+
+        Raises:
+            TimeFFormatError: If an ID is missing.
+        """
+        try:
+            return tuple(records[record_id] for record_id in refs.get(field, ()))
+        except KeyError as exc:
+            raise TimeFFormatError(
+                f"task {task_id!r} field {field!r} refers to missing record {exc.args[0]!r}"
+            ) from exc
+
+    @staticmethod
+    def _resolve_annotations(
+        task_id: str,
+        field: str,
+        refs: dict[str, tuple[str, ...]],
+        annotations: dict[str, Annotation],
+    ) -> tuple[Annotation, ...]:
+        """Resolve one ordered annotation-reference field.
+
+        Returns:
+            The referenced annotation occurrences.
+
+        Raises:
+            TimeFFormatError: If an occurrence is missing.
+        """
+        try:
+            return tuple(annotations[occurrence_id] for occurrence_id in refs.get(field, ()))
+        except KeyError as exc:
+            raise TimeFFormatError(
+                f"task {task_id!r} field {field!r} refers to missing annotation occurrence {exc.args[0]!r}"
+            ) from exc
+
+    @staticmethod
+    def _add_task_record_kwargs(
+        task_id: str,
+        cls: type[Task],
+        refs: dict[str, tuple[str, ...]],
+        records: dict[str, Record],
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Add concrete task record relationships to constructor arguments."""
+        resolve = lambda field: DuckDBControlReader._resolve_records(task_id, field, refs, records)  # noqa: E731
+        if issubclass(cls, ForecastingTask):
+            context = resolve("context_records")
+            target = resolve("target_record")
+            kwargs.update(context_records=context, target_record=target[0] if target else None)
+        elif issubclass(cls, TSEditingTask):
+            source, target = resolve("source_record"), resolve("target_record")
+            kwargs.update(
+                source_record=source[0] if source else None,
+                target_record=target[0] if target else None,
+            )
+        elif issubclass(cls, TSGenerationTask):
+            target = resolve("target_record")
+            kwargs["target_record"] = target[0] if target else None
+        elif issubclass(cls, TSCorrespondenceTask):
+            candidates, targets = resolve("candidate_records"), resolve("target_records")
+            kwargs.update(candidate_records=candidates, target_records=targets or None)
+
+    @staticmethod
+    def _add_task_signal_kwargs(
+        task_id: str,
+        cls: type[Task],
+        refs: dict[str, tuple[str, ...]],
+        signals: dict[str, Signal],
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Add concrete task signal relationships to constructor arguments.
+
+        Raises:
+            TimeFFormatError: If a signal ID is missing.
+        """
+        if not issubclass(cls, TSCorrespondenceTask):
+            return
+        try:
+            resolved = tuple(signals[signal_id] for signal_id in refs.get("target_signals", ()))
+        except KeyError as exc:
+            raise TimeFFormatError(
+                f"task {task_id!r} field 'target_signals' refers to missing signal {exc.args[0]!r}"
+            ) from exc
+        kwargs["target_signals"] = resolved or None
 
     def _read_axes(self) -> dict[str, RegularAxis | IrregularAxis | OrdinalAxis]:
         """Hydrate each shared axis exactly once.

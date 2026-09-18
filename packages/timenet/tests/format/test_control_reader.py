@@ -15,8 +15,9 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
         "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
     }
 
-    with DuckDBControlReader(path, value_loader=values.__getitem__) as reader:
+    with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
         (record,) = reader.read_records()
+        (task,) = reader.read_tasks((record,))
 
     assert record.id == "record-1"
     assert record.sources[0].id == "monitor"
@@ -26,3 +27,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
     assert record.annotations[0].content_id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
+    assert task.inputs[0] is record
+    assert task.prompt == "Alive?"
+    assert task.target == "Yes"
+    assert task.annotations[0].name == "task_kind"
