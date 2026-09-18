@@ -1,14 +1,6 @@
-"""``TimeFWriter``: serialize a :class:`~timenet.dataset.TimeFDataset` to the TimeF layout on disk.
+"""Write a TimeF v2 DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
-The writer keeps the Parquet control plane fixed and sends series values to a selected Parquet or
-Zarr backend. The configured chunk, row-group, and shard targets bound the backend buffers.
-The writer stages everything in a temporary directory and publishes it with a single atomic rename.
-A ``manifest.json`` in the version directory marks a committed version.
-"""
-
-from collections.abc import Callable, Iterable, Iterator
-from enum import StrEnum
-import itertools
+from collections.abc import Callable, Iterable
 import json
 from pathlib import Path
 import shutil
@@ -34,23 +26,22 @@ from timenet.format.constants import (
     INDEX_TEMPLATE,
     MANIFEST_FILE,
     RECORDS_TEMPLATE,
-    TASK_PART_TEMPLATE,
     part_path,
 )
+from timenet.format.control_writer import DuckDBControlWriter
+from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.schemas import (
     LOGICAL_IDS,
-    TASK_COMMON_NAMES,
     UUID16,
     IdCodec,
     IdTypes,
     annotations_schema,
     index_schema,
     records_schema,
-    task_schema,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types import Annotation, Task
+from timenet.types import Annotation
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -147,9 +138,6 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
-        # A streamed dataset's task iterator, peeked once for id types and reused for the write.
-        self._task_iter: Iterator[Task] = iter(())
-        self._first_task: Task | None = None
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -207,13 +195,20 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
-        unique_series, series_to_records = self._dedupe_series()
+        unique_series, _series_to_records = self._dedupe_series()
         placements = self._write_values(unique_series)
-        self._write_records()
-        self._write_annotations()
-        self._write_tasks()
-        self._write_index(placements, series_to_records)
-        self._counts = self._build_counts(unique_series, placements)
+        tasks = (
+            self._dataset.iter_streamed_tasks_validated()
+            if self._dataset.has_task_stream
+            else self._dataset.iter_tasks()
+        )
+        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+            self._dataset,
+            placements,
+            tasks=tasks,
+        )
+        self._control_file = CONTROL_FILE
+        self._counts = self._build_counts()
         self._written = True
 
     def close(self) -> None:
@@ -246,7 +241,7 @@ class TimeFWriter:
         for record in self._dataset.records:
             values["record_id"].append(record.record_id)
             values["subject_id"].extend(record.subject_ids)
-            for ts in record.time_series:
+            for ts in record.signals:
                 values["time_series_id"].append(ts.time_series_id)
                 if ts.source_id is not None:
                     values["source_id"].append(ts.source_id)
@@ -254,15 +249,7 @@ class TimeFWriter:
                 values["annotation_id"].append(ann.id)
         for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
             values["annotation_id"].append(ann.id)
-        if self._dataset.has_task_stream:
-            # Streamed tasks are not materialized; one peeked id decides binary(16)-vs-string storage
-            # without draining millions of tasks. Keep the validating iterator so _write_tasks reuses
-            # it: the source is consumed (and validated) exactly once, even a one-shot generator.
-            self._task_iter = self._dataset.iter_streamed_tasks_validated()
-            self._first_task = next(self._task_iter, None)
-            if self._first_task is not None:
-                values["task_id"].append(self._first_task.id)
-        else:
+        if not self._dataset.has_task_stream:
             for task in self._dataset.tasks:
                 values["task_id"].append(task.id)
 
@@ -297,7 +284,7 @@ class TimeFWriter:
         series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
         for record in self._dataset.records:
-            for ts in record.time_series:
+            for ts in record.signals:
                 existing = unique.get(ts.time_series_id)
                 if existing is None:
                     unique[ts.time_series_id] = ts
@@ -575,40 +562,6 @@ class TimeFWriter:
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
-    def _write_tasks(self) -> None:
-        # Route tasks to a byte-budgeted sink per type, created on first sight of a type, so they reach
-        # disk in row-group batches without the whole list ever living in memory. iter_tasks() yields a
-        # materialized dataset's tasks and a streamed one's identically, so one path serves both.
-        # _task_type_counts feeds the manifest counts, tallied here so the tasks are never iterated twice.
-        self._task_files: list[str] = []
-        self._task_type_counts: dict[str, int] = {}
-        sinks: dict[str, ShardedTableWriter] = {}
-        schemas: dict[str, pa.Schema] = {}
-        if self._dataset.has_task_stream:
-            # Reuse the iterator the id-type peek started: the source is consumed and validated once.
-            # The peek already pulled the first task, so chain it back ahead of the rest.
-            if self._first_task is None:
-                tasks: Iterable[Task] = ()
-            else:
-                tasks = itertools.chain((self._first_task,), self._task_iter)
-        else:
-            tasks = self._dataset.iter_tasks()
-        for task in tasks:
-            task_type_str = str(task.task_type)
-            schema = schemas.get(task_type_str)
-            if schema is None:
-                schema = task_schema(task.task_type, self._id_types)
-                schemas[task_type_str] = schema
-                sinks[task_type_str] = self._control_sink(
-                    schema,
-                    lambda index, tt=task_type_str: part_path(TASK_PART_TEMPLATE, index, task_type=tt),
-                    dictionary_columns=encodings.task_dictionary(schema),
-                )
-            sinks[task_type_str].add(_task_row(task, schema, self._codec))
-            self._task_type_counts[task_type_str] = self._task_type_counts.get(task_type_str, 0) + 1
-        for task_type_str in sorted(sinks):  # stable file order regardless of the type interleaving
-            self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
-
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_records: dict[str, list[str]]
     ) -> None:
@@ -667,10 +620,7 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                records=self._file_parts(self._record_parts),
-                annotations=self._file_parts(self._annotation_parts),
-                time_series_index=self._file_parts(self._index_parts),
-                tasks=self._file_parts(self._task_files),
+                control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
             ),
             values_backend=self._values_backend_name,
@@ -706,26 +656,36 @@ class TimeFWriter:
                 )
             seen[ann.id] = ann
 
-    def _build_counts(
-        self,
-        unique_series: list[TimeSeries],
-        placements: dict[tuple[str, int], ChunkPlacement],
-    ) -> ManifestCounts:
-        tasks_by_type = self._task_type_counts  # tallied while streaming/writing the tasks
-        specs_by_type: dict[str, int] = {}
-        for ts in unique_series:
-            specs_by_type[ts.spec.spec_type] = specs_by_type.get(ts.spec.spec_type, 0) + 1
-        annotation_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
-        annotation_ids |= {ann.id for ann in self._dataset.registered_annotations}
-        return ManifestCounts(
-            records=len(self._dataset.records),
-            annotations=len(annotation_ids),
-            registered_annotations=len(self._dataset.registered_annotations),
-            tasks=tasks_by_type,
-            time_series_chunks=len(placements),
-            time_series_index_rows=self._index_rows,
-            time_series_specs=specs_by_type,
-        )
+    def _build_counts(self) -> ManifestCounts:
+        """Read exact entity counts from the completed control database.
+
+        Returns:
+            Counts for the manifest.
+        """
+        with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
+
+            def count(table: str) -> int:
+                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()  # noqa: S608
+                if row is None:
+                    raise TimeFValidationError(f"could not count rows in control table {table!r}")
+                return int(row[0])
+
+            signals_by_spec = dict(
+                connection.execute(
+                    "SELECT spec_type, count(*) FROM signals GROUP BY spec_type ORDER BY spec_type"
+                ).fetchall()
+            )
+            return ManifestCounts(
+                records=count("records"),
+                sources=count("sources"),
+                signals=count("signals"),
+                axes=count("axes"),
+                annotation_contents=count("annotation_contents"),
+                annotation_occurrences=count("annotation_occurrences"),
+                tasks=self._task_type_counts,
+                signal_chunks=count("signal_chunks"),
+                signals_by_spec=signals_by_spec,
+            )
 
     def _file_parts(self, rels: Iterable[str]) -> tuple[FilePart, ...]:
         """Describe each staged artifact by its path, checksum, and size.
@@ -813,29 +773,6 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
         **_axis_columns(ts.time_axis),
         "n_values": ts.n_values,
     }
-
-
-def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
-    refs = type(task).refs
-    row: dict = {
-        "id": codec.encode("task_id", task.id),
-        "record_ids": codec.encode_list("record_id", task.record_ids),
-        "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
-        "prompt": task.prompt,
-        "scope": codec.encode_span(task.scope),
-        "input_annotation_ids": codec.encode_list("annotation_id", task.input_annotation_ids),
-        "target_annotation_ids": codec.encode_list("annotation_id", task.target_annotation_ids),
-        "rationale": task.rationale,
-    }
-    for name in schema.names:
-        if name in TASK_COMMON_NAMES:
-            continue
-        value = getattr(task, name)
-        if isinstance(value, StrEnum):  # a StrEnum payload (for example localization mode) stores as its value
-            value = str(value)
-        value = list(value) if isinstance(value, tuple) else value
-        row[name] = codec.encode_payload(refs, name, value)
-    return row
 
 
 def _ordered_unique(items: Iterable[str]) -> list[str]:

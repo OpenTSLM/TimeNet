@@ -1,4 +1,4 @@
-"""The :class:`TimeSeries` reference type: one logical stream with a lazy Arrow loader."""
+"""The :class:`Signal` leaf type: one logical stream with a lazy Arrow loader."""
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
-from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import Annotation, Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
 def _validate_enum_values(
@@ -71,20 +71,19 @@ def _array_from_values(
     return array
 
 
-@dataclass(frozen=True, eq=False, kw_only=True)
-class TimeSeries:
+@dataclass(frozen=True, eq=False, init=False, kw_only=True)
+class Signal:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
-    The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
-    across records, or give two instances the same explicit id, they share one chunk on disk. Consumers
-    read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector supplies ``loader`` at
-    build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
+    Each Signal has exactly one owning Source. Several Signals can share an immutable TimeAxis or
+    TimeSeriesSpec. Consumers read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector
+    supplies ``loader`` at build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
     """
 
     spec: TimeSeriesSpec
     """Measurement-modality contract: type tag, units, dtype, and per-timestep shape."""
-    signal: str
-    """Name of this signal within the modality. The signal must be non-empty."""
+    name: str
+    """Human-readable signal name within the source."""
     time_axis: TimeAxis
     """Where this series' values sit in time. A :class:`~timenet.dataset.axis.RegularAxis` gives a
     cadence, an :class:`~timenet.dataset.axis.IrregularAxis` stores per-value time offsets, and an
@@ -99,14 +98,103 @@ class TimeSeries:
     either gives a second, conflicting answer to the same question."""
     source_id: str | None = None
     """Optional identifier of the raw source recording."""
-    time_series_id: str = field(default_factory=new_id)
-    """Stable identity used to dedupe and share chunks. Defaults to a UUIDv7."""
+    id: str = field(default_factory=new_id)
+    """Stable Signal identity. Defaults to a UUIDv7."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
     the series counts one value per timestep, not one per scalar. This matches the count a chunk's
     ``n_values`` reports.
 
     """
+    annotations: tuple[Annotation, ...] = ()
+    """Annotations attached directly to this signal."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible signal metadata."""
+
+    def __init__(  # noqa: PLR0913 - supports eager data and lazy storage loaders
+        self,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        id: str | None = None,
+        name: str | None = None,
+        data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array | None = None,
+        loader: Callable[[], pa.Array] | None = None,
+        n_values: int | None = None,
+        time_offsets_loader: Callable[[], pa.Array] | None = None,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+        signal: str | None = None,
+        time_series_id: str | None = None,
+    ) -> None:
+        """Build a signal from eager ``data`` or a lazy ``loader``.
+
+        ``signal`` and ``time_series_id`` are transitional aliases for old connectors. New code uses
+        ``name`` and ``id``.
+
+        Raises:
+            TimeFValidationError: If aliases disagree, both data paths are set, or a required value is
+                missing.
+        """
+        if name is not None and signal is not None and name != signal:
+            raise TimeFValidationError("Signal.name and legacy signal disagree")
+        if id is not None and time_series_id is not None and id != time_series_id:
+            raise TimeFValidationError("Signal.id and legacy time_series_id disagree")
+        resolved_name = name if name is not None else signal
+        resolved_id = id if id is not None else time_series_id or new_id()
+        if resolved_name is None:
+            raise TimeFValidationError("Signal requires name=")
+        if data is not None and loader is not None:
+            raise TimeFValidationError("Signal accepts data= or loader=, not both")
+        if data is None and loader is None:
+            raise TimeFValidationError("Signal requires data= or loader=")
+        if data is not None:
+            array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
+            if n_values is not None and n_values != len(array):
+                raise TimeFValidationError(f"Signal.n_values={n_values} does not match the {len(array)} eager values")
+
+            def load_eager() -> pa.Array:
+                return array
+
+            loader = load_eager
+            n_values = len(array)
+        if n_values is None:
+            raise TimeFValidationError("a lazy Signal requires n_values=")
+        object.__setattr__(self, "spec", spec)
+        object.__setattr__(self, "name", resolved_name)
+        object.__setattr__(self, "time_axis", time_axis)
+        object.__setattr__(self, "loader", loader)
+        object.__setattr__(self, "time_offsets_loader", time_offsets_loader)
+        object.__setattr__(self, "source_id", source_id)
+        object.__setattr__(self, "id", resolved_id)
+        object.__setattr__(self, "n_values", n_values)
+        object.__setattr__(self, "annotations", tuple(annotations))
+        object.__setattr__(self, "metadata", {} if metadata is None else metadata)
+        self.__post_init__()
+
+    @property
+    def time_series_id(self) -> str:
+        """Return the transitional storage identity alias."""
+        return self.id
+
+    @property
+    def signal(self) -> str:
+        """Return the transitional signal-name alias."""
+        return self.name
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one annotation and return it.
+
+        Args:
+            annotation: The annotation to attach.
+
+        Returns:
+            The attached annotation.
+        """
+        attached = annotation._new_occurrence()
+        object.__setattr__(self, "annotations", (*self.annotations, attached))  # noqa: PLC2801
+        return attached
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
@@ -116,8 +204,8 @@ class TimeSeries:
                 and the axis shape disagree about whether this series stores per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
-        if not self.signal:
-            raise ValueError("TimeSeries.signal must be non-empty")
+        if not self.name:
+            raise ValueError("Signal.name must be non-empty")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)
@@ -408,3 +496,8 @@ class TimeSeries:
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)
+
+
+# Transitional alias for the lower commits in the stack. The final API-removal commit deletes it
+# after the bundled connectors and consumers use ``Signal``.
+TimeSeries = Signal
