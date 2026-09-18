@@ -329,9 +329,9 @@ def test_every_streamed_task_carries_its_own_record_ids(release, monkeypatch):
         assert set(task.record_ids) <= known
 
 
-def test_the_vocabularies_are_registered_and_belong_to_no_record(release, monkeypatch):
+def test_the_vocabularies_are_dataset_annotations_and_belong_to_no_record(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    registered = {one.id for one in dataset._registered_annotations.values()}
+    registered = {one.id for one in dataset.annotations}
     assert registered == {
         "sleep-edfx-vocabulary-sleep_stage",
         "sleep-edfx-vocabulary-sex",
@@ -411,7 +411,7 @@ def test_the_series_values_match_the_recording_they_were_read_from(release, monk
     # fails here.
     dataset = _convert(release, monkeypatch)
     record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
-    series = next(one for one in record.time_series if one.signal == _SIGNALS[0])
+    series = next(one for one in record.signals if one.signal == _SIGNALS[0])
     written = edfio.read_edf(release / _STUDY / "SC4901E0-PSG.edf").signals[0].data
     read_back = series.to_numpy()
     assert len(read_back) == len(written)

@@ -1,4 +1,4 @@
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion, LocalRegistry
@@ -37,7 +37,12 @@ def _namespaced_dataset() -> TimeFDataset:
         time_series_id="ns-ts-0",
         n_values=8,
     )
-    record = dataset.add_record(record=Record(time_series=(series,), record_id="ns-record-0"))
+    record = dataset.add_record(
+        record=Record(
+            sources=(Source(id="ns-record-0-source", name="Source", signals=(series,)),),
+            record_id="ns-record-0",
+        )
+    )
     dataset.add_task(record, ClassificationTask(target="x", id="ns-task-0"))
     return dataset
 

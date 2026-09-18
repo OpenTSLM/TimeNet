@@ -37,7 +37,7 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -64,7 +64,7 @@ class Manifest:
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int = 1
+    timef_format_version: int = 2
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
@@ -74,8 +74,8 @@ class Manifest:
         without parsing the metadata block. The two values must match.
 
         Raises:
-            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
-                not match ``metadata.dataset_id``.
+            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, ``dataset_id`` does
+                not match ``metadata.dataset_id``, or the required control database is missing.
         """
         if (
             type(self.timef_format_version) is not int
@@ -95,6 +95,8 @@ class Manifest:
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
+        if len(self.files.control) != 1:
+            raise TimeNetInvalidManifestError("TimeF manifest must declare exactly one files.control entry")
 
     # ---- serialization -------------------------------------------------------------------------
 
@@ -341,13 +343,15 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "records": [_part_to_dict(part) for part in files.records],
         "annotations": [_part_to_dict(part) for part in files.annotations],
         "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
         "tasks": [_part_to_dict(part) for part in files.tasks],
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
+    data["control"] = [_part_to_dict(part) for part in files.control]
+    return data
 
 
 def _part_to_dict(part: FilePart) -> dict[str, Any]:
@@ -362,6 +366,7 @@ def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
             time_series_index=_parts(data["time_series_index"], "time_series_index"),
             tasks=_parts(data.get("tasks", ()), "tasks"),
             time_series=_parts(data.get("time_series", ()), "time_series"),
+            control=_parts(data["control"], "control"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
