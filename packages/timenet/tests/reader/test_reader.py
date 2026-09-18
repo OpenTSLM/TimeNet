@@ -76,7 +76,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",
-            target="yes",
+            targets=("yes",),
             inputs=(record,),
             input_annotations=(options,),
             id="qa-0",
@@ -102,7 +102,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     tasks = [
         AnswerTask(
             prompt=f"Question {index}?",
-            target="yes",
+            targets=("yes",),
             rationale=f"reason {index}",
             inputs=(record,),
             input_annotations=(options,),
@@ -113,7 +113,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     if streaming:
         dataset.set_task_stream([AnswerTask], lambda: iter(tasks))
     else:
-        dataset.add_tasks(record, tasks)
+        dataset.add_tasks(tasks=tasks)
     return dataset
 
 
