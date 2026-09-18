@@ -236,6 +236,11 @@ class Record:
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
 
+    @property
+    def id(self) -> str:
+        """Return the record's stable public identifier."""
+        return self.record_id
+
     def __post_init__(self) -> None:
         """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
 
