@@ -16,9 +16,10 @@ for per-component detail.
 ## The big picture
 
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
-**client/SDK** reads its manifest from a **registry** and loads the data. The control plane is Parquet.
-The values plane can be Parquet or Zarr. Reading never runs connector code. Against a local registry,
-`load` can first build a dataset that the registry does not have from an installed connector.
+**client/SDK** reads its manifest from a **registry** and loads the data. The relational control
+plane is one immutable DuckDB file. The values plane can be Parquet or Zarr. Reading never runs
+connector code. Against a local registry, `load` can first build a dataset that the registry does
+not have from an installed connector.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
@@ -95,7 +96,7 @@ flow reads it straight back.
 
 - The manifest is self-describing. The SDK reads schema, counts, and file pointers from
   `manifest.json`. It never runs connector code or globs the directory.
-- Types are plain frozen dataclasses. Specs, data sources, and annotations are frozen
+- Types are plain dataclasses. Specs and annotation content are typed
   [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
   synthesis. That keeps multiprocessing `DataLoader` workers safe.
 - Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()`,
@@ -107,9 +108,8 @@ flow reads it straight back.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a
   single atomic rename. Once `manifest.json` is present, the writer commits the version.
 - Versions are immutable. Edits are copy-on-write. To remove a row, the writer writes a new version
-  through the same atomic path ([`edit_version`](timef-writer.md#copy-on-write-edits)). Stable
-  never-reused ids keep references valid. Content-defined chunking keeps the rewrite cheap on a
-  deduplicating backend.
+  through the same atomic path. Stable, never-reused IDs keep references valid. Content-defined
+  chunking keeps the rewrite cheap on a deduplicating backend.
 
 ---
 

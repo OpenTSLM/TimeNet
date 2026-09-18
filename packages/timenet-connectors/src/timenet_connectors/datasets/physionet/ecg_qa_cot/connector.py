@@ -23,12 +23,11 @@ import hashlib
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
-    DataSource,
     TimeSeriesSpec,
     ureg,
 )
@@ -47,12 +46,10 @@ ECG_QA_TEMPLATE_ANSWERS_URL = (
 # public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
-_SOURCE = DataSource(data_source_type="physionet", name="PTB-XL", provider="PhysioNet")
 _ECG = TimeSeriesSpec(
     spec_type="ecg",
     name="12-lead ECG",
     unit_value=ureg.millivolt,
-    data_source=_SOURCE,
 )
 _DEFAULT_CONTEXT = "12-lead ECG recording."
 
@@ -219,13 +216,31 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                 template_ids.add(int(float(row["template_id"])))
                 contexts.add(_clinical_context(row))
 
+        records: dict[int, Record] = {}
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
-            record = dataset.add_record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            record = Record(
+                record_id=f"ptbxl-{ecg_id}",
+                sources=(
+                    Source(
+                        id=f"ptbxl-{ecg_id}-source",
+                        name="PTB-XL ECG",
+                        signals=self._leads_for(ecg_id, record_base),
+                    ),
+                ),
+            )
+            dataset.add_record(record=record)
             record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
+            records[ecg_id] = record
 
-        dataset.register_annotations(self._metadata_annotations(question_types, template_ids, contexts, answers))
-        dataset.set_task_stream([AnswerTask], lambda: self._iter_tasks(source, answers))
+        task_annotations = {
+            annotation.id: dataset.annotate(annotation)
+            for annotation in self._metadata_annotations(question_types, template_ids, contexts, answers)
+        }
+        dataset.set_task_stream(
+            [AnswerTask],
+            lambda: self._iter_tasks(source, answers, records, task_annotations),
+        )
         return dataset
 
     def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[TimeSeries, ...]:
@@ -283,12 +298,19 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         return annotations
 
     @staticmethod
-    def _iter_tasks(source: EcgQaCotSource, answers: dict[int, tuple[str, ...]]) -> Iterator[AnswerTask]:
+    def _iter_tasks(
+        source: EcgQaCotSource,
+        answers: dict[int, tuple[str, ...]],
+        records: Mapping[int, Record],
+        annotations: Mapping[str, Annotation],
+    ) -> Iterator[AnswerTask]:
         """Yield one :class:`AnswerTask` per CoT row, referencing its recording and metadata annotations.
 
         Args:
             source: The download handle naming the CoT CSVs.
             answers: Per-template answer options (decides whether a task references an options annotation).
+            records: Input Records keyed by PTB-XL ECG ID.
+            annotations: Dataset annotation occurrences keyed by content ID.
 
         Yields:
             Each question as an answer task, streamed so the whole set never lives in memory.
@@ -302,12 +324,12 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                     input_ids.append(_options_id(template_id))
                 input_ids.append(_context_id(_clinical_context(row)))
                 yield AnswerTask(
+                    inputs=(records[ecg_id],),
                     prompt=str(row["question"]),
                     target=str(row["answer"]),
                     rationale=str(row["rationale"]),
-                    input_annotation_ids=tuple(input_ids),
+                    input_annotations=tuple(annotations[annotation_id] for annotation_id in input_ids),
                     id=f"ecgqa-{split}-{index}",
-                    record_ids=(f"ptbxl-{ecg_id}",),
                 )
 
 

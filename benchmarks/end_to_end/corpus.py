@@ -10,14 +10,13 @@ from typing import Any, cast
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
-    DataSource,
     Domain,
     ForecastingTask,
     License,
@@ -59,7 +58,32 @@ SCENARIOS = (
 """The eight portable workloads. All use scalar float32 values for cross-backend runs."""
 
 
-_SOURCE = DataSource(data_source_type="synthetic-benchmark", name="Closed-form generator", provider="TimeNet")
+def _add_record(
+    dataset: TimeFDataset,
+    *,
+    record_id: str,
+    source_name: str,
+    signals: tuple[TimeSeries, ...],
+    metadata: dict[str, object] | None = None,
+) -> Record:
+    """Add one explicit benchmark hierarchy.
+
+    Returns:
+        The registered Record.
+    """
+    record = Record(
+        record_id=record_id,
+        sources=(
+            Source(
+                id=f"{record_id}-source",
+                name=source_name,
+                signals=signals,
+            ),
+        ),
+        metadata={} if metadata is None else metadata,
+    )
+    dataset.add_record(record=record)
+    return record
 
 
 def _loader(values: np.ndarray) -> Callable[[], pa.Array]:
@@ -99,7 +123,6 @@ def _scalar_series(
         spec_type=scenario.name,
         name=scenario.name.replace("-", " ").title(),
         unit_value=ureg.Unit(scenario.unit),
-        data_source=_SOURCE,
     )
     values = pa.array(_values(scenario_index, signal_index, scenario.steps, scale), type=pa.float32())
     return TimeSeries(
@@ -137,7 +160,6 @@ def _nonfloat_series(
         spec_type=f"portable-{name}",
         name=name.replace("-", " ").title(),
         unit_value=ureg.dimensionless,
-        data_source=_SOURCE,
         dtype=dtype,
         categories=categories,
     )
@@ -260,10 +282,23 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
     """
     ecg = records["ecg"]
     for index in range(1, 8 * scale):
-        record = dataset.add_record(
-            time_series=ecg.time_series,
+        signals = tuple(
+            TimeSeries(
+                spec=signal.spec,
+                signal=signal.name,
+                time_axis=signal.time_axis,
+                loader=signal.loader,
+                time_series_id=f"{signal.id}-question-{index:03d}",
+                n_values=signal.n_values,
+            )
+            for signal in ecg.signals
+        )
+        record = _add_record(
+            dataset,
             record_id=f"record-ecg-question-{index:03d}",
-            subject_ids=("subject-ecg",),
+            source_name="Synthetic ECG monitor",
+            signals=signals,
+            metadata={"subject_id": "subject-ecg"},
         )
         record.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
@@ -276,7 +311,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             ),
         )
 
-    finance_spec = records["finance"].time_series[0].spec
+    finance_spec = records["finance"].signals[0].spec
     for index in range(64 * scale):
         signal_count = 1 + index % 3
         length = 64 + (index % 8) * 32
@@ -292,7 +327,12 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             )
             for signal in range(signal_count)
         )
-        record = dataset.add_record(time_series=series, record_id=f"record-tsqa-{index:04d}")
+        record = _add_record(
+            dataset,
+            record_id=f"record-tsqa-{index:04d}",
+            source_name="TSQA row",
+            signals=series,
+        )
         record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             record,
@@ -303,7 +343,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             ),
         )
 
-    vibration_spec = records["vibration"].time_series[0].spec
+    vibration_spec = records["vibration"].signals[0].spec
     for index in range(64 * scale):
         offset = 0.75 if index % 2 == 0 else -0.75
         values = (_values(0, index, 64, 1) * 0.1 + offset).astype(np.float32)
@@ -316,7 +356,12 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             time_series_id=f"mean-series-{index:04d}",
             n_values=len(values),
         )
-        record = dataset.add_record(time_series=(series,), record_id=f"record-mean-{index:04d}")
+        record = _add_record(
+            dataset,
+            record_id=f"record-mean-{index:04d}",
+            source_name="Synthetic mean generator",
+            signals=(series,),
+        )
         record.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             record,
@@ -353,15 +398,16 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             spec_type=name,
             name=name.replace("-", " ").title(),
             unit_value=ureg.dimensionless,
-            data_source=_SOURCE,
             dtype=values.dtype.name,
             value_shape=values.shape[1:],
             dimension_names=dimensions,
         )
-        record = dataset.add_record(
-            time_series=(tensor(values, spec, name),),
+        record = _add_record(
+            dataset,
             record_id=f"record-rich-{name}",
-            subject_ids=(f"subject-rich-{name}",),
+            source_name="Rich signal generator",
+            signals=(tensor(values, spec, name),),
+            metadata={"subject_id": f"subject-rich-{name}"},
         )
         record.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
@@ -377,10 +423,12 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
     series = tuple(
         _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in signals
     )
-    record = dataset.add_record(
-        time_series=series,
+    record = _add_record(
+        dataset,
         record_id="record-nonfloat",
-        subject_ids=("subject-nonfloat",),
+        source_name="Non-float signal generator",
+        signals=series,
+        metadata={"subject_id": "subject-nonfloat"},
     )
     record.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
 
@@ -420,10 +468,12 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             _scalar_series(scenario, scenario_index, signal, signal_index, scale)
             for signal_index, signal in enumerate(scenario.signals)
         )
-        record = dataset.add_record(
-            time_series=series,
+        record = _add_record(
+            dataset,
             record_id=f"record-{scenario.name}",
-            subject_ids=(f"subject-{scenario.name}",),
+            source_name=scenario.name.replace("-", " ").title(),
+            signals=series,
+            metadata={"subject_id": f"subject-{scenario.name}"},
         )
         annotations = [
             Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),

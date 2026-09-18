@@ -5,20 +5,23 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ManifestCounts:
-    """Row/entity counts recorded in the manifest for quick inspection without opening the parquet."""
+    """TimeF v2 entity counts recorded for inspection without opening DuckDB."""
 
     records: int = 0
     """Total number of records in the dataset."""
-    annotations: int = 0
-    """Number of unique annotation ids across all records."""
-    registered_annotations: int = 0
-    """Number of task-referenced annotations that no record carries. Lets the reader skip the annotation
-    scan that recovers them when there are none."""
+    sources: int = 0
+    """Total number of Sources at every recursion depth."""
+    signals: int = 0
+    """Total number of Signals."""
+    axes: int = 0
+    """Number of distinct shared TimeAxes."""
+    annotation_contents: int = 0
+    """Number of reusable annotation content items."""
+    annotation_occurrences: int = 0
+    """Number of annotation attachments across all object types."""
     tasks: dict[str, int] = field(default_factory=dict)
     """Count of tasks keyed by task type."""
-    time_series_chunks: int = 0
-    """Number of time series chunk placements written to parquet."""
-    time_series_index_rows: int = 0
-    """Number of rows in the time series index."""
-    time_series_specs: dict[str, int] = field(default_factory=dict)
-    """Count of unique time series keyed by spec type."""
+    signal_chunks: int = 0
+    """Number of Signal chunk placements in the values plane."""
+    signals_by_spec: dict[str, int] = field(default_factory=dict)
+    """Signal count keyed by specification type."""
