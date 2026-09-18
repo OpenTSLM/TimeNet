@@ -41,7 +41,7 @@ def describe_text(dataset: TimeFDataset, *, rows: int) -> str:
         The formatted summary string.
     """
     records = dataset.records
-    unique_series = {ts.time_series_id: ts for record in records for ts in record.time_series}
+    unique_series = {signal.id: signal for record in records for signal in record.signals}
 
     blocks = [
         _identity(dataset),
@@ -106,11 +106,11 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
     header = ("record_id", "signals", "length", "tasks", "annotations")
     table_rows = []
     for record in records[:rows]:
-        length = point_count(record.time_series[0]) if record.time_series else None
+        length = point_count(record.signals[0]) if record.signals else None
         table_rows.append(
             (
                 record.record_id,
-                str(len(record.time_series)),
+                str(len(record.signals)),
                 "?" if length is None else str(length),
                 str(len(record.task_ids)),
                 str(len(record.annotations)),
