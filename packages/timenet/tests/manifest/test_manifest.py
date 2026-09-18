@@ -15,7 +15,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Domain,
     License,
     TimeSeriesSpec,
@@ -28,12 +27,10 @@ _CONTROL = (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),)
 
 
 def _manifest(*, values_backend: str = "parquet") -> Manifest:
-    holter = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
         unit_value=ureg.millivolt,
-        data_source=holter,
     )
     schema = DatasetSchema(
         time_series_specs=(ecg,),
@@ -188,21 +185,9 @@ def test_to_dict_shape():
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
     assert d["schema"]["time_series_specs"][0]["unit_value"] == "millivolt"
-    # the record sits on the spec, so nothing has to be resolved against a side table on read
-    assert d["schema"]["time_series_specs"][0]["data_source"] == {
-        "data_source_type": "holter_x",
-        "name": "Holter Monitor X",
-        "provider": "Acme",
-    }
-    assert "data_sources" not in d["schema"]
+    assert "data_source" not in d["schema"]["time_series_specs"][0]
     assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "answer"}]
     assert d["counts"]["tasks"] == {"classification": 2}
-
-
-def test_from_dict_reads_the_data_source_stored_on_the_spec():
-    schema = Manifest.from_dict(_manifest().to_dict()).schema
-    spec = schema.time_series_specs[0]
-    assert spec.data_source == DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
 
 
 def test_from_dict_resolves_tasks_to_real_classes():

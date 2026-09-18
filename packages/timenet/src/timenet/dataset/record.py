@@ -384,6 +384,18 @@ class Record:
         self.annotations = (*self.annotations, attached)
         return attached
 
+    def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
+        """Attach one annotation through the declarative API.
+
+        Args:
+            annotation: The typed annotation to attach.
+            warn_when_outside: Warn and keep a temporal annotation outside the recording window.
+
+        Returns:
+            The attached annotation occurrence.
+        """
+        return self.add_annotation(annotation, warn_when_outside=warn_when_outside)
+
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
     ) -> tuple[Annotation, ...]:

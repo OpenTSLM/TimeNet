@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, assert_never
@@ -350,9 +349,8 @@ class DuckDBControlWriter:
                 raise TimeFValidationError(f"axis id {axis.axis_id!r} is shared by signals with different time offsets")
 
         spec = signal.spec
-        data_source = None if spec.data_source is None else asdict(spec.data_source)
         connection.execute(
-            """INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 signal.id,
                 source_id,
@@ -366,7 +364,6 @@ class DuckDBControlWriter:
                 _json(spec.value_shape),
                 _json(spec.dimension_names),
                 spec.nullable,
-                None if data_source is None else _json(data_source),
                 signal.n_values,
                 _json(signal.metadata),
             ],

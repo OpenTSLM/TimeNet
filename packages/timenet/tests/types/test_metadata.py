@@ -12,7 +12,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Domain,
     License,
     TimeSeriesSpec,
@@ -73,18 +72,6 @@ def test_schema_holds_descriptors_and_task_types():
     )
     assert schema.time_series_specs[0] is spec
     assert schema.tasks == (ClassificationTask,)
-
-
-def test_a_spec_carries_its_own_data_source():
-    # No side table to agree with: the record lives on the spec and round-trips with it.
-    source = DataSource(data_source_type="holter", name="Holter")
-    spec = TimeSeriesSpec(
-        spec_type="ecg_lead",
-        name="ECG Lead",
-        unit_value=ureg.millivolt,
-        data_source=source,
-    )
-    assert DatasetSchema(time_series_specs=(spec,)).time_series_specs[0].data_source == source
 
 
 def test_metadata_picklable():
