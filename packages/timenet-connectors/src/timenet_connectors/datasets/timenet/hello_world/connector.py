@@ -17,7 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -148,7 +148,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             source_id="rec-0",
             time_series_id="ts-cos-0",
         )
-        record0 = dataset.add_record(time_series=(shared, cosine), subject_ids=("subj-0",), record_id="record-0")
+        record0 = dataset.add_record(
+            record=Record(time_series=(shared, cosine), subject_ids=("subj-0",), record_id="record-0")
+        )
         # These annotations have names. The localization task below can reference them by id instead
         # of repeating the literal values.
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
@@ -206,7 +208,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_series_id="ts-long-1",
             n_values=long.n_values,
         )
-        record1 = dataset.add_record(time_series=(shared, long_series), subject_ids=("subj-1",), record_id="record-1")
+        record1 = dataset.add_record(
+            record=Record(time_series=(shared, long_series), subject_ids=("subj-1",), record_id="record-1")
+        )
         record1.add_annotation(cohort)  # same instance and id, so the annotation is shared
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
@@ -222,7 +226,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             source_id="rec-0",
             time_series_id="ts-window-2",
         )
-        record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+        record2 = dataset.add_record(
+            record=Record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+        )
         # A scope narrows the input to a region. This task has the same task type as the whole-record
         # label above, but it supplies the window. Span times use the source recording timeline, so
         # this task's span sits inside the window's span.

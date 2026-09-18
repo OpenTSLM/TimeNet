@@ -10,7 +10,7 @@ reads land with the pruned reader, and their assertions belong here too once tha
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -54,7 +54,9 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     for i in range(n_records):
         values = [float((i + j) % 11) for j in range(series_len)]
         ts = TimeSeries.from_values(values, spec=spec, signal="a", time_axis=axis, time_series_id=f"ts-{i:03d}")
-        record = dataset.add_record(time_series=(ts,), subject_ids=(f"subj-{i}",), record_id=f"record-{i:03d}")
+        record = dataset.add_record(
+            record=Record(time_series=(ts,), subject_ids=(f"subj-{i}",), record_id=f"record-{i:03d}")
+        )
         record.add_annotation(Annotation(key="label", value=f"cls-{i % 3}", id=f"ann-{i:03d}"))
         dataset.add_task(record, ClassificationTask(target=f"c{i % 2}", id=f"task-{i:03d}"))
     return dataset

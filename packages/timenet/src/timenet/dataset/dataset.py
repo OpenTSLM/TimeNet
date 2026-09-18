@@ -1,7 +1,6 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from datetime import datetime
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
 
@@ -10,7 +9,6 @@ import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record, check_span_within_window
-from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
@@ -18,7 +16,6 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     Task,
-    TimeInterval,
     annotation_type_of,
     value_type_of,
 )
@@ -51,62 +48,27 @@ class TimeFDataset:  # noqa: PLR0904
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def add_record(
-        self,
-        *,
-        time_series: tuple[TimeSeries, ...],
-        subject_ids: tuple[str, ...] = (),
-        record_id: str | None = None,
-        start_time: datetime | int | None = None,
-        time_span: TimeInterval | None = None,
-    ) -> Record:
-        """Create a record, register it, and return it.
+    def add_record(self, *, record: Record) -> Record:
+        """Register and return a complete record.
 
         Args:
-            time_series: The logical :class:`TimeSeries` streams that the record uses.
-            subject_ids: The subjects that this record belongs to. The tuple is empty for
-                domains that have no subjects.
-            record_id: An explicit ID. The default is an automatically generated uuid4 value.
-                Pass an explicit ID for deterministic output, for example for golden test fixtures.
-            start_time: The wall-clock timestamp for the record's relative zero point. This value
-                can be a timezone-aware datetime or a whole number of Unix microseconds. Use
-                ``None`` when no wall-clock reference exists.
-            time_span: The overall span of the session. Use this if the series have gaps that an
-                unscoped span can fall into (see :attr:`Record.time_span`). The value must be a
-                whole-record :class:`~timenet.types.TimeInterval` object that contains every
-                series window.
+            record: The complete record hierarchy to register.
 
         Returns:
-            The newly created :class:`Record`.
+            The same :class:`Record` instance.
 
         Raises:
-            TimeFValidationError: This error occurs if ``time_series`` is empty, or if two series
-                share the same ``time_series_id`` value. The ids must be distinct. The writer uses
-                the ids as shard keys, and :meth:`Record.add_annotation` and :meth:`add_task` both
-                resolve references by these ids. So a repeated id silently merges two signals
-                into one.
+            TimeFValidationError: If the record repeats a signal ID or its record ID is already
+                registered.
         """
-        if not time_series:
-            raise TimeFValidationError("add_record requires a non-empty time_series")
-        series_ids = [ts.time_series_id for ts in time_series]
+        series_ids = [signal.id for signal in record.signals]
         if len(set(series_ids)) != len(series_ids):
             duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
-            raise TimeFValidationError(f"add_record requires distinct time_series_ids, got duplicates {duplicates}")
-        if record_id is None:
-            record = Record(
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
+            raise TimeFValidationError(
+                f"add_record requires distinct time_series_ids (signal IDs), got duplicates {duplicates}"
             )
-        else:
-            record = Record(
-                record_id=record_id,
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
-            )
+        if any(existing.record_id == record.record_id for existing in self._records):
+            raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
         self._records.append(record)
         return record
 
