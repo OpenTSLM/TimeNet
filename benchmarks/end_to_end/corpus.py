@@ -17,7 +17,6 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
-    DataSource,
     Domain,
     ForecastingTask,
     License,
@@ -57,9 +56,6 @@ SCENARIOS = (
     Scenario("automotive", ("rpm", "torque", "coolant", "vibration"), 200.0, 8_192, "dimensionless"),
 )
 """The eight portable workloads. All use scalar float32 values for cross-backend runs."""
-
-
-_SOURCE = DataSource(data_source_type="synthetic-benchmark", name="Closed-form generator", provider="TimeNet")
 
 
 def _add_record(
@@ -127,7 +123,6 @@ def _scalar_series(
         spec_type=scenario.name,
         name=scenario.name.replace("-", " ").title(),
         unit_value=ureg.Unit(scenario.unit),
-        data_source=_SOURCE,
     )
     values = pa.array(_values(scenario_index, signal_index, scenario.steps, scale), type=pa.float32())
     return TimeSeries(
@@ -165,7 +160,6 @@ def _nonfloat_series(
         spec_type=f"portable-{name}",
         name=name.replace("-", " ").title(),
         unit_value=ureg.dimensionless,
-        data_source=_SOURCE,
         dtype=dtype,
         categories=categories,
     )
@@ -404,7 +398,6 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             spec_type=name,
             name=name.replace("-", " ").title(),
             unit_value=ureg.dimensionless,
-            data_source=_SOURCE,
             dtype=values.dtype.name,
             value_shape=values.shape[1:],
             dimension_names=dimensions,
