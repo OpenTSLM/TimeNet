@@ -63,9 +63,9 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 
     !!! planned "Planned"
         No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
-        directory. Spark can read its Parquet control tables directly. Reading series values depends
-        on the manifest's values backend: Parquet values are accessible to Parquet tooling, while
-        Zarr values need a Zarr-aware reader.
+        directory. DuckDB can query its relational control tables directly. Reading Signal values
+        depends on the manifest's values backend: Parquet values are accessible to Parquet tooling,
+        while Zarr values need a Zarr-aware reader.
 
 === "PyTorch"
 

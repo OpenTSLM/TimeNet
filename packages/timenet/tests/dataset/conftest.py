@@ -27,6 +27,10 @@ def make_series(spec):
             n_values=len(values),
             loader=lambda v=tuple(values): pa.array(list(v), type=pa.float32()),
         )
+        if "time_series_id" in overrides:
+            overrides["id"] = overrides.pop("time_series_id")
+        if "signal" in overrides:
+            overrides["name"] = overrides.pop("signal")
         return replace(base, **overrides) if overrides else base
 
     return _make
