@@ -59,7 +59,9 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        return {field.name: _canonical(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _canonical(getattr(value, field.name)) for field in fields(value) if field.name != "axis_id"
+        }
     if isinstance(value, dict):
         return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
     if isinstance(value, list | tuple):
@@ -141,7 +143,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                             "signal": series.signal,
                             "source_id": series.source_id,
                             "time_series_id": series.time_series_id,
-                            "time_axis": repr(series.time_axis),
+                            "time_axis": _canonical(series.time_axis),
                             "n_values": series.n_values,
                             "dtype": values.dtype.str,
                             "shape": values.shape,
