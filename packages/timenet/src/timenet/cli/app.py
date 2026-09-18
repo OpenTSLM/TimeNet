@@ -141,8 +141,11 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
     table.add_row("tasks", ", ".join(str(task.task_type) for task in manifest.schema.tasks) or "-")
     table.add_section()
     table.add_row("records", str(counts.records))
-    table.add_row("annotations", str(counts.annotations))
-    table.add_row("chunks", str(counts.time_series_chunks))
+    table.add_row("sources", str(counts.sources))
+    table.add_row("signals", str(counts.signals))
+    table.add_row("annotation contents", str(counts.annotation_contents))
+    table.add_row("annotation occurrences", str(counts.annotation_occurrences))
+    table.add_row("chunks", str(counts.signal_chunks))
     console.print(table)
     if counts.tasks:
         tasks = Table(title="Tasks", title_justify="left", title_style="bold")
