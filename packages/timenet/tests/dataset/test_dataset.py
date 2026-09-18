@@ -441,6 +441,26 @@ def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
         list(dataset.iter_streamed_tasks_validated())
 
 
+def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series, monkeypatch):
+    dataset = _dataset()
+    record = dataset.add_record(time_series=(make_series(),), record_id="record-0")
+    dataset.add_record(time_series=(make_series(),), record_id="unrelated-record")
+    task = AnswerTask(prompt="q", targets=("a",), inputs=(record,))
+    calls = 0
+    original = Record.signals
+
+    def tracked_signals(self):
+        nonlocal calls
+        calls += 1
+        return original.__get__(self, Record)
+
+    monkeypatch.setattr(Record, "signals", property(tracked_signals))
+    dataset.set_task_stream([AnswerTask], lambda: iter((task, task)))
+
+    assert list(dataset.iter_streamed_tasks_validated()) == [task, task]
+    assert calls == 0
+
+
 def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     dataset = _dataset()
     context = dataset.add_record(time_series=(make_series(),))
