@@ -62,7 +62,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
     # Registered annotations no record carries survive any record removal, and tasks reference them
     # regardless of which records remain, so they are always reachable.
     registered = dataset.registered_annotations
-    registered_ids = frozenset(annotation.id for annotation in registered)
+    registered_ids = frozenset(annotation.id for annotation in (*registered, *dataset.annotations))
     removed_task_ids = _tasks_to_remove(dataset, remove, annotations_by_record, registered_ids, cascade=cascade)
 
     tasks = _rebuild_tasks(dataset, removed_task_ids, surviving_ids, annotations_by_record, registered_ids)
@@ -83,6 +83,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         tasks=tasks,
         schema=DatasetSchema(),
         registered_annotations=registered,
+        annotations=dataset.annotations,
     )
     edited.derive_schema()
     return edited
@@ -214,10 +215,16 @@ def _rebuild_tasks(
         if task.id in removed_task_ids:
             continue
         reachable = _reachable_annotation_ids(task, annotations_by_record, registered_ids)
+        inputs = tuple(record for record in task.inputs if record.id in surviving_ids)
+        input_annotations = tuple(
+            annotation for annotation in task.input_annotations if annotation.content_id in reachable
+        )
         rebuilt[task.id] = replace(
             task,
+            inputs=inputs,
             record_ids=tuple(sid for sid in task.record_ids if sid in surviving_ids),
-            input_annotation_ids=tuple(aid for aid in task.input_annotation_ids if aid in reachable),
+            input_annotations=input_annotations,
+            input_annotation_ids=tuple(annotation.content_id for annotation in input_annotations),
             from_tasks=(),
         )
     for task in dataset.tasks:
@@ -274,6 +281,7 @@ def edit_version(
             tasks=edited.tasks,
             schema=DatasetSchema(),
             registered_annotations=edited.registered_annotations,
+            annotations=edited.annotations,
         )
         edited.derive_schema()
 

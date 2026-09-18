@@ -1,12 +1,4 @@
-"""Modality and data-source descriptors.
-
-A :class:`TimeSeriesSpec` describes one measurement modality: its tag, unit, dtype, and value shape.
-A :class:`DataSource` describes the origin that produced it. Both are flat frozen dataclasses.
-Connectors build them directly or subclass them with field defaults for reuse.
-:class:`~timenet.reader.TimeFReader` rebuilds the identical instances from the manifest, so they
-round-trip and pickle without any runtime class synthesis. The per-signal identifier lives on
-:class:`~timenet.dataset.TimeSeries`, not here, so every signal of a modality shares one spec.
-"""
+"""Measurement modality descriptors used by Signals."""
 
 from dataclasses import dataclass
 from typing import cast
@@ -79,29 +71,6 @@ def _validate_dtype(dtype: str, categories: tuple[str, ...]) -> None:
 
 
 @dataclass(frozen=True)
-class DataSource:
-    """The origin that produced a modality: a device, an API feed, a model, an institution."""
-
-    data_source_type: str
-    """Type tag identifying the kind of source."""
-    name: str
-    """Human-readable display name of the source."""
-    provider: str | None = None
-    """Organization or platform behind the source, if any."""
-
-    def __post_init__(self) -> None:
-        """Reject a non-string or empty identifier.
-
-        Raises:
-            TimeFValidationError: If ``data_source_type`` or ``name`` is not a non-empty string.
-        """
-        for field_name in ("data_source_type", "name"):
-            value = getattr(self, field_name)
-            if not isinstance(value, str) or not value:
-                raise TimeFValidationError(f"DataSource.{field_name} must be a non-empty string, got {value!r}")
-
-
-@dataclass(frozen=True)
 class TimeSeriesSpec:
     """Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.
 
@@ -115,8 +84,6 @@ class TimeSeriesSpec:
     """Human-readable display name of the modality."""
     unit_value: pint.Unit
     """Unit of the measured values."""
-    data_source: DataSource | None = None
-    """Origin that produced this modality, if known."""
     dtype: str = "float32"
     """Value dtype: a NumPy scalar dtype, ``"str"`` for text, or ``"enum"`` for a categorical value."""
     categories: tuple[str, ...] = ()
@@ -132,18 +99,13 @@ class TimeSeriesSpec:
         """Coerce the unit and validate the spec contract.
 
         Raises:
-            TimeFValidationError: If the unit, spec type, data source, dtype, shape, or dimension
-                names are invalid.
+            TimeFValidationError: If the unit, spec type, dtype, shape, or dimension names are invalid.
         """
         object.__setattr__(self, "unit_value", _to_unit(self.unit_value))
         if not isinstance(self.nullable, bool):
             raise TimeFValidationError("TimeSeriesSpec.nullable must be a bool")
         if not self.spec_type:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
-        if self.data_source is not None and not isinstance(self.data_source, DataSource):
-            raise TimeFValidationError(
-                f"TimeSeriesSpec.data_source must be a DataSource or None, got {type(self.data_source).__name__}"
-            )
         if self.spec_type in _RESERVED_SPEC_TYPES:
             # The Zarr backend builds a per-spec_type array path from spec_type. Percent-encoding
             # leaves all of these names untouched. "." and ".." are filesystem-special. The two

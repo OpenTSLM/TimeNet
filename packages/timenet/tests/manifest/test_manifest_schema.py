@@ -10,7 +10,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Domain,
     License,
     TimeSeriesSpec,
@@ -20,12 +19,10 @@ from timenet.types import (
 
 
 def _manifest() -> Manifest:
-    source = DataSource(data_source_type="holter", name="Holter Monitor", provider="Acme")
     spec = TimeSeriesSpec(
         spec_type="ecg",
         name="ECG",
         unit_value=ureg.millivolt,
-        data_source=source,
     )
     rhythm = TimeSeriesSpec(
         spec_type="rhythm",
@@ -63,6 +60,7 @@ def _manifest() -> Manifest:
             time_series_specs={"ecg": 2},
         ),
         files=ManifestFiles(
+            control=(FilePart("control.duckdb", "sha256:" + "0" * 64, 5),),
             records=(FilePart("records.parquet", "sha256:" + "a" * 64, 10),),
             annotations=(FilePart("annotations.parquet", "sha256:" + "b" * 64, 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:" + "c" * 64, 30),),
