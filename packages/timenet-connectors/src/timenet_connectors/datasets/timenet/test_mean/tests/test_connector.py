@@ -1,5 +1,6 @@
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
@@ -14,10 +15,10 @@ def _convert() -> TimeFDataset:
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[str, str | None]:
     return {
-        record_id: task.target
+        record.id: cast(str, task.targets[0])
         for task in dataset.tasks
-        if isinstance(task, ClassificationTask)
-        for record_id in task.record_ids
+        if isinstance(task, ClassificationTask) and task.targets is not None
+        for record in task.inputs
     }
 
 
@@ -51,7 +52,7 @@ def test_every_record_is_a_single_signal():
     dataset = _convert()
     assert len(dataset.records) == 1000
     for record in dataset.records:
-        assert len(record.time_series) == 1
+        assert len(record.signals) == 1
 
 
 def test_label_agrees_with_signal_mean():
@@ -59,6 +60,6 @@ def test_label_agrees_with_signal_mean():
     dataset = _convert()
     labels = _labels_by_record(dataset)
     for record in dataset.records:
-        mean = float(record.time_series[0].to_numpy().mean())
+        mean = float(record.signals[0].to_numpy().mean())
         expected = "above_zero" if mean > 0 else "below_zero"
         assert labels[record.record_id] == expected
