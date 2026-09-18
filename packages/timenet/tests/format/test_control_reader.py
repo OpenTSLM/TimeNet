@@ -29,6 +29,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert record.sources[0].sources[0].id == "ecg"
     lead_i, lead_ii = record.signals
     assert lead_i.time_axis is lead_ii.time_axis
+    assert lead_i.spec is lead_ii.spec
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
     assert record.annotations[0].content_id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
