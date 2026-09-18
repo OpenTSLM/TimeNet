@@ -59,7 +59,12 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        return {field.name: _canonical(getattr(value, field.name)) for field in fields(value)}
+        unstable_or_executable = {"axis_id", "occurrence_id", "loader", "time_offsets_loader"}
+        return {
+            field.name: _canonical(getattr(value, field.name))
+            for field in fields(value)
+            if field.name not in unstable_or_executable
+        }
     if isinstance(value, dict):
         return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
     if isinstance(value, list | tuple):
@@ -121,15 +126,16 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 json.dumps(
                     {
                         "record_id": record.record_id,
-                        "subject_ids": record.subject_ids,
+                        "metadata": record.metadata,
                         "task_ids": record.task_ids,
                         "annotations": _canonical(record.annotations),
+                        "sources": _canonical(record.sources),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode()
             )
-            for series in record.time_series:
+            for series in record.signals:
                 is_text_kind = series.spec.dtype in {"str", "enum"}
                 if is_text_kind:
                     labels = series.to_arrow().cast(pa.string()).to_pylist()
@@ -141,7 +147,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                             "signal": series.signal,
                             "source_id": series.source_id,
                             "time_series_id": series.time_series_id,
-                            "time_axis": repr(series.time_axis),
+                            "time_axis": _canonical(series.time_axis),
                             "n_values": series.n_values,
                             "dtype": values.dtype.str,
                             "shape": values.shape,

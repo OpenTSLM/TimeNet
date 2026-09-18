@@ -7,7 +7,6 @@ from timenet.types import (
     AnnotationType,
     AnswerTask,
     ClassificationTask,
-    DataSource,
     ScalarPredictionTask,
     TemporalLocalizationTask,
 )
@@ -39,22 +38,19 @@ def test_convert_is_deterministic():
 def test_schema_covers_every_feature():
     schema = _convert().derive_schema()
     assert len(schema.time_series_specs) == 2  # sine + cosine
-    # one source, carried on each spec rather than registered once in a side table
-    assert {s.data_source for s in schema.time_series_specs} == {
-        DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
-    }
+    assert {source.name for record in _convert().records for source in record.sources} == {"Synthetic generator"}
     annotation_types = {a.annotation_type for a in schema.annotations}
     assert annotation_types == {AnnotationType.STATIC, AnnotationType.POINT, AnnotationType.INTERVAL}
     assert set(schema.tasks) == {ClassificationTask, AnswerTask, ScalarPredictionTask, TemporalLocalizationTask}
 
 
-def test_shares_a_series_across_records_by_id():
+def test_each_signal_has_one_owner():
     dataset = _convert()
     series_by_id: dict[str, int] = {}
     for record in dataset.records:
-        for ts in record.time_series:
-            series_by_id[ts.time_series_id] = series_by_id.get(ts.time_series_id, 0) + 1
-    assert any(count >= 2 for count in series_by_id.values()), "expected a series shared across records"
+        for signal in record.signals:
+            series_by_id[signal.id] = series_by_id.get(signal.id, 0) + 1
+    assert series_by_id and set(series_by_id.values()) == {1}
 
 
 def test_shares_an_annotation_across_records_by_id():

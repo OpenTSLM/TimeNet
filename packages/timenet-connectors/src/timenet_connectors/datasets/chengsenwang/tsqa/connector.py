@@ -9,7 +9,7 @@ is a list of lists. Each row becomes one record that carries the series and an
 import json
 from typing import Any
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
@@ -50,11 +50,22 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 )
                 for signal, values in enumerate(signals)
             )
-            record = dataset.add_record(time_series=time_series, record_id=f"row-{index}")
+            record = Record(
+                record_id=f"row-{index}",
+                sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=time_series),),
+            )
+            dataset.add_record(record=record)
             record.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
                 record.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(record, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+            dataset.add_task(
+                task=AnswerTask(
+                    inputs=(record,),
+                    prompt=row["Question"],
+                    targets=(row["Answer"],),
+                    id=f"qa-{index}",
+                )
+            )
         return dataset
 
 

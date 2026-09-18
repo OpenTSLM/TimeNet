@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
@@ -26,6 +26,10 @@ def _series(**overrides):
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
+    if "time_series_id" in overrides:
+        overrides["id"] = overrides.pop("time_series_id")
+    if "signal" in overrides:
+        overrides["name"] = overrides.pop("signal")
     return replace(base, **overrides) if overrides else base
 
 
@@ -73,6 +77,21 @@ def test_frozen():
 def test_default_id_unique_explicit_id_kept():
     assert _series().time_series_id != _series().time_series_id
     assert _series(time_series_id="fixed").time_series_id == "fixed"
+
+
+def test_signal_accepts_declarative_eager_data():
+    signal = Signal(
+        id="lead-i",
+        name="I",
+        data=[1.0, 2.0],
+        spec=_spec(),
+        time_axis=RegularAxis.from_rate_hz(500),
+    )
+
+    assert signal.id == "lead-i"
+    assert signal.name == "I"
+    assert signal.n_values == 2
+    assert signal.to_arrow().to_pylist() == [1.0, 2.0]
 
 
 @pytest.mark.parametrize(

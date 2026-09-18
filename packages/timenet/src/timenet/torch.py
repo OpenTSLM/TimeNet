@@ -52,7 +52,7 @@ class TimeFTorchDataset(Dataset):
 
     def __getitem__(self, index: int) -> Any:
         record = self._records[index]
-        pairs = tuple(_series_tensor_and_mask(ts) for ts in record.time_series)
+        pairs = tuple(_series_tensor_and_mask(signal) for signal in record.signals)
         item: dict[str, Any] = {
             "record_id": record.record_id,
             "series": tuple(values for values, _ in pairs),
