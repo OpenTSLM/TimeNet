@@ -85,6 +85,16 @@ def test_add_task_links_record_and_task(make_series):
     assert ds.tasks == (task,)
 
 
+def test_add_task_uses_object_inputs(make_series):
+    dataset = _dataset()
+    record = dataset.add_record(time_series=(make_series(),))
+    task = AnswerTask(inputs=(record,), prompt="Alive?", target="Yes")
+
+    assert dataset.add_task(task=task) is task
+    assert task.inputs == (record,)
+    assert task.record_ids == (record.id,)
+
+
 def test_add_task_multiple_records(make_series):
     ds = _dataset()
     s1 = ds.add_record(time_series=(make_series(),))
