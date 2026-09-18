@@ -9,7 +9,7 @@ tags:
 
 The producer command-line tool. It drives a [connector](../connectors.md) through the
 [build pipeline](../build.md). It writes a TimeF version directory that a
-[registry](../registry.md) can use. The directory has a `manifest.json`, Parquet control tables, and
+[registry](../registry.md) can use. The directory has a `manifest.json`, `control.duckdb`, and
 a Parquet or Zarr values plane. The tool ships with `timenet-connectors`, separate from the consumer
 [`timenet`](timenet.md) tool. It needs the `timenet[build]` extra that `timenet-connectors`
 already installs.

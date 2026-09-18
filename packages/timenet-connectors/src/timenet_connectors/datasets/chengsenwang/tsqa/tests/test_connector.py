@@ -73,13 +73,13 @@ def test_qa_tasks_match_fixture():
     qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
     assert {t.prompt for t in qa} == {r["Question"] for r in rows}
-    assert {t.target for t in qa} == {r["Answer"] for r in rows}
+    assert {t.targets[0] for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
 
 
 def test_series_values_parsed_from_fixture():
     dataset = _convert()
     expected = json.loads(_fixture_rows()[0]["Series"])
-    got = dataset.records[0].time_series[0].to_numpy()
+    got = dataset.records[0].signals[0].to_numpy()
     assert len(got) == len(expected)
     assert float(got[0]) == pytest.approx(expected[0], rel=1e-5)
 
