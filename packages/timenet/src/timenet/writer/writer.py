@@ -1,4 +1,4 @@
-"""Write a TimeF v2 DuckDB control plane and a sharded Parquet or Zarr values plane."""
+"""Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
 from collections.abc import Callable, Iterable
 import json

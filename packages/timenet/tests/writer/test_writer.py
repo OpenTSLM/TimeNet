@@ -132,7 +132,10 @@ def test_long_series_splits_into_multiple_chunks(tmp_path):
     # Tiny chunk cap forces the long hello_world series to split.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
-        index = connection.execute("SELECT signal_id, chunk_index FROM signal_chunks").fetchall()
+        index = connection.execute(
+            """SELECT signals.signal_id, chunks.chunk_index
+               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+        ).fetchall()
     chunks_per_series: dict[str, set] = {}
     for signal_id, chunk_index in index:
         chunks_per_series.setdefault(signal_id, set()).add(chunk_index)
@@ -143,8 +146,10 @@ def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         row = connection.execute(
-            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
-               FROM signal_chunks ORDER BY signal_id, chunk_index LIMIT 1"""
+            """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
+                      chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               ORDER BY signals.signal_id, chunks.chunk_index LIMIT 1"""
         ).fetchone()
     assert row is not None
     value_path, major_index, minor_index, n_values = row
