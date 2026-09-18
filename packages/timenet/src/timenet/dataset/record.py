@@ -371,7 +371,7 @@ class Record:
             warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
         Returns:
-            The attached annotation (the same instance).
+            A new occurrence that shares the input annotation's reusable content.
 
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this record. If a
@@ -410,7 +410,7 @@ class Record:
             warn_when_outside: As on :meth:`add_annotation`.
 
         Returns:
-            The attached annotations (the same instances), in the order given.
+            New occurrences that share the input annotations' reusable content, in the order given.
 
         Raises:
             TimeFValidationError: as documented on :meth:`add_annotation`.
