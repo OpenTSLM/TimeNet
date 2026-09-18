@@ -148,7 +148,7 @@ def test_one_record_per_ecg_not_per_question(tmp_path, records_dir):
 
 
 def test_twelve_leads_per_record(tmp_path, records_dir):
-    assert all(len(record.time_series) == 12 for record in _convert(tmp_path, records_dir).records)
+    assert all(len(record.signals) == 12 for record in _convert(tmp_path, records_dir).records)
 
 
 def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir):
@@ -159,7 +159,7 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     assert all(isinstance(task, AnswerTask) for task in tasks)
     assert {task.target for task in tasks} == {row["answer"] for row in rows}
     assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
-    assert {task.record_ids[0] for task in tasks} == {"ptbxl-1", "ptbxl-2"}  # each task points at its recording
+    assert {task.inputs[0].id for task in tasks} == {"ptbxl-1", "ptbxl-2"}
     assert all(task.target != task.rationale for task in tasks)  # answer is the short label, not the CoT
 
 
@@ -168,25 +168,25 @@ def test_recording_carries_its_split(tmp_path, records_dir):
         assert [ann.value for ann in record.annotations if ann.key == "split"] == ["train"]
 
 
-def test_question_metadata_is_deduped_registered_annotations(tmp_path, records_dir):
+def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    keys = {ann.key for ann in dataset.registered_annotations}
+    keys = {ann.key for ann in dataset.annotations}
     assert {"question_type", "template_id", "answer_options", "clinical_context"} <= keys
-    # template 0 appears in two rows but is registered once
-    template_values = sorted(ann.value for ann in dataset.registered_annotations if ann.key == "template_id")
+    # template 0 appears in two rows but is attached once
+    template_values = sorted(ann.value for ann in dataset.annotations if ann.key == "template_id")
     assert template_values == [0, 1]
 
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    registered = {ann.id for ann in dataset.registered_annotations}
+    registered = {ann.id for ann in dataset.annotations}
     for task in dataset.iter_tasks():
         assert set(task.input_annotation_ids) <= registered
 
 
 def test_answer_options_come_from_template(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    options = {ann.id: ann.value for ann in dataset.registered_annotations if ann.key == "answer_options"}
+    options = {ann.id: ann.value for ann in dataset.annotations if ann.key == "answer_options"}
     assert options["ecgqa-options-0"] == ["yes", "no", "not sure"]  # template 0 in the fixture answers CSV
 
 
@@ -194,7 +194,7 @@ def test_series_values_match_fixture_record(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
     signal, _ = wfdb.rdsamp(str(records_dir / "00001_hr"), channels=[0])
     record = next(r for r in dataset.records if r.record_id == "ptbxl-1")
-    got = record.time_series[0].to_numpy()
+    got = record.signals[0].to_numpy()
     assert len(got) == len(signal)
     assert float(got[0]) == pytest.approx(float(signal[0, 0]), rel=1e-5)
 
@@ -205,7 +205,7 @@ def test_convert_needs_no_wfdb_for_format16(tmp_path, records_dir, monkeypatch):
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
     dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
     assert dataset.records
-    assert len(dataset.records[0].time_series[0].to_numpy())  # runs the direct loader, no wfdb
+    assert len(dataset.records[0].signals[0].to_numpy())  # runs the direct loader, no wfdb
 
 
 def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
@@ -216,7 +216,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
         restored = reader.read()
     assert {record.record_id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
     assert len(restored.tasks) == 3  # streamed to disk and back
-    assert {ann.key for ann in restored.registered_annotations} >= {
+    assert {ann.key for ann in restored.annotations} >= {
         "question_type",
         "template_id",
         "answer_options",
