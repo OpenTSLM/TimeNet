@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
 
 
+_CHUNK_LOCATOR_BATCH_SIZE = 1_024
+
+
 class TimeFReader:
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
@@ -43,6 +46,9 @@ class TimeFReader:
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
+        self._chunk_locator_batches: list[list[int]] = []
+        self._chunk_locator_batch_by_key: dict[int, int] = {}
+        self._chunk_rows_cache: dict[int, list[dict]] = {}
 
     def __getstate__(self) -> dict:
         """Return picklable state without open connections or decoded object caches."""
@@ -51,6 +57,7 @@ class TimeFReader:
         state["_control"] = None
         state["_records"] = None
         state["_values"] = None
+        state["_chunk_rows_cache"] = {}
         return state
 
     def __enter__(self) -> TimeFReader:
@@ -76,6 +83,7 @@ class TimeFReader:
             self._control = None
         self._records = None
         self._tasks = None
+        self._chunk_rows_cache.clear()
 
     def verify(self) -> None:
         """Verify the size and checksum of every artifact in the manifest.
@@ -198,7 +206,7 @@ class TimeFReader:
         Returns:
             The complete canonical Arrow array.
         """
-        rows = self._control_reader().chunk_rows_by_key(signal_key, signal_id)
+        rows = self._chunk_rows(signal_key, signal_id)
         return self._values_reader().load(self._version, rows, spec)
 
     def _load_signal_range(
@@ -214,11 +222,38 @@ class TimeFReader:
         Returns:
             The requested canonical Arrow values.
         """
-        rows = self._control_reader().chunk_rows_by_key(signal_key, signal_id)
+        rows = self._chunk_rows(signal_key, signal_id)
         return self._values_reader().load_range(self._version, rows, start, stop, spec)
+
+    def _chunk_rows(self, signal_key: int, signal_id: str) -> list[dict]:
+        """Return cached chunk locators after loading the Signal's bounded batch.
+
+        Raises:
+            TimeFFormatError: If the Signal has no stored chunks.
+        """
+        cached = self._chunk_rows_cache.get(signal_key)
+        if cached is not None:
+            if not cached:
+                raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
+            return cached
+        batch_index = self._chunk_locator_batch_by_key.get(signal_key)
+        if batch_index is None:
+            return self._control_reader().chunk_rows_by_key(signal_key, signal_id)
+        batch = self._chunk_locator_batches[batch_index]
+        self._chunk_rows_cache.update(self._control_reader().chunk_rows_by_keys(batch))
+        rows = self._chunk_rows_cache[signal_key]
+        if not rows:
+            raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
+        return rows
 
     def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
         """Return a picklable, range-aware Signal loader."""
+        if signal_key not in self._chunk_locator_batch_by_key:
+            if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
+                self._chunk_locator_batches.append([])
+            batch_index = len(self._chunk_locator_batches) - 1
+            self._chunk_locator_batches[batch_index].append(signal_key)
+            self._chunk_locator_batch_by_key[signal_key] = batch_index
         return _SignalLoader(self, signal_key, signal_id, spec)
 
     def _load_offsets(self, axis_key: int, axis_id: str) -> pa.Array:

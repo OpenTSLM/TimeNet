@@ -9,6 +9,7 @@ import pytest
 from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.control_reader import DuckDBControlReader
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -194,6 +195,28 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
+
+
+def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    original = DuckDBControlReader.chunk_rows_by_keys
+    calls = []
+
+    def counting_batch(reader, signals):
+        calls.append(tuple(signals))
+        return original(reader, signals)
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        records = tuple(reader.iter_records())
+        signals = tuple(signal for record in records for signal in record.signals)
+        assert calls == []
+
+        for signal in signals:
+            signal.to_arrow()
+
+    assert len(calls) == 1
+    assert len(calls[0]) == len(signals)
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
