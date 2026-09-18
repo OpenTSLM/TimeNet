@@ -805,14 +805,14 @@ class TimeFReader:
                 self, record_id, time_series_id, axis.first_us, axis.last_us, n_values
             )
         try:
-            return TimeSeries(
+            return TimeSeries.from_loader(
                 spec=self._spec_by_type[spec_type],
-                signal=struct["signal"],
+                name=struct["signal"],
                 time_axis=axis,
                 loader=_SeriesLoader(self, record_id, time_series_id),
                 time_offsets_loader=time_offsets_loader,
                 source_id=self._codec.decode_opt("source_id", struct["source_id"]),
-                time_series_id=time_series_id,
+                id=time_series_id,
                 n_values=n_values,
             )
         except TimeFValidationError as exc:

@@ -74,13 +74,13 @@ def _registered_annotation_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -133,13 +133,13 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -585,12 +585,12 @@ def test_an_index_lookup_failure_reaches_the_caller_as_a_format_error(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0], type=pa.float32()),
-        time_series_id="11111111-1111-1111-1111-111111111111",
+        id="11111111-1111-1111-1111-111111111111",
         n_values=2,
     )
     record_id = "22222222-2222-2222-2222-222222222222"
@@ -938,9 +938,9 @@ def _time_span_dataset(tmp_path) -> Path:
             license=License.MIT,
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless),
-        signal="c",
+        name="c",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
@@ -1000,13 +1000,13 @@ def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -1039,13 +1039,13 @@ def _annotation_dataset(annotations):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -1090,13 +1090,13 @@ def _registered_source_dataset(source):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -1138,13 +1138,13 @@ def test_temporal_localization_empty_target_round_trips(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
@@ -1167,13 +1167,13 @@ def test_correspondence_time_series_answer_round_trips(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
-        signal="I",
+        name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         loader=lambda: pa.array([0.0, 1.0, 2.0], type=pa.float32()),
         source_id="rec-0",
-        time_series_id="ecg-rec-0-I",
+        id="ecg-rec-0-I",
         n_values=3,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))

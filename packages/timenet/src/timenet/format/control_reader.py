@@ -142,9 +142,9 @@ class DuckDBControlReader:
             spec = self._spec_from_row(row)
             offsets_loader = self._offsets_loader(axis_id) if isinstance(axis, IrregularAxis) else None
             signals_by_source[source_id].append(
-                Signal(
-                    time_series_id=signal_id,
-                    signal=name,
+                Signal.from_loader(
+                    id=signal_id,
+                    name=name,
                     spec=spec,
                     time_axis=axis,
                     n_values=row[13],
