@@ -57,6 +57,30 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
         assert (version_dir / rel).exists()
 
 
+def test_manifest_counts_match_the_control_database(tmp_path):
+    version_dir = _written(tmp_path)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+
+    def row_count(connection, query):
+        row = connection.execute(query).fetchone()
+        assert row is not None
+        return row[0]
+
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        assert manifest.counts.records == row_count(connection, "SELECT count(*) FROM records")
+        assert manifest.counts.sources == row_count(connection, "SELECT count(*) FROM sources")
+        assert manifest.counts.signals == row_count(connection, "SELECT count(*) FROM signals")
+        assert manifest.counts.axes == row_count(connection, "SELECT count(*) FROM axes")
+        assert manifest.counts.annotation_contents == row_count(connection, "SELECT count(*) FROM annotation_contents")
+        assert manifest.counts.annotation_occurrences == row_count(
+            connection, "SELECT count(*) FROM annotation_occurrences"
+        )
+        assert manifest.counts.signal_chunks == row_count(connection, "SELECT count(*) FROM signal_chunks")
+        assert manifest.counts.signals_by_spec == dict(
+            connection.execute("SELECT spec_type, count(*) FROM signals GROUP BY spec_type").fetchall()
+        )
+
+
 def test_manifest_has_per_file_checksum_and_size(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
@@ -70,11 +94,9 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert len(manifest.files.control) == 1
-    assert manifest.files.records == ()
-    assert manifest.files.annotations == ()
-    assert manifest.files.time_series_index == ()
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
-    for key in ("control", "records", "annotations", "time_series_index", "tasks", "time_series"):
+    assert set(raw_files) == {"control", "time_series"}
+    for key in ("control", "time_series"):
         assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
         for entry in raw_files[key]:
             assert set(entry) == {"path", "checksum", "size"}, f"{key} entries are {{path, checksum, size}}"
