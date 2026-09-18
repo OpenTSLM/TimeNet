@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 import zarr
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
@@ -160,17 +160,19 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(
-            TimeSeries(
-                spec=spec,
-                signal="rgb",
-                time_axis=RegularAxis.from_rate_hz(30),
-                n_values=len(frames),
-                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
-                time_series_id="camera-1",
+        record=Record(
+            time_series=(
+                TimeSeries(
+                    spec=spec,
+                    signal="rgb",
+                    time_axis=RegularAxis.from_rate_hz(30),
+                    n_values=len(frames),
+                    loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
+                    time_series_id="camera-1",
+                ),
             ),
-        ),
-        record_id="record-camera",
+            record_id="record-camera",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
@@ -214,25 +216,29 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(
-            TimeSeries(
-                spec=nd_spec,
-                signal="rgb",
-                time_axis=RegularAxis.from_rate_hz(10),
-                time_series_id="cam-1",
-                n_values=len(frames),
-                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=nd_spec.dimension_names),
+        record=Record(
+            time_series=(
+                TimeSeries(
+                    spec=nd_spec,
+                    signal="rgb",
+                    time_axis=RegularAxis.from_rate_hz(10),
+                    time_series_id="cam-1",
+                    n_values=len(frames),
+                    loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                        frames, dim_names=nd_spec.dimension_names
+                    ),
+                ),
+                TimeSeries(
+                    spec=scalar_spec,
+                    signal="i",
+                    time_axis=RegularAxis.from_rate_hz(10),
+                    time_series_id="sig-1",
+                    n_values=6,
+                    loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
+                ),
             ),
-            TimeSeries(
-                spec=scalar_spec,
-                signal="i",
-                time_axis=RegularAxis.from_rate_hz(10),
-                time_series_id="sig-1",
-                n_values=6,
-                loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
-            ),
-        ),
-        record_id="record-0",
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
@@ -269,8 +275,12 @@ def test_str_round_trip(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
-        record_id="record-0",
+        record=Record(
+            time_series=(
+                TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),
+            ),
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
@@ -301,8 +311,12 @@ def test_str_empty_range_read(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
-        record_id="record-0",
+        record=Record(
+            time_series=(
+                TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),
+            ),
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:

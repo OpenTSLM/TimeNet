@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import ClassificationTask, DataSource, TimeSeriesSpec, ureg
 
@@ -72,7 +72,7 @@ class TestMeanConnector(BaseConnector[None]):
                 source_id=f"rec-{index}",
                 time_series_id=f"ts-{index}",
             )
-            record = dataset.add_record(time_series=(series,), record_id=f"record-{index}")
+            record = dataset.add_record(record=Record(time_series=(series,), record_id=f"record-{index}"))
             label = "above_zero" if offset > 0 else "below_zero"
             dataset.add_task(record, ClassificationTask(target=label, id=f"task-{index}"))
         return dataset
