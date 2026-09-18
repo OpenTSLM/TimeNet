@@ -200,7 +200,8 @@ def test_one_record_for_each_recording(release, monkeypatch):
 def test_every_record_carries_the_same_study_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     study = [_annotations(dataset, record.record_id, "study")[0] for record in dataset.records]
-    assert study[0] is study[1]
+    assert study[0].content_id == study[1].content_id
+    assert study[0].occurrence_id != study[1].occurrence_id
     assert study[0].value == _STUDY
 
 
@@ -214,7 +215,8 @@ def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     first = _annotations(dataset, "sleep-edfx-SC4901E0", "sex")[0]
     second = _annotations(dataset, "sleep-edfx-SC4902E0", "sex")[0]
-    assert first is second
+    assert first.content_id == second.content_id
+    assert first.occurrence_id != second.occurrence_id
     assert first.value == "F"
 
 
