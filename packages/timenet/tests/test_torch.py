@@ -1,5 +1,7 @@
 import pytest
 
+from timenet.dataset import Record
+
 
 torch = pytest.importorskip("torch")
 
@@ -81,7 +83,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(time_series=(ts,), record_id="record-0")
+    dataset.add_record(record=Record(time_series=(ts,), record_id="record-0"))
     return dataset
 
 

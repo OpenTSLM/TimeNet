@@ -31,7 +31,7 @@ from pathlib import Path
 import re
 from typing import ClassVar
 
-from timenet.dataset import TimeFDataset
+from timenet.dataset import Record, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
@@ -305,10 +305,12 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             )
 
             record = dataset.add_record(
-                time_series=series,
-                record_id=record_id,
-                subject_ids=(recording.subject_id,),
-                time_span=TimeInterval.micros(0, session_end),
+                record=Record(
+                    time_series=series,
+                    record_id=record_id,
+                    subject_ids=(recording.subject_id,),
+                    time_span=TimeInterval.micros(0, session_end),
+                )
             )
             record.add_annotations(sleep_stages)
             record.add_annotations(recording_metadata)

@@ -13,7 +13,7 @@ import uuid
 from _fake_registry import build_service_fake
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
@@ -51,7 +51,7 @@ def _second_dataset() -> TimeFDataset:
         time_series_id="other-ts-0",
         n_values=16,
     )
-    record = dataset.add_record(time_series=(series,), record_id="other-record-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="other-record-0"))
     record.add_annotation(Annotation(key="age", value=70, unit="years", id="other-age-0"))
     dataset.add_task(record, ClassificationTask(target="afib", id="other-task-0"))
     return dataset
