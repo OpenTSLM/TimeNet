@@ -5,21 +5,18 @@ from __future__ import annotations
 from collections.abc import Iterable
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, assert_never
+from typing import TYPE_CHECKING, Any, assert_never, cast
 
 import duckdb
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.task_codec import encode_span, encode_task_payload
+from timenet.format.task_codec import TARGET_VALUE_COLUMNS, encode_span, encode_target, encode_task_payload
 from timenet.types import (
     Annotation,
-    ForecastingTask,
     Task,
     TSCorrespondenceTask,
-    TSEditingTask,
-    TSGenerationTask,
     annotation_type_of,
 )
 
@@ -183,17 +180,47 @@ class DuckDBControlWriter:
             task_type = str(task.task_type)
             task_counts[task_type] = task_counts.get(task_type, 0) + 1
             connection.execute(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     task.id,
                     str(task.task_type),
                     task.prompt,
                     None if task.scope is None else _json(encode_span(task.scope)),
+                    task.targets is not None,
                     _json(encode_task_payload(task)),
                     task.rationale,
                     _json(task.metadata),
                 ],
             )
+            for position, target in enumerate(task.targets or ()):
+                row = encode_target(target)
+                record_id = row["record_id"]
+                signal_id = row["signal_id"]
+                if record_id is not None and record_id not in known_records:
+                    raise TimeFValidationError(
+                        f"task {task.id!r} target {position} refers to unknown Record {record_id!r}"
+                    )
+                if signal_id is not None and signal_id not in known_signals:
+                    raise TimeFValidationError(
+                        f"task {task.id!r} target {position} refers to unknown Signal {signal_id!r}"
+                    )
+                span_signal_ids = cast("tuple[str, ...] | list[str]", row["span_signal_ids"] or ())
+                missing_signals = [signal for signal in span_signal_ids if signal not in known_signals]
+                if missing_signals:
+                    raise TimeFValidationError(
+                        f"task {task.id!r} target {position} refers to unknown Signals {missing_signals}"
+                    )
+                values = [
+                    _json(row[name]) if name == "span_signal_ids" and row[name] is not None else row[name]
+                    for name in TARGET_VALUE_COLUMNS
+                ]
+                connection.execute(
+                    """INSERT INTO task_targets (
+                           task_id, position, target_kind, text_value, integer_value, float_value,
+                           boolean_value, record_id, signal_id, span_start, span_end, span_signal_ids
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [task.id, position, row["target_kind"], *values],
+                )
             annotations.extend((task.id, annotation) for annotation in task.annotations)
             record_refs = self._task_record_refs(task)
             for field, records in record_refs:
@@ -205,16 +232,6 @@ class DuckDBControlWriter:
                     connection.execute(
                         "INSERT INTO task_record_refs VALUES (?, ?, ?, ?)",
                         [task.id, field, position, record_id],
-                    )
-            for field, signal_ids in self._task_signal_refs(task):
-                for position, signal_id in enumerate(signal_ids):
-                    if signal_id not in known_signals:
-                        raise TimeFValidationError(
-                            f"task {task.id!r} field {field!r} refers to unknown signal {signal_id!r}"
-                        )
-                    connection.execute(
-                        "INSERT INTO task_signal_refs VALUES (?, ?, ?, ?)",
-                        [task.id, field, position, signal_id],
                     )
             for field, values in (
                 ("input_annotations", task.input_annotations),
@@ -245,37 +262,9 @@ class DuckDBControlWriter:
             Pairs of public field name and ordered record IDs.
         """
         refs: list[tuple[str, tuple[str, ...]]] = [("inputs", tuple(record.id for record in task.inputs))]
-        if isinstance(task, ForecastingTask):
-            refs.append(("context_records", task.context_record_ids))
-            if task.target_record_id is not None:
-                refs.append(("target_record", (task.target_record_id,)))
-        elif isinstance(task, TSEditingTask):
-            if task.source_record_id is not None:
-                refs.append(("source_record", (task.source_record_id,)))
-            if task.target_record_id is not None:
-                refs.append(("target_record", (task.target_record_id,)))
-        elif isinstance(task, TSGenerationTask):
-            if task.target_record_id is not None:
-                refs.append(("target_record", (task.target_record_id,)))
-        elif isinstance(task, TSCorrespondenceTask):
-            refs.extend(
-                (
-                    ("candidate_records", task.candidate_record_ids),
-                    ("target_records", task.target or ()),
-                )
-            )
+        if isinstance(task, TSCorrespondenceTask):
+            refs.append(("candidate_records", tuple(record.id for record in task.candidate_records)))
         return tuple(refs)
-
-    @staticmethod
-    def _task_signal_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
-        """Project task signal objects into normalized field rows.
-
-        Returns:
-            Pairs of public field name and ordered signal IDs.
-        """
-        if isinstance(task, TSCorrespondenceTask) and task.target_time_series_ids is not None:
-            return (("target_signals", task.target_time_series_ids),)
-        return ()
 
     @staticmethod
     def _write_task_annotation_refs(

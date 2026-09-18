@@ -38,7 +38,7 @@ def _namespaced_dataset() -> TimeFDataset:
         n_values=8,
     )
     record = dataset.add_record(time_series=(series,), record_id="ns-record-0")
-    dataset.add_task(record, ClassificationTask(target="x", id="ns-task-0"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id="ns-task-0"))
     return dataset
 
 
