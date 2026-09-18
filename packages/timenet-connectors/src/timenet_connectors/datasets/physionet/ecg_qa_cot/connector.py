@@ -243,13 +243,13 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         header = self._read_header(record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
         return tuple(
-            TimeSeries(
+            TimeSeries.from_loader(
                 spec=_ECG,
-                signal=name,
+                name=name,
                 time_axis=axis,
                 loader=self._lead_loader(record_base, header, lead_idx),
                 source_id=f"ptbxl-{ecg_id}",
-                time_series_id=f"ecg-{ecg_id}-{name}",
+                id=f"ecg-{ecg_id}-{name}",
                 n_values=int(header.sig_len),
             )
             for lead_idx, name in enumerate(header.sig_name)
