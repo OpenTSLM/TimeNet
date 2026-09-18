@@ -1,4 +1,4 @@
-"""Read TimeF v2 datasets from a DuckDB control plane and a sharded values plane."""
+"""Read TimeF datasets from a DuckDB control plane and a sharded values plane."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class TimeFReader:
-    """Read a committed TimeF v2 dataset through its DuckDB control plane."""
+    """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
         """Configure a lazy reader for an opened dataset version.
