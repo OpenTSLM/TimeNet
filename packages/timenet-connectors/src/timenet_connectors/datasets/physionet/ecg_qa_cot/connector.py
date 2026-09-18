@@ -23,7 +23,7 @@ import hashlib
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -221,7 +221,9 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
 
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
-            record = dataset.add_record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            record = dataset.add_record(
+                record=Record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            )
             record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
 
         dataset.register_annotations(self._metadata_annotations(question_types, template_ids, contexts, answers))

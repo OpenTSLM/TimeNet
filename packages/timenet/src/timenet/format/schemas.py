@@ -304,7 +304,21 @@ def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Sche
     resolved = id_types if id_types is not None else default_id_types()
     schema = pa.schema(_task_common(resolved) + _task_payload(resolved)[task_type])
     cls = TASKS[task_type]
-    non_payload = {*TASK_COMMON_NAMES, "from_tasks"}
+    non_payload = {
+        *TASK_COMMON_NAMES,
+        "from_tasks",
+        "inputs",
+        "input_annotations",
+        "target_annotations",
+        "annotations",
+        "metadata",
+        "context_records",
+        "target_record",
+        "source_record",
+        "candidate_records",
+        "target_records",
+        "target_signals",
+    }
     expected = {field.name for field in fields(cls)} - non_payload
     if cls.answer_is_record:
         expected.discard("target")

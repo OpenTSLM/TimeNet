@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
@@ -73,7 +73,7 @@ def _dataset(spec: TimeSeriesSpec, values, signal: str = "c", record_id: str = "
         time_axis=RegularAxis.from_rate_hz(1),
         time_series_id=f"ts-{signal}",
     )
-    dataset.add_record(time_series=(ts,), record_id=record_id)
+    dataset.add_record(record=Record(time_series=(ts,), record_id=record_id))
     dataset.derive_schema()
     return dataset
 
@@ -158,8 +158,8 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
         signal="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
-    dataset.add_record(time_series=(bool0, str0), record_id="record-0")
-    dataset.add_record(time_series=(bool1, str1), record_id="record-1")
+    dataset.add_record(record=Record(time_series=(bool0, str0), record_id="record-0"))
+    dataset.add_record(record=Record(time_series=(bool1, str1), record_id="record-1"))
     dataset.derive_schema()
     version_dir = _write(tmp_path / "base", dataset)
     edited = edit_version(
@@ -226,7 +226,7 @@ def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(time_series=series, record_id="record-0")
+    dataset.add_record(record=Record(time_series=series, record_id="record-0"))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset, values_backend=values_backend)
 

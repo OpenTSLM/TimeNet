@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
@@ -51,7 +51,7 @@ _HATCH_VALUES = [1.0, 0.0, 1.0, 0.0]
 def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, values_backend=values_backend)))
@@ -83,7 +83,7 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
         ),
         TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec("mach"), signal="hatch"),
     )
-    dataset.add_record(time_series=series)
+    dataset.add_record(record=Record(time_series=series))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
@@ -107,7 +107,7 @@ def test_series_sharing_time_offsets_each_store_their_own_copy(tmp_path):
         dataset_series = TimeSeries.from_irregular(
             [1.0, 2.0, 3.0], time_offsets_us=shared_us, spec=_spec(), signal=signal
         )
-        dataset.add_record(time_series=(dataset_series,))
+        dataset.add_record(record=Record(time_series=(dataset_series,)))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
@@ -122,7 +122,7 @@ def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
     ts = TimeSeries.from_irregular(
         np.arange(4000, dtype=np.float32), time_offsets_us=time_offsets, spec=_spec(), signal="ibi"
     )
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     # 480 bytes per chunk => 40 steps per chunk at 12 bytes a step, so ~100 chunks.
@@ -174,7 +174,7 @@ def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
         time_offsets_loader=lambda: pa.array(np.array([0, 10, 20], dtype=np.int64)),
         n_values=3,
     )
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError, match="its axis claims the stream runs"):
         _written(tmp_path, dataset)
@@ -187,7 +187,7 @@ def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes)
     # target where the two do not divide aborts create_array.
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
@@ -200,15 +200,17 @@ def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
     # time_offsets: mixing the two in one array would let the offsets drift apart silently.
     dataset = _dataset()
     dataset.add_record(
-        time_series=(
-            TimeSeries.from_values(
-                np.arange(8, dtype=np.float32),
-                spec=_spec(),
-                signal="steady",
-                time_axis=RegularAxis.from_rate_hz(2),
+        record=Record(
+            time_series=(
+                TimeSeries.from_values(
+                    np.arange(8, dtype=np.float32),
+                    spec=_spec(),
+                    signal="steady",
+                    time_axis=RegularAxis.from_rate_hz(2),
+                ),
+                TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch"),
             ),
-            TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch"),
-        ),
+        )
     )
     dataset.derive_schema()
     version = _written(tmp_path, dataset, values_backend="zarr")
@@ -238,7 +240,7 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     # no longer matches the axis. The reader re-checks on read and refuses it.
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
     records_path = version_dir / "records/part-00000000.parquet"
@@ -256,7 +258,7 @@ def test_zarr_time_offsets_persist_the_delta_filter(tmp_path):
     # written zarr.json rather than trusting the create_array call that requested it.
     dataset = _dataset()
     ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     version = _written(tmp_path, dataset, values_backend="zarr")
 

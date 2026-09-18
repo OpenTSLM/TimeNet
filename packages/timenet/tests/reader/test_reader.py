@@ -9,7 +9,7 @@ import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import SpanOutsideWindowWarning, TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
@@ -83,7 +83,7 @@ def _registered_annotation_dataset() -> TimeFDataset:
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
     dataset.register_annotations([options])
     dataset.add_task(
@@ -142,7 +142,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     options = Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno")
     dataset.register_annotations([options])
     prompts = [f"Question {i}?" for i in range(5)]
@@ -594,7 +594,7 @@ def test_an_index_lookup_failure_reaches_the_caller_as_a_format_error(tmp_path):
         n_values=2,
     )
     record_id = "22222222-2222-2222-2222-222222222222"
-    dataset.add_record(time_series=(series,), record_id=record_id)
+    dataset.add_record(record=Record(time_series=(series,), record_id=record_id))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset=dataset)
 
@@ -945,7 +945,7 @@ def _time_span_dataset(tmp_path) -> Path:
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
     )
-    record = dataset.add_record(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0))
+    record = dataset.add_record(record=Record(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0)))
     record.add_annotation(Annotation(key="note", span=TimePoint.seconds(2.0)))  # unscoped, inside [0, 5) s
     return _write(tmp_path, dataset)
 
@@ -1009,7 +1009,7 @@ def test_task_partition_missing_optional_column_reads_as_none(tmp_path):
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     dataset.add_task(record, ClassificationTask(target="afib", target_schema="scp5", id="cls-0"))
     version_dir = _write(tmp_path, dataset=dataset)
 
@@ -1048,7 +1048,7 @@ def _annotation_dataset(annotations):
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     for ann in annotations:
         record.add_annotation(ann)
     return dataset
@@ -1099,7 +1099,7 @@ def _registered_source_dataset(source):
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     options = Annotation(key="answer_options", value=["yes", "no"], source=source, id="opts-src")
     dataset.register_annotations([options])
     dataset.add_task(
@@ -1147,7 +1147,7 @@ def test_temporal_localization_empty_target_round_trips(tmp_path):
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     dataset.add_task(record, TemporalLocalizationTask(prompt="Mark every P-wave", target=(), id="loc-0"))
     restored = _read(_write(tmp_path, dataset=dataset))
     task = restored.tasks[0]
@@ -1176,7 +1176,7 @@ def test_correspondence_time_series_answer_round_trips(tmp_path):
         time_series_id="ecg-rec-0-I",
         n_values=3,
     )
-    record = dataset.add_record(time_series=(series,), record_id="rec-0")
+    record = dataset.add_record(record=Record(time_series=(series,), record_id="rec-0"))
     dataset.add_task(record, TSCorrespondenceTask(target_time_series_ids=("ecg-rec-0-I",), id="corr-0"))
     restored = _read(_write(tmp_path, dataset=dataset))
     task = restored.tasks[0]
