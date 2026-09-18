@@ -1,4 +1,4 @@
-"""The :class:`TimeSeries` reference type: one logical stream with a lazy Arrow loader."""
+"""The :class:`Signal` leaf type: one logical stream with a lazy Arrow loader."""
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
-from timenet.types import Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import Annotation, Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
 
 
 def _validate_enum_values(
@@ -71,8 +71,8 @@ def _array_from_values(
     return array
 
 
-@dataclass(frozen=True, eq=False, kw_only=True)
-class TimeSeries:
+@dataclass(frozen=True, eq=False, init=False, kw_only=True)
+class Signal:
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
     The writer dedupes by ``time_series_id``, not by value (``eq=False``). If you reuse one instance
@@ -83,8 +83,8 @@ class TimeSeries:
 
     spec: TimeSeriesSpec
     """Measurement-modality contract: type tag, units, dtype, and per-timestep shape."""
-    signal: str
-    """Name of this signal within the modality. The signal must be non-empty."""
+    name: str
+    """Human-readable signal name within the source."""
     time_axis: TimeAxis
     """Where this series' values sit in time. A :class:`~timenet.dataset.axis.RegularAxis` gives a
     cadence, an :class:`~timenet.dataset.axis.IrregularAxis` stores per-value time offsets, and an
@@ -99,7 +99,7 @@ class TimeSeries:
     either gives a second, conflicting answer to the same question."""
     source_id: str | None = None
     """Optional identifier of the raw source recording."""
-    time_series_id: str = field(default_factory=new_id)
+    id: str = field(default_factory=new_id)
     """Stable identity used to dedupe and share chunks. Defaults to a UUIDv7."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
@@ -107,6 +107,122 @@ class TimeSeries:
     ``n_values`` reports.
 
     """
+    annotations: tuple[Annotation, ...] = ()
+    """Annotations attached directly to this signal."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible signal metadata."""
+
+    def __init__(  # noqa: PLR0913 - a signal carries its complete public metadata
+        self,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        id: str | None = None,
+        name: str,
+        data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Build a signal from values that are already in memory."""
+        array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
+        self._initialize(
+            spec=spec,
+            time_axis=time_axis,
+            id=id or new_id(),
+            name=name,
+            loader=lambda: array,
+            n_values=len(array),
+            source_id=source_id,
+            annotations=annotations,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def from_loader(  # noqa: PLR0913 - lazy signals carry their storage metadata
+        cls,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        name: str,
+        loader: Callable[[], pa.Array],
+        n_values: int,
+        id: str | None = None,
+        time_offsets_loader: Callable[[], pa.Array] | None = None,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> "Signal":
+        """Build a signal whose values are loaded only when they are read.
+
+        Returns:
+            A signal backed by ``loader`` without calling it.
+        """
+        instance = cls.__new__(cls)
+        instance._initialize(
+            spec=spec,
+            time_axis=time_axis,
+            id=id or new_id(),
+            name=name,
+            loader=loader,
+            n_values=n_values,
+            time_offsets_loader=time_offsets_loader,
+            source_id=source_id,
+            annotations=annotations,
+            metadata=metadata,
+        )
+        return instance
+
+    def _initialize(  # noqa: PLR0913 - shared eager and lazy field initialization
+        self,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        id: str,
+        name: str,
+        loader: Callable[[], pa.Array],
+        n_values: int,
+        time_offsets_loader: Callable[[], pa.Array] | None = None,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Set and validate fields shared by eager and lazy construction."""
+        set_field = object.__setattr__
+        set_field(self, "spec", spec)
+        set_field(self, "name", name)
+        set_field(self, "time_axis", time_axis)
+        set_field(self, "loader", loader)
+        set_field(self, "time_offsets_loader", time_offsets_loader)
+        set_field(self, "source_id", source_id)
+        set_field(self, "id", id)
+        set_field(self, "n_values", n_values)
+        set_field(self, "annotations", tuple(annotations))
+        set_field(self, "metadata", {} if metadata is None else metadata)
+        self.__post_init__()
+
+    @property
+    def time_series_id(self) -> str:
+        """Return the transitional storage identity alias."""
+        return self.id
+
+    @property
+    def signal(self) -> str:
+        """Return the transitional signal-name alias."""
+        return self.name
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one annotation and return it.
+
+        Args:
+            annotation: The annotation to attach.
+
+        Returns:
+            The attached annotation.
+        """
+        attached = annotation._new_occurrence()
+        object.__setattr__(self, "annotations", (*self.annotations, attached))  # noqa: PLC2801
+        return attached
 
     def __post_init__(self) -> None:
         """Validate the intrinsic per-series invariants.
@@ -116,8 +232,8 @@ class TimeSeries:
                 and the axis shape disagree about whether this series stores per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
-        if not self.signal:
-            raise ValueError("TimeSeries.signal must be non-empty")
+        if not self.name:
+            raise ValueError("Signal.name must be non-empty")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)
@@ -159,10 +275,10 @@ class TimeSeries:
         values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         spec: TimeSeriesSpec,
-        signal: str,
+        name: str,
         time_axis: TimeAxis,
         source_id: str | None = None,
-        time_series_id: str | None = None,
+        id: str | None = None,
     ) -> "TimeSeries":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
@@ -170,30 +286,28 @@ class TimeSeries:
         with the spec's dtype. Repeated reads return that same array. The array length sets
         ``n_values``.
 
-        For files or remote sources, use the ``loader=`` constructor and supply the length.
-        That constructor does not read the values immediately.
+        For files or remote sources, use :meth:`from_loader` and supply the length. That constructor
+        does not read the values immediately.
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
                 strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             spec: The series' measurement-modality spec.
-            signal: The signal name.
+            name: The signal name.
             time_axis: Where the values sit in time.
             source_id: Optional id of the raw source recording.
-            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        array = _array_from_values(spec, values)
         return cls(
             spec=spec,
-            signal=signal,
+            name=name,
+            data=values,
             time_axis=time_axis,
-            loader=lambda: array,
             source_id=source_id,
-            time_series_id=time_series_id or new_id(),
-            n_values=len(array),
+            id=id,
         )
 
     @classmethod
@@ -203,9 +317,9 @@ class TimeSeries:
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
-        signal: str,
+        name: str,
         source_id: str | None = None,
-        time_series_id: str | None = None,
+        id: str | None = None,
     ) -> "TimeSeries":
         """Build an irregular series from materialized values and their time offsets.
 
@@ -219,9 +333,9 @@ class TimeSeries:
                 strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
-            signal: The signal name.
+            name: The signal name.
             source_id: Optional id of the raw source recording.
-            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
             The constructed :class:`TimeSeries`.
@@ -237,14 +351,14 @@ class TimeSeries:
                 f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"
             )
         time_offset_array = pa.array(time_offsets)
-        return cls(
+        return cls.from_loader(
             spec=spec,
-            signal=signal,
+            name=name,
             time_axis=IrregularAxis.spanning(time_offsets),
             loader=lambda: array,
             time_offsets_loader=lambda: time_offset_array,
             source_id=source_id,
-            time_series_id=time_series_id or new_id(),
+            id=id,
             n_values=len(array),
         )
 
@@ -408,3 +522,8 @@ class TimeSeries:
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)
+
+
+# Transitional alias for the lower commits in the stack. The final API-removal commit deletes it
+# after the bundled connectors and consumers use ``Signal``.
+TimeSeries = Signal

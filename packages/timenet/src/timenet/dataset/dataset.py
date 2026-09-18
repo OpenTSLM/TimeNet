@@ -1,7 +1,6 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from datetime import datetime
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
 
@@ -10,7 +9,6 @@ import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record, check_span_within_window
-from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
@@ -18,7 +16,6 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     Task,
-    TimeInterval,
     annotation_type_of,
     value_type_of,
 )
@@ -28,7 +25,7 @@ T = TypeVar("T")
 TTask = TypeVar("TTask", bound=Task)
 
 
-class TimeFDataset:
+class TimeFDataset:  # noqa: PLR0904
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -40,6 +37,7 @@ class TimeFDataset:
         self._metadata = metadata
         self._records: list[Record] = []
         self._tasks: list[Task] = []
+        self._annotations: list[Annotation] = []
         # Annotations that tasks reference but no record carries, deduped by id. A task's metadata
         # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
         # instead of being copied onto every record the tasks are about.
@@ -50,66 +48,35 @@ class TimeFDataset:
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def add_record(
-        self,
-        *,
-        time_series: tuple[TimeSeries, ...],
-        subject_ids: tuple[str, ...] = (),
-        record_id: str | None = None,
-        start_time: datetime | int | None = None,
-        time_span: TimeInterval | None = None,
-    ) -> Record:
-        """Create a record, register it, and return it.
+    def add_record(self, *, record: Record) -> Record:
+        """Register and return a complete record.
 
         Args:
-            time_series: The logical :class:`TimeSeries` streams that the record uses.
-            subject_ids: The subjects that this record belongs to. The tuple is empty for
-                domains that have no subjects.
-            record_id: An explicit ID. The default is an automatically generated uuid4 value.
-                Pass an explicit ID for deterministic output, for example for golden test fixtures.
-            start_time: The wall-clock timestamp for the record's relative zero point. This value
-                can be a timezone-aware datetime or a whole number of Unix microseconds. Use
-                ``None`` when no wall-clock reference exists.
-            time_span: The overall span of the session. Use this if the series have gaps that an
-                unscoped span can fall into (see :attr:`Record.time_span`). The value must be a
-                whole-record :class:`~timenet.types.TimeInterval` object that contains every
-                series window.
+            record: The complete record hierarchy to register.
 
         Returns:
-            The newly created :class:`Record`.
+            The same :class:`Record` instance.
 
         Raises:
-            TimeFValidationError: This error occurs if ``time_series`` is empty, or if two series
-                share the same ``time_series_id`` value. The ids must be distinct. The writer uses
-                the ids as shard keys, and :meth:`Record.add_annotation` and :meth:`add_task` both
-                resolve references by these ids. So a repeated id silently merges two signals
-                into one.
+            TimeFValidationError: If the record repeats a signal ID or its record ID is already
+                registered.
         """
-        if not time_series:
-            raise TimeFValidationError("add_record requires a non-empty time_series")
-        series_ids = [ts.time_series_id for ts in time_series]
+        series_ids = [signal.id for signal in record.signals]
         if len(set(series_ids)) != len(series_ids):
             duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
-            raise TimeFValidationError(f"add_record requires distinct time_series_ids, got duplicates {duplicates}")
-        if record_id is None:
-            record = Record(
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
+            raise TimeFValidationError(
+                f"add_record requires distinct time_series_ids (signal IDs), got duplicates {duplicates}"
             )
-        else:
-            record = Record(
-                record_id=record_id,
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
-            )
+        if any(existing.record_id == record.record_id for existing in self._records):
+            raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
         self._records.append(record)
         return record
 
-    def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
+    def add_task(
+        self,
+        records: Record | Iterable[Record] | None = None,
+        task: Task | None = None,
+    ) -> Task:
         """Register a task and link it to its records.
 
         This method checks every span that the task carries against the records given here. This
@@ -122,9 +89,8 @@ class TimeFDataset:
         not the call to this method.
 
         Args:
-            records: The record, or records, that the task attaches to.
-            task: The task instance. The caller must already set its payload, ``scope``, and
-                ``from_tasks`` fields.
+            records: Legacy explicit task inputs. New code sets ``task.inputs`` instead.
+            task: The concrete task instance with its input records, payload, and scope.
 
         Returns:
             The registered task. This is the same instance, with the ``record_ids`` field
@@ -142,7 +108,15 @@ class TimeFDataset:
                 occurs if the span falls outside a record's covered span. It also occurs if a
                 referenced record or annotation is not registered in this dataset.
         """
-        targets = (records,) if isinstance(records, Record) else tuple(records)
+        if task is None:
+            if isinstance(records, Task):
+                task = records
+                records = None
+            else:
+                raise TimeFValidationError("add_task requires task=")
+        if records is not None and task.inputs:
+            raise TimeFValidationError("add_task accepts task.inputs or records, not both")
+        targets = task.inputs if records is None else ((records,) if isinstance(records, Record) else tuple(records))
         if not targets:
             raise TimeFValidationError("add_task requires at least one record")
         return self._register_batch((task,), targets)[0]
@@ -205,6 +179,21 @@ class TimeFDataset:
                     f"{existing!r} and {annotation!r}"
                 )
             self._registered_annotations[annotation.id] = annotation
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach a static annotation to the dataset.
+
+        Returns:
+            The attached occurrence.
+
+        Raises:
+            TimeFValidationError: If the annotation has a time placement, which is ambiguous across records.
+        """
+        if annotation.span is not None:
+            raise TimeFValidationError("dataset annotations cannot have a time span")
+        attached = annotation._new_occurrence()
+        self._annotations.append(attached)
+        return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
@@ -329,6 +318,7 @@ class TimeFDataset:
             )
         self._validate_task_batch(batch, targets)
         for task in batch:
+            task.inputs = targets
             task.record_ids = tuple(record.record_id for record in targets)
             for record in targets:
                 record.task_ids = (*record.task_ids, task.id)
@@ -361,6 +351,7 @@ class TimeFDataset:
             raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
         known_task_ids = registered_ids | set(batch_ids)
         for task in batch:
+            self._normalize_task_annotation_refs(task)
             for parent_id in task.from_task_ids:
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
@@ -381,6 +372,26 @@ class TimeFDataset:
                         f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
                     )
             self._check_annotation_refs(task, targets)
+
+    @staticmethod
+    def _normalize_task_annotation_refs(task: Task) -> None:
+        """Keep transitional annotation IDs aligned with object references.
+
+        Raises:
+            TimeFValidationError: If an object tuple and its ID projection disagree.
+        """
+        for objects_name, ids_name in (
+            ("input_annotations", "input_annotation_ids"),
+            ("target_annotations", "target_annotation_ids"),
+        ):
+            annotations = getattr(task, objects_name)
+            if not annotations:
+                continue
+            content_ids = tuple(annotation.content_id for annotation in annotations)
+            current = getattr(task, ids_name)
+            if current and current != content_ids:
+                raise TimeFValidationError(f"{type(task).__name__} {objects_name} and {ids_name} disagree")
+            setattr(task, ids_name, content_ids)
 
     @staticmethod
     def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:
@@ -522,12 +533,17 @@ class TimeFDataset:
             raise TimeFValidationError(
                 f"{name} sets multiple inline answers ({', '.join(inline)}); a task answers with exactly one"
             )
-        if inline and task.target_annotation_ids:
+        if inline and (task.target_annotation_ids or task.target_annotations):
             raise TimeFValidationError(
                 f"{name} sets an inline answer ({', '.join(inline)}) and target_annotation_ids "
                 f"{list(task.target_annotation_ids)}; the answer is either inline or by reference, not both"
             )
-        if not type(task).answer_is_record and not inline and not task.target_annotation_ids:
+        if (
+            not type(task).answer_is_record
+            and not inline
+            and not task.target_annotation_ids
+            and not task.target_annotations
+        ):
             raise TimeFValidationError(
                 f"{name} needs an answer: set one of {list(type(task).answer_fields)}, or "
                 f"target_annotation_ids= to point at stored annotations"
@@ -619,6 +635,11 @@ class TimeFDataset:
     def registered_annotations(self) -> tuple[Annotation, ...]:
         """Annotations registered for tasks to reference, which no record carries (registration order)."""
         return tuple(self._registered_annotations.values())
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return annotations attached to the dataset itself."""
+        return tuple(self._annotations)
 
     @property
     def has_task_stream(self) -> bool:

@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
@@ -50,8 +50,8 @@ _HATCH_VALUES = [1.0, 0.0, 1.0, 0.0]
 @pytest.mark.parametrize("values_backend", ["parquet", "zarr"])
 def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset = _dataset()
-    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, values_backend=values_backend)))
@@ -62,7 +62,7 @@ def test_an_irregular_series_round_trips(tmp_path, values_backend):
 
 
 def test_the_window_comes_from_the_stored_endpoints():
-    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
     # One microsecond past the last time_offset: no cadence means no next time offset to end on.
     assert ts.span_us == (0, 6_527_881_001)
 
@@ -73,17 +73,17 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     dataset = _dataset()
     shared_us = [0, 1_655_412_000, 6_486_006_000]
     series = (
-        TimeSeries.from_irregular([21.3, 21.4, 21.9], time_offsets_us=shared_us, spec=_spec(), signal="temp"),
-        TimeSeries.from_irregular([55.1, 55.3, 54.8], time_offsets_us=shared_us, spec=_spec(), signal="humidity"),
+        TimeSeries.from_irregular([21.3, 21.4, 21.9], time_offsets_us=shared_us, spec=_spec(), name="temp"),
+        TimeSeries.from_irregular([55.1, 55.3, 54.8], time_offsets_us=shared_us, spec=_spec(), name="humidity"),
         TimeSeries.from_values(
             np.arange(500, dtype=np.float32),
             spec=_spec("vib"),
-            signal="z",
+            name="z",
             time_axis=RegularAxis.from_rate_hz(500),
         ),
-        TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec("mach"), signal="hatch"),
+        TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec("mach"), name="hatch"),
     )
-    dataset.add_record(time_series=series)
+    dataset.add_record(record=Record(time_series=series))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
@@ -105,9 +105,9 @@ def test_series_sharing_time_offsets_each_store_their_own_copy(tmp_path):
     shared_us = [0, 5_000, 9_000]
     for signal in ("temp", "humidity"):
         dataset_series = TimeSeries.from_irregular(
-            [1.0, 2.0, 3.0], time_offsets_us=shared_us, spec=_spec(), signal=signal
+            [1.0, 2.0, 3.0], time_offsets_us=shared_us, spec=_spec(), name=signal
         )
-        dataset.add_record(time_series=(dataset_series,))
+        dataset.add_record(record=Record(time_series=(dataset_series,)))
     dataset.derive_schema()
 
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
@@ -120,9 +120,9 @@ def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
     dataset = _dataset()
     time_offsets = list(range(0, 4000 * 1000, 1000))
     ts = TimeSeries.from_irregular(
-        np.arange(4000, dtype=np.float32), time_offsets_us=time_offsets, spec=_spec(), signal="ibi"
+        np.arange(4000, dtype=np.float32), time_offsets_us=time_offsets, spec=_spec(), name="ibi"
     )
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     # 480 bytes per chunk => 40 steps per chunk at 12 bytes a step, so ~100 chunks.
@@ -134,9 +134,9 @@ def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
 
 def test_an_irregular_series_needs_its_time_offsets():
     with pytest.raises(TimeFValidationError, match="must carry time_offsets_loader"):
-        TimeSeries(
+        TimeSeries.from_loader(
             spec=_spec(),
-            signal="c",
+            name="c",
             time_axis=IrregularAxis(first_us=0, last_us=1),
             loader=lambda: None,
             n_values=2,
@@ -146,9 +146,9 @@ def test_an_irregular_series_needs_its_time_offsets():
 @pytest.mark.parametrize("axis", [RegularAxis.from_rate_hz(1), OrdinalAxis()])
 def test_only_an_irregular_series_may_carry_time_offsets(axis):
     with pytest.raises(TimeFValidationError, match="only for an IrregularAxis"):
-        TimeSeries(
+        TimeSeries.from_loader(
             spec=_spec(),
-            signal="c",
+            name="c",
             time_axis=axis,
             loader=lambda: None,
             time_offsets_loader=lambda: None,
@@ -158,7 +158,7 @@ def test_only_an_irregular_series_may_carry_time_offsets(axis):
 
 def test_time_offsets_must_match_the_value_count():
     with pytest.raises(TimeFValidationError, match="one time offset per value"):
-        TimeSeries.from_irregular([1.0, 2.0], time_offsets_us=[0, 1, 2], spec=_spec(), signal="c")
+        TimeSeries.from_irregular([1.0, 2.0], time_offsets_us=[0, 1, 2], spec=_spec(), name="c")
 
 
 def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
@@ -166,15 +166,15 @@ def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
     # the stream rather than trusting it.
     dataset = _dataset()
     values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    ts = TimeSeries(
+    ts = TimeSeries.from_loader(
         spec=_spec(),
-        signal="c",
+        name="c",
         time_axis=IrregularAxis(first_us=0, last_us=999),  # the stream ends at 20
         loader=lambda: pa.array(values),
         time_offsets_loader=lambda: pa.array(np.array([0, 10, 20], dtype=np.int64)),
         n_values=3,
     )
-    dataset.add_record(time_series=(ts,))
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError, match="its axis claims the stream runs"):
         _written(tmp_path, dataset)
@@ -186,8 +186,8 @@ def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes)
     # own byte width, so it needs the same rounding the values array does; without it every byte
     # target where the two do not divide aborts create_array.
     dataset = _dataset()
-    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
 
     version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
@@ -200,15 +200,17 @@ def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
     # time_offsets: mixing the two in one array would let the offsets drift apart silently.
     dataset = _dataset()
     dataset.add_record(
-        time_series=(
-            TimeSeries.from_values(
-                np.arange(8, dtype=np.float32),
-                spec=_spec(),
-                signal="steady",
-                time_axis=RegularAxis.from_rate_hz(2),
+        record=Record(
+            time_series=(
+                TimeSeries.from_values(
+                    np.arange(8, dtype=np.float32),
+                    spec=_spec(),
+                    name="steady",
+                    time_axis=RegularAxis.from_rate_hz(2),
+                ),
+                TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch"),
             ),
-            TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch"),
-        ),
+        )
     )
     dataset.derive_schema()
     version = _written(tmp_path, dataset, values_backend="zarr")
@@ -237,8 +239,8 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     # The writer verifies endpoints, but a corrupt shard could hand back a stream whose last time offset
     # no longer matches the axis. The reader re-checks on read and refuses it.
     dataset = _dataset()
-    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
     records_path = version_dir / "records/part-00000000.parquet"
@@ -255,8 +257,8 @@ def test_zarr_time_offsets_persist_the_delta_filter(tmp_path):
     # The time offsets array claims a Delta filter for its monotonic stream; confirm it lands in the
     # written zarr.json rather than trusting the create_array call that requested it.
     dataset = _dataset()
-    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), signal="hatch")
-    dataset.add_record(time_series=(ts,))
+    ts = TimeSeries.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(time_series=(ts,)))
     dataset.derive_schema()
     version = _written(tmp_path, dataset, values_backend="zarr")
 

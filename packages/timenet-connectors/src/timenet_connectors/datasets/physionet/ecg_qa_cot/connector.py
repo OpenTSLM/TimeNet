@@ -23,7 +23,7 @@ import hashlib
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -221,7 +221,9 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
 
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
-            record = dataset.add_record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            record = dataset.add_record(
+                record=Record(time_series=self._leads_for(ecg_id, record_base), record_id=f"ptbxl-{ecg_id}")
+            )
             record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
 
         dataset.register_annotations(self._metadata_annotations(question_types, template_ids, contexts, answers))
@@ -241,13 +243,13 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         header = self._read_header(record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
         return tuple(
-            TimeSeries(
+            TimeSeries.from_loader(
                 spec=_ECG,
-                signal=name,
+                name=name,
                 time_axis=axis,
                 loader=self._lead_loader(record_base, header, lead_idx),
                 source_id=f"ptbxl-{ecg_id}",
-                time_series_id=f"ecg-{ecg_id}-{name}",
+                id=f"ecg-{ecg_id}-{name}",
                 n_values=int(header.sig_len),
             )
             for lead_idx, name in enumerate(header.sig_name)
