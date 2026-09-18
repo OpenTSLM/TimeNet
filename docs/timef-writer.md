@@ -1,6 +1,6 @@
 ---
 icon: lucide/save
-description: "How TimeFWriter publishes DuckDB-backed TimeF v2 datasets."
+description: "How TimeFWriter publishes DuckDB-backed TimeF datasets."
 tags:
   - reference
   - writer
@@ -8,7 +8,7 @@ tags:
 
 # TimeFWriter
 
-`TimeFWriter` publishes one immutable TimeF v2 dataset version. It writes structural data and
+`TimeFWriter` publishes one immutable TimeF dataset version. It writes structural data and
 relationships to `control.duckdb`, sends Signal arrays to the selected values backend, and writes
 `manifest.json` last.
 
@@ -94,7 +94,7 @@ possible.
 
 ## Task streams
 
-A dataset can provide a re-iterable task source with `set_task_stream()`. The v2 writer consumes the
+A dataset can provide a re-iterable task source with `set_task_stream()`. The writer consumes the
 validated stream once while inserting task rows and object relationships. It retains task IDs and
 deferred dependency edges, not every Task object, so a large task corpus does not need to be
 materialized in Python.
@@ -104,4 +104,3 @@ materialized in Python.
 Pass `progress_cb` to receive `WriteProgressEvent` objects. Events report schema work, completed
 Signals, finalized value shards, and the final commit. The callback is observational: an exception
 from it aborts the write like any other failure.
-
