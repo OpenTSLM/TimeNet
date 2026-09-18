@@ -6,6 +6,7 @@ import pytest
 
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
+import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
@@ -51,7 +52,13 @@ def _dataset() -> TimeFDataset:
         )
     )
     dataset.add_record(record=record)
-    task = AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", targets=("Yes",))
+    task = AnswerTask(
+        id="task-1",
+        inputs=(record,),
+        prompt="Alive?",
+        targets=("Yes",),
+        input_annotations=(record.annotations[0],),
+    )
     task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
     dataset.add_task(task=task)
     return dataset
@@ -129,6 +136,42 @@ def test_control_relationships_use_integer_keys(tmp_path):
             assert row is not None
             (stored_type,) = row
             assert stored_type == "BIGINT", f"{table}.{column} stores {stored_type}"
+
+
+def test_control_writer_preserves_relationships_across_task_batches(tmp_path, monkeypatch):
+    dataset = _dataset()
+    record = dataset.records[0]
+    annotation = record.annotations[0]
+    parent = dataset.tasks[0]
+    for index in range(2, 7):
+        task = AnswerTask(
+            id=f"task-{index}",
+            inputs=(record,),
+            prompt=f"Question {index}?",
+            targets=(f"Answer {index}",),
+            input_annotations=(annotation,),
+            from_tasks=(parent,),
+        )
+        dataset.add_task(task=task)
+        parent = task
+    monkeypatch.setattr(control_writer_module, "_TASK_BATCH_SIZE", 2)
+    path = tmp_path / "control.duckdb"
+
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with connect_control(path, read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (6,)
+        assert connection.execute("SELECT count(*) FROM task_targets").fetchone() == (6,)
+        assert connection.execute("SELECT count(*) FROM task_record_refs").fetchone() == (6,)
+        assert connection.execute("SELECT count(*) FROM task_annotation_refs").fetchone() == (6,)
+        assert connection.execute("SELECT count(*) FROM task_dependencies").fetchone() == (5,)
+        assert connection.execute(
+            """SELECT parent.task_id, child.task_id
+               FROM task_dependencies dependencies
+               JOIN tasks child ON child.task_key = dependencies.task_key
+               JOIN tasks parent ON parent.task_key = dependencies.parent_task_key
+               WHERE child.task_id = 'task-3'"""
+        ).fetchone() == ("task-2", "task-3")
 
 
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
