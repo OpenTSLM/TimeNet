@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record, check_span_within_window
+from timenet.dataset.source import Source
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
@@ -51,19 +52,23 @@ class TimeFDataset:  # noqa: PLR0904
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def add_record(
+    def add_record(  # noqa: PLR0913 - transitional constructor and complete-object registration
         self,
         *,
-        time_series: tuple[TimeSeries, ...],
+        record: Record | None = None,
+        sources: tuple[Source, ...] = (),
+        time_series: tuple[TimeSeries, ...] = (),
         subject_ids: tuple[str, ...] = (),
         record_id: str | None = None,
         start_time: datetime | int | None = None,
         time_span: TimeInterval | None = None,
     ) -> Record:
-        """Create a record, register it, and return it.
+        """Register a complete record, or create one from sources or legacy flat series.
 
         Args:
-            time_series: The logical :class:`TimeSeries` streams that the record uses.
+            record: A complete record to register without rebuilding it.
+            sources: Root sources used to construct a new hierarchical record.
+            time_series: Legacy flat streams used to construct a record during migration.
             subject_ids: The subjects that this record belongs to. The tuple is empty for
                 domains that have no subjects.
             record_id: An explicit ID. The default is an automatically generated uuid4 value.
@@ -77,38 +82,46 @@ class TimeFDataset:  # noqa: PLR0904
                 series window.
 
         Returns:
-            The newly created :class:`Record`.
+            The registered :class:`Record`. When ``record`` is given, this is the same instance.
 
         Raises:
-            TimeFValidationError: This error occurs if ``time_series`` is empty, or if two series
-                share the same ``time_series_id`` value. The ids must be distinct. The writer uses
-                the ids as shard keys, and :meth:`Record.add_annotation` and :meth:`add_task` both
-                resolve references by these ids. So a repeated id silently merges two signals
-                into one.
+            TimeFValidationError: If the call mixes ``record`` with construction arguments, creates
+                an empty record, repeats a signal ID, or registers a duplicate record ID.
         """
-        if not time_series:
-            raise TimeFValidationError("add_record requires a non-empty time_series")
-        series_ids = [ts.time_series_id for ts in time_series]
+        construction_requested = bool(sources or time_series or subject_ids or record_id or start_time or time_span)
+        if record is not None and construction_requested:
+            raise TimeFValidationError("add_record accepts record= or construction fields, not both")
+        if record is None and not sources and not time_series:
+            raise TimeFValidationError("add_record requires record=, sources=, or legacy time_series=")
+        series_ids = [signal.id for signal in record.signals] if record is not None else [ts.id for ts in time_series]
         if len(set(series_ids)) != len(series_ids):
             duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
-            raise TimeFValidationError(f"add_record requires distinct time_series_ids, got duplicates {duplicates}")
-        if record_id is None:
-            record = Record(
+            raise TimeFValidationError(
+                f"add_record requires distinct time_series_ids (signal IDs), got duplicates {duplicates}"
+            )
+        if record is not None:
+            registered = record
+        elif record_id is None:
+            registered = Record(
+                sources=tuple(sources),
                 time_series=tuple(time_series),
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
                 time_span=time_span,
             )
         else:
-            record = Record(
+            registered = Record(
                 record_id=record_id,
+                sources=tuple(sources),
                 time_series=tuple(time_series),
                 subject_ids=tuple(subject_ids),
                 start_time=start_time,
                 time_span=time_span,
             )
-        self._records.append(record)
-        return record
+        if any(existing.record_id == registered.record_id for existing in self._records):
+            raise TimeFValidationError(f"record id {registered.record_id!r} is already registered")
+        self._records.append(registered)
+        return registered
 
     def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
         """Register a task and link it to its records.

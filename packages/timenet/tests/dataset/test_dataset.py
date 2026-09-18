@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import (
@@ -45,6 +45,24 @@ def test_add_record_registers_and_returns(make_series):
     assert isinstance(record, Record)
     assert ds.records == (record,)
     assert record.subject_ids == ("p1",)
+
+
+def test_add_record_accepts_a_complete_hierarchy(make_series):
+    signal = make_series(time_series_id="signal")
+    source = Source(id="source", name="Device", signals=(signal,))
+    record = Record(record_id="record", sources=(source,))
+    dataset = _dataset()
+
+    assert dataset.add_record(record=record) is record
+    assert dataset.records == (record,)
+
+
+def test_add_record_rejects_a_complete_record_mixed_with_construction_fields(make_series):
+    record = Record(record_id="record", sources=(Source(id="source", name="Device"),))
+    dataset = _dataset()
+
+    with pytest.raises(TimeFValidationError, match="record= or construction fields"):
+        dataset.add_record(record=record, time_series=(make_series(),))
 
 
 def test_add_record_rejects_empty_time_series():
