@@ -1,9 +1,9 @@
-"""uuid7 default ids are stored as binary(16) and round-trip back to canonical strings."""
+"""IDs use canonical strings in DuckDB and round-trip without changing their values."""
 
 import uuid
 
+import duckdb
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
@@ -86,17 +86,12 @@ def test_manifest_has_no_id_encoding(tmp_path):
     assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
 
 
-def test_uuid_id_columns_are_binary16_on_disk(tmp_path):
+def test_uuid_id_columns_are_varchar_in_control_database(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset())
-    records = pq.read_table(version_dir / "records/part-00000000.parquet").schema
-    assert records.field("record_id").type == pa.binary(16)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").schema
-    assert index.field("record_id").type == pa.binary(16)
-    assert index.field("time_series_id").type == pa.binary(16)
-    shard = next(version_dir.glob("time_series/part-*.parquet"))
-    assert pq.read_table(shard).schema.field("time_series_id").type == pa.binary(16)
-    annotations = pq.read_table(version_dir / "annotations/part-00000000.parquet").schema
-    assert annotations.field("id").type == pa.binary(16)
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        assert connection.execute("SELECT typeof(record_id) FROM records").fetchone() == ("VARCHAR",)
+        assert connection.execute("SELECT typeof(signal_id) FROM signals").fetchone() == ("VARCHAR",)
+        assert connection.execute("SELECT typeof(content_id) FROM annotation_contents").fetchone() == ("VARCHAR",)
 
 
 def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
@@ -188,14 +183,14 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     assert task.scope == scope
 
 
-def test_non_uuid_ids_stay_string(tmp_path):
+def test_non_uuid_ids_round_trip_without_conversion(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset(record_id="record-0"))
-    records = pq.read_table(version_dir / "records/part-00000000.parquet").schema
-    assert records.field("record_id").type == pa.string()
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader.read().records[0].record_id == "record-0"
 
 
-def test_span_series_ids_round_trip_as_binary16(tmp_path):
-    """A span nests time_series ids inside a struct column; they encode like any other id column."""
+def test_span_series_ids_round_trip(tmp_path):
+    """A span keeps nested Signal IDs through the normalized task representation."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/uuid-test",
@@ -218,10 +213,6 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-
-    partition = version_dir / "tasks/task=classification/part-00000000.parquet"
-    scope_type = pq.read_table(partition).schema.field("scope").type
-    assert scope_type.field("time_series_ids").type == pa.list_(pa.binary(16))
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}

@@ -69,7 +69,6 @@ CREATE TABLE signals (
     value_shape JSON NOT NULL,
     dimension_names JSON NOT NULL,
     nullable BOOLEAN NOT NULL,
-    data_source JSON,
     n_values BIGINT NOT NULL CHECK (n_values > 0),
     metadata JSON NOT NULL
 );
