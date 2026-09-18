@@ -175,7 +175,6 @@ class TimeFReader:
         if self._control is None:
             self._control = DuckDBControlReader(
                 materialize_control(self._version),
-                value_loader=self._load_signal,
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
             )
@@ -193,17 +192,18 @@ class TimeFReader:
             self._values = make_values_reader(self._manifest.values_backend)
         return self._values
 
-    def _load_signal(self, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
+    def _load_signal(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
         """Load all values for one Signal.
 
         Returns:
             The complete canonical Arrow array.
         """
-        rows = self._control_reader().chunk_rows(signal_id)
+        rows = self._control_reader().chunk_rows_by_key(signal_key, signal_id)
         return self._values_reader().load(self._version, rows, spec)
 
     def _load_signal_range(
         self,
+        signal_key: int,
         signal_id: str,
         spec: TimeSeriesSpec,
         start: int,
@@ -214,20 +214,20 @@ class TimeFReader:
         Returns:
             The requested canonical Arrow values.
         """
-        rows = self._control_reader().chunk_rows(signal_id)
+        rows = self._control_reader().chunk_rows_by_key(signal_key, signal_id)
         return self._values_reader().load_range(self._version, rows, start, stop, spec)
 
-    def _make_signal_loader(self, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
+    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
         """Return a picklable, range-aware Signal loader."""
-        return _SignalLoader(self, signal_id, spec)
+        return _SignalLoader(self, signal_key, signal_id, spec)
 
-    def _load_offsets(self, axis_id: str) -> pa.Array:
+    def _load_offsets(self, axis_key: int, axis_id: str) -> pa.Array:
         """Load the stored offsets for one irregular TimeAxis.
 
         Returns:
             The axis offsets in microseconds.
         """
-        return self._control_reader().load_axis_offsets(axis_id)
+        return self._control_reader().load_axis_offsets_by_key(axis_key, axis_id)
 
     @contextmanager
     def _as_format_error(self, *, preserve_validation: bool = False) -> Iterator[None]:
@@ -258,6 +258,7 @@ class _SignalLoader:
     """Picklable values loader for one DuckDB-indexed Signal."""
 
     reader: TimeFReader
+    signal_key: int
     signal_id: str
     spec: TimeSeriesSpec
 
@@ -267,7 +268,7 @@ class _SignalLoader:
         Returns:
             The complete canonical Arrow array.
         """
-        return self.reader._load_signal(self.signal_id, self.spec)
+        return self.reader._load_signal(self.signal_key, self.signal_id, self.spec)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Load a half-open Signal step range.
@@ -275,4 +276,4 @@ class _SignalLoader:
         Returns:
             The requested canonical Arrow values.
         """
-        return self.reader._load_signal_range(self.signal_id, self.spec, start, stop)
+        return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
