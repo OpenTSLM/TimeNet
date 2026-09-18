@@ -261,9 +261,11 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
     ecg = records["ecg"]
     for index in range(1, 8 * scale):
         record = dataset.add_record(
-            time_series=ecg.time_series,
-            record_id=f"record-ecg-question-{index:03d}",
-            subject_ids=("subject-ecg",),
+            record=Record(
+                time_series=ecg.time_series,
+                record_id=f"record-ecg-question-{index:03d}",
+                subject_ids=("subject-ecg",),
+            )
         )
         record.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
@@ -292,7 +294,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             )
             for signal in range(signal_count)
         )
-        record = dataset.add_record(time_series=series, record_id=f"record-tsqa-{index:04d}")
+        record = dataset.add_record(record=Record(time_series=series, record_id=f"record-tsqa-{index:04d}"))
         record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             record,
@@ -316,7 +318,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             time_series_id=f"mean-series-{index:04d}",
             n_values=len(values),
         )
-        record = dataset.add_record(time_series=(series,), record_id=f"record-mean-{index:04d}")
+        record = dataset.add_record(record=Record(time_series=(series,), record_id=f"record-mean-{index:04d}"))
         record.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             record,
@@ -359,9 +361,11 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             dimension_names=dimensions,
         )
         record = dataset.add_record(
-            time_series=(tensor(values, spec, name),),
-            record_id=f"record-rich-{name}",
-            subject_ids=(f"subject-rich-{name}",),
+            record=Record(
+                time_series=(tensor(values, spec, name),),
+                record_id=f"record-rich-{name}",
+                subject_ids=(f"subject-rich-{name}",),
+            )
         )
         record.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
@@ -378,9 +382,11 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
         _nonfloat_series(name, dtype, values, scale, categories=cats) for name, dtype, values, cats in signals
     )
     record = dataset.add_record(
-        time_series=series,
-        record_id="record-nonfloat",
-        subject_ids=("subject-nonfloat",),
+        record=Record(
+            time_series=series,
+            record_id="record-nonfloat",
+            subject_ids=("subject-nonfloat",),
+        )
     )
     record.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
 
@@ -421,9 +427,11 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             for signal_index, signal in enumerate(scenario.signals)
         )
         record = dataset.add_record(
-            time_series=series,
-            record_id=f"record-{scenario.name}",
-            subject_ids=(f"subject-{scenario.name}",),
+            record=Record(
+                time_series=series,
+                record_id=f"record-{scenario.name}",
+                subject_ids=(f"subject-{scenario.name}",),
+            )
         )
         annotations = [
             Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),

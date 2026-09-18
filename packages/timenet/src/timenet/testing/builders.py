@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -122,10 +122,12 @@ def make_dataset() -> TimeFDataset:
     cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
     record0 = dataset.add_record(
-        time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
-        subject_ids=("subj-0",),
-        record_id="record-0",
-        start_time=9_007_199_254_740_993,  # anchored record, the other records stay unanchored
+        record=Record(
+            time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
+            subject_ids=("subj-0",),
+            record_id="record-0",
+            start_time=9_007_199_254_740_993,  # anchored record, the other records stay unanchored
+        )
     )
     record0.add_annotations(
         [
@@ -166,14 +168,16 @@ def make_dataset() -> TimeFDataset:
     )
 
     record1 = dataset.add_record(
-        time_series=(shared, _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0)),
-        subject_ids=("subj-1",),
-        record_id="record-1",
+        record=Record(
+            time_series=(shared, _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0)),
+            subject_ids=("subj-1",),
+            record_id="record-1",
+        )
     )
-    record1.add_annotation(cohort)  # same instance and id, so two records share it
+    record1.add_annotation(cohort)  # A new occurrence shares the cohort content across both records.
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
-    record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+    record2 = dataset.add_record(record=Record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2"))
     dataset.add_task(
         record2,
         ClassificationTask(
