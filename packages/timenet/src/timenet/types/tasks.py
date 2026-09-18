@@ -16,14 +16,16 @@ from the manifest. Tasks are mutable, so :meth:`~timenet.dataset.TimeFDataset.ad
 ``record_ids`` after construction.
 """
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import pint
 
 from timenet.errors import TimeFValidationError
+from timenet.types.annotations import Annotation
 from timenet.types.ids import new_id
 from timenet.types.spans import (
     Span,
@@ -34,6 +36,11 @@ from timenet.types.spans import (
     TimeSpan,
 )
 from timenet.types.units import normalize_unit
+
+
+if TYPE_CHECKING:
+    from timenet.dataset.record import Record
+    from timenet.dataset.time_series import Signal
 
 
 @unique
@@ -83,15 +90,18 @@ class TaskRefs:
 
 
 @dataclass(kw_only=True)
-class Task:
+class Task(ABC):
     """Base for all tasks. You do not construct it directly. Each subclass declares ``task_type`` and an answer type.
 
     It holds everything that is the same across task types. So generic code (training loops, the writer,
     the editor) can read a task without its concrete type.
     """
 
-    task_type: ClassVar[TaskType]
-    """The subclass's stable type tag. Deliberately absent here: the base is not a task."""
+    @property
+    @abstractmethod
+    def task_type(self) -> TaskType:
+        """Return the concrete task's stable storage tag."""
+
     refs: ClassVar[TaskRefs] = TaskRefs()
     """Which payload fields hold record ids or spans (see :class:`TaskRefs`)."""
     answer_fields: ClassVar[tuple[str, ...]] = ("target",)
@@ -104,24 +114,44 @@ class Task:
 
     id: str = field(default_factory=new_id)
     """Unique task identifier, a UUIDv7 string by default."""
+    inputs: tuple["Record", ...] = field(default=(), compare=False)
+    """Records supplied to the model. The storage layer persists their stable IDs."""
     record_ids: tuple[str, ...] = ()
-    """Ids of the records this task is about. ``add_task`` sets them."""
+    """Transitional stored-ID projection. New code uses :attr:`inputs`."""
     prompt: str | None = None
     """What the model is asked, when the task is prompted. ``None`` for an unprompted task."""
     scope: Span | None = None
     """The region of the input the task is about. ``None`` means the whole record."""
     input_annotation_ids: tuple[str, ...] = ()
     """Annotations given to the model as context, not ones it must produce."""
+    input_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    """Context annotations as in-memory object references."""
     target: object | None = None
     """The answer, typed by the subclass. ``None`` when the answer is stored by reference, or produced
     as a series (see ``answer_is_record``)."""
     target_annotation_ids: tuple[str, ...] = ()
     """The answer by reference: it is these stored annotations, not an inline copy of them. It is
     exclusive with ``target``. :meth:`~timenet.dataset.TimeFDataset.add_task` enforces that."""
+    target_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    """Target annotations as in-memory object references."""
     rationale: str | None = None
     """Chain of thought to train on. Any task can carry one. ``None`` when the source stores none."""
     from_tasks: tuple["Task", ...] = ()
     """Source tasks this one was derived from."""
+    annotations: tuple[Annotation, ...] = ()
+    """Annotations attached to this task."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible task metadata."""
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach an annotation occurrence to this task.
+
+        Returns:
+            The attached occurrence.
+        """
+        attached = annotation._new_occurrence()
+        self.annotations = (*self.annotations, attached)
+        return attached
 
     @property
     def from_task_ids(self) -> tuple[str, ...]:
@@ -150,7 +180,7 @@ class Task:
                 found.extend(value)
         return tuple(found)
 
-    def check_against_scope(self) -> None:
+    def check_against_scope(self) -> None:  # noqa: B027 - optional subclass validation hook
         """Validate payload that depends on the task's finalized ``scope``.
 
         :meth:`~timenet.dataset.TimeFDataset.add_task` calls this after stamping any ``scope=`` passed
@@ -274,9 +304,13 @@ class ForecastingTask(Task):
     answer_is_record: ClassVar[bool] = True
     context_record_ids: tuple[str, ...] = ()
     """Ids of the records that provide forecasting context."""
+    context_records: tuple["Record", ...] = field(default=(), compare=False)
+    """Records that provide forecasting context."""
     target_record_id: str | None = None
     """Id of the record whose future values the task predicts. ``None`` when ``target_span`` names the
     region to predict in the attached record instead."""
+    target_record: "Record | None" = field(default=None, compare=False)
+    """The record whose values form the forecasting target."""
     target_span: TimeInterval | StepInterval | None = None
     """The region to predict, inside the record the task is attached to. It is an interval, not a point
     (the type says so), and it is exclusive with ``target_record_id``. It is in the same frame as
@@ -302,6 +336,15 @@ class ForecastingTask(Task):
                 runs once ``add_task`` has stamped any ``scope=``, and also here when the task is built
                 with its own ``scope``.
         """
+        if self.context_records:
+            object_ids = tuple(record.id for record in self.context_records)
+            if self.context_record_ids and self.context_record_ids != object_ids:
+                raise TimeFValidationError("ForecastingTask context_records and context_record_ids disagree")
+            self.context_record_ids = object_ids
+        if self.target_record is not None:
+            if self.target_record_id is not None and self.target_record_id != self.target_record.id:
+                raise TimeFValidationError("ForecastingTask target_record and target_record_id disagree")
+            self.target_record_id = self.target_record.id
         if self.target_span is None:
             if self.target_record_id is None:
                 raise TimeFValidationError(
@@ -415,10 +458,31 @@ class TSEditingTask(Task):
     task_type: ClassVar[TaskType] = TaskType.TS_EDITING
     refs: ClassVar[TaskRefs] = TaskRefs(record_id_fields=("source_record_id", "target_record_id"))
     answer_is_record: ClassVar[bool] = True
-    source_record_id: str
+    source_record_id: str | None = None
     """Id of the record to edit."""
-    target_record_id: str
+    source_record: "Record | None" = field(default=None, compare=False)
+    """The record to edit."""
+    target_record_id: str | None = None
     """Id of the record that holds the edited result."""
+    target_record: "Record | None" = field(default=None, compare=False)
+    """The record that holds the edited result."""
+
+    def __post_init__(self) -> None:
+        """Resolve object references and require both sides of the edit.
+
+        Raises:
+            TimeFValidationError: If object and ID forms disagree or either record is missing.
+        """
+        if self.source_record is not None:
+            if self.source_record_id is not None and self.source_record_id != self.source_record.id:
+                raise TimeFValidationError("TSEditingTask source_record and source_record_id disagree")
+            self.source_record_id = self.source_record.id
+        if self.target_record is not None:
+            if self.target_record_id is not None and self.target_record_id != self.target_record.id:
+                raise TimeFValidationError("TSEditingTask target_record and target_record_id disagree")
+            self.target_record_id = self.target_record.id
+        if self.source_record_id is None or self.target_record_id is None:
+            raise TimeFValidationError("TSEditingTask requires source_record and target_record")
 
 
 @dataclass(kw_only=True)
@@ -428,8 +492,23 @@ class TSGenerationTask(Task):
     task_type: ClassVar[TaskType] = TaskType.TS_GENERATION
     refs: ClassVar[TaskRefs] = TaskRefs(record_id_fields=("target_record_id",))
     answer_is_record: ClassVar[bool] = True
-    target_record_id: str
+    target_record_id: str | None = None
     """Id of the record that holds the series to generate."""
+    target_record: "Record | None" = field(default=None, compare=False)
+    """The record that holds the series to generate."""
+
+    def __post_init__(self) -> None:
+        """Resolve the target object and require a generated record.
+
+        Raises:
+            TimeFValidationError: If object and ID forms disagree or neither is provided.
+        """
+        if self.target_record is not None:
+            if self.target_record_id is not None and self.target_record_id != self.target_record.id:
+                raise TimeFValidationError("TSGenerationTask target_record and target_record_id disagree")
+            self.target_record_id = self.target_record.id
+        if self.target_record_id is None:
+            raise TimeFValidationError("TSGenerationTask requires target_record")
 
 
 @dataclass(kw_only=True)
@@ -449,11 +528,17 @@ class TSCorrespondenceTask(Task):
     answer_fields: ClassVar[tuple[str, ...]] = ("target", "target_time_series_ids")
     candidate_record_ids: tuple[str, ...] = ()
     """Ids of the records that supply the answer. Empty means the pool has no limit."""
+    candidate_records: tuple["Record", ...] = field(default=(), compare=False)
+    """Records that supply the answer. Empty means the pool has no limit."""
     target: tuple[str, ...] | None = None
     """Ids of the corresponding record(s), which must be in ``candidate_record_ids`` when it is set."""
+    target_records: tuple["Record", ...] | None = field(default=None, compare=False)
+    """The corresponding record objects."""
     target_time_series_ids: tuple[str, ...] | None = None
     """Ids of the corresponding series, when the answer names signals rather than whole records (for
     example "which signals correlate with X"). Each id must resolve to a series on the task's records."""
+    target_signals: tuple["Signal", ...] | None = field(default=None, compare=False)
+    """The corresponding signal objects when the answer is signal-level."""
 
     def __post_init__(self) -> None:
         """Reject an empty ``target``/``target_time_series_ids``, or a ``target`` outside the pool.
@@ -462,6 +547,21 @@ class TSCorrespondenceTask(Task):
             TimeFValidationError: If ``target`` or ``target_time_series_ids`` is ``()`` rather than
                 ``None`` or non-empty. Also if ``target`` names a record the candidate pool lacks.
         """
+        if self.candidate_records:
+            object_ids = tuple(record.id for record in self.candidate_records)
+            if self.candidate_record_ids and self.candidate_record_ids != object_ids:
+                raise TimeFValidationError("TSCorrespondenceTask candidate_records and candidate_record_ids disagree")
+            self.candidate_record_ids = object_ids
+        if self.target_records is not None:
+            object_ids = tuple(record.id for record in self.target_records)
+            if self.target is not None and self.target != object_ids:
+                raise TimeFValidationError("TSCorrespondenceTask target_records and target disagree")
+            self.target = object_ids
+        if self.target_signals is not None:
+            object_ids = tuple(signal.id for signal in self.target_signals)
+            if self.target_time_series_ids is not None and self.target_time_series_ids != object_ids:
+                raise TimeFValidationError("TSCorrespondenceTask target_signals and target_time_series_ids disagree")
+            self.target_time_series_ids = object_ids
         if self.target is not None and not self.target:
             raise TimeFValidationError(
                 "TSCorrespondenceTask target must be None (answer stored by reference) or non-empty, got ()"
@@ -515,6 +615,7 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
     """
     registry: dict[TaskType, type[Task]] = {}
     for cls in classes if classes is not None else _concrete_task_classes():
+        task_type = cast("TaskType", cls.task_type)
         fields = set(cls.__dataclass_fields__)
         declared = set(cls.refs.record_id_fields) | set(cls.refs.span_fields)
         unknown = declared - fields
@@ -524,11 +625,11 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
         missing = record_id_fields - set(cls.refs.record_id_fields)
         if missing:
             raise TimeFValidationError(f"{cls.__name__}.refs.record_id_fields omits record-id fields {sorted(missing)}")
-        if cls.task_type in registry:
+        if task_type in registry:
             raise TimeFValidationError(
-                f"both {registry[cls.task_type].__name__} and {cls.__name__} claim task_type {cls.task_type!r}"
+                f"both {registry[task_type].__name__} and {cls.__name__} claim task_type {task_type!r}"
             )
-        registry[cls.task_type] = cls
+        registry[task_type] = cls
     return registry
 
 
