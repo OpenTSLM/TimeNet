@@ -53,18 +53,17 @@ def _manifest() -> Manifest:
         schema=schema,
         counts=ManifestCounts(
             records=2,
-            annotations=4,
+            sources=2,
+            signals=2,
+            axes=1,
+            annotation_contents=3,
+            annotation_occurrences=4,
             tasks={"classification": 2},
-            time_series_chunks=3,
-            time_series_index_rows=3,
-            time_series_specs={"ecg": 2},
+            signal_chunks=3,
+            signals_by_spec={"ecg": 2},
         ),
         files=ManifestFiles(
             control=(FilePart("control.duckdb", "sha256:" + "0" * 64, 5),),
-            records=(FilePart("records.parquet", "sha256:" + "a" * 64, 10),),
-            annotations=(FilePart("annotations.parquet", "sha256:" + "b" * 64, 20),),
-            time_series_index=(FilePart("time_series_index.parquet", "sha256:" + "c" * 64, 30),),
-            tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:" + "d" * 64, 40),),
             time_series=(FilePart("time_series/part-00000.parquet", "sha256:" + "e" * 64, 50),),
         ),
     )
@@ -85,7 +84,7 @@ def test_to_dict_validates_against_schema():
         lambda d: d.update(timef_format_version=99),  # not the pinned const
         lambda d: d["schema"].update(tasks=[{"task_type": "nope"}]),  # unknown task_type
         lambda d: d["schema"]["annotations"][0].update(annotation_type="sideways"),  # bad annotation_type
-        lambda d: d["files"].update(records="single.parquet"),  # a bare string, not a list of parts
+        lambda d: d["files"].update(control="control.duckdb"),  # a bare string, not a list of parts
         lambda d: d["metadata"].update(license="Nope"),  # unknown license
     ],
 )
