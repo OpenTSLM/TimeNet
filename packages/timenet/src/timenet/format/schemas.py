@@ -9,20 +9,17 @@ string ids.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import cast
 
 import pyarrow as pa
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.types import (
-    TASKS,
     Span,
     StepInterval,
     StepPoint,
     StepSpan,
-    TaskRefs,
-    TaskType,
     TimeInterval,
     TimePoint,
     TimeSpan,
@@ -229,107 +226,6 @@ def span_struct(id_types: IdTypes) -> pa.DataType:
     )
 
 
-def _task_common(id_types: IdTypes) -> list[tuple[str, pa.DataType]]:
-    return [
-        ("id", id_types["task_id"]),
-        ("record_ids", pa.list_(id_types["record_id"])),
-        ("from_task_ids", pa.list_(id_types["task_id"])),
-        ("prompt", pa.string()),
-        ("scope", span_struct(id_types)),
-        ("input_annotation_ids", pa.list_(id_types["annotation_id"])),
-        ("target_annotation_ids", pa.list_(id_types["annotation_id"])),
-        ("rationale", pa.string()),
-    ]
-
-
-# Names of the columns every task partition shares, regardless of task type. The writer's row builder
-# and the reader's payload split both read this one source, so the two copies stay in lockstep.
-TASK_COMMON_NAMES: tuple[str, ...] = (
-    "id",
-    "record_ids",
-    "from_task_ids",
-    "prompt",
-    "scope",
-    "input_annotation_ids",
-    "target_annotation_ids",
-    "rationale",
-)
-
-
-def _task_payload(id_types: IdTypes) -> dict[TaskType, list[tuple[str, pa.DataType]]]:
-    return {
-        TaskType.CLASSIFICATION: [("target", pa.string()), ("target_schema", pa.string())],
-        TaskType.ANSWER: [("target", pa.string())],
-        TaskType.SCALAR_PREDICTION: [
-            ("target", pa.float64()),
-            ("unit", pa.string()),
-            ("target_name", pa.string()),
-        ],
-        TaskType.TEMPORAL_LOCALIZATION: [
-            ("target", pa.list_(span_struct(id_types))),
-            ("mode", pa.string()),
-        ],
-        TaskType.FORECASTING: [
-            ("context_record_ids", pa.list_(id_types["record_id"])),
-            ("target_record_id", id_types["record_id"]),
-            ("target_span", span_struct(id_types)),
-        ],
-        TaskType.TS_EDITING: [
-            ("source_record_id", id_types["record_id"]),
-            ("target_record_id", id_types["record_id"]),
-        ],
-        TaskType.TS_GENERATION: [("target_record_id", id_types["record_id"])],
-        TaskType.TS_CORRESPONDENCE: [
-            ("candidate_record_ids", pa.list_(id_types["record_id"])),
-            ("target", pa.list_(id_types["record_id"])),
-            ("target_time_series_ids", pa.list_(id_types["time_series_id"])),
-        ],
-    }
-
-
-def task_schema(task_type: TaskType, id_types: IdTypes | None = None) -> pa.Schema:
-    """Return the Arrow schema for one task partition.
-
-    Args:
-        task_type: The task type whose partition schema to build.
-        id_types: The resolved id storage types (defaults to all-``string``). The reader passes none,
-            because it only reads the column names.
-
-    Returns:
-        The Arrow schema (common columns plus the type's payload columns).
-
-    Raises:
-        TimeFValidationError: If the task dataclass payload and its Arrow schema have drifted.
-    """
-    resolved = id_types if id_types is not None else default_id_types()
-    schema = pa.schema(_task_common(resolved) + _task_payload(resolved)[task_type])
-    cls = TASKS[task_type]
-    non_payload = {
-        *TASK_COMMON_NAMES,
-        "from_tasks",
-        "inputs",
-        "input_annotations",
-        "target_annotations",
-        "annotations",
-        "metadata",
-        "context_records",
-        "target_record",
-        "source_record",
-        "candidate_records",
-        "target_records",
-        "target_signals",
-    }
-    expected = {field.name for field in fields(cls)} - non_payload
-    if cls.answer_is_record:
-        expected.discard("target")
-    actual = set(schema.names) - set(TASK_COMMON_NAMES)
-    if expected != actual:
-        raise TimeFValidationError(
-            f"{cls.__name__} payload fields {sorted(expected)} do not match its Arrow schema fields {sorted(actual)}"
-        )
-    return schema
-
-
 @dataclass(frozen=True)
 class IdCodec:
     """Convert ids between their in-memory strings and their on-disk form.
@@ -369,9 +265,9 @@ class IdCodec:
     def encode(self, logical: str, value: object) -> object:
         """Encode one id to 16 raw bytes for a ``uuid16`` column, else pass it through unchanged.
 
-        A reference id outside the entity id space (for example, a ``ForecastingTask.target_record_id``
-        that names no record) raises a contextual :class:`TimeFValidationError` naming the column and
-        value. This makes the writer fail legibly even if referential validation is bypassed.
+        A reference ID outside the entity ID space raises a contextual
+        :class:`TimeFValidationError` naming the column and value. This makes the writer fail legibly
+        even if referential validation is bypassed.
 
         Args:
             logical: The logical id the column holds (for example, ``"record_id"``).
@@ -435,32 +331,6 @@ class IdCodec:
             "time_series_ids": series_ids,
             "frame": span.frame,
         }
-
-    def encode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
-        """Encode a task payload cell holding ids or spans, leaving plain payload untouched.
-
-        Args:
-            refs: The owning task class's reference declaration.
-            name: The payload column name.
-            value: The (already list-normalized) cell value.
-
-        Returns:
-            The encoded value.
-        """
-        if value is None:
-            return value
-        if name in refs.span_fields:
-            if isinstance(value, Span):
-                return self.encode_span(value)
-            return [self.encode_span(span) for span in cast("list[Span]", value)]
-        logical = None
-        if name in refs.record_id_fields:
-            logical = "record_id"
-        elif name in refs.time_series_id_fields:
-            logical = "time_series_id"
-        if logical is None or logical not in self.uuid16:
-            return value
-        return self.encode_list(logical, value) if isinstance(value, list) else self.encode(logical, value)
 
     def decode(self, logical: str, value: object) -> str:
         """Decode one required id, turning 16 raw bytes back into a canonical string for ``uuid16``.
@@ -534,31 +404,3 @@ class IdCodec:
         if end is None:
             return TimePoint(start_us=start, time_series_ids=time_series_ids)
         return TimeInterval(start_us=start, end_us=end, time_series_ids=time_series_ids)
-
-    def decode_payload(self, refs: TaskRefs, name: str, value: object) -> object:
-        """Decode a task payload cell holding ids or spans, leaving plain payload untouched.
-
-        Args:
-            refs: The owning task class's reference declaration.
-            name: The payload column name.
-            value: The (already tuple-normalized) cell value.
-
-        Returns:
-            The decoded value.
-        """
-        if value is None:
-            return value
-        if name in refs.span_fields:
-            if isinstance(value, tuple):
-                return tuple(self.decode_span(row) for row in value)
-            return self.decode_span(value)
-        logical = None
-        if name in refs.record_id_fields:
-            logical = "record_id"
-        elif name in refs.time_series_id_fields:
-            logical = "time_series_id"
-        if logical is None or logical not in self.uuid16:
-            return value
-        if isinstance(value, tuple):
-            return tuple(self.decode(logical, item) for item in value)
-        return self.decode(logical, value)

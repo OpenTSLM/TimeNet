@@ -51,7 +51,7 @@ def _dataset() -> TimeFDataset:
         )
     )
     dataset.add_record(record=record)
-    task = AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", target="Yes")
+    task = AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", targets=("Yes",))
     task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
     dataset.add_task(task=task)
     return dataset
@@ -69,7 +69,12 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
         assert connection.execute("SELECT task_type, prompt, payload FROM tasks").fetchone() == (
             "answer",
             "Alive?",
-            '{"target":"Yes"}',
+            "{}",
+        )
+        assert connection.execute("SELECT position, target_kind, text_value FROM task_targets").fetchone() == (
+            0,
+            "text",
+            "Yes",
         )
         assert connection.execute("SELECT field, record_id FROM task_record_refs").fetchone() == (
             "inputs",

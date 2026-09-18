@@ -107,9 +107,28 @@ CREATE TABLE tasks (
     task_type VARCHAR NOT NULL,
     prompt VARCHAR,
     scope JSON,
+    has_inline_targets BOOLEAN NOT NULL,
     payload JSON NOT NULL,
     rationale VARCHAR,
     metadata JSON NOT NULL
+);
+
+CREATE SEQUENCE target_key_sequence START 1;
+
+CREATE TABLE task_targets (
+    target_key BIGINT NOT NULL DEFAULT nextval('target_key_sequence'),
+    task_id VARCHAR NOT NULL,
+    position BIGINT NOT NULL,
+    target_kind VARCHAR NOT NULL,
+    text_value VARCHAR,
+    integer_value BIGINT,
+    float_value DOUBLE,
+    boolean_value BOOLEAN,
+    record_id VARCHAR,
+    signal_id VARCHAR,
+    span_start BIGINT,
+    span_end BIGINT,
+    span_signal_ids JSON
 );
 
 CREATE TABLE task_record_refs (
