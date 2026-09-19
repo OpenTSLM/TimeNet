@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: uci/har
+dataset_version: 1.0.0
+name: Human Activity Recognition Using Smartphones
+description: >-
+  Nine 50 Hz smartphone inertial signals in fixed 2.56-second windows, with one of six
+  human-activity labels for each window.
+license: CC-BY-4.0
+license_url: https://archive.ics.uci.edu/dataset/240/human+activity+recognition+using+smartphones
+domains:
+  - activity
+  - motion
+tags:
+  - activity-recognition
+  - accelerometer
+  - gyroscope
+  - inertial
+  - smartphone
+source_url: https://archive.ics.uci.edu/dataset/240/human+activity+recognition+using+smartphones
