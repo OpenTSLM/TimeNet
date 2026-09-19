@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: uci/pamap2
+dataset_version: 1.0.0
+name: PAMAP2 Physical Activity Monitoring
+description: Native 100 Hz multi-sensor activity-monitoring recordings with source timestamps and labels.
+license: CC-BY-4.0
+license_url: https://archive.ics.uci.edu/dataset/231/pamap2+physical+activity+monitoring
+domains: [activity, health, motion]
+tags: [activity-recognition, accelerometer, gyroscope, wearable]
+source_url: https://archive.ics.uci.edu/dataset/231/pamap2+physical+activity+monitoring
