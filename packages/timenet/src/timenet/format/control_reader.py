@@ -359,13 +359,8 @@ class DuckDBControlReader:
             for key, signal_id in self.connection.execute("SELECT signal_key, signal_id FROM signals").fetchall()
             if signal_id in signals_by_id
         }
-        annotations = self._read_annotations()
-        annotations_by_occurrence = {
-            annotation.occurrence_id: annotation
-            for values in annotations.values()
-            for annotation in values
-            if annotation.occurrence_id is not None
-        }
+        annotations_by_occurrence: dict[int, Annotation] = {}
+        annotations = self._read_annotations(annotations_by_occurrence=annotations_by_occurrence)
         record_refs = self._task_record_relationships()
         annotation_refs = self._task_annotation_relationships()
 
@@ -435,7 +430,7 @@ class DuckDBControlReader:
             except (ValueError, KeyError) as exc:
                 raise TimeFFormatError(f"task {task_id!r} has unknown type {stored_type!r}") from exc
             refs = record_refs.get(task_key, {})
-            inputs = self._resolve_records(task_id, "inputs", refs, records_by_id)
+            inputs = self._resolve_records(task_id, "inputs", refs, records_by_key)
             kwargs: dict[str, Any] = {
                 "id": task_id,
                 "inputs": inputs,
@@ -452,7 +447,7 @@ class DuckDBControlReader:
                     task_id,
                     "candidate_records",
                     refs,
-                    records_by_id,
+                    records_by_key,
                 )
             input_annotations = self._resolve_annotations(
                 task_id,
@@ -484,54 +479,62 @@ class DuckDBControlReader:
             tasks[task_key].from_tasks = tuple(parents)
         return tuple(tasks.values())
 
-    def _task_record_relationships(self) -> dict[int, dict[str, tuple[str, ...]]]:
+    def _task_record_relationships(self) -> dict[int, dict[str, tuple[int, ...]]]:
         """Read ordered task-to-Record relationships through integer keys.
 
         Returns:
-            ``task_key -> field -> ordered public Record IDs``.
+            ``task_key -> field -> ordered internal Record keys``.
         """
         rows = self.connection.execute(
-            """SELECT refs.task_key, refs.field, records.record_id
-               FROM task_record_refs refs
-               JOIN records USING (record_key)
-               ORDER BY refs.task_key, refs.field, refs.position"""
+            """SELECT task_key, field, record_key
+               FROM task_record_refs
+               ORDER BY task_key, field, position"""
         ).fetchall()
         return self._group_relationships(rows)
 
-    def _task_annotation_relationships(self) -> dict[int, dict[str, tuple[str, ...]]]:
+    def _task_annotation_relationships(self) -> dict[int, dict[str, tuple[int, ...]]]:
         """Read ordered task-to-annotation relationships through integer keys.
 
         Returns:
-            ``task_key -> field -> ordered public occurrence IDs``.
+            ``task_key -> field -> ordered internal occurrence keys``.
         """
         rows = self.connection.execute(
-            """SELECT refs.task_key, refs.field, occurrences.occurrence_id
-               FROM task_annotation_refs refs
-               JOIN annotation_occurrences occurrences USING (occurrence_key)
-               ORDER BY refs.task_key, refs.field, refs.position"""
+            """SELECT task_key, field, occurrence_key
+               FROM task_annotation_refs
+               ORDER BY task_key, field, position"""
         ).fetchall()
         return self._group_relationships(rows)
 
     @staticmethod
-    def _group_relationships(rows: list[tuple[int, str, str]]) -> dict[int, dict[str, tuple[str, ...]]]:
+    def _group_relationships(rows: list[tuple[int, str, int]]) -> dict[int, dict[str, tuple[int, ...]]]:
         """Group ordered relationship query rows.
 
         Returns:
             Relationship values grouped by task key and field.
         """
-        grouped: dict[int, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        grouped: dict[int, dict[str, tuple[int, ...]]] = {}
+        current_task: int | None = None
+        current_field: str | None = None
+        current_values: list[int] = []
         for task_key, field, value in rows:
-            grouped[task_key][field].append(value)
-        return {
-            task_key: {field: tuple(values) for field, values in fields.items()} for task_key, fields in grouped.items()
-        }
+            if task_key != current_task or field != current_field:
+                if current_task is not None and current_field is not None:
+                    grouped.setdefault(current_task, {})[current_field] = tuple(current_values)
+                current_task = task_key
+                current_field = field
+                current_values = [value]
+            else:
+                current_values.append(value)
+        if current_task is not None and current_field is not None:
+            grouped.setdefault(current_task, {})[current_field] = tuple(current_values)
+        return grouped
 
     @staticmethod
     def _resolve_records(
         task_id: str,
         field: str,
-        refs: dict[str, tuple[str, ...]],
-        records: dict[str, Record],
+        refs: dict[str, tuple[int, ...]],
+        records: dict[int, Record],
     ) -> tuple[Record, ...]:
         """Resolve one ordered record-reference field.
 
@@ -542,18 +545,18 @@ class DuckDBControlReader:
             TimeFFormatError: If an ID is missing.
         """
         try:
-            return tuple(records[record_id] for record_id in refs.get(field, ()))
+            return tuple(records[record_key] for record_key in refs.get(field, ()))
         except KeyError as exc:
             raise TimeFFormatError(
-                f"task {task_id!r} field {field!r} refers to missing record {exc.args[0]!r}"
+                f"task {task_id!r} field {field!r} refers to missing record key {exc.args[0]!r}"
             ) from exc
 
     @staticmethod
     def _resolve_annotations(
         task_id: str,
         field: str,
-        refs: dict[str, tuple[str, ...]],
-        annotations: dict[str, Annotation],
+        refs: dict[str, tuple[int, ...]],
+        annotations: dict[int, Annotation],
     ) -> tuple[Annotation, ...]:
         """Resolve one ordered annotation-reference field.
 
@@ -564,10 +567,10 @@ class DuckDBControlReader:
             TimeFFormatError: If an occurrence is missing.
         """
         try:
-            return tuple(annotations[occurrence_id] for occurrence_id in refs.get(field, ()))
+            return tuple(annotations[occurrence_key] for occurrence_key in refs.get(field, ()))
         except KeyError as exc:
             raise TimeFFormatError(
-                f"task {task_id!r} field {field!r} refers to missing annotation occurrence {exc.args[0]!r}"
+                f"task {task_id!r} field {field!r} refers to missing annotation occurrence key {exc.args[0]!r}"
             ) from exc
 
     def _read_axes(
@@ -672,6 +675,8 @@ class DuckDBControlReader:
     def _read_annotations(
         self,
         object_keys: Iterable[int] | None = None,
+        *,
+        annotations_by_occurrence: dict[int, Annotation] | None = None,
     ) -> dict[tuple[str, str], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences for hierarchy objects.
 
@@ -697,7 +702,7 @@ class DuckDBControlReader:
                    UNION ALL
                    SELECT task_key, 'Task', task_id FROM tasks
                )
-               SELECT o.occurrence_id, o.object_type, objects.object_id, o.span_type,
+               SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
                       o.start_us, o.end_us, o.signal_keys, o.provenance, o.confidence,
                       o.metadata, c.content_id, c.name, c.value, c.unit, c.metadata,
                       o.content_key, objects.object_key
@@ -713,18 +718,18 @@ class DuckDBControlReader:
             [requested is None, list(requested or ())],
         ).fetchall()
         for row in rows:
-            occurrence_id, object_type = row[:2]
-            if row[10] is None:
+            occurrence_id, object_type = row[1:3]
+            if row[11] is None:
                 raise TimeFFormatError(
-                    f"annotation occurrence {occurrence_id!r} refers to missing content key {row[15]!r}"
+                    f"annotation occurrence {occurrence_id!r} refers to missing content key {row[16]!r}"
                 )
-            if row[16] is None:
+            if row[17] is None:
                 if object_type not in {"Dataset", "Record", "Source", "Signal", "Task"}:
                     raise TimeFFormatError(
                         f"annotation occurrence {occurrence_id!r} has unknown object type {object_type!r}"
                     )
                 raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} key")
-        referenced_signal_keys = sorted({signal_key for row in rows for signal_key in (row[6] or ())})
+        referenced_signal_keys = sorted({signal_key for row in rows for signal_key in (row[7] or ())})
         signal_ids_by_key = (
             dict(
                 self.connection.execute(
@@ -737,37 +742,38 @@ class DuckDBControlReader:
             else {}
         )
         for row in rows:
-            signal_keys = row[6]
+            signal_keys = row[7]
             try:
                 scope = (
                     None if signal_keys is None else tuple(signal_ids_by_key[signal_key] for signal_key in signal_keys)
                 )
             except KeyError as exc:
                 raise TimeFFormatError(
-                    f"annotation occurrence {row[0]!r} refers to missing signal key {exc.args[0]!r}"
+                    f"annotation occurrence {row[1]!r} refers to missing signal key {exc.args[0]!r}"
                 ) from exc
             span = None
-            if row[3] == "point":
-                span = TimePoint(start_us=row[4], time_series_ids=scope)
-            elif row[3] == "interval":
-                span = TimeInterval(start_us=row[4], end_us=row[5], time_series_ids=scope)
-            elif row[3] != "static":
-                raise TimeFFormatError(f"annotation occurrence {row[0]!r} has unknown span type {row[3]!r}")
-            content_metadata = _decode_json(row[14], default={})
+            if row[4] == "point":
+                span = TimePoint(start_us=row[5], time_series_ids=scope)
+            elif row[4] == "interval":
+                span = TimeInterval(start_us=row[5], end_us=row[6], time_series_ids=scope)
+            elif row[4] != "static":
+                raise TimeFFormatError(f"annotation occurrence {row[1]!r} has unknown span type {row[4]!r}")
+            content_metadata = _decode_json(row[15], default={})
             description = content_metadata.pop("description", None)
-            grouped[row[1], row[2]].append(
-                Annotation(
-                    occurrence_id=row[0],
-                    id=row[10],
-                    key=row[11],
-                    value=_decode_json(row[12]),
-                    unit=row[13],
-                    description=description,
-                    metadata=content_metadata,
-                    span=span,
-                    source=_decode_json(row[7]),
-                    confidence=row[8],
-                    occurrence_metadata=_decode_json(row[9], default={}),
-                )
+            annotation = Annotation(
+                occurrence_id=row[1],
+                id=row[11],
+                key=row[12],
+                value=_decode_json(row[13]),
+                unit=row[14],
+                description=description,
+                metadata=content_metadata,
+                span=span,
+                source=_decode_json(row[8]),
+                confidence=row[9],
+                occurrence_metadata=_decode_json(row[10], default={}),
             )
+            grouped[row[2], row[3]].append(annotation)
+            if annotations_by_occurrence is not None:
+                annotations_by_occurrence[row[0]] = annotation
         return {key: tuple(value) for key, value in grouped.items()}
