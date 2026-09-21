@@ -64,7 +64,8 @@ def _dataset() -> TimeFDataset:
     return dataset
 
 
-def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path):
+def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_writer_module, "_ROW_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(_dataset())
 
