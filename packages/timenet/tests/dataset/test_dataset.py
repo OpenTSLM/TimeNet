@@ -51,7 +51,7 @@ def test_add_record_registers_and_returns(make_series):
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
-    signal = make_series(time_series_id="signal")
+    signal = make_series(id="signal")
     source = Source(id="source", name="Device", signals=(signal,))
     record = Record(record_id="record", sources=(source,))
     dataset = _dataset()
