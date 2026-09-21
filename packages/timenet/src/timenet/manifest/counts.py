@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ManifestCounts:
-    """TimeF v2 entity counts recorded for inspection without opening DuckDB."""
+    """TimeF entity counts recorded for inspection without opening DuckDB."""
 
     records: int = 0
     """Total number of records in the dataset."""
