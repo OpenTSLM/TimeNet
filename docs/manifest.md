@@ -20,7 +20,7 @@ to keep in sync.
 
 The packaged `manifest.schema.json` (JSON Schema draft 2020-12) pins the on-disk shape. This file
 is the formal contract for external consumers. It is published as
-[`manifest-v1.schema.json`](https://docs.timenet.ai/schemas/manifest-v1.schema.json) and is
+[`manifest.schema.json`](https://docs.timenet.ai/schemas/manifest.schema.json) and is
 available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the output of
 `to_dict()` against this schema.
 
@@ -40,15 +40,15 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
-    timef_format_version=1,     # validated against the supported set {1}
+    timef_format_version=2,     # validated against the supported set {2}
 )
 ```
 
-`values_backend` names the [values backend](timef-writer.md#values-backends) that wrote
+`values_backend` names the [values backend](timef-writer.md#values-settings) that wrote
 `files.time_series`. The reader uses this value to select the backend. If the key is absent, the
 reader uses `"parquet"`.
 
-`value_encoding` gives the [values encoding](timef-writer.md#values-encoding) that wrote the shards
+`value_encoding` gives the [values encoding](timef-writer.md#values-settings) that wrote the shards
 of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
 each file, so the reader does not need it. The field lets a builder see which encoding a build
 selected. The field is empty for a backend that has no such choice.
@@ -61,17 +61,8 @@ The values locator is backend-neutral. One schema covers both scalar and multidi
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
-A spec records its `nullable` flag in the same way. When an older manifest omits the flag, the current
-SDK reads it as `False`. The current SDK can therefore read artifacts written before nullability
-support without changing their missing-value behavior.
-
-Nullable artifacts also use `timef_format_version=1`. This does not guarantee that older SDKs can
-read newer nullable artifacts correctly. SDKs from before nullability support can ignore the Zarr
-validity arrays, which mark present timesteps. Those SDKs can treat missing-value placeholders as
-observations.
-
-For nullable artifacts, use an SDK that supports nullability. Format version 1 alone does not show
-whether a reader supports the `nullable` flag and its storage representation.
+A spec records its `nullable` flag. Parquet stores nullability in Arrow validity bitmaps. Zarr stores
+it in validity arrays next to the values.
 
 If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
 `TimeNetInvalidManifestError`.
