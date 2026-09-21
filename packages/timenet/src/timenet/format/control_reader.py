@@ -29,8 +29,8 @@ from timenet.types import (
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[str, TimeSeriesSpec], Callable[[], pa.Array]]
-OffsetsLoader = Callable[[str], pa.Array]
+ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
+OffsetsLoader = Callable[[int, str], pa.Array]
 
 _HIERARCHY_KEYS = {
     "records": ("record_id", "record_id"),
@@ -165,7 +165,7 @@ class DuckDBControlReader:
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for row in signal_rows:
-            _, signal_id, source_key, name, axis_key = row[:5]
+            signal_key, signal_id, source_key, name, axis_key = row[:5]
             axis = axes.get(axis_key)
             if axis is None:
                 raise TimeFFormatError(f"signal {signal_id!r} refers to missing axis key {axis_key!r}")
@@ -177,9 +177,9 @@ class DuckDBControlReader:
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
                 offsets_loader = (
-                    partial(self._offsets_loader, axis.axis_id)
+                    partial(self._offsets_loader, axis_key, axis.axis_id)
                     if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets, axis.axis_id)
+                    else partial(self.load_axis_offsets_by_key, axis_key, axis.axis_id)
                 )
             signals_by_source[source_key].append(
                 Signal.from_loader(
@@ -189,7 +189,7 @@ class DuckDBControlReader:
                     time_axis=axis,
                     n_values=row[13],
                     loader=(
-                        self._value_loader_factory(signal_id, spec)
+                        self._value_loader_factory(signal_key, signal_id, spec)
                         if self._value_loader_factory is not None
                         else partial(self._value_loader, signal_id, spec)
                     ),
@@ -316,9 +316,6 @@ class DuckDBControlReader:
 
         Returns:
             Chunk rows in chunk-index order.
-
-        Raises:
-            TimeFFormatError: If the signal has no stored chunks.
         """
         rows = self.connection.execute(
             """SELECT c.chunk_index, c.value_path, c.chunk_major_index, c.chunk_minor_index, c.n_values
@@ -327,6 +324,32 @@ class DuckDBControlReader:
                WHERE s.signal_id = ? ORDER BY c.chunk_index""",
             [signal_id],
         ).fetchall()
+        return self._chunk_dicts(rows, signal_id)
+
+    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
+        """Return values-backend chunk locators through an internal integer key.
+
+        Returns:
+            Chunk rows in chunk-index order.
+        """
+        rows = self.connection.execute(
+            """SELECT chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks
+               WHERE signal_key = ? ORDER BY chunk_index""",
+            [signal_key],
+        ).fetchall()
+        return self._chunk_dicts(rows, signal_id)
+
+    @staticmethod
+    def _chunk_dicts(rows: list[tuple[Any, ...]], signal_id: str) -> list[dict[str, Any]]:
+        """Convert stored chunk tuples to the values-backend row contract.
+
+        Returns:
+            Chunk dictionaries in their query order.
+
+        Raises:
+            TimeFFormatError: If the signal has no stored chunks.
+        """
         if not rows:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return [
@@ -629,24 +652,40 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the offsets disagree with the axis or its Signals.
         """
+        axis = self.connection.execute(
+            "SELECT axis_key FROM axes WHERE axis_id = ? AND axis_type = 'irregular'",
+            [axis_id],
+        ).fetchone()
+        if axis is None:
+            raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
+        return self.load_axis_offsets_by_key(axis[0], axis_id)
+
+    def load_axis_offsets_by_key(self, axis_key: int, axis_id: str) -> pa.Array:
+        """Load one shared irregular axis through its internal integer key.
+
+        Returns:
+            The axis offsets as Arrow int64 values.
+
+        Raises:
+            TimeFFormatError: If the offsets disagree with the axis or its Signals.
+        """
         rows = self.connection.execute(
             """SELECT offsets.offset_us
                FROM axis_offsets offsets
-               JOIN axes USING (axis_key)
-               WHERE axes.axis_id = ? ORDER BY offsets.position""",
-            [axis_id],
+               WHERE axis_key = ? ORDER BY offsets.position""",
+            [axis_key],
         ).fetchall()
         offsets = np.asarray([row[0] for row in rows], dtype=np.int64)
         axis = self.connection.execute(
-            "SELECT first_us, last_us, axis_key FROM axes WHERE axis_id = ? AND axis_type = 'irregular'",
-            [axis_id],
+            "SELECT first_us, last_us FROM axes WHERE axis_key = ? AND axis_type = 'irregular'",
+            [axis_key],
         ).fetchone()
         if axis is None:
             raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
         lengths = {
             row[0]
             for row in self.connection.execute(
-                "SELECT DISTINCT n_values FROM signals WHERE axis_key = ?", [axis[2]]
+                "SELECT DISTINCT n_values FROM signals WHERE axis_key = ?", [axis_key]
             ).fetchall()
         }
         if len(lengths) != 1 or len(offsets) not in lengths:
