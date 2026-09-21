@@ -83,13 +83,13 @@ _COSINE = TimeSeriesSpec(
 
 
 def _series(spec, signal, n, time_series_id, source_id, phase=0.0):  # noqa: PLR0913, PLR0917
-    return TimeSeries(
+    return TimeSeries.from_loader(
         spec=spec,
-        signal=signal,
+        name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
         source_id=source_id,
-        time_series_id=time_series_id,
+        id=time_series_id,
         n_values=n,
     )
 

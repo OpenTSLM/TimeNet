@@ -53,7 +53,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     axis = RegularAxis.from_rate_hz(16)
     for i in range(n_records):
         values = [float((i + j) % 11) for j in range(series_len)]
-        ts = TimeSeries.from_values(values, spec=spec, signal="a", time_axis=axis, time_series_id=f"ts-{i:03d}")
+        ts = TimeSeries.from_values(values, spec=spec, name="a", time_axis=axis, id=f"ts-{i:03d}")
         record = dataset.add_record(
             record=Record(time_series=(ts,), subject_ids=(f"subj-{i}",), record_id=f"record-{i:03d}")
         )

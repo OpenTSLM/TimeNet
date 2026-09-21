@@ -72,7 +72,7 @@ def _typed_dataset(dtype, values):
         unit_value=ureg.dimensionless,
         dtype=dtype,
     )
-    ts = TimeSeries.from_values(values, spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1))
+    ts = TimeSeries.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/torch",
