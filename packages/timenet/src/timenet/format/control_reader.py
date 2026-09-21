@@ -15,19 +15,15 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_span, decode_task_payload
+from timenet.format.task_codec import decode_span, decode_target, decode_task_payload
 from timenet.types import (
     TASKS,
     Annotation,
-    ForecastingTask,
     Task,
     TaskType,
     TimeInterval,
     TimePoint,
     TimeSeriesSpec,
-    TSCorrespondenceTask,
-    TSEditingTask,
-    TSGenerationTask,
     ureg,
 )
 
@@ -373,15 +369,46 @@ class DuckDBControlReader:
             if annotation.occurrence_id is not None
         }
         record_refs = self._relationship_rows("task_record_refs", "record_id")
-        signal_refs = self._relationship_rows("task_signal_refs", "signal_id")
         annotation_refs = self._relationship_rows("task_annotation_refs", "occurrence_id")
 
+        targets_by_task: dict[str, list[object]] = defaultdict(list)
+        target_rows = self.connection.execute(
+            """SELECT task_id, target_kind, text_value, integer_value, float_value,
+                      boolean_value, record_id, signal_id, span_start, span_end, span_signal_ids
+               FROM task_targets ORDER BY task_id, position"""
+        ).fetchall()
+        target_columns = (
+            "target_kind",
+            "text_value",
+            "integer_value",
+            "float_value",
+            "boolean_value",
+            "record_id",
+            "signal_id",
+            "span_start",
+            "span_end",
+            "span_signal_ids",
+        )
+        for task_id, *values in target_rows:
+            row = dict(zip(target_columns, values, strict=True))
+            row["span_signal_ids"] = _decode_json(row["span_signal_ids"])
+            targets_by_task[task_id].append(decode_target(row, records=records_by_id, signals=signals_by_id))
+
         task_rows = self.connection.execute(
-            """SELECT task_id, task_type, prompt, scope, payload, rationale, metadata
+            """SELECT task_id, task_type, prompt, scope, has_inline_targets, payload, rationale, metadata
                FROM tasks ORDER BY task_id"""
         ).fetchall()
         tasks: dict[str, Task] = {}
-        for task_id, stored_type, prompt, scope_data, payload_data, rationale, metadata in task_rows:
+        for (
+            task_id,
+            stored_type,
+            prompt,
+            scope_data,
+            has_inline_targets,
+            payload_data,
+            rationale,
+            metadata,
+        ) in task_rows:
             try:
                 task_type = TaskType(stored_type)
                 cls = TASKS[task_type]
@@ -392,7 +419,7 @@ class DuckDBControlReader:
             kwargs: dict[str, Any] = {
                 "id": task_id,
                 "inputs": inputs,
-                "record_ids": tuple(record.id for record in inputs),
+                "targets": tuple(targets_by_task.get(task_id, ())) if has_inline_targets else None,
                 "prompt": prompt,
                 "scope": decode_span(_decode_json(scope_data)),
                 "rationale": rationale,
@@ -400,8 +427,13 @@ class DuckDBControlReader:
                 "metadata": _decode_json(metadata, default={}),
                 **decode_task_payload(task_type, _decode_json(payload_data, default={})),
             }
-            self._add_task_record_kwargs(task_id, cls, refs, records_by_id, kwargs)
-            self._add_task_signal_kwargs(task_id, cls, signal_refs.get(task_id, {}), signals_by_id, kwargs)
+            if "candidate_records" in cls.__dataclass_fields__:
+                kwargs["candidate_records"] = self._resolve_records(
+                    task_id,
+                    "candidate_records",
+                    refs,
+                    records_by_id,
+                )
             input_annotations = self._resolve_annotations(
                 task_id,
                 "input_annotations",
@@ -416,9 +448,7 @@ class DuckDBControlReader:
             )
             kwargs.update(
                 input_annotations=input_annotations,
-                input_annotation_ids=tuple(annotation.content_id for annotation in input_annotations),
                 target_annotations=target_annotations,
-                target_annotation_ids=tuple(annotation.content_id for annotation in target_annotations),
             )
             tasks[task_id] = cls(**kwargs)
 
@@ -662,18 +692,20 @@ class DuckDBControlReader:
                    FROM annotation_occurrences o
                    LEFT JOIN annotation_contents c USING (content_id)"""
         parameters: list[object] = []
+        targets = object_ids or {}
         if not read_all:
-            if object_ids is None:
-                raise AssertionError("selective annotation reads require object IDs")
             query += """
                    WHERE (o.object_type = 'Record' AND o.object_id IN (SELECT unnest(?)))
                       OR (o.object_type = 'Source' AND o.object_id IN (SELECT unnest(?)))
                       OR (o.object_type = 'Signal' AND o.object_id IN (SELECT unnest(?)))"""
-            parameters = [list(object_ids["Record"]), list(object_ids["Source"]), list(object_ids["Signal"])]
+            parameters = [
+                list(targets.get("Record", set())),
+                list(targets.get("Source", set())),
+                list(targets.get("Signal", set())),
+            ]
         query += """ ORDER BY o.object_type, o.object_id, o.content_id, o.span_type,
                               o.start_us NULLS FIRST, o.end_us NULLS FIRST, o.occurrence_id"""
         rows = self.connection.execute(query, parameters).fetchall()
-        targets = object_ids or {}
         for row in rows:
             occurrence_id, content_id, object_type, object_id = row[:4]
             if row[11] is None:

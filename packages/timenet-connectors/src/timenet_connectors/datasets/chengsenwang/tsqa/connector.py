@@ -62,7 +62,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 task=AnswerTask(
                     inputs=(record,),
                     prompt=row["Question"],
-                    target=row["Answer"],
+                    targets=(row["Answer"],),
                     id=f"qa-{index}",
                 )
             )

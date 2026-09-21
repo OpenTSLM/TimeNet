@@ -1,8 +1,6 @@
 """Write a TimeF v2 DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
-from collections.abc import Callable, Iterable, Iterator
-from enum import StrEnum
-import itertools
+from collections.abc import Callable, Iterable
 import json
 from pathlib import Path
 import shutil
@@ -28,25 +26,22 @@ from timenet.format.constants import (
     INDEX_TEMPLATE,
     MANIFEST_FILE,
     RECORDS_TEMPLATE,
-    TASK_PART_TEMPLATE,
     part_path,
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.schemas import (
     LOGICAL_IDS,
-    TASK_COMMON_NAMES,
     UUID16,
     IdCodec,
     IdTypes,
     annotations_schema,
     index_schema,
     records_schema,
-    task_schema,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types import Annotation, Task
+from timenet.types import Annotation
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -143,9 +138,6 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
-        # A streamed dataset's task iterator, peeked once for id types and reused for the write.
-        self._task_iter: Iterator[Task] = iter(())
-        self._first_task: Task | None = None
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -570,40 +562,6 @@ class TimeFWriter:
             dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
         )
 
-    def _write_tasks(self) -> None:
-        # Route tasks to a byte-budgeted sink per type, created on first sight of a type, so they reach
-        # disk in row-group batches without the whole list ever living in memory. iter_tasks() yields a
-        # materialized dataset's tasks and a streamed one's identically, so one path serves both.
-        # _task_type_counts feeds the manifest counts, tallied here so the tasks are never iterated twice.
-        self._task_files: list[str] = []
-        self._task_type_counts: dict[str, int] = {}
-        sinks: dict[str, ShardedTableWriter] = {}
-        schemas: dict[str, pa.Schema] = {}
-        if self._dataset.has_task_stream:
-            # Reuse the iterator the id-type peek started: the source is consumed and validated once.
-            # The peek already pulled the first task, so chain it back ahead of the rest.
-            if self._first_task is None:
-                tasks: Iterable[Task] = ()
-            else:
-                tasks = itertools.chain((self._first_task,), self._task_iter)
-        else:
-            tasks = self._dataset.iter_tasks()
-        for task in tasks:
-            task_type_str = str(task.task_type)
-            schema = schemas.get(task_type_str)
-            if schema is None:
-                schema = task_schema(task.task_type, self._id_types)
-                schemas[task_type_str] = schema
-                sinks[task_type_str] = self._control_sink(
-                    schema,
-                    lambda index, tt=task_type_str: part_path(TASK_PART_TEMPLATE, index, task_type=tt),
-                    dictionary_columns=encodings.task_dictionary(schema),
-                )
-            sinks[task_type_str].add(_task_row(task, schema, self._codec))
-            self._task_type_counts[task_type_str] = self._task_type_counts.get(task_type_str, 0) + 1
-        for task_type_str in sorted(sinks):  # stable file order regardless of the type interleaving
-            self._task_files.extend(sinks[task_type_str].finish(write_empty_part=True))
-
     def _write_index(
         self, placements: dict[tuple[str, int], ChunkPlacement], series_to_records: dict[str, list[str]]
     ) -> None:
@@ -815,29 +773,6 @@ def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
         **_axis_columns(ts.time_axis),
         "n_values": ts.n_values,
     }
-
-
-def _task_row(task: Task, schema: pa.Schema, codec: IdCodec) -> dict:
-    refs = type(task).refs
-    row: dict = {
-        "id": codec.encode("task_id", task.id),
-        "record_ids": codec.encode_list("record_id", task.record_ids),
-        "from_task_ids": codec.encode_list("task_id", task.from_task_ids),
-        "prompt": task.prompt,
-        "scope": codec.encode_span(task.scope),
-        "input_annotation_ids": codec.encode_list("annotation_id", task.input_annotation_ids),
-        "target_annotation_ids": codec.encode_list("annotation_id", task.target_annotation_ids),
-        "rationale": task.rationale,
-    }
-    for name in schema.names:
-        if name in TASK_COMMON_NAMES:
-            continue
-        value = getattr(task, name)
-        if isinstance(value, StrEnum):  # a StrEnum payload (for example localization mode) stores as its value
-            value = str(value)
-        value = list(value) if isinstance(value, tuple) else value
-        row[name] = codec.encode_payload(refs, name, value)
-    return row
 
 
 def _ordered_unique(items: Iterable[str]) -> list[str]:
