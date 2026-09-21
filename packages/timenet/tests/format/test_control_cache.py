@@ -17,9 +17,6 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         dataset_id=dataset.metadata.dataset_id,
         metadata=dataset.metadata,
         files=ManifestFiles(
-            records=(),
-            annotations=(),
-            time_series_index=(),
             control=(FilePart(path.name, file_checksum(path), path.stat().st_size),),
         ),
     )

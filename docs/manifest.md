@@ -91,8 +91,7 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 - Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). The shared
   registry converts them back.
-- A spec carries its data source inline. As a result, the reader does not resolve it against a
-  side table.
+- Device and origin information belongs to the hierarchy's `Source`, not to `TimeSeriesSpec`.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
   `TASKS` registry. An unknown `task_type` raises `TimeNetInvalidManifestError`. The annotation
   `value_type` round-trips as a string. The reader uses it to decode values.
@@ -101,15 +100,14 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 ## `ManifestCounts`
 
-The fields are `records`, `annotations`, `tasks` (a dict of `task_type -> count`),
-`time_series_chunks`, `time_series_index_rows`, and `time_series_specs` (a dict of
-`spec_type -> series count`). All fields default to `0` or `{}`.
+The fields count `records`, `sources`, `signals`, `axes`, reusable `annotation_contents`,
+`annotation_occurrences`, and `signal_chunks`. `tasks` maps task type to count, and
+`signals_by_spec` maps specification type to Signal count. All fields default to `0` or `{}`.
 
 ## `ManifestFiles`
 
-`ManifestFiles` groups file descriptors by kind: `records`, `annotations`, and
-`time_series_index` (required), plus `tasks` and `time_series` (tuples, empty by default). A
-reader uses this list. It never uses a directory glob.
+`ManifestFiles` lists the single `control.duckdb` artifact and the `time_series` values-plane
+artifacts. A reader uses this list and never uses a directory glob.
 
 Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
 `checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
