@@ -20,7 +20,6 @@ from timenet.types import (
     AnnotationType,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Task,
     TaskType,
     TimeSeriesSpec,
@@ -227,15 +226,6 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "spec_type": spec.spec_type,
                 "name": spec.name,
                 "unit_value": str(spec.unit_value),
-                "data_source": (
-                    {
-                        "data_source_type": spec.data_source.data_source_type,
-                        "name": spec.data_source.name,
-                        "provider": spec.data_source.provider,
-                    }
-                    if spec.data_source is not None
-                    else None
-                ),
                 "dtype": spec.dtype,
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
@@ -265,7 +255,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 spec_type=entry["spec_type"],
                 name=entry["name"],
                 unit_value=ureg.Unit(entry["unit_value"]),
-                data_source=_data_source(entry.get("data_source")),
                 dtype=entry.get("dtype", "float32"),
                 categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),
@@ -292,20 +281,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
-
-
-def _data_source(entry: dict[str, Any] | None) -> DataSource | None:
-    """Rebuild a spec's data source from the record stored beside it.
-
-    Args:
-        entry: The stored ``data_source`` object, or ``None``.
-
-    Returns:
-        The data source, or ``None`` if the spec declares none.
-    """
-    if entry is None:
-        return None
-    return DataSource(data_source_type=entry["data_source_type"], name=entry["name"], provider=entry.get("provider"))
 
 
 def _resolve_task(task_type: str) -> type[Task]:
