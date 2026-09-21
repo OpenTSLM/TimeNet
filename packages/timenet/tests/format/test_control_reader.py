@@ -6,7 +6,7 @@ from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import TimePoint
+from timenet.types import Annotation, TimePoint
 
 from .test_control_writer import _dataset
 
@@ -58,6 +58,22 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
     assert target_point == point
+
+
+def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    record = dataset.records[0]
+    second = record.annotate(Annotation(id="age-65", key="patient_age", value=65, unit="year"))
+    dataset.tasks[0].input_annotations = (second, record.annotations[0])
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        records = reader.read_records()
+        (task,) = reader.read_tasks(records)
+
+    assert task.inputs == records
+    assert tuple(annotation.content_id for annotation in task.input_annotations) == ("age-65", "sex-male")
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
