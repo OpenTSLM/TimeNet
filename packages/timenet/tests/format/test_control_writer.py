@@ -1,4 +1,5 @@
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pytest
@@ -115,3 +116,32 @@ def test_control_writer_rejects_ambiguous_annotation_target_id(tmp_path):
         DuckDBControlWriter(path).write_hierarchy(dataset)
 
     assert not path.exists()
+
+
+def test_control_writer_stores_value_chunk_locations(tmp_path):
+    path = tmp_path / "control.duckdb"
+    placement = SimpleNamespace(
+        chunk_file="values/part-00000000.parquet",
+        data_index=SimpleNamespace(major_idx=2, minor_idx=3),
+        spec_type="voltage",
+        signal="I",
+        n_values=2,
+    )
+    placements = {
+        ("lead-i", 0): placement,
+        ("lead-ii", 0): SimpleNamespace(
+            chunk_file=placement.chunk_file,
+            data_index=SimpleNamespace(major_idx=2, minor_idx=4),
+            spec_type="voltage",
+            signal="II",
+            n_values=2,
+        ),
+    }
+
+    DuckDBControlWriter(path).write_hierarchy(_dataset(), placements)  # ty: ignore[invalid-argument-type]
+
+    with connect_control(path, read_only=True) as connection:
+        assert connection.execute(
+            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks WHERE signal_id = 'lead-i'"""
+        ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)

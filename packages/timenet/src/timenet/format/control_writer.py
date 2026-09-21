@@ -1,10 +1,12 @@
 """Write the in-memory TimeF hierarchy into ``control.duckdb``."""
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from dataclasses import asdict
 import json
 from pathlib import Path
-from typing import Any, assert_never
+from typing import TYPE_CHECKING, Any, assert_never
 
 import duckdb
 
@@ -21,6 +23,10 @@ from timenet.types import (
     TSGenerationTask,
     annotation_type_of,
 )
+
+
+if TYPE_CHECKING:
+    from timenet.values_backends.writer import ChunkPlacement
 
 
 def _json(value: object) -> str:
@@ -51,11 +57,16 @@ class DuckDBControlWriter:
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
 
-    def write_hierarchy(self, dataset: TimeFDataset) -> None:
+    def write_hierarchy(
+        self,
+        dataset: TimeFDataset,
+        placements: dict[tuple[str, int], ChunkPlacement] | None = None,
+    ) -> None:
         """Write records, sources, signals, axes, and their annotations atomically.
 
         Args:
             dataset: The complete in-memory hierarchy.
+            placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
 
         Raises:
             TimeFValidationError: If the hierarchy contains a dangling relationship, conflicting
@@ -67,7 +78,8 @@ class DuckDBControlWriter:
                 create_control_schema(connection)
                 with transaction(connection):
                     self._write_objects(connection, dataset)
-                    self._validate_objects(connection)
+                    self._write_chunks(connection, placements or {})
+                    self._validate_objects(connection, require_chunks=placements is not None)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
             self.path.unlink(missing_ok=True)
@@ -101,6 +113,29 @@ class DuckDBControlWriter:
         annotation_refs = self._write_tasks(connection, dataset, annotations, object_types)
         self._write_annotations(connection, annotations, object_types)
         self._write_task_annotation_refs(connection, annotation_refs)
+
+    @staticmethod
+    def _write_chunks(
+        connection: duckdb.DuckDBPyConnection,
+        placements: dict[tuple[str, int], ChunkPlacement],
+    ) -> None:
+        """Insert values-plane chunk locations."""
+        if not placements:
+            return
+        connection.executemany(
+            "INSERT INTO signal_chunks VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    signal_id,
+                    chunk_index,
+                    placement.chunk_file,
+                    placement.data_index.major_idx,
+                    placement.data_index.minor_idx,
+                    placement.n_values,
+                )
+                for (signal_id, chunk_index), placement in sorted(placements.items())
+            ],
+        )
 
     def _write_tasks(  # noqa: PLR0912 - each normalized task relationship is validated explicitly
         self,
@@ -466,7 +501,7 @@ class DuckDBControlWriter:
         return next(iter(found))
 
     @staticmethod
-    def _validate_objects(connection: duckdb.DuckDBPyConnection) -> None:
+    def _validate_objects(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool) -> None:
         """Run relational checks that are clearer as bulk SQL queries.
 
         Raises:
@@ -511,3 +546,18 @@ class DuckDBControlWriter:
         ).fetchone()
         if bad_axis is not None:
             raise TimeFValidationError(f"signal {bad_axis[0]!r} has an axis length that does not match its values")
+        if require_chunks:
+            bad_chunks = connection.execute(
+                """SELECT signals.signal_id
+                   FROM signals
+                   LEFT JOIN (
+                       SELECT signal_id, sum(n_values) AS stored_values
+                       FROM signal_chunks GROUP BY signal_id
+                   ) chunks USING (signal_id)
+                   WHERE coalesce(stored_values, 0) <> signals.n_values
+                   LIMIT 1"""
+            ).fetchone()
+            if bad_chunks is not None:
+                raise TimeFValidationError(
+                    f"signal {bad_chunks[0]!r} has value chunks whose lengths do not match n_values"
+                )

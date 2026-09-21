@@ -31,7 +31,7 @@ from timenet.types import (
 )
 
 
-ValueLoader = Callable[[str], pa.Array]
+ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 
 _HIERARCHY_KEYS = {
     "records": ("record_id", "record_id"),
@@ -57,7 +57,7 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
         raise TimeFFormatError(f"control.duckdb contains invalid JSON: {value!r}") from exc
 
 
-def _missing_values(signal_id: str) -> pa.Array:
+def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when metadata-only hydration is asked to load values.
 
     Raises:
@@ -158,7 +158,7 @@ class DuckDBControlReader:
                     spec=spec,
                     time_axis=axis,
                     n_values=row[13],
-                    loader=lambda signal_id=signal_id: self._value_loader(signal_id),
+                    loader=lambda signal_id=signal_id, spec=spec: self._value_loader(signal_id, spec),
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_id), ()),
                     metadata=_decode_json(row[14], default={}),
@@ -255,6 +255,33 @@ class DuckDBControlReader:
             else:
                 children[parent_id].append(source_id)
         return children, roots
+
+    def chunk_rows(self, signal_id: str) -> list[dict[str, Any]]:
+        """Return values-backend chunk locators for one signal.
+
+        Returns:
+            Chunk rows in chunk-index order.
+
+        Raises:
+            TimeFFormatError: If the signal has no stored chunks.
+        """
+        rows = self.connection.execute(
+            """SELECT chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks WHERE signal_id = ? ORDER BY chunk_index""",
+            [signal_id],
+        ).fetchall()
+        if not rows:
+            raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
+        return [
+            {
+                "chunk_idx": row[0],
+                "chunk_file": row[1],
+                "chunk_major_idx": row[2],
+                "chunk_minor_idx": row[3],
+                "n_values": row[4],
+            }
+            for row in rows
+        ]
 
     def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:  # noqa: PLR0914
         """Hydrate concrete tasks and restore all in-memory object references.
