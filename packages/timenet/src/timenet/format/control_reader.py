@@ -357,6 +357,33 @@ class DuckDBControlReader:
         ).fetchall()
         return self._chunk_dicts(rows, signal_id)
 
+    def chunk_rows_by_keys(self, signal_keys: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
+        """Return chunk locators for a batch of internal Signal keys.
+
+        Args:
+            signal_keys: Internal integer Signal keys.
+
+        Returns:
+            Chunk rows keyed by internal Signal key. Each Signal's rows are in chunk-index order.
+        """
+        keys = tuple(signal_keys)
+        if not keys:
+            return {}
+        rows = self.connection.execute(
+            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks
+               WHERE signal_key IN (SELECT unnest(?))
+               ORDER BY signal_key, chunk_index""",
+            [list(keys)],
+        ).fetchall()
+        grouped: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
+        for signal_key, *chunk_row in rows:
+            grouped[signal_key].append(tuple(chunk_row))
+        return {
+            signal_key: self._chunk_dicts(grouped[signal_key], str(signal_key)) if grouped[signal_key] else []
+            for signal_key in keys
+        }
+
     @staticmethod
     def _chunk_dicts(rows: list[tuple[Any, ...]], signal_id: str) -> list[dict[str, Any]]:
         """Convert stored chunk tuples to the values-backend row contract.
