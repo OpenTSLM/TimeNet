@@ -39,7 +39,7 @@ def _dataset(signals) -> TimeFDataset:
         )
     )
     series = tuple(
-        TimeSeries.from_values(values, spec=spec, signal=name, time_axis=RegularAxis.from_rate_hz(1))
+        TimeSeries.from_values(values, spec=spec, name=name, time_axis=RegularAxis.from_rate_hz(1))
         for name, spec, values in signals
     )
     dataset.add_record(record=Record(time_series=series, record_id="record-0"))

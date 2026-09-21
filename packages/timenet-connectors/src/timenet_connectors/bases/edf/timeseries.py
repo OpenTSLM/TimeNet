@@ -47,15 +47,15 @@ def build(
 
         samples_per_record = header.samples_per_record[index]
         series.append(
-            TimeSeries(
+            TimeSeries.from_loader(
                 spec=spec,
-                signal=signal,
+                name=signal,
                 # From the header of this file, thus the signals at 1 Hz and the one
                 # recording that writes records of 60 s need no special case.
                 time_axis=RegularAxis.from_rate_hz(Fraction(samples_per_record) / header.record_duration),
                 loader=loader(file, index),
                 source_id=record_id,
-                time_series_id=f"{record_id}-{signal}",
+                id=f"{record_id}-{signal}",
                 n_values=header.num_records * samples_per_record,
             )
         )

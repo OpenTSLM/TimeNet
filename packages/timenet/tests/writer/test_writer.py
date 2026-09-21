@@ -216,7 +216,9 @@ def test_abort_leaves_no_partial_dir(tmp_path):
     record = dataset.add_record(
         record=Record(
             time_series=(
-                TimeSeries(spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader),
+                TimeSeries.from_loader(
+                    spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader
+                ),
             ),
         )
     )
@@ -249,9 +251,9 @@ def test_per_series_array_contract_enforced(tmp_path):
     import pyarrow as pa  # noqa: PLC0415
 
     # declares 5 observations, loader returns 3
-    ts = TimeSeries(
+    ts = TimeSeries.from_loader(
         spec=spec,
-        signal="c",
+        name="c",
         time_axis=RegularAxis.from_rate_hz(1),
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         n_values=5,
@@ -324,21 +326,21 @@ def test_same_id_different_series_rejected(tmp_path):
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    a = TimeSeries(
+    a = TimeSeries.from_loader(
         spec=spec,
-        signal="a",
+        name="a",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        time_series_id="ts-x",
+        id="ts-x",
     )
-    b = TimeSeries(  # same id, different signal and window
+    b = TimeSeries.from_loader(  # same id, different signal and window
         spec=spec,
-        signal="b",
+        name="b",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
-        time_series_id="ts-x",
+        id="ts-x",
     )
     dataset.add_record(record=Record(time_series=(a,), record_id="s-a"))
     dataset.add_record(record=Record(time_series=(b,), record_id="s-b"))
@@ -358,13 +360,13 @@ def test_same_series_shared_across_records_still_dedupes(tmp_path):
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    shared = TimeSeries(
+    shared = TimeSeries.from_loader(
         spec=spec,
-        signal="a",
+        name="a",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        time_series_id="ts-shared",
+        id="ts-shared",
     )
     dataset.add_record(record=Record(time_series=(shared,), record_id="s-a"))
     dataset.add_record(record=Record(time_series=(shared,), record_id="s-b"))
