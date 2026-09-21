@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["timef_format_version", "dataset_id", "metadata", "files"],
   "properties": {
-    "timef_format_version": { "type": "integer", "const": 1 },
+    "timef_format_version": { "type": "integer", "const": 2 },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "metadata": { "$ref": "#/$defs/metadata" },
     "schema": { "$ref": "#/$defs/schema" },
@@ -208,8 +208,14 @@
     "files": {
       "type": "object",
       "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["records", "annotations", "time_series_index"],
+      "required": ["control", "records", "annotations", "time_series_index"],
       "properties": {
+        "control": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/filePart" }
+        },
         "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
