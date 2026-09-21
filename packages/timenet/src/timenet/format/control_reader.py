@@ -113,7 +113,7 @@ class DuckDBControlReader:
         """Close the connection when leaving a context manager."""
         self.close()
 
-    def read_records(  # noqa: PLR0914 - related row sets stay together
+    def read_records(  # noqa: PLR0914, PLR0915 - related row sets stay together
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -157,12 +157,17 @@ class DuckDBControlReader:
         axes = self._read_axes({row[4] for row in signal_rows})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
+        specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for row in signal_rows:
             _, signal_id, source_key, name, axis_key = row[:5]
             axis = axes.get(axis_key)
             if axis is None:
                 raise TimeFFormatError(f"signal {signal_id!r} refers to missing axis key {axis_key!r}")
-            spec = self._spec_from_row(row)
+            spec_key = row[5:13]
+            spec = specs.get(spec_key)
+            if spec is None:
+                spec = self._spec_from_row(row)
+                specs[spec_key] = spec
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
                 offsets_loader = (
