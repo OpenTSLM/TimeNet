@@ -5,6 +5,7 @@ from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
@@ -108,3 +109,17 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     values_reader.close()
 
     assert projections == [["values"]]
+
+
+def test_lazy_values_use_the_stored_integer_signal_key(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = next(iter(reader.iter_records(with_annotations=False)))
+        signal = record.signals[0]
+        monkeypatch.setattr(
+            reader._control_reader(),
+            "chunk_rows",
+            lambda _signal_id: pytest.fail("lazy values repeated the public string lookup"),
+        )
+
+        assert len(signal.to_arrow()) == signal.n_values
