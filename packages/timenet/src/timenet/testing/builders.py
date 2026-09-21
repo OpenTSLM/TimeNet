@@ -12,7 +12,6 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
-    DataSource,
     Domain,
     License,
     LocalizationMode,
@@ -67,18 +66,15 @@ def sine_loader(
 
 
 _RATE_HZ = 16.0
-_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SINE = TimeSeriesSpec(
     spec_type="sine",
     name="Sine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 
 
