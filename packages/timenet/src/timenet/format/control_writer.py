@@ -27,7 +27,8 @@ if TYPE_CHECKING:
     from timenet.values_backends.writer import ChunkPlacement
 
 
-_TASK_BATCH_SIZE = 10_000
+_ROW_BATCH_SIZE = 10_000
+_TASK_BATCH_SIZE = _ROW_BATCH_SIZE
 _TARGET_VALUE_COLUMNS = {
     "target_text_values": ("target_item_key", "value"),
     "target_integer_values": ("target_item_key", "value"),
@@ -90,6 +91,34 @@ def _reserve_keys(connection: duckdb.DuckDBPyConnection, sequence: str, count: i
     ]
 
 
+def _reserve_hierarchy_keys(
+    connection: duckdb.DuckDBPyConnection,
+    records: Iterable[Any],
+) -> tuple[Iterator[int], Iterator[int]]:
+    """Reserve exact key ranges for hierarchy objects and axes.
+
+    Returns:
+        Iterators over object keys and axis keys.
+    """
+    record_count = 0
+    source_count = 0
+    signal_count = 0
+    axis_ids: set[str] = set()
+    for record in records:
+        record_count += 1
+        for source in record.walk_sources():
+            source_count += 1
+            signal_count += len(source.signals)
+            axis_ids.update(signal.time_axis.axis_id for signal in source.signals)
+    object_keys = _reserve_keys(
+        connection,
+        "object_key_sequence",
+        record_count + source_count + signal_count,
+    )
+    axis_keys = _reserve_keys(connection, "axis_key_sequence", len(axis_ids))
+    return iter(object_keys), iter(axis_keys)
+
+
 def _insert_rows(
     connection: duckdb.DuckDBPyConnection,
     table_name: str,
@@ -108,6 +137,103 @@ def _insert_rows(
         )
     finally:
         connection.unregister(relation_name)
+
+
+class _TableBatch:
+    """Insert bounded Arrow batches into one control table."""
+
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        table_name: str,
+        columns: tuple[str, ...],
+    ) -> None:
+        self.connection = connection
+        self.table_name = table_name
+        self.columns = columns
+        self.rows: list[dict[str, object]] = []
+
+    def add(self, row: dict[str, object]) -> None:
+        """Add one row and write the batch when it reaches the size limit."""
+        self.rows.append(row)
+        if len(self.rows) >= _ROW_BATCH_SIZE:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write all buffered rows and clear the buffer."""
+        _insert_rows(self.connection, self.table_name, self.columns, self.rows)
+        self.rows.clear()
+
+
+class _HierarchyBatches:
+    """Own the bounded row buffers for the stored hierarchy."""
+
+    def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
+        self.records = _TableBatch(
+            connection,
+            "records",
+            (
+                "record_key",
+                "record_id",
+                "start_time_us",
+                "time_span_start_us",
+                "time_span_end_us",
+                "metadata",
+            ),
+        )
+        self.sources = _TableBatch(
+            connection,
+            "sources",
+            ("source_key", "source_id", "record_key", "parent_source_key", "name", "metadata"),
+        )
+        self.axes = _TableBatch(
+            connection,
+            "axes",
+            (
+                "axis_key",
+                "axis_id",
+                "axis_type",
+                "period_numerator_us",
+                "period_denominator",
+                "origin_us",
+                "first_us",
+                "last_us",
+            ),
+        )
+        self.axis_offsets = _TableBatch(
+            connection,
+            "axis_offsets",
+            ("axis_key", "position", "offset_us"),
+        )
+        self.signals = _TableBatch(
+            connection,
+            "signals",
+            (
+                "signal_key",
+                "signal_id",
+                "source_key",
+                "name",
+                "axis_key",
+                "spec_type",
+                "spec_name",
+                "unit",
+                "dtype",
+                "categories",
+                "value_shape",
+                "dimension_names",
+                "nullable",
+                "n_values",
+                "metadata",
+            ),
+        )
+
+    def flush(self) -> None:
+        """Write all remaining hierarchy rows."""
+        self.records.flush()
+        self.sources.flush()
+        self.axes.flush()
+        self.axis_offsets.flush()
+        self.signals.flush()
 
 
 class DuckDBControlWriter:
@@ -179,7 +305,10 @@ class DuckDBControlWriter:
         Returns:
             Counts keyed by concrete task type.
         """
-        axes: dict[str, tuple[object, int]] = {}
+        records = dataset.records
+        object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
+        batches = _HierarchyBatches(connection)
+        axes: dict[str, tuple[object, int, pa.Array | None]] = {}
         signal_keys: dict[str, int] = {}
         dataset_key = _returned_key(
             connection.execute(
@@ -191,25 +320,32 @@ class DuckDBControlWriter:
             ("Dataset", dataset_key, annotation) for annotation in dataset.annotations
         ]
         record_keys: dict[str, int] = {}
-        for record in dataset.records:
+        for record in records:
             span = record.time_span
-            record_key = _returned_key(
-                connection.execute(
-                    """INSERT INTO records (
-                           record_id, start_time_us, time_span_start_us, time_span_end_us, metadata
-                       ) VALUES (?, ?, ?, ?, ?) RETURNING record_key""",
-                    [
-                        record.record_id,
-                        record.start_time,
-                        None if span is None else span.start_us,
-                        None if span is None else span.end_us,
-                        _json(record.metadata),
-                    ],
-                )
+            record_key = next(object_keys)
+            batches.records.add(
+                {
+                    "record_key": record_key,
+                    "record_id": record.record_id,
+                    "start_time_us": record.start_time,
+                    "time_span_start_us": None if span is None else span.start_us,
+                    "time_span_end_us": None if span is None else span.end_us,
+                    "metadata": _json(record.metadata),
+                }
             )
             record_keys[record.id] = record_key
             annotations.extend(("Record", record_key, annotation) for annotation in record.annotations)
-            self._write_record_sources(connection, record, record_key, axes, signal_keys, annotations)
+            self._write_record_sources(
+                record,
+                record_key,
+                axes,
+                signal_keys,
+                annotations,
+                object_keys,
+                axis_keys,
+                batches,
+            )
+        batches.flush()
         annotation_refs, task_counts = self._write_tasks(
             connection,
             record_keys,
@@ -523,12 +659,14 @@ class DuckDBControlWriter:
 
     def _write_record_sources(  # noqa: PLR0913, PLR0917 - hierarchy maps stay explicit
         self,
-        connection: duckdb.DuckDBPyConnection,
         record: Any,
         record_key: int,
-        axes: dict[str, tuple[object, int]],
+        axes: dict[str, tuple[object, int, pa.Array | None]],
         signal_keys: dict[str, int],
         annotations: list[tuple[str, int, Annotation]],
+        object_keys: Iterator[int],
+        axis_keys: Iterator[int],
+        batches: _HierarchyBatches,
     ) -> None:
         """Insert one record's source tree and signals.
 
@@ -541,16 +679,20 @@ class DuckDBControlWriter:
             )
 
         def write_source(source: Any, parent_key: int | None) -> None:
-            source_key = _returned_key(
-                connection.execute(
-                    """INSERT INTO sources (source_id, record_key, parent_source_key, name, metadata)
-                       VALUES (?, ?, ?, ?, ?) RETURNING source_key""",
-                    [source.id, record_key, parent_key, source.name, _json(source.metadata)],
-                )
+            source_key = next(object_keys)
+            batches.sources.add(
+                {
+                    "source_key": source_key,
+                    "source_id": source.id,
+                    "record_key": record_key,
+                    "parent_source_key": parent_key,
+                    "name": source.name,
+                    "metadata": _json(source.metadata),
+                }
             )
             annotations.extend(("Source", source_key, annotation) for annotation in source.annotations)
             for signal in source.signals:
-                signal_key = self._write_signal(connection, signal, source_key, axes)
+                signal_key = self._write_signal(signal, source_key, axes, object_keys, axis_keys, batches)
                 signal_keys[signal.id] = signal_key
                 annotations.extend(("Signal", signal_key, annotation) for annotation in signal.annotations)
             for child in source.sources:
@@ -559,12 +701,14 @@ class DuckDBControlWriter:
         for source in record.sources:
             write_source(source, None)
 
-    def _write_signal(
+    def _write_signal(  # noqa: PLR0913, PLR0917 - the hierarchy write state stays explicit
         self,
-        connection: duckdb.DuckDBPyConnection,
         signal: Signal,
         source_key: int,
-        axes: dict[str, tuple[object, int]],
+        axes: dict[str, tuple[object, int, pa.Array | None]],
+        object_keys: Iterator[int],
+        axis_keys: Iterator[int],
+        batches: _HierarchyBatches,
     ) -> int:
         """Insert one signal and its shared axis.
 
@@ -577,8 +721,9 @@ class DuckDBControlWriter:
         axis = signal.time_axis
         existing = axes.get(axis.axis_id)
         if existing is None:
-            axis_key = self._write_axis(connection, signal)
-            axes[axis.axis_id] = (axis, axis_key)
+            axis_key = next(axis_keys)
+            offsets = self._write_axis(signal, axis_key, batches)
+            axes[axis.axis_id] = (axis, axis_key, offsets)
         elif existing[0] != axis:
             raise TimeFValidationError(f"axis id {axis.axis_id!r} is reused with different definitions")
         else:
@@ -586,97 +731,91 @@ class DuckDBControlWriter:
         if existing is not None and isinstance(axis, IrregularAxis):
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-            stored_offsets = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT offset_us FROM axis_offsets WHERE axis_key = ? ORDER BY position",
-                    [axis_key],
-                ).fetchall()
-            ]
-            if signal.time_offsets_loader().to_pylist() != stored_offsets:
+            stored_offsets = existing[2]
+            if stored_offsets is None or not signal.time_offsets_loader().equals(stored_offsets):
                 raise TimeFValidationError(f"axis id {axis.axis_id!r} is shared by signals with different time offsets")
 
         spec = signal.spec
-        return _returned_key(
-            connection.execute(
-                """INSERT INTO signals (
-                       signal_id, source_key, name, axis_key, spec_type, spec_name, unit, dtype,
-                       categories, value_shape, dimension_names, nullable, n_values, metadata
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING signal_key""",
-                [
-                    signal.id,
-                    source_key,
-                    signal.name,
-                    axis_key,
-                    spec.spec_type,
-                    spec.name,
-                    str(spec.unit_value),
-                    spec.dtype,
-                    _json(spec.categories),
-                    _json(spec.value_shape),
-                    _json(spec.dimension_names),
-                    spec.nullable,
-                    signal.n_values,
-                    _json(signal.metadata),
-                ],
-            )
+        signal_key = next(object_keys)
+        batches.signals.add(
+            {
+                "signal_key": signal_key,
+                "signal_id": signal.id,
+                "source_key": source_key,
+                "name": signal.name,
+                "axis_key": axis_key,
+                "spec_type": spec.spec_type,
+                "spec_name": spec.name,
+                "unit": str(spec.unit_value),
+                "dtype": spec.dtype,
+                "categories": _json(spec.categories),
+                "value_shape": _json(spec.value_shape),
+                "dimension_names": _json(spec.dimension_names),
+                "nullable": spec.nullable,
+                "n_values": signal.n_values,
+                "metadata": _json(signal.metadata),
+            }
         )
+        return signal_key
 
     @staticmethod
-    def _write_axis(connection: duckdb.DuckDBPyConnection, signal: Signal) -> int:
-        """Insert an axis and any irregular offsets.
+    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> pa.Array | None:
+        """Buffer an axis and any irregular offsets.
 
         Returns:
-            The generated axis key.
+            The irregular offsets, or ``None`` for other axis types.
 
         Raises:
             TimeFValidationError: If an irregular signal has no offsets loader.
         """
         axis = signal.time_axis
         if isinstance(axis, RegularAxis):
-            return _returned_key(
-                connection.execute(
-                    """INSERT INTO axes (
-                           axis_id, axis_type, period_numerator_us, period_denominator, origin_us,
-                           first_us, last_us
-                       ) VALUES (?, ?, ?, ?, ?, NULL, NULL) RETURNING axis_key""",
-                    [
-                        axis.axis_id,
-                        str(axis.axis_type),
-                        axis.period_us.numerator,
-                        axis.period_us.denominator,
-                        axis.start_index,
-                    ],
-                )
+            batches.axes.add(
+                {
+                    "axis_key": axis_key,
+                    "axis_id": axis.axis_id,
+                    "axis_type": str(axis.axis_type),
+                    "period_numerator_us": axis.period_us.numerator,
+                    "period_denominator": axis.period_us.denominator,
+                    "origin_us": axis.start_index,
+                    "first_us": None,
+                    "last_us": None,
+                }
             )
+            return None
         if isinstance(axis, IrregularAxis):
-            axis_key = _returned_key(
-                connection.execute(
-                    """INSERT INTO axes (
-                           axis_id, axis_type, period_numerator_us, period_denominator, origin_us,
-                           first_us, last_us
-                       ) VALUES (?, ?, NULL, NULL, NULL, ?, ?) RETURNING axis_key""",
-                    [axis.axis_id, str(axis.axis_type), axis.first_us, axis.last_us],
-                )
+            batches.axes.add(
+                {
+                    "axis_key": axis_key,
+                    "axis_id": axis.axis_id,
+                    "axis_type": str(axis.axis_type),
+                    "period_numerator_us": None,
+                    "period_denominator": None,
+                    "origin_us": None,
+                    "first_us": axis.first_us,
+                    "last_us": axis.last_us,
+                }
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-            offsets = signal.time_offsets_loader().to_pylist()
-            connection.executemany(
-                "INSERT INTO axis_offsets VALUES (?, ?, ?)",
-                [(axis_key, position, offset) for position, offset in enumerate(offsets)],
-            )
-            return axis_key
+            offsets = signal.time_offsets_loader()
+            for position, offset in enumerate(offsets.to_pylist()):
+                batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": offset})
+            return offsets
         if isinstance(axis, OrdinalAxis):
-            return _returned_key(
-                connection.execute(
-                    """INSERT INTO axes (
-                           axis_id, axis_type, period_numerator_us, period_denominator, origin_us,
-                           first_us, last_us
-                       ) VALUES (?, ?, NULL, NULL, NULL, NULL, NULL) RETURNING axis_key""",
-                    [axis.axis_id, str(axis.axis_type)],
-                )
+            batches.axes.add(
+                {
+                    "axis_key": axis_key,
+                    "axis_id": axis.axis_id,
+                    "axis_type": str(axis.axis_type),
+                    "period_numerator_us": None,
+                    "period_denominator": None,
+                    "origin_us": None,
+                    "first_us": None,
+                    "last_us": None,
+                }
             )
+            return None
         assert_never(axis)
 
     @staticmethod
