@@ -4,7 +4,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE, RECORDS_TEMPLATE, part_path
@@ -215,8 +215,15 @@ def test_abort_leaves_no_partial_dir(tmp_path):
     )
     record = dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries(spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader),
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries(
+                            spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader
+                        ),
+                    ),
+                ),
             ),
         )
     )
@@ -256,7 +263,7 @@ def test_per_series_array_contract_enforced(tmp_path):
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         n_values=5,
     )
-    dataset.add_record(record=Record(time_series=(ts,)))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
@@ -340,8 +347,8 @@ def test_same_id_different_series_rejected(tmp_path):
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         time_series_id="ts-x",
     )
-    dataset.add_record(record=Record(time_series=(a,), record_id="s-a"))
-    dataset.add_record(record=Record(time_series=(b,), record_id="s-b"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), record_id="s-a"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), record_id="s-b"))
     dataset.derive_schema()
     with (
         pytest.raises(TimeFValidationError, match="claimed by two different series"),
@@ -366,8 +373,8 @@ def test_same_series_shared_across_records_still_dedupes(tmp_path):
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_series_id="ts-shared",
     )
-    dataset.add_record(record=Record(time_series=(shared,), record_id="s-a"))
-    dataset.add_record(record=Record(time_series=(shared,), record_id="s-b"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(shared,)),), record_id="s-a"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(shared,)),), record_id="s-b"))
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
