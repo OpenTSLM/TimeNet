@@ -62,13 +62,16 @@ class DuckDBControlWriter:
         placements: dict[tuple[str, int], ChunkPlacement] | None = None,
         *,
         tasks: Iterable[Task] | None = None,
-    ) -> None:
+    ) -> dict[str, int]:
         """Write records, sources, signals, axes, and their annotations atomically.
 
         Args:
             dataset: The complete in-memory hierarchy.
             placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
             tasks: A previously validated task stream, or ``None`` to use the dataset's tasks.
+
+        Returns:
+            Counts keyed by concrete task type.
 
         Raises:
             TimeFValidationError: If the hierarchy contains a dangling relationship, conflicting
@@ -79,7 +82,11 @@ class DuckDBControlWriter:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
                 with transaction(connection):
-                    self._write_objects(connection, dataset, tuple(dataset.iter_tasks()) if tasks is None else tasks)
+                    task_counts = self._write_objects(
+                        connection,
+                        dataset,
+                        dataset.iter_tasks() if tasks is None else tasks,
+                    )
                     self._write_chunks(connection, placements or {})
                     self._validate_objects(connection, require_chunks=placements is not None)
                 connection.execute("CHECKPOINT")
@@ -89,14 +96,19 @@ class DuckDBControlWriter:
         except BaseException:
             self.path.unlink(missing_ok=True)
             raise
+        return task_counts
 
     def _write_objects(
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,
         tasks: Iterable[Task],
-    ) -> None:
-        """Insert hierarchy rows into an open transaction."""
+    ) -> dict[str, int]:
+        """Insert hierarchy rows into an open transaction.
+
+        Returns:
+            Counts keyed by concrete task type.
+        """
         axes: dict[str, object] = {}
         object_types: dict[str, set[str]] = {dataset.metadata.dataset_id: {"Dataset"}}
         annotations: list[tuple[str, Annotation]] = [
@@ -117,9 +129,10 @@ class DuckDBControlWriter:
             )
             annotations.extend((record.record_id, annotation) for annotation in record.annotations)
             self._write_record_sources(connection, record, axes, annotations, object_types)
-        annotation_refs = self._write_tasks(connection, dataset, annotations, object_types, tasks)
+        annotation_refs, task_counts = self._write_tasks(connection, dataset, annotations, object_types, tasks)
         self._write_annotations(connection, annotations, object_types)
         self._write_task_annotation_refs(connection, annotation_refs)
+        return task_counts
 
     @staticmethod
     def _write_chunks(
@@ -151,23 +164,27 @@ class DuckDBControlWriter:
         annotations: list[tuple[str, Annotation]],
         object_types: dict[str, set[str]],
         tasks_source: Iterable[Task],
-    ) -> list[tuple[str, str, int, str]]:
+    ) -> tuple[list[tuple[str, str, int, str]], dict[str, int]]:
         """Insert tasks and normalized object relationships.
 
         Returns:
-            Deferred task-to-annotation rows, inserted after annotation occurrences.
+            Deferred task-to-annotation rows and counts keyed by concrete task type.
 
         Raises:
             TimeFValidationError: If a task refers to an object outside the dataset.
         """
-        tasks = tuple(tasks_source)
         known_records = {record.id for record in dataset.records}
         known_signals = {signal.id for record in dataset.records for signal in record.signals}
-        task_ids = {task.id for task in tasks}
-        if len(task_ids) != len(tasks):
-            raise TimeFValidationError("tasks must have unique IDs")
-
-        for task in tasks:
+        task_ids: set[str] = set()
+        dependency_rows: list[tuple[str, int, str]] = []
+        annotation_refs: list[tuple[str, str, int, str]] = []
+        task_counts: dict[str, int] = {}
+        for task in tasks_source:
+            if task.id in task_ids:
+                raise TimeFValidationError(f"task id {task.id!r} is not unique")
+            task_ids.add(task.id)
+            task_type = str(task.task_type)
+            task_counts[task_type] = task_counts.get(task_type, 0) + 1
             object_types.setdefault(task.id, set()).add("Task")
             connection.execute(
                 "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -182,9 +199,6 @@ class DuckDBControlWriter:
                 ],
             )
             annotations.extend((task.id, annotation) for annotation in task.annotations)
-
-        annotation_refs: list[tuple[str, str, int, str]] = []
-        for task in tasks:
             record_refs = self._task_record_refs(task)
             for field, records in record_refs:
                 for position, record_id in enumerate(records):
@@ -215,15 +229,17 @@ class DuckDBControlWriter:
                         raise TimeFValidationError(f"task {task.id!r} field {field!r} refers to an unbound annotation")
                     annotation_refs.append((task.id, field, position, annotation.occurrence_id))
             for position, parent in enumerate(task.from_tasks):
-                if parent.id not in task_ids:
-                    raise TimeFValidationError(
-                        f"task {task.id!r} depends on task {parent.id!r}, which is not in the dataset"
-                    )
-                connection.execute(
-                    "INSERT INTO task_dependencies VALUES (?, ?, ?)",
-                    [task.id, position, parent.id],
+                dependency_rows.append((task.id, position, parent.id))
+        for task_id, position, parent_id in dependency_rows:
+            if parent_id not in task_ids:
+                raise TimeFValidationError(
+                    f"task {task_id!r} depends on task {parent_id!r}, which is not in the dataset"
                 )
-        return annotation_refs
+            connection.execute(
+                "INSERT INTO task_dependencies VALUES (?, ?, ?)",
+                [task_id, position, parent_id],
+            )
+        return annotation_refs, task_counts
 
     @staticmethod
     def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
