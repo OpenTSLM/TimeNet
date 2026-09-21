@@ -40,6 +40,8 @@ class ManifestFiles:
     """Parts of the task tables. There is one table for each task type."""
     time_series: tuple[FilePart, ...] = ()
     """Parts of the time series data. Each part is also a shard."""
+    control: tuple[FilePart, ...] = ()
+    """The single DuckDB relational control-plane file for TimeF."""
 
     def all_files(self) -> tuple[FilePart, ...]:
         """Return every file descriptor across all artifacts, in a stable order.
@@ -48,7 +50,14 @@ class ManifestFiles:
             The parts of ``records``, ``annotations``, ``time_series_index``, ``tasks``, and
             ``time_series``, joined into one tuple.
         """
-        return (*self.records, *self.annotations, *self.time_series_index, *self.tasks, *self.time_series)
+        return (
+            *self.control,
+            *self.records,
+            *self.annotations,
+            *self.time_series_index,
+            *self.tasks,
+            *self.time_series,
+        )
 
     def all_parts(self) -> tuple[str, ...]:
         """Return the version-relative path of every file, in the same order as :meth:`all_files`.

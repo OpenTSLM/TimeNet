@@ -254,8 +254,6 @@ class Record:
             TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
                 contain some series' window.
         """
-        if self.time_series and self.sources:
-            raise TimeFValidationError("Record accepts either legacy time_series or sources, not both")
         if self.sources:
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
