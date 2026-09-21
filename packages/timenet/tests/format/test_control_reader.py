@@ -32,7 +32,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert record.annotations[0].occurrence_id is not None
     assert task.inputs[0] is record
     assert task.prompt == "Alive?"
-    assert task.target == "Yes"
+    assert task.targets == ("Yes",)
     assert task.annotations[0].name == "task_kind"
 
 

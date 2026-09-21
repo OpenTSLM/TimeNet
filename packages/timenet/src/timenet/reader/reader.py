@@ -133,8 +133,8 @@ class TimeFReader:
         tasks = self.tasks
         by_id = {record.record_id: record for record in records}
         for task in tasks:
-            for record_id in task.record_ids:
-                record = by_id.get(record_id)
+            for referenced in task.inputs:
+                record = by_id.get(referenced.id)
                 if record is not None and task.id not in record.task_ids:
                     record.task_ids = (*record.task_ids, task.id)
         return TimeFDataset.from_parts(

@@ -203,50 +203,50 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     automotive = records["automotive"]
 
     dataset.add_task(
-        vibration,
-        ClassificationTask(
-            target="outer-race-fault",
+        task=ClassificationTask(
+            inputs=(vibration,),
+            targets=("outer-race-fault",),
             target_schema="condition",
             id="task-vibration-class",
         ),
     )
     dataset.add_task(
-        ecg,
-        ClassificationTask(
-            target="atrial-fibrillation",
+        task=ClassificationTask(
+            inputs=(ecg,),
+            targets=("atrial-fibrillation",),
             target_schema="rhythm",
             id="task-ecg-class",
         ),
     )
     dataset.add_task(
-        sleep,
-        ClassificationTask(
-            target="N2",
+        task=ClassificationTask(
+            inputs=(sleep,),
+            targets=("N2",),
             target_schema="sleep-stage",
             scope=TimeInterval.seconds(30.0, 60.0),
             id="task-sleep-label",
         ),
     )
     dataset.add_task(
-        accelerometer,
-        AnswerTask(
-            target="A trace with rising amplitude and a periodic impact after five seconds.",
+        task=AnswerTask(
+            inputs=(accelerometer,),
+            targets=("A trace with rising amplitude and a periodic impact after five seconds.",),
             id="task-accelerometer-caption",
         ),
     )
     dataset.add_task(
-        finance,
-        AnswerTask(
+        task=AnswerTask(
+            inputs=(finance,),
             prompt="Summarize the session.",
-            target="Choppy open, midday rally, positive close.",
+            targets=("Choppy open, midday rally, positive close.",),
             id="task-finance-qa",
         ),
     )
     dataset.add_task(
-        workout,
-        AnswerTask(
+        task=AnswerTask(
+            inputs=(workout,),
             prompt="Assess this workout.",
-            target="Aerobic base session",
+            targets=("Aerobic base session",),
             rationale="Heart-rate drift appears late while pace remains stable.",
             id="task-workout-reasoning",
         ),
@@ -255,18 +255,18 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     # scenario is 4096 steps at 0.25 Hz, a [0, 16384 s) window at the smallest scale, so this span is
     # inside every scale.
     dataset.add_task(
-        energy,
-        ForecastingTask(
+        task=ForecastingTask(
+            inputs=(energy,),
             scope=TimeInterval.seconds(0.0, 16000.0),
-            target_span=TimeInterval.seconds(16000.0, 16380.0),
+            targets=(TimeInterval.seconds(16000.0, 16380.0),),
             id="task-energy-forecast",
         ),
     )
     dataset.add_task(
-        automotive,
-        AnswerTask(
+        task=AnswerTask(
+            inputs=(automotive,),
             prompt="Estimate remaining useful life.",
-            target="74 cycles",
+            targets=("74 cycles",),
             rationale="Vibration rises while torque efficiency falls.",
             id="task-automotive-reasoning",
         ),
@@ -302,10 +302,10 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         )
         record.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
-            record,
-            AnswerTask(
+            task=AnswerTask(
+                inputs=(record,),
                 prompt=f"Is rhythm abnormal in view {index}?",
-                target="atrial-fibrillation",
+                targets=("atrial-fibrillation",),
                 rationale="The synthetic rhythm has repeatable irregular intervals.",
                 id=f"task-ecg-reasoning-{index:03d}",
             ),
@@ -335,10 +335,10 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         )
         record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
-            record,
-            AnswerTask(
+            task=AnswerTask(
+                inputs=(record,),
                 prompt=f"What pattern appears in series {index}?",
-                target="A deterministic trend with periodic variation.",
+                targets=("A deterministic trend with periodic variation.",),
                 id=f"task-tsqa-{index:04d}",
             ),
         )
@@ -364,9 +364,9 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         )
         record.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
-            record,
-            ClassificationTask(
-                target="above-zero" if offset > 0 else "below-zero",
+            task=ClassificationTask(
+                inputs=(record,),
+                targets=("above-zero" if offset > 0 else "below-zero",),
                 target_schema="mean-sign",
                 id=f"task-mean-{index:04d}",
             ),
