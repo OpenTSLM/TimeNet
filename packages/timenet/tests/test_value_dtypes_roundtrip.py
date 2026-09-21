@@ -69,9 +69,9 @@ def _dataset(spec: TimeSeriesSpec, values, signal: str = "c", record_id: str = "
     ts = TimeSeries.from_values(
         values,
         spec=spec,
-        signal=signal,
+        name=signal,
         time_axis=RegularAxis.from_rate_hz(1),
-        time_series_id=f"ts-{signal}",
+        id=f"ts-{signal}",
     )
     dataset.add_record(record=Record(time_series=(ts,), record_id=record_id))
     dataset.derive_schema()
@@ -141,21 +141,21 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
     )
     bool_spec = _spec(dtype="bool")
     bool0 = TimeSeries.from_values(
-        [True, False, True], spec=bool_spec, signal="active", time_axis=RegularAxis.from_rate_hz(1)
+        [True, False, True], spec=bool_spec, name="active", time_axis=RegularAxis.from_rate_hz(1)
     )
     str0 = TimeSeries.from_values(
         ["normal", "afib"],
         spec=_spec(dtype="str"),
-        signal="stage",
+        name="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
     bool1 = TimeSeries.from_values(
-        [False, False, True], spec=bool_spec, signal="active", time_axis=RegularAxis.from_rate_hz(1)
+        [False, False, True], spec=bool_spec, name="active", time_axis=RegularAxis.from_rate_hz(1)
     )
     str1 = TimeSeries.from_values(
         ["vt", "normal"],
         spec=_spec(dtype="str"),
-        signal="stage",
+        name="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
     dataset.add_record(record=Record(time_series=(bool0, str0), record_id="record-0"))
@@ -213,7 +213,7 @@ def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
         ("active", _spec("bool"), np.array([True, False, True])),
     ]
     series = tuple(
-        TimeSeries.from_values(values, spec=spec, signal=name, time_axis=RegularAxis.from_rate_hz(1))
+        TimeSeries.from_values(values, spec=spec, name=name, time_axis=RegularAxis.from_rate_hz(1))
         for name, spec, values in signals
     )
     dataset = TimeFDataset(

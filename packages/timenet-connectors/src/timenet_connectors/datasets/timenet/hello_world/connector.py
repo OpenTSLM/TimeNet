@@ -131,10 +131,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         shared = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values, phase=0.0),
             spec=_SINE,
-            signal="a",
+            name="a",
             time_axis=_AXIS,
             source_id="rec-0",
-            time_series_id="ts-shared",
+            id="ts-shared",
         )
         # An annotation shared across two records. This uses the dedupe-by-id path.
         cohort = Annotation(key="cohort", value="A", id="cohort-shared")
@@ -143,10 +143,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         cosine = TimeSeries.from_values(
             _wave_values(np.cos, short.n_values, phase=0.0),
             spec=_COSINE,
-            signal="b",
+            name="b",
             time_axis=_AXIS,
             source_id="rec-0",
-            time_series_id="ts-cos-0",
+            id="ts-cos-0",
         )
         record0 = dataset.add_record(
             record=Record(time_series=(shared, cosine), subject_ids=("subj-0",), record_id="record-0")
@@ -199,13 +199,13 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
 
         # Record 1: this reuses the shared series and adds a longer series. The writer tests split the
         # longer series into chunks under a small chunk cap.
-        long_series = TimeSeries(
+        long_series = TimeSeries.from_loader(
             spec=_SINE,
-            signal="a",
+            name="a",
             time_axis=_AXIS,
             loader=_wave(np.sin, long.n_values, phase=1.0),
             source_id="rec-1",
-            time_series_id="ts-long-1",
+            id="ts-long-1",
             n_values=long.n_values,
         )
         record1 = dataset.add_record(
@@ -221,10 +221,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         window = TimeSeries.from_values(
             _wave_values(np.sin, short.n_values - window_start, phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ),
             spec=_SINE,
-            signal="a",
+            name="a",
             time_axis=_AXIS.at_index(window_start),
             source_id="rec-0",
-            time_series_id="ts-window-2",
+            id="ts-window-2",
         )
         record2 = dataset.add_record(
             record=Record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
