@@ -19,7 +19,6 @@ from timenet.format.task_codec import decode_span, decode_task_payload
 from timenet.types import (
     TASKS,
     Annotation,
-    DataSource,
     ForecastingTask,
     Task,
     TaskType,
@@ -187,7 +186,7 @@ class DuckDBControlReader:
                     name=name,
                     spec=spec,
                     time_axis=axis,
-                    n_values=row[13],
+                    n_values=row[12],
                     loader=(
                         self._value_loader_factory(signal_id, spec)
                         if self._value_loader_factory is not None
@@ -195,7 +194,7 @@ class DuckDBControlReader:
                     ),
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_id), ()),
-                    metadata=_decode_json(row[14], default={}),
+                    metadata=_decode_json(row[13], default={}),
                 )
             )
 
@@ -614,8 +613,6 @@ class DuckDBControlReader:
         Returns:
             The typed specification.
         """
-        source_data = _decode_json(row[12])
-        source = None if source_data is None else DataSource(**source_data)
         return TimeSeriesSpec(
             spec_type=row[4],
             name=row[5],
@@ -625,7 +622,6 @@ class DuckDBControlReader:
             value_shape=tuple(_decode_json(row[9], default=[])),
             dimension_names=tuple(_decode_json(row[10], default=[])),
             nullable=row[11],
-            data_source=source,
         )
 
     def _read_annotations(

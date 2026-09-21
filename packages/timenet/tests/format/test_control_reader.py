@@ -48,7 +48,7 @@ def test_control_reader_scopes_related_queries_to_requested_records(tmp_path):
         connection.execute(
             """INSERT INTO signals
                SELECT 'signal-2', 'source-2', name, 'missing-axis', spec_type, spec_name, unit, dtype,
-                      categories, value_shape, dimension_names, nullable, data_source, n_values, metadata
+                      categories, value_shape, dimension_names, nullable, n_values, metadata
                FROM signals LIMIT 1"""
         )
 

@@ -23,7 +23,6 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
-    DataSource,
     LocalizationMode,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -36,18 +35,15 @@ from timenet.types import (
 
 _SAMPLING_RATE_HZ = 16.0
 _AXIS = RegularAxis.from_rate_hz(16)
-_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SINE = TimeSeriesSpec(
     spec_type="sine",
     name="Sine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 
 
