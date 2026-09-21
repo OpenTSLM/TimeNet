@@ -44,6 +44,12 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
     """
     if value is None:
         return default
+    if value == "{}":
+        return {}
+    if value == "[]":
+        return []
+    if value == "null":
+        return None
     try:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
