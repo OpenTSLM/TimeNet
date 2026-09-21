@@ -326,7 +326,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                 yield AnswerTask(
                     inputs=(records[ecg_id],),
                     prompt=str(row["question"]),
-                    target=str(row["answer"]),
+                    targets=(str(row["answer"]),),
                     rationale=str(row["rationale"]),
                     input_annotations=tuple(annotations[annotation_id] for annotation_id in input_ids),
                     id=f"ecgqa-{split}-{index}",

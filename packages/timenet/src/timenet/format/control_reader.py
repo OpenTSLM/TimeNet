@@ -15,19 +15,15 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_span, decode_task_payload
+from timenet.format.task_codec import decode_span, decode_target, decode_task_payload
 from timenet.types import (
     TASKS,
     Annotation,
-    ForecastingTask,
     Task,
     TaskType,
     TimeInterval,
     TimePoint,
     TimeSeriesSpec,
-    TSCorrespondenceTask,
-    TSEditingTask,
-    TSGenerationTask,
     ureg,
 )
 
@@ -356,15 +352,46 @@ class DuckDBControlReader:
             if annotation.occurrence_id is not None
         }
         record_refs = self._relationship_rows("task_record_refs", "record_id")
-        signal_refs = self._relationship_rows("task_signal_refs", "signal_id")
         annotation_refs = self._relationship_rows("task_annotation_refs", "occurrence_id")
 
+        targets_by_task: dict[str, list[object]] = defaultdict(list)
+        target_rows = self.connection.execute(
+            """SELECT task_id, target_kind, text_value, integer_value, float_value,
+                      boolean_value, record_id, signal_id, span_start, span_end, span_signal_ids
+               FROM task_targets ORDER BY task_id, position"""
+        ).fetchall()
+        target_columns = (
+            "target_kind",
+            "text_value",
+            "integer_value",
+            "float_value",
+            "boolean_value",
+            "record_id",
+            "signal_id",
+            "span_start",
+            "span_end",
+            "span_signal_ids",
+        )
+        for task_id, *values in target_rows:
+            row = dict(zip(target_columns, values, strict=True))
+            row["span_signal_ids"] = _decode_json(row["span_signal_ids"])
+            targets_by_task[task_id].append(decode_target(row, records=records_by_id, signals=signals_by_id))
+
         task_rows = self.connection.execute(
-            """SELECT task_id, task_type, prompt, scope, payload, rationale, metadata
+            """SELECT task_id, task_type, prompt, scope, has_inline_targets, payload, rationale, metadata
                FROM tasks ORDER BY task_id"""
         ).fetchall()
         tasks: dict[str, Task] = {}
-        for task_id, stored_type, prompt, scope_data, payload_data, rationale, metadata in task_rows:
+        for (
+            task_id,
+            stored_type,
+            prompt,
+            scope_data,
+            has_inline_targets,
+            payload_data,
+            rationale,
+            metadata,
+        ) in task_rows:
             try:
                 task_type = TaskType(stored_type)
                 cls = TASKS[task_type]
@@ -375,7 +402,7 @@ class DuckDBControlReader:
             kwargs: dict[str, Any] = {
                 "id": task_id,
                 "inputs": inputs,
-                "record_ids": tuple(record.id for record in inputs),
+                "targets": tuple(targets_by_task.get(task_id, ())) if has_inline_targets else None,
                 "prompt": prompt,
                 "scope": decode_span(_decode_json(scope_data)),
                 "rationale": rationale,
@@ -383,8 +410,13 @@ class DuckDBControlReader:
                 "metadata": _decode_json(metadata, default={}),
                 **decode_task_payload(task_type, _decode_json(payload_data, default={})),
             }
-            self._add_task_record_kwargs(task_id, cls, refs, records_by_id, kwargs)
-            self._add_task_signal_kwargs(task_id, cls, signal_refs.get(task_id, {}), signals_by_id, kwargs)
+            if "candidate_records" in cls.__dataclass_fields__:
+                kwargs["candidate_records"] = self._resolve_records(
+                    task_id,
+                    "candidate_records",
+                    refs,
+                    records_by_id,
+                )
             input_annotations = self._resolve_annotations(
                 task_id,
                 "input_annotations",
@@ -399,9 +431,7 @@ class DuckDBControlReader:
             )
             kwargs.update(
                 input_annotations=input_annotations,
-                input_annotation_ids=tuple(annotation.content_id for annotation in input_annotations),
                 target_annotations=target_annotations,
-                target_annotation_ids=tuple(annotation.content_id for annotation in target_annotations),
             )
             tasks[task_id] = cls(**kwargs)
 
@@ -486,56 +516,6 @@ class DuckDBControlReader:
             raise TimeFFormatError(
                 f"task {task_id!r} field {field!r} refers to missing annotation occurrence {exc.args[0]!r}"
             ) from exc
-
-    @staticmethod
-    def _add_task_record_kwargs(
-        task_id: str,
-        cls: type[Task],
-        refs: dict[str, tuple[str, ...]],
-        records: dict[str, Record],
-        kwargs: dict[str, Any],
-    ) -> None:
-        """Add concrete task record relationships to constructor arguments."""
-        resolve = lambda field: DuckDBControlReader._resolve_records(task_id, field, refs, records)  # noqa: E731
-        if issubclass(cls, ForecastingTask):
-            context = resolve("context_records")
-            target = resolve("target_record")
-            kwargs.update(context_records=context, target_record=target[0] if target else None)
-        elif issubclass(cls, TSEditingTask):
-            source, target = resolve("source_record"), resolve("target_record")
-            kwargs.update(
-                source_record=source[0] if source else None,
-                target_record=target[0] if target else None,
-            )
-        elif issubclass(cls, TSGenerationTask):
-            target = resolve("target_record")
-            kwargs["target_record"] = target[0] if target else None
-        elif issubclass(cls, TSCorrespondenceTask):
-            candidates, targets = resolve("candidate_records"), resolve("target_records")
-            kwargs.update(candidate_records=candidates, target_records=targets or None)
-
-    @staticmethod
-    def _add_task_signal_kwargs(
-        task_id: str,
-        cls: type[Task],
-        refs: dict[str, tuple[str, ...]],
-        signals: dict[str, Signal],
-        kwargs: dict[str, Any],
-    ) -> None:
-        """Add concrete task signal relationships to constructor arguments.
-
-        Raises:
-            TimeFFormatError: If a signal ID is missing.
-        """
-        if not issubclass(cls, TSCorrespondenceTask):
-            return
-        try:
-            resolved = tuple(signals[signal_id] for signal_id in refs.get("target_signals", ()))
-        except KeyError as exc:
-            raise TimeFFormatError(
-                f"task {task_id!r} field 'target_signals' refers to missing signal {exc.args[0]!r}"
-            ) from exc
-        kwargs["target_signals"] = resolved or None
 
     def _read_axes(self, axis_ids: set[str]) -> dict[str, RegularAxis | IrregularAxis | OrdinalAxis]:
         """Hydrate each shared axis exactly once.

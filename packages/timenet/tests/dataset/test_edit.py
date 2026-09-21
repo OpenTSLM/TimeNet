@@ -19,13 +19,12 @@ def test_remove_records_preserves_dataset_annotations_and_their_refs():
     options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-shared"))
     answer = next(task for task in dataset.tasks if task.id == "task-answer-0")
     answer.input_annotations = (*answer.input_annotations, options)
-    answer.input_annotation_ids = (*answer.input_annotation_ids, options.content_id)
 
     edited = remove_records(dataset, ["record-2"], cascade=True)  # record-2's own task cascades out
 
     assert [ann.id for ann in edited.annotations] == ["opts-shared"]
     kept = next(task for task in edited.tasks if task.id == "task-answer-0")
-    assert "opts-shared" in kept.input_annotation_ids
+    assert options in kept.input_annotations
 
 
 def _base(tmp_path, dataset=None):
@@ -46,7 +45,6 @@ def _answer_reads_context_via_record1():
     dataset = make_dataset()
     answer = next(t for t in dataset.tasks if t.id == "task-answer-0")
     answer.inputs = (dataset.records[0], dataset.records[1])
-    answer.record_ids = ("record-0", "record-1")
     dataset.records[1].task_ids = (*dataset.records[1].task_ids, "task-answer-0")
     record0 = dataset.records[0]
     record0.annotations = tuple(a for a in record0.annotations if a.id != "cohort-shared")
@@ -111,8 +109,8 @@ def test_input_annotation_refs_are_stripped_when_unreachable():
 
     edited = remove_records(dataset, ["record-1"])
     rebuilt = next(t for t in edited.tasks if t.id == "task-answer-0")
-    assert rebuilt.record_ids == ("record-0",)
-    assert rebuilt.input_annotation_ids == ()
+    assert rebuilt.inputs == (dataset.records[0],)
+    assert rebuilt.input_annotations == ()
 
 
 def test_input_annotation_refs_survive_a_reachable_removal():
@@ -121,18 +119,20 @@ def test_input_annotation_refs_survive_a_reachable_removal():
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-1"])
     rebuilt = next(t for t in edited.tasks if t.id == "task-answer-0")
-    assert rebuilt.input_annotation_ids == ("cohort-shared",)
+    assert tuple(annotation.id for annotation in rebuilt.input_annotations) == ("cohort-shared",)
 
 
 def test_target_annotation_refs_are_required():
-    # task-localize-0 stores its answer as target_annotation_ids pointing at stim-0/art-0 on record-0.
+    # task-localize-0 stores its answer as annotation occurrences on record-0.
     # Widening it to record-2 means dropping record-0 no longer costs it every record, but it does cost
     # it the answer, so the edit is rejected rather than silently rewriting the ground truth.
     dataset = make_dataset()
     localize = next(t for t in dataset.tasks if t.id == "task-localize-0")
-    localize.target = None
-    localize.target_annotation_ids = ("stim-0", "art-0")
-    localize.record_ids = ("record-0", "record-2")
+    localize.inputs = (dataset.records[0], dataset.records[2])
+    localize.targets = None
+    localize.target_annotations = tuple(
+        annotation for annotation in dataset.records[0].annotations if annotation.id in {"stim-0", "art-0"}
+    )
     dataset.records[2].task_ids = (*dataset.records[2].task_ids, "task-localize-0")
     dataset.derive_schema()
 
@@ -152,35 +152,34 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
 
-    by_record = {s.record_id: {a.id for a in s.annotations} for s in restored.records}
+    by_record = {
+        record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
+    }
     for task in restored.tasks:
-        reachable = set().union(*(by_record[sid] for sid in task.record_ids))
-        named = (*task.input_annotation_ids, *task.target_annotation_ids)
-        assert not [aid for aid in named if aid not in reachable], f"{task.id} dangles"
+        reachable = set().union(*(by_record[record.id] for record in task.inputs))
+        named = (*task.input_annotations, *task.target_annotations)
+        assert not [annotation for annotation in named if annotation.occurrence_id not in reachable]
 
 
-def test_payload_record_refs_are_required_whatever_the_task_type():
-    # The editor reads TaskRefs rather than special-casing forecasting, so an edit task's source and a
-    # correspondence task's candidate pool are protected the same way.
+def test_target_and_candidate_records_are_required_whatever_the_task_type():
     dataset = make_dataset()
     edited_record = dataset.records[1]
     dataset.add_task(
-        dataset.records[0],
-        TSEditingTask(
+        task=TSEditingTask(
+            inputs=(dataset.records[0],),
             prompt="Denoise it.",
-            source_record_id="record-0",
-            target_record_id=edited_record.record_id,
+            targets=(edited_record,),
             id="task-edit-0",
-        ),
+        )
     )
     dataset.add_task(
-        dataset.records[0],
-        TSCorrespondenceTask(
+        task=TSCorrespondenceTask(
+            inputs=(dataset.records[0],),
             prompt="Which trace matches?",
-            candidate_record_ids=("record-1", "record-2"),
-            target=("record-2",),
+            candidate_records=(dataset.records[1], dataset.records[2]),
+            targets=(dataset.records[2],),
             id="task-corr-0",
-        ),
+        )
     )
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="task-edit-0"):
