@@ -56,7 +56,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
             )
         )
         record.add_annotation(Annotation(key="label", value=f"cls-{i % 3}", id=f"ann-{i:03d}"))
-        dataset.add_task(record, ClassificationTask(target=f"c{i % 2}", id=f"task-{i:03d}"))
+        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(f"c{i % 2}",), id=f"task-{i:03d}"))
     return dataset
 
 

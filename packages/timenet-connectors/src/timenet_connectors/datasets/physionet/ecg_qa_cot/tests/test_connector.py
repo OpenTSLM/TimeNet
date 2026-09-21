@@ -157,10 +157,11 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     tasks = list(dataset.iter_tasks())
     assert len(tasks) == len(rows)
     assert all(isinstance(task, AnswerTask) for task in tasks)
-    assert {task.target for task in tasks} == {row["answer"] for row in rows}
+    assert {task.targets[0] for task in tasks if task.targets is not None} == {row["answer"] for row in rows}
     assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
     assert {task.inputs[0].id for task in tasks} == {"ptbxl-1", "ptbxl-2"}
-    assert all(task.target != task.rationale for task in tasks)  # answer is the short label, not the CoT
+    # The answer is the short label, not the chain of thought.
+    assert all(task.targets != (task.rationale,) for task in tasks)
 
 
 def test_recording_carries_its_split(tmp_path, records_dir):
@@ -179,9 +180,9 @@ def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir)
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    registered = {ann.id for ann in dataset.annotations}
+    registered = {annotation.occurrence_id for annotation in dataset.annotations}
     for task in dataset.iter_tasks():
-        assert set(task.input_annotation_ids) <= registered
+        assert {annotation.occurrence_id for annotation in task.input_annotations} <= registered
 
 
 def test_answer_options_come_from_template(tmp_path, records_dir):
