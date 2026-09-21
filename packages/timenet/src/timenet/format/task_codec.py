@@ -1,12 +1,14 @@
-"""Canonical JSON codec for task scalar and span payloads."""
+"""Canonical codecs for Task configuration, scopes, and typed target rows."""
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
+from timenet.dataset.record import Record
+from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
 from timenet.types import (
-    AnswerTask,
     ClassificationTask,
-    ForecastingTask,
+    LocalizationMode,
     ScalarPredictionTask,
     Span,
     StepInterval,
@@ -16,9 +18,19 @@ from timenet.types import (
     TemporalLocalizationTask,
     TimeInterval,
     TimePoint,
-    TSCorrespondenceTask,
-    TSEditingTask,
-    TSGenerationTask,
+)
+
+
+TARGET_VALUE_COLUMNS = (
+    "text_value",
+    "integer_value",
+    "float_value",
+    "boolean_value",
+    "record_id",
+    "signal_id",
+    "span_start",
+    "span_end",
+    "span_signal_ids",
 )
 
 
@@ -26,10 +38,10 @@ def encode_span(span: Span | None) -> dict[str, Any] | None:
     """Encode a concrete span without losing its frame or shape.
 
     Returns:
-        A JSON-compatible tagged mapping, or ``None``.
+        The canonical span mapping, or ``None``.
 
     Raises:
-        TimeFFormatError: If ``span`` is not a built-in concrete span.
+        TimeFFormatError: If the Span subtype is unsupported.
     """
     if span is None:
         return None
@@ -55,13 +67,13 @@ def encode_span(span: Span | None) -> dict[str, Any] | None:
 
 
 def decode_span(data: dict[str, Any] | None) -> Span | None:
-    """Decode a span from canonical task JSON.
+    """Decode a canonical span mapping.
 
     Returns:
-        The concrete span, or ``None``.
+        The decoded Span, or ``None``.
 
     Raises:
-        TimeFFormatError: If the stored type tag is unknown.
+        TimeFFormatError: If the stored span type is unknown.
     """
     if data is None:
         return None
@@ -82,51 +94,144 @@ def decode_span(data: dict[str, Any] | None) -> Span | None:
 
 
 def encode_task_payload(task: Task) -> dict[str, Any]:
-    """Encode only the concrete task's scalar and span payload fields.
+    """Encode only configuration owned by the concrete Task class.
 
     Returns:
-        A JSON-compatible mapping with no object relationships.
-
-    Raises:
-        TimeFFormatError: If ``task`` is not a built-in concrete task.
+        The task configuration mapping, without targets or relationships.
     """
     if isinstance(task, ClassificationTask):
-        return {"target": task.target, "target_schema": task.target_schema}
-    if isinstance(task, AnswerTask):
-        return {"target": task.target}
+        return {"target_schema": task.target_schema}
     if isinstance(task, ScalarPredictionTask):
-        return {"target": task.target, "unit": task.unit, "target_name": task.target_name}
+        return {"unit": task.unit, "target_name": task.target_name}
     if isinstance(task, TemporalLocalizationTask):
-        target = None if task.target is None else [encode_span(span) for span in task.target]
-        return {"target": target, "mode": str(task.mode)}
-    if isinstance(task, ForecastingTask):
-        return {"target_span": encode_span(task.target_span)}
-    if isinstance(task, TSEditingTask | TSGenerationTask | TSCorrespondenceTask):
-        return {}
-    raise TimeFFormatError(f"cannot encode unsupported task type {type(task).__name__}")
+        return {"mode": str(task.mode)}
+    return {}
 
 
 def decode_task_payload(task_type: TaskType, payload: dict[str, Any]) -> dict[str, Any]:
-    """Decode subclass-specific constructor arguments from stored JSON.
+    """Decode concrete Task configuration from its canonical mapping.
 
     Returns:
-        Keyword arguments for the concrete task constructor.
+        Keyword arguments for the concrete Task constructor.
     """
+    if task_type is TaskType.CLASSIFICATION:
+        return {"target_schema": payload.get("target_schema")}
+    if task_type is TaskType.SCALAR_PREDICTION:
+        return {"unit": payload.get("unit"), "target_name": payload.get("target_name")}
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
-        target = payload.get("target")
-        return {
-            "target": None if target is None else tuple(decode_span(span) for span in target),
-            "mode": payload["mode"],
-        }
-    if task_type is TaskType.FORECASTING:
-        return {"target_span": decode_span(payload.get("target_span"))}
-    return dict(payload)
+        return {"mode": LocalizationMode(payload.get("mode", LocalizationMode.SPARSE))}
+    return {}
 
 
-def _tuple_or_none(value: list[str] | None) -> tuple[str, ...] | None:
-    """Normalize a JSON list scope.
+def encode_target(target: object) -> dict[str, object | None]:
+    """Encode one public target item as a typed table row.
 
     Returns:
-        A tuple, or ``None``.
+        A row with one target kind and its corresponding value column.
+
+    Raises:
+        TimeFFormatError: If the target type is unsupported.
     """
-    return None if value is None else tuple(value)
+    row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
+    if isinstance(target, bool):
+        row.update(target_kind="boolean", boolean_value=target)
+    elif isinstance(target, str):
+        row.update(target_kind="text", text_value=target)
+    elif isinstance(target, int):
+        row.update(target_kind="integer", integer_value=target)
+    elif isinstance(target, float):
+        row.update(target_kind="float", float_value=target)
+    elif isinstance(target, Record):
+        row.update(target_kind="record", record_id=target.id)
+    elif isinstance(target, Signal):
+        row.update(target_kind="signal", signal_id=target.id)
+    elif isinstance(target, TimePoint):
+        row.update(
+            target_kind="time_point",
+            span_start=target.start_us,
+            span_signal_ids=target.time_series_ids,
+        )
+    elif isinstance(target, TimeInterval):
+        row.update(
+            target_kind="time_interval",
+            span_start=target.start_us,
+            span_end=target.end_us,
+            span_signal_ids=target.time_series_ids,
+        )
+    elif isinstance(target, StepPoint):
+        row.update(target_kind="step_point", span_start=target.start, signal_id=target.time_series_id)
+    elif isinstance(target, StepInterval):
+        row.update(
+            target_kind="step_interval",
+            span_start=target.start,
+            span_end=target.stop,
+            signal_id=target.time_series_id,
+        )
+    else:
+        raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
+    return row
+
+
+def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
+    row: dict[str, object],
+    *,
+    records: dict[str, Record],
+    signals: dict[str, Signal],
+) -> object:
+    """Decode one typed target row and resolve stored object references.
+
+    Returns:
+        The native scalar, Record, Signal, or Span target.
+
+    Raises:
+        TimeFFormatError: If a required value or referenced object is missing, or the kind is unknown.
+    """
+    kind = row["target_kind"]
+    if kind == "text":
+        return _required(row, "text_value")
+    if kind == "integer":
+        return _required(row, "integer_value")
+    if kind == "float":
+        return _required(row, "float_value")
+    if kind == "boolean":
+        return _required(row, "boolean_value")
+    if kind == "record":
+        return _resolve(records, row, "record_id", "Record")
+    if kind == "signal":
+        return _resolve(signals, row, "signal_id", "Signal")
+    start = _required(row, "span_start")
+    signal_ids = _tuple_or_none(row["span_signal_ids"])
+    if kind == "time_point":
+        return TimePoint(start_us=start, time_series_ids=signal_ids)
+    if kind == "time_interval":
+        return TimeInterval(start_us=start, end_us=_required(row, "span_end"), time_series_ids=signal_ids)
+    signal_id = _required(row, "signal_id")
+    if kind == "step_point":
+        return StepPoint(start=start, time_series_id=signal_id)
+    if kind == "step_interval":
+        return StepInterval(start=start, stop=_required(row, "span_end"), time_series_id=signal_id)
+    raise TimeFFormatError(f"task target has unknown kind {kind!r}")
+
+
+def _required(row: dict[str, object], name: str) -> Any:
+    value = row.get(name)
+    if value is None:
+        raise TimeFFormatError(f"task target kind {row.get('target_kind')!r} requires {name}")
+    return value
+
+
+def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: str) -> Any:
+    public_id = _required(row, name)
+    try:
+        return objects[public_id]
+    except KeyError as exc:
+        raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
+
+
+def _tuple_or_none(value: object) -> tuple[str, ...] | None:
+    """Normalize a stored signal-ID sequence.
+
+    Returns:
+        The immutable sequence, or ``None``.
+    """
+    return None if value is None else tuple(cast("Iterable[str]", value))

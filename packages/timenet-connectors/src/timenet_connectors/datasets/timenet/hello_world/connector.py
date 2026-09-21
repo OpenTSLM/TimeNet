@@ -170,14 +170,14 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 artifact,
             ]
         )
-        classification = ClassificationTask(target="normal", id="task-cls-0")
+        classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
         dataset.add_tasks(
-            record0,
-            [
+            tasks=[
                 classification,
                 AnswerTask(
+                    inputs=(record0,),
                     prompt="What rhythm?",
-                    target="Normal.",
+                    targets=("Normal.",),
                     # Any task can carry a chain of thought. An answer task with a chain of thought is
                     # the old reasoning task.
                     rationale="The peaks repeat once per cycle at a constant interval.",
@@ -187,11 +187,18 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     from_tasks=(classification,),
                     id="task-answer-0",
                 ),
-                ScalarPredictionTask(target=60.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+                ScalarPredictionTask(
+                    inputs=(record0,),
+                    targets=(60.0,),
+                    unit="bpm",
+                    target_name="mean_rate",
+                    id="task-scalar-0",
+                ),
                 # Localization works backward from a normal task. The query is the input, and the
                 # regions are the output. Here, the task stores the answer by reference, so the target
                 # is the two temporal annotations above.
                 TemporalLocalizationTask(
+                    inputs=(record0,),
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
                     target_annotations=(stimulus, artifact),
@@ -268,7 +275,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record2,),
-                target="onset",
+                targets=("onset",),
                 id="task-cls-2",
                 scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
             ),
