@@ -1,17 +1,32 @@
 """Write the in-memory TimeF hierarchy into ``control.duckdb``."""
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from dataclasses import asdict
 import json
 from pathlib import Path
-from typing import Any, assert_never
+from typing import TYPE_CHECKING, Any, assert_never
 
 import duckdb
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.types import Annotation, annotation_type_of
+from timenet.format.task_codec import encode_span, encode_task_payload
+from timenet.types import (
+    Annotation,
+    ForecastingTask,
+    Task,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
+    annotation_type_of,
+)
+
+
+if TYPE_CHECKING:
+    from timenet.values_backends.writer import ChunkPlacement
 
 
 def _json(value: object) -> str:
@@ -42,11 +57,16 @@ class DuckDBControlWriter:
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
 
-    def write_hierarchy(self, dataset: TimeFDataset) -> None:
+    def write_hierarchy(
+        self,
+        dataset: TimeFDataset,
+        placements: dict[tuple[str, int], ChunkPlacement] | None = None,
+    ) -> None:
         """Write records, sources, signals, axes, and their annotations atomically.
 
         Args:
             dataset: The complete in-memory hierarchy.
+            placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
 
         Raises:
             TimeFValidationError: If the hierarchy contains a dangling relationship, conflicting
@@ -58,7 +78,8 @@ class DuckDBControlWriter:
                 create_control_schema(connection)
                 with transaction(connection):
                     self._write_objects(connection, dataset)
-                    self._validate_objects(connection)
+                    self._write_chunks(connection, placements or {})
+                    self._validate_objects(connection, require_chunks=placements is not None)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
             self.path.unlink(missing_ok=True)
@@ -89,7 +110,175 @@ class DuckDBControlWriter:
             )
             annotations.extend((record.record_id, annotation) for annotation in record.annotations)
             self._write_record_sources(connection, record, axes, annotations, object_types)
+        annotation_refs = self._write_tasks(connection, dataset, annotations, object_types)
         self._write_annotations(connection, annotations, object_types)
+        self._write_task_annotation_refs(connection, annotation_refs)
+
+    @staticmethod
+    def _write_chunks(
+        connection: duckdb.DuckDBPyConnection,
+        placements: dict[tuple[str, int], ChunkPlacement],
+    ) -> None:
+        """Insert values-plane chunk locations."""
+        if not placements:
+            return
+        connection.executemany(
+            "INSERT INTO signal_chunks VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    signal_id,
+                    chunk_index,
+                    placement.chunk_file,
+                    placement.data_index.major_idx,
+                    placement.data_index.minor_idx,
+                    placement.n_values,
+                )
+                for (signal_id, chunk_index), placement in sorted(placements.items())
+            ],
+        )
+
+    def _write_tasks(  # noqa: PLR0912 - each normalized task relationship is validated explicitly
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        dataset: TimeFDataset,
+        annotations: list[tuple[str, Annotation]],
+        object_types: dict[str, set[str]],
+    ) -> list[tuple[str, str, int, str]]:
+        """Insert tasks and normalized object relationships.
+
+        Returns:
+            Deferred task-to-annotation rows, inserted after annotation occurrences.
+
+        Raises:
+            TimeFValidationError: If a task refers to an object outside the dataset.
+        """
+        tasks = tuple(dataset.iter_tasks())
+        known_records = {record.id for record in dataset.records}
+        known_signals = {signal.id for record in dataset.records for signal in record.signals}
+        task_ids = {task.id for task in tasks}
+        if len(task_ids) != len(tasks):
+            raise TimeFValidationError("tasks must have unique IDs")
+
+        for task in tasks:
+            object_types.setdefault(task.id, set()).add("Task")
+            connection.execute(
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    task.id,
+                    str(task.task_type),
+                    task.prompt,
+                    None if task.scope is None else _json(encode_span(task.scope)),
+                    _json(encode_task_payload(task)),
+                    task.rationale,
+                    _json(task.metadata),
+                ],
+            )
+            annotations.extend((task.id, annotation) for annotation in task.annotations)
+
+        annotation_refs: list[tuple[str, str, int, str]] = []
+        for task in tasks:
+            record_refs = self._task_record_refs(task)
+            for field, records in record_refs:
+                for position, record_id in enumerate(records):
+                    if record_id not in known_records:
+                        raise TimeFValidationError(
+                            f"task {task.id!r} field {field!r} refers to unknown record {record_id!r}"
+                        )
+                    connection.execute(
+                        "INSERT INTO task_record_refs VALUES (?, ?, ?, ?)",
+                        [task.id, field, position, record_id],
+                    )
+            for field, signal_ids in self._task_signal_refs(task):
+                for position, signal_id in enumerate(signal_ids):
+                    if signal_id not in known_signals:
+                        raise TimeFValidationError(
+                            f"task {task.id!r} field {field!r} refers to unknown signal {signal_id!r}"
+                        )
+                    connection.execute(
+                        "INSERT INTO task_signal_refs VALUES (?, ?, ?, ?)",
+                        [task.id, field, position, signal_id],
+                    )
+            for field, values in (
+                ("input_annotations", task.input_annotations),
+                ("target_annotations", task.target_annotations),
+            ):
+                for position, annotation in enumerate(values):
+                    if annotation.occurrence_id is None:
+                        raise TimeFValidationError(f"task {task.id!r} field {field!r} refers to an unbound annotation")
+                    annotation_refs.append((task.id, field, position, annotation.occurrence_id))
+            for position, parent in enumerate(task.from_tasks):
+                if parent.id not in task_ids:
+                    raise TimeFValidationError(
+                        f"task {task.id!r} depends on task {parent.id!r}, which is not in the dataset"
+                    )
+                connection.execute(
+                    "INSERT INTO task_dependencies VALUES (?, ?, ?)",
+                    [task.id, position, parent.id],
+                )
+        return annotation_refs
+
+    @staticmethod
+    def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Project task record objects into normalized field rows.
+
+        Returns:
+            Pairs of public field name and ordered record IDs.
+        """
+        refs: list[tuple[str, tuple[str, ...]]] = [("inputs", tuple(record.id for record in task.inputs))]
+        if isinstance(task, ForecastingTask):
+            refs.append(("context_records", task.context_record_ids))
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSEditingTask):
+            if task.source_record_id is not None:
+                refs.append(("source_record", (task.source_record_id,)))
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSGenerationTask):
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSCorrespondenceTask):
+            refs.extend(
+                (
+                    ("candidate_records", task.candidate_record_ids),
+                    ("target_records", task.target or ()),
+                )
+            )
+        return tuple(refs)
+
+    @staticmethod
+    def _task_signal_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Project task signal objects into normalized field rows.
+
+        Returns:
+            Pairs of public field name and ordered signal IDs.
+        """
+        if isinstance(task, TSCorrespondenceTask) and task.target_time_series_ids is not None:
+            return (("target_signals", task.target_time_series_ids),)
+        return ()
+
+    @staticmethod
+    def _write_task_annotation_refs(
+        connection: duckdb.DuckDBPyConnection,
+        rows: list[tuple[str, str, int, str]],
+    ) -> None:
+        """Insert task annotation references after occurrence rows exist.
+
+        Raises:
+            TimeFValidationError: If a referenced occurrence is not attached to a stored object.
+        """
+        for task_id, field, position, occurrence_id in rows:
+            exists = connection.execute(
+                "SELECT 1 FROM annotation_occurrences WHERE occurrence_id = ?", [occurrence_id]
+            ).fetchone()
+            if exists is None:
+                raise TimeFValidationError(
+                    f"task {task_id!r} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
+                )
+            connection.execute(
+                "INSERT INTO task_annotation_refs VALUES (?, ?, ?, ?)",
+                [task_id, field, position, occurrence_id],
+            )
 
     def _write_record_sources(
         self,
@@ -305,7 +494,7 @@ class DuckDBControlWriter:
         return next(iter(found))
 
     @staticmethod
-    def _validate_objects(connection: duckdb.DuckDBPyConnection) -> None:
+    def _validate_objects(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool) -> None:
         """Run relational checks that are clearer as bulk SQL queries.
 
         Raises:
@@ -350,3 +539,18 @@ class DuckDBControlWriter:
         ).fetchone()
         if bad_axis is not None:
             raise TimeFValidationError(f"signal {bad_axis[0]!r} has an axis length that does not match its values")
+        if require_chunks:
+            bad_chunks = connection.execute(
+                """SELECT signals.signal_id
+                   FROM signals
+                   LEFT JOIN (
+                       SELECT signal_id, sum(n_values) AS stored_values
+                       FROM signal_chunks GROUP BY signal_id
+                   ) chunks USING (signal_id)
+                   WHERE coalesce(stored_values, 0) <> signals.n_values
+                   LIMIT 1"""
+            ).fetchone()
+            if bad_chunks is not None:
+                raise TimeFValidationError(
+                    f"signal {bad_chunks[0]!r} has value chunks whose lengths do not match n_values"
+                )
