@@ -1,6 +1,6 @@
 ---
 icon: lucide/database
-description: "The TimeF v2 DuckDB control plane and lazy values plane."
+description: "The TimeF DuckDB control plane and lazy values plane."
 tags:
   - reference
   - format
@@ -8,7 +8,7 @@ tags:
 
 # TimeF format
 
-TimeF v2 separates relational structure from large signal arrays. One immutable DuckDB database
+TimeF separates relational structure from large signal arrays. One immutable DuckDB database
 stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
 the signal values.
 
@@ -122,4 +122,3 @@ database, records final checksums in `manifest.json`, and atomically publishes t
 
 `TimeFReader.verify()` hashes every listed artifact. Normal reads stay lazy and verify the cached
 remote `control.duckdb` before opening it read-only.
-
