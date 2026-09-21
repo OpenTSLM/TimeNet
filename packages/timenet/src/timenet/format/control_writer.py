@@ -11,7 +11,16 @@ import duckdb
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.types import Annotation, annotation_type_of
+from timenet.format.task_codec import encode_span, encode_task_payload
+from timenet.types import (
+    Annotation,
+    ForecastingTask,
+    Task,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
+    annotation_type_of,
+)
 
 
 def _json(value: object) -> str:
@@ -89,7 +98,159 @@ class DuckDBControlWriter:
             )
             annotations.extend((record.record_id, annotation) for annotation in record.annotations)
             self._write_record_sources(connection, record, axes, annotations, object_types)
+        annotation_refs = self._write_tasks(connection, dataset, annotations, object_types)
         self._write_annotations(connection, annotations, object_types)
+        self._write_task_annotation_refs(connection, annotation_refs)
+
+    def _write_tasks(  # noqa: PLR0912 - each normalized task relationship is validated explicitly
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        dataset: TimeFDataset,
+        annotations: list[tuple[str, Annotation]],
+        object_types: dict[str, set[str]],
+    ) -> list[tuple[str, str, int, str]]:
+        """Insert tasks and normalized object relationships.
+
+        Returns:
+            Deferred task-to-annotation rows, inserted after annotation occurrences.
+
+        Raises:
+            TimeFValidationError: If a task refers to an object outside the dataset.
+        """
+        tasks = tuple(dataset.iter_tasks())
+        known_records = {record.id for record in dataset.records}
+        known_signals = {signal.id for record in dataset.records for signal in record.signals}
+        task_ids = {task.id for task in tasks}
+        if len(task_ids) != len(tasks):
+            raise TimeFValidationError("tasks must have unique IDs")
+
+        task_rows: list[tuple[object, ...]] = []
+        for task in tasks:
+            object_types.setdefault(task.id, set()).add("Task")
+            task_rows.append(
+                (
+                    task.id,
+                    str(task.task_type),
+                    task.prompt,
+                    None if task.scope is None else _json(encode_span(task.scope)),
+                    _json(encode_task_payload(task)),
+                    task.rationale,
+                    _json(task.metadata),
+                )
+            )
+            annotations.extend((task.id, annotation) for annotation in task.annotations)
+        if task_rows:
+            connection.executemany("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)", task_rows)
+
+        annotation_refs: list[tuple[str, str, int, str]] = []
+        record_rows: list[tuple[str, str, int, str]] = []
+        signal_rows: list[tuple[str, str, int, str]] = []
+        dependency_rows: list[tuple[str, int, str]] = []
+        for task in tasks:
+            record_refs = self._task_record_refs(task)
+            for field, records in record_refs:
+                for position, record_id in enumerate(records):
+                    if record_id not in known_records:
+                        raise TimeFValidationError(
+                            f"task {task.id!r} field {field!r} refers to unknown record {record_id!r}"
+                        )
+                    record_rows.append((task.id, field, position, record_id))
+            for field, signal_ids in self._task_signal_refs(task):
+                for position, signal_id in enumerate(signal_ids):
+                    if signal_id not in known_signals:
+                        raise TimeFValidationError(
+                            f"task {task.id!r} field {field!r} refers to unknown signal {signal_id!r}"
+                        )
+                    signal_rows.append((task.id, field, position, signal_id))
+            for field, values in (
+                ("input_annotations", task.input_annotations),
+                ("target_annotations", task.target_annotations),
+            ):
+                for position, annotation in enumerate(values):
+                    if annotation.occurrence_id is None:
+                        raise TimeFValidationError(f"task {task.id!r} field {field!r} refers to an unbound annotation")
+                    annotation_refs.append((task.id, field, position, annotation.occurrence_id))
+            for position, parent in enumerate(task.from_tasks):
+                if parent.id not in task_ids:
+                    raise TimeFValidationError(
+                        f"task {task.id!r} depends on task {parent.id!r}, which is not in the dataset"
+                    )
+                dependency_rows.append((task.id, position, parent.id))
+        if record_rows:
+            connection.executemany("INSERT INTO task_record_refs VALUES (?, ?, ?, ?)", record_rows)
+        if signal_rows:
+            connection.executemany("INSERT INTO task_signal_refs VALUES (?, ?, ?, ?)", signal_rows)
+        if dependency_rows:
+            connection.executemany("INSERT INTO task_dependencies VALUES (?, ?, ?)", dependency_rows)
+        return annotation_refs
+
+    @staticmethod
+    def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Project task record objects into normalized field rows.
+
+        Returns:
+            Pairs of public field name and ordered record IDs.
+        """
+        refs: list[tuple[str, tuple[str, ...]]] = [("inputs", tuple(record.id for record in task.inputs))]
+        if isinstance(task, ForecastingTask):
+            refs.append(("context_records", task.context_record_ids))
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSEditingTask):
+            if task.source_record_id is not None:
+                refs.append(("source_record", (task.source_record_id,)))
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSGenerationTask):
+            if task.target_record_id is not None:
+                refs.append(("target_record", (task.target_record_id,)))
+        elif isinstance(task, TSCorrespondenceTask):
+            refs.extend(
+                (
+                    ("candidate_records", task.candidate_record_ids),
+                    ("target_records", task.target or ()),
+                )
+            )
+        return tuple(refs)
+
+    @staticmethod
+    def _task_signal_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Project task signal objects into normalized field rows.
+
+        Returns:
+            Pairs of public field name and ordered signal IDs.
+        """
+        if isinstance(task, TSCorrespondenceTask) and task.target_time_series_ids is not None:
+            return (("target_signals", task.target_time_series_ids),)
+        return ()
+
+    @staticmethod
+    def _write_task_annotation_refs(
+        connection: duckdb.DuckDBPyConnection,
+        rows: list[tuple[str, str, int, str]],
+    ) -> None:
+        """Insert task annotation references after occurrence rows exist.
+
+        Raises:
+            TimeFValidationError: If a referenced occurrence is not attached to a stored object.
+        """
+        if not rows:
+            return
+        occurrence_ids = {row[3] for row in rows}
+        stored_ids = {
+            row[0]
+            for row in connection.execute(
+                "SELECT occurrence_id FROM annotation_occurrences WHERE occurrence_id IN (SELECT unnest(?))",
+                [list(occurrence_ids)],
+            ).fetchall()
+        }
+        missing = occurrence_ids - stored_ids
+        if missing:
+            task_id, field, _, occurrence_id = next(row for row in rows if row[3] in missing)
+            raise TimeFValidationError(
+                f"task {task_id!r} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
+            )
+        connection.executemany("INSERT INTO task_annotation_refs VALUES (?, ?, ?, ?)", rows)
 
     def _write_record_sources(
         self,

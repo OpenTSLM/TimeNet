@@ -7,7 +7,7 @@ from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
 
 SPEC = TimeSeriesSpec(
@@ -51,6 +51,9 @@ def _dataset() -> TimeFDataset:
     )
     dataset.add_record(record=record)
     dataset.annotate(Annotation(id="site", key="site", value="lab"))
+    task = AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", target="Yes")
+    task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
+    dataset.add_task(task=task)
     return dataset
 
 
@@ -63,6 +66,15 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
         assert connection.execute("SELECT count(*) FROM sources").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM signals").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
+        assert connection.execute("SELECT task_type, prompt, payload FROM tasks").fetchone() == (
+            "answer",
+            "Alive?",
+            '{"target":"Yes"}',
+        )
+        assert connection.execute("SELECT field, record_id FROM task_record_refs").fetchone() == (
+            "inputs",
+            "record-1",
+        )
         assert connection.execute("SELECT parent_source_id FROM sources WHERE source_id = 'ecg'").fetchone() == (
             "monitor",
         )
