@@ -63,6 +63,7 @@ def _manifest() -> Manifest:
             time_series_specs={"ecg": 2},
         ),
         files=ManifestFiles(
+            control=(FilePart("control.duckdb", "sha256:" + "0" * 64, 5),),
             records=(FilePart("records.parquet", "sha256:" + "a" * 64, 10),),
             annotations=(FilePart("annotations.parquet", "sha256:" + "b" * 64, 20),),
             time_series_index=(FilePart("time_series_index.parquet", "sha256:" + "c" * 64, 30),),

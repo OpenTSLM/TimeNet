@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.dataset import Record
+from timenet.dataset import Record, Source
 
 
 torch = pytest.importorskip("torch")
@@ -44,7 +44,7 @@ def test_getitem_structure():
 def test_getitem_values_match():
     dataset = make_dataset()
     item = TimeFTorchDataset(dataset)[0]
-    expected = dataset.records[0].time_series[0].to_numpy()
+    expected = dataset.records[0].signals[0].to_numpy()
     assert item["series"][0].numpy().tolist() == expected.tolist()
 
 
@@ -83,7 +83,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(time_series=(ts,), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id="record-0"))
     return dataset
 
 
