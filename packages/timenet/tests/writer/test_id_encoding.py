@@ -5,7 +5,7 @@ import uuid
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -61,7 +61,8 @@ def _uuid_dataset(*, record_id=None):
         )
     )
     series = (_series(),)
-    record = Record(time_series=series) if record_id is None else Record(time_series=series, record_id=record_id)
+    sources = (Source(name="Source", signals=series),)
+    record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
     dataset.add_record(record=record)
     record.add_annotation(Annotation(key="k", value=1))
     dataset.add_task(record, ClassificationTask(target="x"))
@@ -123,8 +124,8 @@ def test_forecasting_scalar_id_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    context = dataset.add_record(record=Record(time_series=(_series(),)))
-    target = dataset.add_record(record=Record(time_series=(_series(),)))
+    context = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
+    target = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
     dataset.add_task(
         target,
         ForecastingTask(context_record_ids=(context.record_id,), target_record_id=target.record_id),
@@ -149,8 +150,8 @@ def test_forecasting_target_span_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    record = dataset.add_record(record=Record(time_series=(_series(),)))
-    series_id = record.time_series[0].time_series_id
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
+    series_id = record.signals[0].time_series_id
     span = TimeInterval.seconds(1.0, 3.0, time_series_ids=(series_id,))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
     dataset.add_task(record, ForecastingTask(target_span=span, scope=scope))
@@ -176,8 +177,8 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
         )
     )
     ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), name="c", time_axis=OrdinalAxis())
-    record = dataset.add_record(record=Record(time_series=(ordinal,)))
-    series_id = record.time_series[0].time_series_id
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ordinal,)),)))
+    series_id = record.signals[0].time_series_id
     span = StepInterval(time_series_id=series_id, start=4, stop=6)
     scope = StepInterval(time_series_id=series_id, start=0, stop=4)
     dataset.add_task(record, ForecastingTask(target_span=span, scope=scope))
@@ -208,7 +209,7 @@ def test_span_series_ids_round_trip_as_binary16(tmp_path):
         )
     )
     series = _series()
-    record = dataset.add_record(record=Record(time_series=(series,)))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
     dataset.add_task(record, ClassificationTask(target="x", scope=scope))
     dataset.add_task(
@@ -244,9 +245,9 @@ def test_correspondence_target_ids_round_trip(tmp_path):
             license=License.MIT,
         )
     )
-    query = dataset.add_record(record=Record(time_series=(_series(),)))
-    match = dataset.add_record(record=Record(time_series=(_series(),)))
-    other = dataset.add_record(record=Record(time_series=(_series(),)))
+    query = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
+    match = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
+    other = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
     dataset.add_task(
         query,
         TSCorrespondenceTask(
@@ -274,8 +275,8 @@ def test_editing_and_generation_record_ids_round_trip(tmp_path):
             license=License.MIT,
         )
     )
-    source = dataset.add_record(record=Record(time_series=(_series(),)))
-    edited = dataset.add_record(record=Record(time_series=(_series(),)))
+    source = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
+    edited = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
     dataset.add_task(
         source,
         TSEditingTask(
@@ -309,7 +310,7 @@ def test_time_span_round_trips(tmp_path):
         )
     )
     time_span = TimeInterval.seconds(0.0, 5.0)  # contains the series' [0, 3) s window
-    dataset.add_record(record=Record(time_series=(_series(),), time_span=time_span))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),), time_span=time_span))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:

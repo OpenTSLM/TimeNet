@@ -1,6 +1,7 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
 
@@ -19,6 +20,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.values_backends import ValuesBackend
 
 
 T = TypeVar("T")
@@ -58,8 +60,7 @@ class TimeFDataset:  # noqa: PLR0904
             The same :class:`Record` instance.
 
         Raises:
-            TimeFValidationError: If the record repeats a signal ID or its record ID is already
-                registered.
+            TimeFValidationError: If the record repeats an object ID or an ID is already registered.
         """
         series_ids = [signal.id for signal in record.signals]
         if len(set(series_ids)) != len(series_ids):
@@ -69,8 +70,60 @@ class TimeFDataset:  # noqa: PLR0904
             )
         if any(existing.record_id == record.record_id for existing in self._records):
             raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
+        existing_source_ids = {source.id for item in self._records for source in item.walk_sources()}
+        repeated_sources = sorted(existing_source_ids & {source.id for source in record.walk_sources()})
+        if repeated_sources:
+            raise TimeFValidationError(
+                f"source id(s) {repeated_sources} already belong to another record; each Source has one owner"
+            )
+        existing_signal_ids = {signal.id for item in self._records for signal in item.signals}
+        repeated_signals = sorted(existing_signal_ids & {signal.id for signal in record.signals})
+        if repeated_signals:
+            raise TimeFValidationError(
+                f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
+            )
         self._records.append(record)
         return record
+
+    def write(
+        self,
+        *,
+        path: str | Path,
+        values_backend: ValuesBackend = ValuesBackend.PARQUET,
+    ) -> Path:
+        """Write this dataset as one immutable TimeF version.
+
+        Args:
+            path: Registry root under which the dataset ID and version directories are created.
+            values_backend: Typed values-plane backend selection.
+
+        Returns:
+            The committed version directory.
+        """
+        from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+        root = Path(path)
+        if self.schema is None:
+            self.derive_schema()
+        with TimeFWriter(root, self, values_backend=values_backend) as writer:
+            writer.write()
+        return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
+
+    @classmethod
+    def open(cls, *, path: str | Path) -> "TimeFDataset":
+        """Open one local TimeF version directory.
+
+        Args:
+            path: Directory containing ``manifest.json`` and ``control.duckdb``.
+
+        Returns:
+            The hydrated dataset with lazy Signal values.
+        """
+        from timenet.reader import TimeFReader  # noqa: PLC0415
+        from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+
+        with TimeFReader(DatasetVersion.open_local(path)) as reader:
+            return reader.read()
 
     def add_task(
         self,
@@ -273,14 +326,22 @@ class TimeFDataset:  # noqa: PLR0904
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        targets = []
-        for record_id in task.record_ids:
-            record = by_id.get(record_id)
-            if record is None:
+        if not task.inputs:
+            raise TimeFValidationError(f"streamed task {task.id!r} requires at least one input Record")
+        targets: list[Record] = []
+        for record in task.inputs:
+            registered = by_id.get(record.id)
+            if registered is not record:
                 raise TimeFValidationError(
-                    f"{type(task).__name__} {task.id!r} attaches to unknown record {record_id!r}"
+                    f"{type(task).__name__} {task.id!r} refers to Record {record.id!r}, which is not "
+                    "registered in this dataset"
                 )
             targets.append(record)
+        projected = tuple(record.id for record in targets)
+        if task.record_ids and task.record_ids != projected:
+            raise TimeFValidationError(f"{type(task).__name__} {task.id!r} inputs and record_ids disagree")
+        task.record_ids = projected
+        self._normalize_task_annotation_refs(task)
         task.check_against_scope()
         self._check_task_answer(task)
         self._check_record_refs(task)
@@ -288,7 +349,7 @@ class TimeFDataset:  # noqa: PLR0904
         for record in targets:
             for span in task.spans():
                 check_span_within_window(
-                    f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
+                    f"{type(task).__name__} span", span, record.signals, record.record_id, record.time_span
                 )
         self._check_annotation_refs(task, tuple(targets))
 
@@ -369,7 +430,7 @@ class TimeFDataset:  # noqa: PLR0904
             for record in targets:
                 for span in task.spans():
                     check_span_within_window(
-                        f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
+                        f"{type(task).__name__} span", span, record.signals, record.record_id, record.time_span
                     )
             self._check_annotation_refs(task, targets)
 
@@ -437,7 +498,7 @@ class TimeFDataset:  # noqa: PLR0904
             TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
                 across records.
         """
-        specs = self._ordered_unique(ts.spec for record in self._records for ts in record.time_series)
+        specs = self._ordered_unique(signal.spec for record in self._records for signal in record.signals)
         by_spec_type: dict[str, object] = {}
         for spec in specs:
             existing = by_spec_type.get(spec.spec_type)
@@ -482,7 +543,7 @@ class TimeFDataset:  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(
+    def from_parts(  # noqa: PLR0913 - reader reconstruction names each stored component
         cls,
         *,
         metadata: DatasetMetadata,
@@ -490,6 +551,7 @@ class TimeFDataset:  # noqa: PLR0904
         tasks: Iterable[Task],
         schema: DatasetSchema,
         registered_annotations: Iterable[Annotation] = (),
+        annotations: Iterable[Annotation] = (),
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -502,6 +564,7 @@ class TimeFDataset:  # noqa: PLR0904
             schema: The schema reconstructed from the manifest.
             registered_annotations: Annotations that tasks reference but no record carries (see
                 :meth:`register_annotations`).
+            annotations: Annotations attached directly to the dataset.
 
         Returns:
             The dataset, built from these parts.
@@ -510,6 +573,7 @@ class TimeFDataset:  # noqa: PLR0904
         dataset._records = list(records)
         dataset._tasks = list(tasks)
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
+        dataset._annotations = list(annotations)
         dataset._schema = schema
         return dataset
 
@@ -560,8 +624,25 @@ class TimeFDataset:  # noqa: PLR0904
             TimeFValidationError: If a referenced annotation id is neither attached to a target
                 record nor registered with :meth:`register_annotations`.
         """
-        known = {annotation.id for record in records for annotation in record.annotations}
+        attached = [*self._annotations]
+        for record in records:
+            attached.extend(record.annotations)
+            for source in record.walk_sources():
+                attached.extend(source.annotations)
+                for signal in source.signals:
+                    attached.extend(signal.annotations)
+        known = {annotation.id for annotation in attached}
         known |= self._registered_annotations.keys()
+        known_occurrences = {
+            annotation.occurrence_id for annotation in attached if annotation.occurrence_id is not None
+        }
+        for field_name in ("input_annotations", "target_annotations"):
+            for annotation in getattr(task, field_name):
+                if annotation.occurrence_id not in known_occurrences:
+                    raise TimeFValidationError(
+                        f"{type(task).__name__} {field_name} refers to annotation occurrence "
+                        f"{annotation.occurrence_id!r}, which is not attached to its dataset or input hierarchy"
+                    )
         for field_name in ("input_annotation_ids", "target_annotation_ids"):
             for annotation_id in getattr(task, field_name):
                 if annotation_id not in known:
@@ -601,7 +682,7 @@ class TimeFDataset:  # noqa: PLR0904
         Raises:
             TimeFValidationError: If a payload reference names a series absent from every target record.
         """
-        known = {ts.time_series_id for record in records for ts in record.time_series}
+        known = {signal.id for record in records for signal in record.signals}
         for field_name in type(task).refs.time_series_id_fields:
             value = getattr(task, field_name)
             series_ids = (value,) if isinstance(value, str) else value or ()
