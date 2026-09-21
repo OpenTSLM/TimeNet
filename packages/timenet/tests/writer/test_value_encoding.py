@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_ROW_GROUP_TARGET_BYTES
@@ -76,7 +76,7 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
         )
         for (spec_type, signal), values in signals.items()
     ]
-    dataset.add_record(record=Record(time_series=tuple(series), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), record_id="record-0"))
     dataset.derive_schema()
     return dataset
 

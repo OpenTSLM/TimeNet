@@ -61,12 +61,15 @@ class DuckDBControlWriter:
         self,
         dataset: TimeFDataset,
         placements: dict[tuple[str, int], ChunkPlacement] | None = None,
+        *,
+        tasks: Iterable[Task] | None = None,
     ) -> None:
         """Write records, sources, signals, axes, and their annotations atomically.
 
         Args:
             dataset: The complete in-memory hierarchy.
             placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
+            tasks: A previously validated task stream, or ``None`` to use the dataset's tasks.
 
         Raises:
             TimeFValidationError: If the hierarchy contains a dangling relationship, conflicting
@@ -77,7 +80,7 @@ class DuckDBControlWriter:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
                 with transaction(connection):
-                    self._write_objects(connection, dataset)
+                    self._write_objects(connection, dataset, tuple(dataset.iter_tasks()) if tasks is None else tasks)
                     self._write_chunks(connection, placements or {})
                     self._validate_objects(connection, require_chunks=placements is not None)
                 connection.execute("CHECKPOINT")
@@ -88,7 +91,12 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
 
-    def _write_objects(self, connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+    def _write_objects(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        dataset: TimeFDataset,
+        tasks: Iterable[Task],
+    ) -> None:
         """Insert hierarchy rows into an open transaction."""
         axes: dict[str, object] = {}
         object_types: dict[str, set[str]] = {dataset.metadata.dataset_id: {"Dataset"}}
@@ -110,7 +118,7 @@ class DuckDBControlWriter:
             )
             annotations.extend((record.record_id, annotation) for annotation in record.annotations)
             self._write_record_sources(connection, record, axes, annotations, object_types)
-        annotation_refs = self._write_tasks(connection, dataset, annotations, object_types)
+        annotation_refs = self._write_tasks(connection, dataset, annotations, object_types, tasks)
         self._write_annotations(connection, annotations, object_types)
         self._write_task_annotation_refs(connection, annotation_refs)
 
@@ -143,6 +151,7 @@ class DuckDBControlWriter:
         dataset: TimeFDataset,
         annotations: list[tuple[str, Annotation]],
         object_types: dict[str, set[str]],
+        tasks_source: Iterable[Task],
     ) -> list[tuple[str, str, int, str]]:
         """Insert tasks and normalized object relationships.
 
@@ -152,7 +161,7 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If a task refers to an object outside the dataset.
         """
-        tasks = tuple(dataset.iter_tasks())
+        tasks = tuple(tasks_source)
         known_records = {record.id for record in dataset.records}
         known_signals = {signal.id for record in dataset.records for signal in record.signals}
         task_ids = {task.id for task in tasks}
