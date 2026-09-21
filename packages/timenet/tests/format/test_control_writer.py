@@ -92,7 +92,7 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
     dataset = _dataset()
     annotation = dataset.records[0].annotations[0]
-    dataset.records[0].add_annotation(
+    dataset.records[0].annotate(
         Annotation(
             id=annotation.content_id,
             key="patient_sex",

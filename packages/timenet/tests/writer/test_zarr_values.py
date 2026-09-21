@@ -1,8 +1,8 @@
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import zarr
 
@@ -61,24 +61,30 @@ def test_spec_types_encode_to_distinct_single_path_segments():
 
 def test_index_locator_resolves_to_values(tmp_path):
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    row = index[0]
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        row = connection.execute(
+            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks ORDER BY signal_id LIMIT 1"""
+        ).fetchone()
+    assert row is not None
+    value_path, major_index, minor_index, n_values = row
     # Zarr locator: chunk_file=array path, chunk_major_idx=element start, chunk_minor_idx unused.
-    assert row["chunk_minor_idx"] is None
-    array = zarr.open_array(store=version_dir / row["chunk_file"], mode="r")
-    chunk = np.asarray(array[row["chunk_major_idx"] : row["chunk_major_idx"] + row["n_values"]])
-    assert len(chunk) == row["n_values"]
+    assert minor_index is None
+    array = zarr.open_array(store=version_dir / value_path, mode="r")
+    chunk = np.asarray(array[major_index : major_index + n_values])
+    assert len(chunk) == n_values
 
 
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    keys = [(row["record_id"], row["time_series_id"]) for row in index]
-    assert len(keys) == len(set(keys))
-    long_series = next(row for row in index if row["time_series_id"] == "ts-long-1")
-    assert long_series["n_values"] == 512  # the fixture's long series, unsplit
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        index = connection.execute("SELECT signal_id, n_values FROM signal_chunks").fetchall()
+    signal_ids = [row[0] for row in index]
+    assert len(signal_ids) == len(set(signal_ids))
+    long_series = next(row for row in index if row[0] == "ts-long-1")
+    assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
 def test_shard_aligned_appends_round_trip(tmp_path):
@@ -186,7 +192,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).time_series[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
