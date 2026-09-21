@@ -187,18 +187,20 @@
       "type": "object",
       "properties": {
         "records": { "type": "integer" },
-        "annotations": { "type": "integer" },
-        "registered_annotations": { "type": "integer" },
+        "sources": { "type": "integer" },
+        "signals": { "type": "integer" },
+        "axes": { "type": "integer" },
+        "annotation_contents": { "type": "integer" },
+        "annotation_occurrences": { "type": "integer" },
         "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
-        "time_series_chunks": { "type": "integer" },
-        "time_series_index_rows": { "type": "integer" },
-        "time_series_specs": { "type": "object", "additionalProperties": { "type": "integer" } }
+        "signal_chunks": { "type": "integer" },
+        "signals_by_spec": { "type": "object", "additionalProperties": { "type": "integer" } }
       }
     },
     "files": {
       "type": "object",
       "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["control", "records", "annotations", "time_series_index"],
+      "required": ["control", "time_series"],
       "properties": {
         "control": {
           "type": "array",
@@ -206,10 +208,6 @@
           "maxItems": 1,
           "items": { "$ref": "#/$defs/filePart" }
         },
-        "records": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "annotations": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "time_series_index": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
-        "tasks": { "type": "array", "items": { "$ref": "#/$defs/filePart" } },
         "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
       }
     },

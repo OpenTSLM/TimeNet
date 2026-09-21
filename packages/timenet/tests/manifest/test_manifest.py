@@ -55,18 +55,17 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
         schema=schema,
         counts=ManifestCounts(
             records=2,
-            annotations=4,
+            sources=2,
+            signals=2,
+            axes=1,
+            annotation_contents=3,
+            annotation_occurrences=4,
             tasks={"classification": 2},
-            time_series_chunks=3,
-            time_series_index_rows=3,
-            time_series_specs={"ecg_lead": 2},
+            signal_chunks=3,
+            signals_by_spec={"ecg_lead": 2},
         ),
         files=ManifestFiles(
             control=_CONTROL,
-            records=(FilePart("records.parquet", "sha256:aa", 10),),
-            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
-            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
-            tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
             time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
         ),
         values_backend=values_backend,
@@ -77,10 +76,6 @@ def test_files_all_parts_concatenates_in_order():
     files = _manifest().files
     assert files.all_parts() == (
         *(p.path for p in files.control),
-        *(p.path for p in files.records),
-        *(p.path for p in files.annotations),
-        *(p.path for p in files.time_series_index),
-        *(p.path for p in files.tasks),
         *(p.path for p in files.time_series),
     )
 
@@ -120,7 +115,7 @@ def test_nullable_schema_roundtrips_at_format_version_2():
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL, records=(), annotations=(), time_series_index=()),
+        files=ManifestFiles(control=_CONTROL),
     )
     spec = replace(base.schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
@@ -138,7 +133,7 @@ def test_nullable_schema_roundtrips_at_format_version_2():
 def test_missing_nullable_defaults_to_false():
     data = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL, records=(), annotations=(), time_series_index=()),
+        files=ManifestFiles(control=_CONTROL),
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
@@ -151,7 +146,7 @@ def test_missing_nullable_defaults_to_false():
 def test_manifest_rejects_nonboolean_nullable(nullable):
     data = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL, records=(), annotations=(), time_series_index=()),
+        files=ManifestFiles(control=_CONTROL),
     ).to_dict()
     data["schema"]["time_series_specs"][0]["nullable"] = nullable
     with pytest.raises(TimeNetInvalidManifestError, match="nullable"):
@@ -244,7 +239,7 @@ def test_from_dict_requires_core_blocks(missing):
     "entry",
     [
         "oops",  # a bare string where a file descriptor object is required
-        {"path": "records/part-00000000.parquet"},  # missing checksum and size
+        {"path": "time_series/part-00000000.parquet"},  # missing checksum and size
         {"path": "x", "checksum": "sha256:" + "a" * 64},  # missing size
         {"path": 123, "checksum": "sha256:" + "a" * 64, "size": 10},  # path not a string
         {"path": "", "checksum": "sha256:" + "a" * 64, "size": 10},  # empty path
@@ -253,14 +248,14 @@ def test_from_dict_requires_core_blocks(missing):
         {"path": "x", "checksum": "sha256:" + "a" * 64, "size": True},  # bool masquerading as an int
         {"path": "/etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # absolute path
         {"path": "../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal above root
-        {"path": "records/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
+        {"path": "time_series/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
     ],
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
     # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
     # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
     d = _manifest().to_dict()
-    d["files"]["records"] = [entry]
+    d["files"]["time_series"] = [entry]
     with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
@@ -354,19 +349,14 @@ def test_codec_roundtrip_property(version, records, task_counts):
             license=License.MIT,
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
-        files=ManifestFiles(
-            control=_CONTROL,
-            records=(FilePart("records.parquet", "sha256:aa", 10),),
-            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
-            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
-        ),
+        files=ManifestFiles(control=_CONTROL),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest
 
 
 @pytest.mark.parametrize(
     ("block", "key"),
-    [("metadata", "tags"), ("metadata", "domains"), ("files", "tasks"), ("files", "time_series")],
+    [("metadata", "tags"), ("metadata", "domains"), ("files", "control"), ("files", "time_series")],
 )
 def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters
