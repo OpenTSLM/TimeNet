@@ -1,6 +1,7 @@
 import pyarrow as pa
 import pytest
 
+from timenet.dataset import Record
 from timenet.errors import TimeFFormatError
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
@@ -76,6 +77,22 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
 
     assert task.inputs == records
     assert tuple(annotation.content_id for annotation in task.input_annotations) == ("age-65", "sex-male")
+
+
+def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+
+    with DuckDBControlReader(path) as reader:
+        records = reader.read_records()
+        monkeypatch.setattr(
+            Record,
+            "signals",
+            property(lambda _record: pytest.fail("text targets walked the Signal hierarchy")),
+        )
+        (task,) = reader.read_tasks(records)
+
+    assert task.targets == ("Yes",)
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
