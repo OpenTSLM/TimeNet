@@ -40,9 +40,9 @@ def _spec():
 
 
 def _series():
-    return TimeSeries(
+    return TimeSeries.from_loader(
         spec=_spec(),
-        signal="c",
+        name="c",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=3,
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
@@ -175,7 +175,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), signal="c", time_axis=OrdinalAxis())
+    ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), name="c", time_axis=OrdinalAxis())
     record = dataset.add_record(record=Record(time_series=(ordinal,)))
     series_id = record.time_series[0].time_series_id
     span = StepInterval(time_series_id=series_id, start=4, stop=6)

@@ -58,7 +58,7 @@ def _dataset(
         ts = TimeSeries.from_values(
             record_values,
             spec=spec,
-            signal="stage",
+            name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
         dataset.add_record(record=Record(time_series=(ts,), record_id=f"record-{i}"))
@@ -116,7 +116,7 @@ def test_enum_rejects_values_outside_codebook():
         TimeSeries.from_values(
             ["awake", "unknown"],
             spec=spec,
-            signal="stage",
+            name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
 
@@ -255,7 +255,7 @@ def test_enum_streaming_write_read(tmp_path):
     )
     spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
     for i, labels in enumerate(records_labels):
-        ts = TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+        ts = TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
         dataset.add_record(record=Record(time_series=(ts,), record_id=f"s-{i}"))
     dataset.derive_schema()
 
@@ -306,8 +306,8 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
     dataset.add_record(record=Record(time_series=(ts1,), record_id="s-0"))
     dataset.add_record(record=Record(time_series=(ts2,), record_id="s-1"))
     dataset.derive_schema()
@@ -348,8 +348,8 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
     dataset.add_record(record=Record(time_series=(ts1,), record_id="s-0"))
     dataset.add_record(record=Record(time_series=(ts2,), record_id="s-1"))
     dataset.derive_schema()
