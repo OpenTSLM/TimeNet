@@ -394,16 +394,10 @@ class DuckDBControlReader:
         """
         hydrated_records = self.read_records() if records is None else tuple(records)
         records_by_id = {record.id: record for record in hydrated_records}
-        signals_by_id = {signal.id: signal for record in hydrated_records for signal in record.signals}
         records_by_key = {
             key: records_by_id[record_id]
             for key, record_id in self.connection.execute("SELECT record_key, record_id FROM records").fetchall()
             if record_id in records_by_id
-        }
-        signals_by_key = {
-            key: signals_by_id[signal_id]
-            for key, signal_id in self.connection.execute("SELECT signal_key, signal_id FROM signals").fetchall()
-            if signal_id in signals_by_id
         }
         annotations_by_occurrence: dict[int, Annotation] = {}
         annotations = self._read_annotations(annotations_by_occurrence=annotations_by_occurrence)
@@ -427,6 +421,19 @@ class DuckDBControlReader:
                LEFT JOIN target_span_values span_values USING (target_item_key)
                ORDER BY links.task_key, links.position"""
         ).fetchall()
+        needs_signals = any(row[7] is not None or row[10] for row in target_rows)
+        signals_by_id = (
+            {signal.id: signal for record in hydrated_records for signal in record.signals} if needs_signals else {}
+        )
+        signals_by_key = (
+            {
+                key: signals_by_id[signal_id]
+                for key, signal_id in self.connection.execute("SELECT signal_key, signal_id FROM signals").fetchall()
+                if signal_id in signals_by_id
+            }
+            if needs_signals
+            else {}
+        )
         target_columns = (
             "target_kind",
             "text_value",
