@@ -3,15 +3,17 @@
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from fractions import Fraction
+from functools import partial
 import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.duckdb import check_control_schema, connect_control
 from timenet.format.task_codec import decode_span, decode_task_payload
 from timenet.types import (
@@ -32,6 +34,8 @@ from timenet.types import (
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
+ValueLoaderFactory = Callable[[str, TimeSeriesSpec], Callable[[], pa.Array]]
+OffsetsLoader = Callable[[str], pa.Array]
 
 
 def _decode_json(value: str | None, *, default: Any = None) -> Any:
@@ -63,12 +67,21 @@ def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
 class DuckDBControlReader:
     """Keep one read-only DuckDB connection and hydrate requested records from it."""
 
-    def __init__(self, path: Path, *, value_loader: ValueLoader | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        value_loader: ValueLoader | None = None,
+        value_loader_factory: ValueLoaderFactory | None = None,
+        offsets_loader: OffsetsLoader | None = None,
+    ) -> None:
         """Open and validate an immutable control database.
 
         Args:
             path: Local path to ``control.duckdb``.
             value_loader: Lazy values-plane resolver keyed by signal ID.
+            value_loader_factory: Factory for range-aware per-Signal loaders.
+            offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -80,6 +93,8 @@ class DuckDBControlReader:
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         self._value_loader = value_loader or _missing_values
+        self._value_loader_factory = value_loader_factory
+        self._offsets_loader = offsets_loader
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -98,18 +113,23 @@ class DuckDBControlReader:
         self.close()
 
     def read_records(  # noqa: PLR0914 - hydration keeps related row sets together
-        self, record_ids: Iterable[str] | None = None
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        with_annotations: bool = True,
     ) -> tuple[Record, ...]:
         """Hydrate complete recursive records while leaving signal values lazy.
 
         Args:
             record_ids: Requested IDs in result order, or ``None`` for every record.
+            with_annotations: Whether to hydrate annotations on records, sources, and signals.
 
         Returns:
             The hydrated records.
 
         Raises:
-            TimeFFormatError: If a requested record is absent or the stored hierarchy is inconsistent.
+            TimeFValidationError: If a requested record is absent.
+            TimeFFormatError: If the stored hierarchy is inconsistent.
         """
         requested = None if record_ids is None else tuple(record_ids)
         rows = self.connection.execute(
@@ -120,7 +140,7 @@ class DuckDBControlReader:
         order = tuple(by_id) if requested is None else requested
         missing = [record_id for record_id in order if record_id not in by_id]
         if missing:
-            raise TimeFFormatError(f"control.duckdb has no record(s) {missing}")
+            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
 
         source_rows = self.connection.execute(
             "SELECT source_id, record_id, parent_source_id, name, metadata FROM sources ORDER BY source_id"
@@ -130,7 +150,7 @@ class DuckDBControlReader:
                       categories, value_shape, dimension_names, nullable, data_source, n_values, metadata
                FROM signals ORDER BY signal_id"""
         ).fetchall()
-        annotations = self._read_annotations()
+        annotations = self._read_annotations() if with_annotations else {}
         axes = self._read_axes()
 
         signals_by_source: dict[str, list[Signal]] = defaultdict(list)
@@ -140,7 +160,13 @@ class DuckDBControlReader:
             if axis is None:
                 raise TimeFFormatError(f"signal {signal_id!r} refers to missing axis {axis_id!r}")
             spec = self._spec_from_row(row)
-            offsets_loader = self._offsets_loader(axis_id) if isinstance(axis, IrregularAxis) else None
+            offsets_loader = None
+            if isinstance(axis, IrregularAxis):
+                offsets_loader = (
+                    partial(self._offsets_loader, axis_id)
+                    if self._offsets_loader is not None
+                    else partial(self.load_axis_offsets, axis_id)
+                )
             signals_by_source[source_id].append(
                 Signal.from_loader(
                     id=signal_id,
@@ -148,7 +174,11 @@ class DuckDBControlReader:
                     spec=spec,
                     time_axis=axis,
                     n_values=row[13],
-                    loader=lambda signal_id=signal_id, spec=spec: self._value_loader(signal_id, spec),
+                    loader=(
+                        self._value_loader_factory(signal_id, spec)
+                        if self._value_loader_factory is not None
+                        else partial(self._value_loader, signal_id, spec)
+                    ),
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_id), ()),
                     metadata=_decode_json(row[14], default={}),
@@ -192,10 +222,12 @@ class DuckDBControlReader:
             span = None
             if row[2] is not None:
                 span = TimeInterval(start_us=row[2], end_us=row[3])
+            root_sources = tuple(hydrate_source(source_id, record_id) for source_id in roots_by_record[record_id])
             records.append(
                 Record(
                     record_id=record_id,
-                    sources=tuple(hydrate_source(source_id, record_id) for source_id in roots_by_record[record_id]),
+                    sources=root_sources,
+                    time_series=tuple(signal for source in root_sources for signal in source.walk_signals()),
                     annotations=annotations.get(("Record", record_id), ()),
                     start_time=row[1],
                     time_span=span,
@@ -203,6 +235,14 @@ class DuckDBControlReader:
                 )
             )
         return tuple(records)
+
+    def read_dataset_annotations(self, dataset_id: str) -> tuple[Annotation, ...]:
+        """Return annotations attached directly to a dataset.
+
+        Returns:
+            Dataset-level annotation occurrences in stable occurrence-ID order.
+        """
+        return self._read_annotations().get(("Dataset", dataset_id), ())
 
     def chunk_rows(self, signal_id: str) -> list[dict[str, Any]]:
         """Return values-backend chunk locators for one signal.
@@ -464,20 +504,40 @@ class DuckDBControlReader:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
 
-    def _offsets_loader(self, axis_id: str) -> Callable[[], pa.Array]:
-        """Return a lazy loader over one shared irregular axis.
+    def load_axis_offsets(self, axis_id: str) -> pa.Array:
+        """Load one shared irregular axis.
 
         Returns:
-            A callable that reads the axis offsets as Arrow int64 values.
+            The axis offsets as Arrow int64 values.
+
+        Raises:
+            TimeFFormatError: If the offsets disagree with the axis or its Signals.
         """
-
-        def load() -> pa.Array:
-            rows = self.connection.execute(
-                "SELECT offset_us FROM axis_offsets WHERE axis_id = ? ORDER BY position", [axis_id]
+        rows = self.connection.execute(
+            "SELECT offset_us FROM axis_offsets WHERE axis_id = ? ORDER BY position", [axis_id]
+        ).fetchall()
+        offsets = np.asarray([row[0] for row in rows], dtype=np.int64)
+        axis = self.connection.execute(
+            "SELECT first_us, last_us FROM axes WHERE axis_id = ? AND axis_type = 'irregular'",
+            [axis_id],
+        ).fetchone()
+        if axis is None:
+            raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
+        lengths = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT DISTINCT n_values FROM signals WHERE axis_id = ?", [axis_id]
             ).fetchall()
-            return pa.array((row[0] for row in rows), type=pa.int64())
-
-        return load
+        }
+        if len(lengths) != 1 or len(offsets) not in lengths:
+            raise TimeFFormatError(
+                f"axis {axis_id!r} stores {len(offsets)} offsets but its Signals declare lengths {sorted(lengths)}"
+            )
+        if len(offsets) == 0 or (int(offsets[0]), int(offsets[-1])) != axis:
+            raise TimeFFormatError(f"axis {axis_id!r} has offsets disagreeing with its axis endpoints {axis}")
+        if np.any(np.diff(offsets) < 0):
+            raise TimeFFormatError(f"axis {axis_id!r} has decreasing offsets")
+        return pa.array(offsets, type=pa.int64())
 
     @staticmethod
     def _spec_from_row(row: tuple[Any, ...]) -> TimeSeriesSpec:
@@ -516,7 +576,8 @@ class DuckDBControlReader:
                       o.metadata, c.content_id, c.name, c.value, c.unit, c.metadata
                FROM annotation_occurrences o
                JOIN annotation_contents c USING (content_id)
-               ORDER BY o.object_type, o.object_id, o.occurrence_id"""
+               ORDER BY o.object_type, o.object_id, o.content_id, o.span_type,
+                        o.start_us NULLS FIRST, o.end_us NULLS FIRST, o.occurrence_id"""
         ).fetchall()
         for row in rows:
             signal_ids = _decode_json(row[6])

@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 import zarr
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
@@ -161,14 +161,21 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     )
     dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries.from_loader(
-                    spec=spec,
-                    name="rgb",
-                    time_axis=RegularAxis.from_rate_hz(30),
-                    n_values=len(frames),
-                    loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
-                    id="camera-1",
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_loader(
+                            spec=spec,
+                            name="rgb",
+                            time_axis=RegularAxis.from_rate_hz(30),
+                            n_values=len(frames),
+                            loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                                frames, dim_names=spec.dimension_names
+                            ),
+                            id="camera-1",
+                        ),
+                    ),
                 ),
             ),
             record_id="record-camera",
@@ -217,24 +224,29 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     )
     dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries.from_loader(
-                    spec=nd_spec,
-                    name="rgb",
-                    time_axis=RegularAxis.from_rate_hz(10),
-                    id="cam-1",
-                    n_values=len(frames),
-                    loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
-                        frames, dim_names=nd_spec.dimension_names
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_loader(
+                            spec=nd_spec,
+                            name="rgb",
+                            time_axis=RegularAxis.from_rate_hz(10),
+                            id="cam-1",
+                            n_values=len(frames),
+                            loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                                frames, dim_names=nd_spec.dimension_names
+                            ),
+                        ),
+                        TimeSeries.from_loader(
+                            spec=scalar_spec,
+                            name="i",
+                            time_axis=RegularAxis.from_rate_hz(10),
+                            id="sig-1",
+                            n_values=6,
+                            loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
+                        ),
                     ),
-                ),
-                TimeSeries.from_loader(
-                    spec=scalar_spec,
-                    name="i",
-                    time_axis=RegularAxis.from_rate_hz(10),
-                    id="sig-1",
-                    n_values=6,
-                    loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
                 ),
             ),
             record_id="record-0",
@@ -276,8 +288,13 @@ def test_str_round_trip(tmp_path):
     )
     dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+                    ),
+                ),
             ),
             record_id="record-0",
         )
@@ -312,8 +329,13 @@ def test_str_empty_range_read(tmp_path):
     )
     dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+                    ),
+                ),
             ),
             record_id="record-0",
         )
