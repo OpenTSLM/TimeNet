@@ -28,7 +28,6 @@ from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
-    DataSource,
     TimeSeriesSpec,
     ureg,
 )
@@ -47,12 +46,10 @@ ECG_QA_TEMPLATE_ANSWERS_URL = (
 # public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
-_SOURCE = DataSource(data_source_type="physionet", name="PTB-XL", provider="PhysioNet")
 _ECG = TimeSeriesSpec(
     spec_type="ecg",
     name="12-lead ECG",
     unit_value=ureg.millivolt,
-    data_source=_SOURCE,
 )
 _DEFAULT_CONTEXT = "12-lead ECG recording."
 

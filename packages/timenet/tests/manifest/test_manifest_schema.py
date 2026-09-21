@@ -10,7 +10,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Domain,
     License,
     TimeSeriesSpec,
@@ -20,12 +19,10 @@ from timenet.types import (
 
 
 def _manifest() -> Manifest:
-    source = DataSource(data_source_type="holter", name="Holter Monitor", provider="Acme")
     spec = TimeSeriesSpec(
         spec_type="ecg",
         name="ECG",
         unit_value=ureg.millivolt,
-        data_source=source,
     )
     rhythm = TimeSeriesSpec(
         spec_type="rhythm",
