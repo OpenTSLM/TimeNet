@@ -84,7 +84,7 @@ class DuckDBControlWriter:
                     record.start_time,
                     None if span is None else span.start_us,
                     None if span is None else span.end_us,
-                    _json({}),
+                    _json(record.metadata),
                 ],
             )
             annotations.extend((record.record_id, annotation) for annotation in record.annotations)
