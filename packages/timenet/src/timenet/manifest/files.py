@@ -1,4 +1,4 @@
-"""The :class:`ManifestFiles` block. It holds the file descriptors of a dataset, relative to the version directory."""
+"""Manifest descriptors for the DuckDB control file and values-plane artifacts."""
 
 from dataclasses import dataclass
 
@@ -22,40 +22,21 @@ class FilePart:
 
 @dataclass(frozen=True)
 class ManifestFiles:
-    """Descriptors for every artifact of a dataset version, grouped by kind. Readers use this data, not a glob.
+    """Descriptors for every TimeF artifact. Readers use this data rather than a file glob."""
 
-    Each artifact is a list of parts. This lets any artifact shard later without a change to the
-    manifest format. Today the writer creates one part for ``records``, ``annotations``, and
-    ``time_series_index``. ``tasks`` and ``time_series`` already have several parts. Each part is a
-    :class:`FilePart` object, with its own path, checksum, and size.
-    """
-
-    records: tuple[FilePart, ...]
-    """Parts of the records table."""
-    annotations: tuple[FilePart, ...]
-    """Parts of the annotations table."""
-    time_series_index: tuple[FilePart, ...]
-    """Parts of the time series index table."""
-    tasks: tuple[FilePart, ...] = ()
-    """Parts of the task tables. There is one table for each task type."""
+    control: tuple[FilePart, ...]
+    """The single immutable ``control.duckdb`` file."""
     time_series: tuple[FilePart, ...] = ()
-    """Parts of the time series data. Each part is also a shard."""
-    control: tuple[FilePart, ...] = ()
-    """The single DuckDB relational control-plane file for TimeF."""
+    """Parquet shards or files inside the Zarr values store."""
 
     def all_files(self) -> tuple[FilePart, ...]:
         """Return every file descriptor across all artifacts, in a stable order.
 
         Returns:
-            The parts of ``records``, ``annotations``, ``time_series_index``, ``tasks``, and
-            ``time_series``, joined into one tuple.
+            The control file followed by every values-plane artifact.
         """
         return (
             *self.control,
-            *self.records,
-            *self.annotations,
-            *self.time_series_index,
-            *self.tasks,
             *self.time_series,
         )
 
