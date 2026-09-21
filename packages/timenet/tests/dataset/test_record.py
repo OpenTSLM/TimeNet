@@ -17,6 +17,17 @@ def test_add_static_annotation(make_series):
     assert record.annotations == (ann,)
 
 
+def test_annotate_binds_a_declarative_annotation(make_series):
+    record = Record(time_series=(make_series(),))
+    content = Annotation(key="patient_sex", value="male", id="sex-male")
+
+    occurrence = record.annotate(content)
+
+    assert occurrence.content_id == content.content_id
+    assert occurrence.occurrence_id is not None
+    assert record.annotations == (occurrence,)
+
+
 def test_add_multiple_annotations_preserves_order(make_series):
     record = Record(time_series=(make_series(),))
     a = record.add_annotation(Annotation(key="age", value=64))
