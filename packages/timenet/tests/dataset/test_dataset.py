@@ -48,7 +48,7 @@ def test_add_record_registers_and_returns(make_series):
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
-    signal = make_series(time_series_id="signal")
+    signal = make_series(id="signal")
     source = Source(id="source", name="Device", signals=(signal,))
     record = Record(record_id="record", sources=(source,))
     dataset = _dataset()
@@ -162,9 +162,9 @@ def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
         dtype="uint8",
         value_shape=(8, 8, 3),
     )
-    image = TimeSeries(
+    image = TimeSeries.from_loader(
         spec=image_spec,
-        signal="image",
+        name="image",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=1,
         loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(np.zeros((1, 8, 8, 3), dtype="uint8")),
@@ -203,7 +203,7 @@ def test_no_loader_calls_during_build():
         name="S",
         unit_value=ureg.dimensionless,
     )
-    ts = TimeSeries(spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
+    ts = TimeSeries.from_loader(spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
     record = ds.add_record(record=Record(time_series=(ts,)))
     ds.add_task(record, ClassificationTask(target="a"))
     ds.derive_schema()

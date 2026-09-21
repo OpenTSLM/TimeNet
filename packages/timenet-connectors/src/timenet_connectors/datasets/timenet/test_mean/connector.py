@@ -67,10 +67,10 @@ class TestMeanConnector(BaseConnector[None]):
             series = TimeSeries.from_values(
                 values,
                 spec=_SIGNAL,
-                signal="signal",
+                name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
                 source_id=f"rec-{index}",
-                time_series_id=f"ts-{index}",
+                id=f"ts-{index}",
             )
             record = dataset.add_record(record=Record(time_series=(series,), record_id=f"record-{index}"))
             label = "above_zero" if offset > 0 else "below_zero"

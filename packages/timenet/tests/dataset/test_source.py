@@ -12,12 +12,12 @@ SPEC = TimeSeriesSpec(spec_type="acceleration", name="Acceleration", unit_value=
 
 
 def _signal(signal_id: str, name: str) -> Signal:
-    return Signal(
+    return Signal.from_loader(
         spec=SPEC,
-        signal=name,
+        name=name,
         time_axis=RegularAxis(period_us=Fraction(1_000)),
         loader=lambda: pa.array([1.0], type=pa.float32()),
-        time_series_id=signal_id,
+        id=signal_id,
         n_values=1,
     )
 

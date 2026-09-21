@@ -21,17 +21,17 @@ SPEC = TimeSeriesSpec(
 
 def _dataset() -> TimeFDataset:
     axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
-    lead_i = Signal(
-        time_series_id="lead-i",
-        signal="I",
+    lead_i = Signal.from_loader(
+        id="lead-i",
+        name="I",
         spec=SPEC,
         time_axis=axis,
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
     )
-    lead_ii = Signal(
-        time_series_id="lead-ii",
-        signal="II",
+    lead_ii = Signal.from_loader(
+        id="lead-ii",
+        name="II",
         spec=SPEC,
         time_axis=axis,
         n_values=2,

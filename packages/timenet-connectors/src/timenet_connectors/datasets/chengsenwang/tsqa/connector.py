@@ -44,9 +44,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 TimeSeries.from_values(
                     values,
                     spec=_SPEC,
-                    signal=f"c{signal}",
+                    name=f"c{signal}",
                     time_axis=OrdinalAxis(),
-                    time_series_id=f"row-{index}-c{signal}",
+                    id=f"row-{index}-c{signal}",
                 )
                 for signal, values in enumerate(signals)
             )
