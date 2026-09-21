@@ -112,66 +112,93 @@ class Signal:
     metadata: dict[str, object] = field(default_factory=dict)
     """Optional JSON-compatible signal metadata."""
 
-    def __init__(  # noqa: PLR0913 - supports eager data and lazy storage loaders
+    def __init__(  # noqa: PLR0913 - a signal carries its complete public metadata
         self,
         *,
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
         id: str | None = None,
-        name: str | None = None,
-        data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array | None = None,
-        loader: Callable[[], pa.Array] | None = None,
-        n_values: int | None = None,
+        name: str,
+        data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Build a signal from values that are already in memory."""
+        array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
+        self._initialize(
+            spec=spec,
+            time_axis=time_axis,
+            id=id or new_id(),
+            name=name,
+            loader=lambda: array,
+            n_values=len(array),
+            source_id=source_id,
+            annotations=annotations,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def from_loader(  # noqa: PLR0913 - lazy signals carry their storage metadata
+        cls,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        name: str,
+        loader: Callable[[], pa.Array],
+        n_values: int,
+        id: str | None = None,
         time_offsets_loader: Callable[[], pa.Array] | None = None,
         source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: dict[str, object] | None = None,
-        signal: str | None = None,
-        time_series_id: str | None = None,
-    ) -> None:
-        """Build a signal from eager ``data`` or a lazy ``loader``.
+    ) -> "Signal":
+        """Build a signal whose values are loaded only when they are read.
 
-        ``signal`` and ``time_series_id`` are transitional aliases for old connectors. New code uses
-        ``name`` and ``id``.
-
-        Raises:
-            TimeFValidationError: If aliases disagree, both data paths are set, or a required value is
-                missing.
+        Returns:
+            A signal backed by ``loader`` without calling it.
         """
-        if name is not None and signal is not None and name != signal:
-            raise TimeFValidationError("Signal.name and legacy signal disagree")
-        if id is not None and time_series_id is not None and id != time_series_id:
-            raise TimeFValidationError("Signal.id and legacy time_series_id disagree")
-        resolved_name = name if name is not None else signal
-        resolved_id = id if id is not None else time_series_id or new_id()
-        if resolved_name is None:
-            raise TimeFValidationError("Signal requires name=")
-        if data is not None and loader is not None:
-            raise TimeFValidationError("Signal accepts data= or loader=, not both")
-        if data is None and loader is None:
-            raise TimeFValidationError("Signal requires data= or loader=")
-        if data is not None:
-            array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
-            if n_values is not None and n_values != len(array):
-                raise TimeFValidationError(f"Signal.n_values={n_values} does not match the {len(array)} eager values")
+        instance = cls.__new__(cls)
+        instance._initialize(
+            spec=spec,
+            time_axis=time_axis,
+            id=id or new_id(),
+            name=name,
+            loader=loader,
+            n_values=n_values,
+            time_offsets_loader=time_offsets_loader,
+            source_id=source_id,
+            annotations=annotations,
+            metadata=metadata,
+        )
+        return instance
 
-            def load_eager() -> pa.Array:
-                return array
-
-            loader = load_eager
-            n_values = len(array)
-        if n_values is None:
-            raise TimeFValidationError("a lazy Signal requires n_values=")
-        object.__setattr__(self, "spec", spec)
-        object.__setattr__(self, "name", resolved_name)
-        object.__setattr__(self, "time_axis", time_axis)
-        object.__setattr__(self, "loader", loader)
-        object.__setattr__(self, "time_offsets_loader", time_offsets_loader)
-        object.__setattr__(self, "source_id", source_id)
-        object.__setattr__(self, "id", resolved_id)
-        object.__setattr__(self, "n_values", n_values)
-        object.__setattr__(self, "annotations", tuple(annotations))
-        object.__setattr__(self, "metadata", {} if metadata is None else metadata)
+    def _initialize(  # noqa: PLR0913 - shared eager and lazy field initialization
+        self,
+        *,
+        spec: TimeSeriesSpec,
+        time_axis: TimeAxis,
+        id: str,
+        name: str,
+        loader: Callable[[], pa.Array],
+        n_values: int,
+        time_offsets_loader: Callable[[], pa.Array] | None = None,
+        source_id: str | None = None,
+        annotations: tuple[Annotation, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Set and validate fields shared by eager and lazy construction."""
+        set_field = object.__setattr__
+        set_field(self, "spec", spec)
+        set_field(self, "name", name)
+        set_field(self, "time_axis", time_axis)
+        set_field(self, "loader", loader)
+        set_field(self, "time_offsets_loader", time_offsets_loader)
+        set_field(self, "source_id", source_id)
+        set_field(self, "id", id)
+        set_field(self, "n_values", n_values)
+        set_field(self, "annotations", tuple(annotations))
+        set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
 
     @property
@@ -248,10 +275,10 @@ class Signal:
         values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         spec: TimeSeriesSpec,
-        signal: str,
+        name: str,
         time_axis: TimeAxis,
         source_id: str | None = None,
-        time_series_id: str | None = None,
+        id: str | None = None,
     ) -> "TimeSeries":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
@@ -259,30 +286,28 @@ class Signal:
         with the spec's dtype. Repeated reads return that same array. The array length sets
         ``n_values``.
 
-        For files or remote sources, use the ``loader=`` constructor and supply the length.
-        That constructor does not read the values immediately.
+        For files or remote sources, use :meth:`from_loader` and supply the length. That constructor
+        does not read the values immediately.
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
                 strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             spec: The series' measurement-modality spec.
-            signal: The signal name.
+            name: The signal name.
             time_axis: Where the values sit in time.
             source_id: Optional id of the raw source recording.
-            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
             The constructed :class:`TimeSeries`.
         """
-        array = _array_from_values(spec, values)
         return cls(
             spec=spec,
-            signal=signal,
+            name=name,
+            data=values,
             time_axis=time_axis,
-            loader=lambda: array,
             source_id=source_id,
-            time_series_id=time_series_id or new_id(),
-            n_values=len(array),
+            id=id,
         )
 
     @classmethod
@@ -292,9 +317,9 @@ class Signal:
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
-        signal: str,
+        name: str,
         source_id: str | None = None,
-        time_series_id: str | None = None,
+        id: str | None = None,
     ) -> "TimeSeries":
         """Build an irregular series from materialized values and their time offsets.
 
@@ -308,9 +333,9 @@ class Signal:
                 strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
-            signal: The signal name.
+            name: The signal name.
             source_id: Optional id of the raw source recording.
-            time_series_id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
             The constructed :class:`TimeSeries`.
@@ -326,14 +351,14 @@ class Signal:
                 f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"
             )
         time_offset_array = pa.array(time_offsets)
-        return cls(
+        return cls.from_loader(
             spec=spec,
-            signal=signal,
+            name=name,
             time_axis=IrregularAxis.spanning(time_offsets),
             loader=lambda: array,
             time_offsets_loader=lambda: time_offset_array,
             source_id=source_id,
-            time_series_id=time_series_id or new_id(),
+            id=id,
             n_values=len(array),
         )
 
