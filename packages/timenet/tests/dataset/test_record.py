@@ -147,7 +147,7 @@ def test_has_absolute_time(make_series):
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
     # An unscoped span needs a timeline to be placed against. An all-ordinal record has no timed series
     # and no time_span, so there is nothing to check it against and it is refused.
-    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, signal="c", time_axis=OrdinalAxis())
+    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, name="c", time_axis=OrdinalAxis())
     record = Record(time_series=(ordinal,))
     with pytest.raises(ValueError, match="no timeline to place it"):
         record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
@@ -240,9 +240,7 @@ def test_time_span_must_be_an_interval(make_series):
 
 
 def _ordinal(spec, n, tsid):
-    return TimeSeries.from_values(
-        [float(i) for i in range(n)], spec=spec, signal="c", time_axis=OrdinalAxis(), time_series_id=tsid
-    )
+    return TimeSeries.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis(), id=tsid)
 
 
 def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):

@@ -66,12 +66,12 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
         )
     )
     series = [
-        TimeSeries(
+        TimeSeries.from_loader(
             spec=_spec(spec_type),
-            signal=signal,
+            name=signal,
             time_axis=RegularAxis.from_rate_hz(_RATE_HZ),
             loader=(lambda captured=values: pa.array(captured, type=pa.float32())),
-            time_series_id=f"ts-{spec_type}-{signal}",
+            id=f"ts-{spec_type}-{signal}",
             n_values=len(values),
         )
         for (spec_type, signal), values in signals.items()

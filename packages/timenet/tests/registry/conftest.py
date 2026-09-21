@@ -43,12 +43,12 @@ def _ecg_dataset() -> TimeFDataset:
         name="ECG Lead",
         unit_value=ureg.millivolt,
     )
-    series = TimeSeries(
+    series = TimeSeries.from_loader(
         spec=spec,
-        signal="II",
+        name="II",
         time_axis=RegularAxis.from_rate_hz(16),
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
-        time_series_id="ecg-ts-0",
+        id="ecg-ts-0",
         n_values=16,
     )
     record = dataset.add_record(record=Record(time_series=(series,), record_id="ecg-record-0"))
