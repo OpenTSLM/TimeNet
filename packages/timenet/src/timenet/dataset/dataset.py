@@ -72,7 +72,11 @@ class TimeFDataset:  # noqa: PLR0904
         self._records.append(record)
         return record
 
-    def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
+    def add_task(
+        self,
+        records: Record | Iterable[Record] | None = None,
+        task: Task | None = None,
+    ) -> Task:
         """Register a task and link it to its records.
 
         This method checks every span that the task carries against the records given here. This
@@ -85,9 +89,8 @@ class TimeFDataset:  # noqa: PLR0904
         not the call to this method.
 
         Args:
-            records: The record, or records, that the task attaches to.
-            task: The task instance. The caller must already set its payload, ``scope``, and
-                ``from_tasks`` fields.
+            records: Legacy explicit task inputs. New code sets ``task.inputs`` instead.
+            task: The concrete task instance with its input records, payload, and scope.
 
         Returns:
             The registered task. This is the same instance, with the ``record_ids`` field
@@ -105,7 +108,15 @@ class TimeFDataset:  # noqa: PLR0904
                 occurs if the span falls outside a record's covered span. It also occurs if a
                 referenced record or annotation is not registered in this dataset.
         """
-        targets = (records,) if isinstance(records, Record) else tuple(records)
+        if task is None:
+            if isinstance(records, Task):
+                task = records
+                records = None
+            else:
+                raise TimeFValidationError("add_task requires task=")
+        if records is not None and task.inputs:
+            raise TimeFValidationError("add_task accepts task.inputs or records, not both")
+        targets = task.inputs if records is None else ((records,) if isinstance(records, Record) else tuple(records))
         if not targets:
             raise TimeFValidationError("add_task requires at least one record")
         return self._register_batch((task,), targets)[0]
@@ -307,6 +318,7 @@ class TimeFDataset:  # noqa: PLR0904
             )
         self._validate_task_batch(batch, targets)
         for task in batch:
+            task.inputs = targets
             task.record_ids = tuple(record.record_id for record in targets)
             for record in targets:
                 record.task_ids = (*record.task_ids, task.id)
@@ -339,6 +351,7 @@ class TimeFDataset:  # noqa: PLR0904
             raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
         known_task_ids = registered_ids | set(batch_ids)
         for task in batch:
+            self._normalize_task_annotation_refs(task)
             for parent_id in task.from_task_ids:
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
@@ -359,6 +372,26 @@ class TimeFDataset:  # noqa: PLR0904
                         f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
                     )
             self._check_annotation_refs(task, targets)
+
+    @staticmethod
+    def _normalize_task_annotation_refs(task: Task) -> None:
+        """Keep transitional annotation IDs aligned with object references.
+
+        Raises:
+            TimeFValidationError: If an object tuple and its ID projection disagree.
+        """
+        for objects_name, ids_name in (
+            ("input_annotations", "input_annotation_ids"),
+            ("target_annotations", "target_annotation_ids"),
+        ):
+            annotations = getattr(task, objects_name)
+            if not annotations:
+                continue
+            content_ids = tuple(annotation.content_id for annotation in annotations)
+            current = getattr(task, ids_name)
+            if current and current != content_ids:
+                raise TimeFValidationError(f"{type(task).__name__} {objects_name} and {ids_name} disagree")
+            setattr(task, ids_name, content_ids)
 
     @staticmethod
     def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:
@@ -500,12 +533,17 @@ class TimeFDataset:  # noqa: PLR0904
             raise TimeFValidationError(
                 f"{name} sets multiple inline answers ({', '.join(inline)}); a task answers with exactly one"
             )
-        if inline and task.target_annotation_ids:
+        if inline and (task.target_annotation_ids or task.target_annotations):
             raise TimeFValidationError(
                 f"{name} sets an inline answer ({', '.join(inline)}) and target_annotation_ids "
                 f"{list(task.target_annotation_ids)}; the answer is either inline or by reference, not both"
             )
-        if not type(task).answer_is_record and not inline and not task.target_annotation_ids:
+        if (
+            not type(task).answer_is_record
+            and not inline
+            and not task.target_annotation_ids
+            and not task.target_annotations
+        ):
             raise TimeFValidationError(
                 f"{name} needs an answer: set one of {list(type(task).answer_fields)}, or "
                 f"target_annotation_ids= to point at stored annotations"

@@ -1,4 +1,5 @@
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pytest
@@ -7,7 +8,7 @@ from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
 
 SPEC = TimeSeriesSpec(
@@ -51,6 +52,9 @@ def _dataset() -> TimeFDataset:
     )
     dataset.add_record(record=record)
     dataset.annotate(Annotation(id="site", key="site", value="lab"))
+    task = AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", target="Yes")
+    task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
+    dataset.add_task(task=task)
     return dataset
 
 
@@ -63,6 +67,15 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path)
         assert connection.execute("SELECT count(*) FROM sources").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM signals").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
+        assert connection.execute("SELECT task_type, prompt, payload FROM tasks").fetchone() == (
+            "answer",
+            "Alive?",
+            '{"target":"Yes"}',
+        )
+        assert connection.execute("SELECT field, record_id FROM task_record_refs").fetchone() == (
+            "inputs",
+            "record-1",
+        )
         assert connection.execute("SELECT parent_source_id FROM sources WHERE source_id = 'ecg'").fetchone() == (
             "monitor",
         )
@@ -103,3 +116,32 @@ def test_control_writer_rejects_ambiguous_annotation_target_id(tmp_path):
         DuckDBControlWriter(path).write_hierarchy(dataset)
 
     assert not path.exists()
+
+
+def test_control_writer_stores_value_chunk_locations(tmp_path):
+    path = tmp_path / "control.duckdb"
+    placement = SimpleNamespace(
+        chunk_file="values/part-00000000.parquet",
+        data_index=SimpleNamespace(major_idx=2, minor_idx=3),
+        spec_type="voltage",
+        signal="I",
+        n_values=2,
+    )
+    placements = {
+        ("lead-i", 0): placement,
+        ("lead-ii", 0): SimpleNamespace(
+            chunk_file=placement.chunk_file,
+            data_index=SimpleNamespace(major_idx=2, minor_idx=4),
+            spec_type="voltage",
+            signal="II",
+            n_values=2,
+        ),
+    }
+
+    DuckDBControlWriter(path).write_hierarchy(_dataset(), placements)  # ty: ignore[invalid-argument-type]
+
+    with connect_control(path, read_only=True) as connection:
+        assert connection.execute(
+            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks WHERE signal_id = 'lead-i'"""
+        ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)
