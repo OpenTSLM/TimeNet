@@ -293,12 +293,14 @@ def _resolve_task(task_type: str) -> type[Task]:
 def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
     return {
         "records": counts.records,
-        "annotations": counts.annotations,
-        "registered_annotations": counts.registered_annotations,
+        "sources": counts.sources,
+        "signals": counts.signals,
+        "axes": counts.axes,
+        "annotation_contents": counts.annotation_contents,
+        "annotation_occurrences": counts.annotation_occurrences,
         "tasks": dict(counts.tasks),
-        "time_series_chunks": counts.time_series_chunks,
-        "time_series_index_rows": counts.time_series_index_rows,
-        "time_series_specs": dict(counts.time_series_specs),
+        "signal_chunks": counts.signal_chunks,
+        "signals_by_spec": dict(counts.signals_by_spec),
     }
 
 
@@ -306,27 +308,24 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
     try:
         return ManifestCounts(
             records=data.get("records", 0),
-            annotations=data.get("annotations", 0),
-            registered_annotations=data.get("registered_annotations", 0),
+            sources=data.get("sources", 0),
+            signals=data.get("signals", 0),
+            axes=data.get("axes", 0),
+            annotation_contents=data.get("annotation_contents", 0),
+            annotation_occurrences=data.get("annotation_occurrences", 0),
             tasks=dict(data.get("tasks", {})),
-            time_series_chunks=data.get("time_series_chunks", 0),
-            time_series_index_rows=data.get("time_series_index_rows", 0),
-            time_series_specs=dict(data.get("time_series_specs", {})),
+            signal_chunks=data.get("signal_chunks", 0),
+            signals_by_spec=dict(data.get("signals_by_spec", {})),
         )
     except (ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
 
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "records": [_part_to_dict(part) for part in files.records],
-        "annotations": [_part_to_dict(part) for part in files.annotations],
-        "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
-        "tasks": [_part_to_dict(part) for part in files.tasks],
+    return {
+        "control": [_part_to_dict(part) for part in files.control],
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
-    data["control"] = [_part_to_dict(part) for part in files.control]
-    return data
 
 
 def _part_to_dict(part: FilePart) -> dict[str, Any]:
@@ -336,12 +335,8 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            records=_parts(data["records"], "records"),
-            annotations=_parts(data["annotations"], "annotations"),
-            time_series_index=_parts(data["time_series_index"], "time_series_index"),
-            tasks=_parts(data.get("tasks", ()), "tasks"),
-            time_series=_parts(data.get("time_series", ()), "time_series"),
             control=_parts(data["control"], "control"),
+            time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
