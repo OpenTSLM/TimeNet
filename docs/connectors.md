@@ -64,7 +64,7 @@ dataclass, or an S3 key. The connector is generic through PEP 695:
 
 ## Sharing data
 
-To share time-series data across records, attach the same `TimeSeries` instance to each record. You
+To share time-series data across records, attach the same `Signal` instance to each record. You
 can also attach two instances that have the same explicit `time_series_id`. The writer removes
 duplicates by `time_series_id`, so it stores the bytes only once. The writer also removes duplicate
 annotations, by `id`.
@@ -169,7 +169,7 @@ pull their database archive.
   it covers a `ClassificationTask -> AnswerTask` chain, a scalar prediction, a temporal localization,
   and a scoped classification. Its dataset card, `dataset.yaml`, sits beside it in
   `datasets/timenet/hello_world/`.
-- `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `TimeSeries`, and each
+- `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `Signal`, and each
   row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
   `requirements.txt` names `huggingface_hub`.
 

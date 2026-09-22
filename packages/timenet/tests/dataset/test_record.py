@@ -3,22 +3,27 @@ from fractions import Fraction
 
 import pytest
 
-from timenet.dataset import Record, TimeSeries
+from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.dataset.record import check_span_within_window
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimePoint
 
 
+def _record(signals, **kwargs):
+    """Build a Record whose one Source owns ``signals``."""
+    return Record(sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
+
+
 def test_add_static_annotation(make_series):
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     ann = record.add_annotation(Annotation(key="age", value=64))
     assert ann.value == 64
     assert record.annotations == (ann,)
 
 
 def test_annotate_binds_a_declarative_annotation(make_series):
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     content = Annotation(key="patient_sex", value="male", id="sex-male")
 
     occurrence = record.annotate(content)
@@ -29,7 +34,7 @@ def test_annotate_binds_a_declarative_annotation(make_series):
 
 
 def test_add_multiple_annotations_preserves_order(make_series):
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     a = record.add_annotation(Annotation(key="age", value=64))
     b = record.add_annotation(Annotation(key="sex", value="M"))
     assert record.annotations == (a, b)
@@ -37,14 +42,12 @@ def test_add_multiple_annotations_preserves_order(make_series):
 
 def test_signal_level_point_resolves_series_id(make_series):
     ts = make_series()
-    record = Record(time_series=(ts,))
-    record.add_annotation(
-        Annotation(key="stimulus", span=TimePoint.seconds(0.002, time_series_ids=(ts.time_series_id,)))
-    )
+    record = _record((ts,))
+    record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(0.002, time_series_ids=(ts.id,))))
 
 
 def test_signal_level_annotation_unknown_id_rejected(make_series):
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     with pytest.raises(ValueError, match="unknown"):
         record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
 
@@ -54,7 +57,7 @@ def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
     # the series' windows, which here is the contiguous [0, 20) s, so differing lengths do not reject it.
     a = make_series(signal="I", values=(0.0,) * 5000)  # [0, 10) s
     b = make_series(signal="II", values=(0.0,) * 10000)  # [0, 20) s
-    record = Record(time_series=(a, b))
+    record = _record((a, b))
     record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
     assert record.annotations[0].key == "artifact"
 
@@ -62,7 +65,7 @@ def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
 def test_trial_level_interval_common_span_ok(make_series):
     a = make_series(signal="I", values=(0.0,) * 5000)
     b = make_series(signal="II", values=(0.0,) * 5000)
-    record = Record(time_series=(a, b))
+    record = _record((a, b))
     record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
 
 
@@ -75,43 +78,43 @@ def test_empty_time_series_ids_rejected():
 def test_trial_level_point_needs_no_common_span(make_series):
     a = make_series(signal="I", values=(0.0,) * 5000)
     b = make_series(signal="II", values=(0.0,) * 10000)
-    record = Record(time_series=(a, b))
+    record = _record((a, b))
     # A point marker imposes no common-span requirement.
     record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0)))
 
 
 def test_to_numpy_single_signal(make_series):
-    record = Record(time_series=(make_series(values=(1.0, 2.0, 3.0)),))
+    record = _record((make_series(values=(1.0, 2.0, 3.0)),))
     assert record.to_numpy().tolist() == [1.0, 2.0, 3.0]
 
 
 def test_to_numpy_rejects_multi_signal(make_series):
-    record = Record(time_series=(make_series(signal="I"), make_series(signal="II")))
+    record = _record((make_series(signal="I"), make_series(signal="II")))
     with pytest.raises(ValueError, match="single-signal"):
         record.to_numpy()
 
 
 def test_start_time_defaults_to_none(make_series):
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     assert record.start_time is None
 
 
 def test_start_time_takes_whole_microseconds(make_series):
     anchor = 1_700_000_000_000_001
-    record = Record(time_series=(make_series(),), start_time=anchor)
+    record = _record((make_series(),), start_time=anchor)
     assert record.start_time == anchor
 
 
 def test_start_time_takes_an_aware_datetime_and_normalizes_it(make_series):
     moment = datetime(2026, 8, 5, 0, 0, 0, 123456, tzinfo=UTC)
-    record = Record(time_series=(make_series(),), start_time=moment)
+    record = _record((make_series(),), start_time=moment)
     assert record.start_time == 1_785_888_000_123_456
 
 
 @pytest.mark.parametrize("anchor", [2**63, -(2**63) - 1])
 def test_start_time_rejects_an_anchor_that_overflows_int64(anchor, make_series):
     with pytest.raises(ValueError, match="int64"):
-        Record(time_series=(make_series(),), start_time=anchor)
+        _record((make_series(),), start_time=anchor)
 
 
 @pytest.mark.parametrize("anchor", [True, "1700000000", 1_700_000_000.5])
@@ -119,12 +122,12 @@ def test_start_time_rejects_an_ambiguous_anchor(anchor, make_series):
     # A bare float reads as either seconds or microseconds, and the wrong reading is off by a
     # million with nothing downstream to catch it.
     with pytest.raises(ValueError, match="datetime or whole Unix microseconds"):
-        Record(time_series=(make_series(),), start_time=anchor)
+        _record((make_series(),), start_time=anchor)
 
 
 def test_time_interval_measures_wall_clock_against_the_record_anchor(make_series):
     anchor = datetime(2026, 8, 5, 9, 0, 0, tzinfo=UTC)
-    record = Record(time_series=(make_series(),), start_time=anchor)
+    record = _record((make_series(),), start_time=anchor)
     span = record.time_interval(
         datetime(2026, 8, 5, 9, 0, 5, tzinfo=UTC),
         datetime(2026, 8, 5, 9, 0, 8, tzinfo=UTC),
@@ -134,39 +137,39 @@ def test_time_interval_measures_wall_clock_against_the_record_anchor(make_series
 
 def test_time_point_needs_an_anchored_record(make_series):
     # A record with no wall-clock anchor has no calendar time to measure a moment against.
-    record = Record(time_series=(make_series(),))
+    record = _record((make_series(),))
     with pytest.raises(TimeFValidationError, match="start_time"):
         record.time_point(datetime(2026, 8, 5, tzinfo=UTC))
 
 
 def test_time_point_rejects_a_naive_moment(make_series):
-    record = Record(time_series=(make_series(),), start_time=1_000_000)
+    record = _record((make_series(),), start_time=1_000_000)
     with pytest.raises(TimeFValidationError, match="must carry a timezone"):
         record.time_point(datetime(2026, 8, 5))
 
 
 def test_start_time_rejects_a_naive_datetime(make_series):
     with pytest.raises(ValueError, match="must carry a timezone"):
-        Record(time_series=(make_series(),), start_time=datetime(2026, 8, 5))
+        _record((make_series(),), start_time=datetime(2026, 8, 5))
 
 
 def test_has_absolute_time(make_series):
-    assert not Record(time_series=(make_series(),)).has_absolute_time
-    assert Record(time_series=(make_series(),), start_time=0).has_absolute_time
+    assert not _record((make_series(),)).has_absolute_time
+    assert _record((make_series(),), start_time=0).has_absolute_time
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
     # An unscoped span needs a timeline to be placed against. An all-ordinal record has no timed series
     # and no time_span, so there is nothing to check it against and it is refused.
-    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, name="c", time_axis=OrdinalAxis())
-    record = Record(time_series=(ordinal,))
+    ordinal = Signal.from_values([1.0, 2.0, 3.0], spec=make_series().spec, name="c", time_axis=OrdinalAxis())
+    record = _record((ordinal,))
     with pytest.raises(ValueError, match="no timeline to place it"):
         record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
 
 
 def test_annotation_span_outside_the_window_is_rejected(make_series):
     # 5000 values at 500 Hz is a 10 s window [0, 10); an interval past it means nothing on the data.
-    record = Record(time_series=(make_series(values=(0.0,) * 5000),))
+    record = _record((make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside record"):
         record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(5.0, 20.0)), warn_when_outside=False)
 
@@ -178,14 +181,14 @@ def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
     late = make_series(
         signal="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
-    record = Record(time_series=(early, late))
+    record = _record((early, late))
     # 15 s falls in the [10, 20) s gap, inside neither series.
     with pytest.raises(TimeFValidationError, match="falls in a gap"):
         record.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)), warn_when_outside=False)
 
 
 def test_an_outside_span_warns_and_is_kept(make_series):
-    record = Record(time_series=(make_series(values=(0.0,) * 5000),))  # a 10 s window [0, 10)
+    record = _record((make_series(values=(0.0,) * 5000),))  # a 10 s window [0, 10)
     span = TimeInterval.seconds(5.0, 20.0)
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         record.add_annotation(Annotation(key="artifact", span=span))
@@ -199,7 +202,7 @@ def test_annotation_in_a_gap_is_accepted_with_a_time_span(make_series):
     late = make_series(
         signal="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
-    record = Record(time_series=(early, late), time_span=TimeInterval.seconds(0.0, 30.0))
+    record = _record((early, late), time_span=TimeInterval.seconds(0.0, 30.0))
     record.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)))  # inside the session span
     assert record.annotations[0].key == "note"
 
@@ -211,8 +214,8 @@ def test_a_scoped_span_must_lie_within_the_intersection(make_series):
     late = make_series(
         signal="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=2_500)
     )  # [5, 15) s
-    record = Record(time_series=(early, late))
-    ids = (early.time_series_id, late.time_series_id)
+    record = _record((early, late))
+    ids = (early.id, late.id)
     record.add_annotation(Annotation(key="ok", span=TimeInterval.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
     # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
     with pytest.raises(TimeFValidationError, match="falls outside record"):
@@ -226,8 +229,8 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
     late = make_series(
         signal="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
-    record = Record(time_series=(early, late))
-    ids = (early.time_series_id, late.time_series_id)
+    record = _record((early, late))
+    ids = (early.id, late.id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
         record.add_annotation(
             Annotation(key="bad", span=TimePoint.seconds(5.0, time_series_ids=ids)), warn_when_outside=False
@@ -237,21 +240,21 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
 def test_time_span_must_contain_every_series_window(make_series):
     series = make_series(values=(0.0,) * 5000)  # [0, 10) s
     with pytest.raises(TimeFValidationError, match="must contain every series' window"):
-        Record(time_series=(series,), time_span=TimeInterval.seconds(0.0, 5.0))  # too short
+        _record((series,), time_span=TimeInterval.seconds(0.0, 5.0))  # too short
 
 
 def test_time_span_time_series_ids_must_be_none(make_series):
     with pytest.raises(TimeFValidationError, match="time_series_ids must be None"):
-        Record(time_series=(make_series(),), time_span=TimeInterval.seconds(0.0, 10.0, time_series_ids=("x",)))
+        _record((make_series(),), time_span=TimeInterval.seconds(0.0, 10.0, time_series_ids=("x",)))
 
 
 def test_time_span_must_be_an_interval(make_series):
     with pytest.raises(TimeFValidationError, match="must be a TimeInterval"):
-        Record(time_series=(make_series(),), time_span=TimePoint.seconds(5.0))  # ty: ignore[invalid-argument-type]
+        _record((make_series(),), time_span=TimePoint.seconds(5.0))
 
 
 def _ordinal(spec, n, tsid):
-    return TimeSeries.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis(), id=tsid)
+    return Signal.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis(), id=tsid)
 
 
 def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):
@@ -288,9 +291,7 @@ def test_a_steps_span_on_a_timeline_series_is_rejected(make_series):
     # its steps is refused rather than bounded by length.
     ts = make_series(values=(0.0,) * 5000)
     with pytest.raises(TimeFValidationError, match="has a timeline"):
-        check_span_within_window(
-            "scope", StepInterval(time_series_id=ts.time_series_id, start=0, stop=5001), (ts,), "s"
-        )
+        check_span_within_window("scope", StepInterval(time_series_id=ts.id, start=0, stop=5001), (ts,), "s")
 
 
 def test_a_time_span_on_an_ordinal_series_is_rejected(make_series):

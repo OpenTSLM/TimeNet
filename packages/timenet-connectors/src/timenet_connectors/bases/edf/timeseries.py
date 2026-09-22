@@ -1,4 +1,4 @@
-"""Turn the signals of one recording into :class:`~timenet.dataset.TimeSeries`.
+"""Turn the signals of one recording into :class:`~timenet.dataset.Signal`.
 
 The caller passes the signal-to-spec table and the loader factory, thus this module holds
 nothing of this dataset and reads no sample. Every other attribute comes from the header.
@@ -9,7 +9,7 @@ from fractions import Fraction
 
 import pyarrow as pa
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.types import TimeSeriesSpec
@@ -22,7 +22,7 @@ def build(
     specs: Mapping[str, TimeSeriesSpec],
     *,
     loader: Callable[[reader.EdfFile, int], Callable[[], pa.Array]],
-) -> tuple[TimeSeries, ...]:
+) -> tuple[Signal, ...]:
     """Give one time series for each signal that the header of a recording names.
 
     Args:
@@ -47,7 +47,7 @@ def build(
 
         samples_per_record = header.samples_per_record[index]
         series.append(
-            TimeSeries.from_loader(
+            Signal.from_loader(
                 spec=spec,
                 name=signal,
                 # From the header of this file, thus the signals at 1 Hz and the one

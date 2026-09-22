@@ -10,7 +10,7 @@ from timenet.dataset import Record, Source
 # pytest's importlib import mode, which does not add test dirs to ``sys.path``.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (
@@ -43,7 +43,7 @@ def _ecg_dataset() -> TimeFDataset:
         name="ECG Lead",
         unit_value=ureg.millivolt,
     )
-    series = TimeSeries.from_loader(
+    series = Signal.from_loader(
         spec=spec,
         name="II",
         time_axis=RegularAxis.from_rate_hz(16),

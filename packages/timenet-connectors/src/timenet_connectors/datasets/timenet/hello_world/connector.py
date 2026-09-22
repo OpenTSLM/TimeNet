@@ -17,7 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -123,7 +123,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset = TimeFDataset(metadata=self.metadata())
 
         # Record 0's sine signal.
-        shared = TimeSeries.from_values(
+        shared = Signal.from_values(
             _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
             spec=_SINE,
             name="a",
@@ -135,7 +135,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
-        cosine = TimeSeries.from_values(
+        cosine = Signal.from_values(
             _wave_values(np.cos, raw_refs[0].n_values, phase=0.0),
             spec=_COSINE,
             name="b",
@@ -159,7 +159,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
         artifact = Annotation(
             key="artifact",
-            span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+            span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
             id="art-0",
         )
         _, record0_cohort, stimulus, artifact = record0.add_annotations(
@@ -209,7 +209,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
 
         # Record 1: a short signal and a longer signal. The writer tests split the longer signal into
         # chunks under a small chunk cap.
-        long_series = TimeSeries.from_loader(
+        long_series = Signal.from_loader(
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
@@ -225,7 +225,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     id="source-record-1",
                     name="Synthetic generator",
                     signals=(
-                        TimeSeries.from_values(
+                        Signal.from_values(
                             _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
                             spec=_SINE,
                             name="a",
@@ -246,7 +246,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
         # window.
         window_start = raw_refs[0].n_values // 2
-        window = TimeSeries.from_values(
+        window = Signal.from_values(
             _wave_values(
                 np.sin,
                 raw_refs[0].n_values - window_start,
@@ -277,7 +277,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 inputs=(record2,),
                 targets=("onset",),
                 id="task-cls-2",
-                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.time_series_id,)),
+                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.id,)),
             ),
         )
         return dataset
