@@ -5,7 +5,7 @@ from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.dataset.selection import SignalSelection
 from timenet.dataset.source import Source
-from timenet.dataset.time_series import Signal, TimeSeries
+from timenet.dataset.time_series import Signal
 
 
 __all__ = [
@@ -19,5 +19,4 @@ __all__ = [
     "Source",
     "TimeAxis",
     "TimeFDataset",
-    "TimeSeries",
 ]

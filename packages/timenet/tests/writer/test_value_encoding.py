@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_ROW_GROUP_TARGET_BYTES
@@ -66,7 +66,7 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
         )
     )
     series = [
-        TimeSeries.from_loader(
+        Signal.from_loader(
             spec=_spec(spec_type),
             name=signal,
             time_axis=RegularAxis.from_rate_hz(_RATE_HZ),
@@ -329,7 +329,7 @@ def test_round_trip_is_bit_exact(tmp_path, forced):
     values = quantized()
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): values}), value_encoding=forced)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read().records[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 
@@ -345,7 +345,7 @@ def test_reader_needs_no_encoding_hint(tmp_path):
 
     assert Manifest.from_json(manifest_path.read_text()).value_encoding == {}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read().records[0].time_series[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 

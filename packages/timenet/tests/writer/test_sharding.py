@@ -4,7 +4,7 @@ import duckdb
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -25,7 +25,6 @@ from timenet.writer import TimeFWriter
 
 # Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.
 _SMALL_TARGETS = {
-    "control_shard_target_bytes": 128,
     "shard_target_bytes": 256,
     "row_group_target_bytes": 128,
     "chunk_max_bytes": 64,
@@ -47,7 +46,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     axis = RegularAxis.from_rate_hz(16)
     for i in range(n_records):
         values = [float((i + j) % 11) for j in range(series_len)]
-        ts = TimeSeries.from_values(values, spec=spec, name="a", time_axis=axis, id=f"ts-{i:03d}")
+        ts = Signal.from_values(values, spec=spec, name="a", time_axis=axis, id=f"ts-{i:03d}")
         record = dataset.add_record(
             record=Record(
                 sources=(Source(id=f"record-{i:03d}-source", name="Source", signals=(ts,)),),
@@ -131,7 +130,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
-        _ = [s.time_series for s in dataset.records]  # touch every record's series metadata
+        _ = [s.signals for s in dataset.records]  # touch every record's series metadata
     # values are lazy; building records may open control-plane tables but no value shard (under time_series/)
     assert not [p for p in opened if "/time_series/" in p]
 
@@ -150,7 +149,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
-        series = next(ts for s in dataset.records for ts in s.time_series if ts.time_series_id == series_id)
+        series = next(ts for s in dataset.records for ts in s.signals if ts.id == series_id)
         series.to_arrow()
     opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened if "/time_series/" in p}
     assert opened_rel == expected_shards  # exactly the series' value shards, nothing else
@@ -169,6 +168,6 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
 
     monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = next(ts for s in reader.read().records for ts in s.time_series if ts.time_series_id == "ts-006")
+        series = next(ts for s in reader.read().records for ts in s.signals if ts.id == "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards
