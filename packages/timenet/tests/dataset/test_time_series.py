@@ -5,7 +5,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Signal, TimeSeries
+from timenet.dataset import Signal
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
@@ -32,7 +32,7 @@ def _series(**overrides):
         fields["id"] = fields.pop("time_series_id")
     if "signal" in overrides:
         fields["name"] = fields.pop("signal")
-    return TimeSeries.from_loader(**fields)
+    return Signal.from_loader(**fields)
 
 
 def test_to_arrow_returns_loader_output():
@@ -73,12 +73,12 @@ def test_identity_equality():
 def test_frozen():
     ts = _series()
     with pytest.raises(AttributeError):
-        ts.signal = "V1"
+        ts.name = "V1"
 
 
 def test_default_id_unique_explicit_id_kept():
-    assert _series().time_series_id != _series().time_series_id
-    assert _series(time_series_id="fixed").time_series_id == "fixed"
+    assert _series().id != _series().id
+    assert _series(time_series_id="fixed").id == "fixed"
 
 
 def test_signal_accepts_declarative_eager_data():
@@ -119,7 +119,7 @@ def test_the_window_is_derived_from_the_axis_and_the_count():
 
 
 def test_from_values_casts_to_float32_and_derives_the_window():
-    ts = TimeSeries.from_values([1.0, 2.0, 3.0, 4.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(2))
+    ts = Signal.from_values([1.0, 2.0, 3.0, 4.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(2))
     values = ts.to_numpy()
     assert values.dtype == np.float32
     assert values.tolist() == [1.0, 2.0, 3.0, 4.0]
@@ -128,7 +128,7 @@ def test_from_values_casts_to_float32_and_derives_the_window():
 
 def test_from_values_counts_the_array_it_was_given():
     # The window is derived, so a caller cannot hand it one that disagrees with the values.
-    ts = TimeSeries.from_values(
+    ts = Signal.from_values(
         np.array([1.0, 2.0]), spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(4).at_index(4)
     )
     assert ts.n_values == 2
@@ -136,25 +136,23 @@ def test_from_values_counts_the_array_it_was_given():
 
 
 def test_from_values_generates_unique_id_unless_given():
-    a = TimeSeries.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    b = TimeSeries.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    assert a.time_series_id != b.time_series_id
-    fixed = TimeSeries.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1), id="x")
-    assert fixed.time_series_id == "x"
+    a = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
+    b = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
+    assert a.id != b.id
+    fixed = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1), id="x")
+    assert fixed.id == "x"
 
 
 def test_from_values_casts_to_the_specified_numpy_dtype():
     spec = replace(_spec(), dtype="int16")
-    arr = TimeSeries.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
+    arr = Signal.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.int16()
     assert arr.to_pylist() == [1, 2, 3]
 
 
 def test_from_values_str_spec_keeps_string_labels():
     spec = replace(_spec(), dtype="str")
-    arr = TimeSeries.from_values(
-        ["normal", "afib"], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)
-    ).to_arrow()
+    arr = Signal.from_values(["normal", "afib"], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.string()
     assert arr.to_pylist() == ["normal", "afib"]
 
@@ -180,7 +178,7 @@ def test_step_range_of_a_seconds_span_on_a_regular_axis():
 
 
 def test_step_range_of_a_seconds_span_on_an_irregular_axis():
-    ts = TimeSeries.from_irregular(
+    ts = Signal.from_irregular(
         [0.0, 1.0, 2.0, 3.0], time_offsets_us=[0, 1_000_000, 2_000_000, 5_000_000], spec=_spec(), name="c"
     )
     # [1 s, 5 s) picks the values at 1 s and 2 s, not the one at 5 s (exclusive end).
@@ -210,6 +208,6 @@ def test_step_range_rejects_a_steps_span_past_the_series():
 
 
 def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():
-    ts = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
+    ts = Signal.from_values([1.0, 2.0, 3.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="no timeline"):
         ts.step_range(TimeInterval.seconds(0.0, 1.0))

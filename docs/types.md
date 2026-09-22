@@ -124,12 +124,12 @@ markers into nulls.
 Nullability applies to a whole timestep. A multidimensional value is all present or all missing.
 The writer rejects partial nulls. The dtypes `int16`, `bool`, `str`, and `enum` also support nulls.
 
-`TimeSeries.to_arrow()` preserves nulls. `TimeSeries.to_numpy()` raises `TimeFValidationError` when
+`Signal.to_arrow()` preserves nulls. `Signal.to_numpy()` raises `TimeFValidationError` when
 the loaded array contains nulls. In some cases, the previous conversion lost the distinction between
 missing values and NaN.
 A nullable spec without actual nulls still supports `to_numpy()`. NaN and infinity remain valid values.
 
-`TimeSeries.to_numpy_and_mask()` returns values and a validity mask, a boolean array that marks
+`Signal.to_numpy_and_mask()` returns values and a validity mask, a boolean array that marks
 present timesteps. Together, the values and mask preserve the missingness that Arrow stores.
 Missing positions hold zero, false, or an empty string. These fill values are not observations.
 The PyTorch dataset returns the same pair as `"series"` and `"series_masks"`.

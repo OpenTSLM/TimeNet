@@ -23,7 +23,7 @@ import hashlib
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -243,20 +243,20 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         )
         return dataset
 
-    def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[TimeSeries, ...]:
-        """Build the 12 lead :class:`TimeSeries` for one recording with lazy per-lead loaders.
+    def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[Signal, ...]:
+        """Build the 12 lead :class:`Signal` for one recording with lazy per-lead loaders.
 
         Args:
             ecg_id: The recording id.
             record_base: The record path without the ``.dat`` / ``.hea`` extension.
 
         Returns:
-            One :class:`TimeSeries` per lead, sharing the ECG spec and a per-recording source id.
+            One :class:`Signal` per lead, sharing the ECG spec and a per-recording source id.
         """
         header = self._read_header(record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
         return tuple(
-            TimeSeries.from_loader(
+            Signal.from_loader(
                 spec=_ECG,
                 name=name,
                 time_axis=axis,

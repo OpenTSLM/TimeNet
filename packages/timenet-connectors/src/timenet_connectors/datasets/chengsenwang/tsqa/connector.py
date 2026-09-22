@@ -9,7 +9,7 @@ is a list of lists. Each row becomes one record that carries the series and an
 import json
 from typing import Any
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
@@ -41,7 +41,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             series = json.loads(row["Series"])
             signals = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
-                TimeSeries.from_values(
+                Signal.from_values(
                     values,
                     spec=_SPEC,
                     name=f"c{signal}",

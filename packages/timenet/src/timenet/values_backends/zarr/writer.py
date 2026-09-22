@@ -34,7 +34,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import TimeSeriesSpec
 from timenet.values_backends import ValuesBackend
@@ -218,7 +218,7 @@ class ZarrValuesBackend(BaseValuesBackend):
             )
         self._clevel = config.compression_level
 
-    def _value_appender(self, group: Any, ts: TimeSeries, array_path: str, codec: Any) -> "_ArrayAppender":
+    def _value_appender(self, group: Any, ts: Signal, array_path: str, codec: Any) -> "_ArrayAppender":
         """Create the values array for one partition and wrap it in an appender.
 
         Args:
@@ -313,10 +313,10 @@ class ZarrValuesBackend(BaseValuesBackend):
 
     def write_series(  # noqa: PLR0914
         self,
-        unique_series: list[TimeSeries],
+        unique_series: list[Signal],
         *,
-        read_and_validate: Callable[[TimeSeries], pa.Array],
-        read_time_offsets: Callable[[TimeSeries], pa.Array | None],
+        read_and_validate: Callable[[Signal], pa.Array],
+        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -390,11 +390,11 @@ class ZarrValuesBackend(BaseValuesBackend):
             rel = f"{_STORE_DIR}/{array_path}"
             for chunk_idx, start in enumerate(range(0, len(values), _MAX_PLACEMENT_VALUES)):
                 n = min(_MAX_PLACEMENT_VALUES, len(values) - start)
-                placements[ts.time_series_id, chunk_idx] = ChunkPlacement(
+                placements[ts.id, chunk_idx] = ChunkPlacement(
                     chunk_file=rel,
                     data_index=ChunkDataIndex(major_idx=base + start, minor_idx=None),
                     spec_type=spec_type,
-                    signal=ts.signal,
+                    signal=ts.name,
                     n_values=n,
                 )
             on_series_done(completed, total)

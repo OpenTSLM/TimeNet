@@ -1,11 +1,8 @@
-"""Arrow schemas for the TimeF on-disk files, parameterized by id storage type.
+"""Pinned Arrow schema of the Parquet value shards and the id codec that writes them.
 
-The column layout is fixed. Only the id columns vary. Every id column holds one of the six logical ids
-in :data:`LOGICAL_IDS`. Each is stored as ``pa.string()``, or as ``pa.binary(16)`` when every value is a
-canonical UUID. ``pa.binary(16)`` uses 16 raw bytes instead of a 36-character string. The writer picks
-the type per logical id and writes it into the Parquet schemas. The reader infers the types from the
-records file schema. ``binary(16)`` decodes back to the canonical string, so callers always see
-string ids.
+Every id column holds one of the logical ids in :data:`LOGICAL_IDS`, stored as ``pa.string()`` or as
+``pa.binary(16)`` when every value of that id is a canonical UUID. The writer picks the type per
+logical id; the DuckDB control plane stores public ids as strings and needs no codec.
 """
 
 from collections.abc import Iterable
@@ -14,17 +11,8 @@ from typing import cast
 
 import pyarrow as pa
 
-from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet.types import (
-    Span,
-    StepInterval,
-    StepPoint,
-    StepSpan,
-    TimeInterval,
-    TimePoint,
-    TimeSpan,
-)
-from timenet.types.ids import id_from_bytes, id_to_bytes
+from timenet.errors import TimeFValidationError
+from timenet.types.ids import id_to_bytes
 
 
 #: The logical ids that cross-reference TimeF entities. Every id column holds exactly one of these.
@@ -53,108 +41,6 @@ def default_id_types() -> IdTypes:
 
 
 #: Where each logical id lives in the records Parquet schema.
-_RECORDS_ID_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("record_id", ("record_id",)),
-    ("subject_id", ("subject_ids",)),
-    ("time_series_id", ("time_series", "time_series_id")),
-    ("source_id", ("time_series", "source_id")),
-    ("task_id", ("task_ids",)),
-    ("annotation_id", ("annotation_ids",)),
-)
-
-
-def id_types_from_records_schema(schema: pa.Schema) -> IdTypes:
-    """Infer every logical id's Arrow type from the records Parquet schema.
-
-    Args:
-        schema: The Arrow schema of any records part file.
-
-    Returns:
-        A mapping from every logical id to its Arrow type.
-    """
-    types: IdTypes = {}
-    for logical, path in _RECORDS_ID_PATHS:
-        arrow_type: pa.DataType = schema.field(path[0]).type
-        for step in path[1:]:
-            arrow_type = arrow_type.value_type  # unwrap list
-            arrow_type = arrow_type.field(step).type  # enter struct
-        if pa.types.is_list(arrow_type):
-            arrow_type = arrow_type.value_type
-        types[logical] = arrow_type
-    return types
-
-
-def time_series_struct(id_types: IdTypes) -> pa.DataType:
-    """Return the per-record nested time-series struct type.
-
-    Args:
-        id_types: The resolved id storage types.
-
-    Returns:
-        The struct type used inside ``records.time_series``.
-    """
-    return pa.struct(
-        [
-            ("spec_type", pa.string()),
-            ("signal", pa.string()),
-            ("source_id", id_types["source_id"]),
-            ("time_series_id", id_types["time_series_id"]),
-            ("axis_type", pa.string()),  # dispatched on before any shape-specific column is read
-            ("period_numerator_us", pa.int64()),  # non-null iff regular
-            ("period_denominator", pa.int64()),  # non-null iff regular
-            ("start_index", pa.int64()),  # non-null iff regular
-            ("first_time_offset_us", pa.int64()),  # non-null iff irregular
-            ("last_time_offset_us", pa.int64()),  # non-null iff irregular
-            ("n_values", pa.int64()),
-        ]
-    )
-
-
-def records_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the records table schema.
-
-    Args:
-        id_types: The resolved id storage types.
-
-    Returns:
-        The Arrow schema.
-    """
-    return pa.schema(
-        [
-            ("record_id", id_types["record_id"]),
-            ("start_time_us", pa.int64()),
-            ("time_span", span_struct(id_types)),  # null unless the record declares an explicit session span
-            ("subject_ids", pa.list_(id_types["subject_id"])),
-            ("time_series", pa.list_(time_series_struct(id_types))),
-            ("task_ids", pa.list_(id_types["task_id"])),
-            ("annotation_ids", pa.list_(id_types["annotation_id"])),
-        ]
-    )
-
-
-def annotations_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the annotations table schema.
-
-    Args:
-        id_types: The resolved id storage types.
-
-    Returns:
-        The Arrow schema.
-    """
-    return pa.schema(
-        [
-            ("id", id_types["annotation_id"]),
-            ("key", pa.string()),
-            ("value", pa.string()),  # JSON-encoded scalar/list/map, null for a pure marker
-            ("source", pa.string()),  # optional per-instance provenance, null when unset
-            ("span", span_struct(id_types)),  # null for a static annotation
-            ("record_ids", pa.list_(id_types["record_id"])),
-        ]
-    )
-
-
-#: The default values-element type of a waveform shard. A module-level constant keeps
-#: :func:`shard_schema`'s default free of a function call in its signature.
 _DEFAULT_VALUES_TYPE = pa.float32()
 
 
@@ -177,51 +63,6 @@ def shard_schema(id_types: IdTypes, value_type: pa.DataType = _DEFAULT_VALUES_TY
             ("n_values", pa.int32()),
             ("values", pa.list_(value_type)),
             ("time_offsets_us", pa.list_(pa.int64())),
-        ]
-    )
-
-
-def index_schema(id_types: IdTypes) -> pa.Schema:
-    """Return the time-series index table schema.
-
-    Args:
-        id_types: The resolved id storage types.
-
-    Returns:
-        The Arrow schema.
-    """
-    return pa.schema(
-        [
-            ("record_id", id_types["record_id"]),
-            ("time_series_id", id_types["time_series_id"]),
-            ("spec_type", pa.string()),
-            ("signal", pa.string()),
-            ("chunk_idx", pa.int32()),
-            # Backend-neutral chunk locator (a ChunkDataIndex flattened). For Parquet, these are the
-            # shard path, row group, and row offset. Other backends assign their own coordinate meanings.
-            ("chunk_file", pa.string()),
-            ("chunk_major_idx", pa.int64()),
-            ("chunk_minor_idx", pa.int64()),
-            ("n_values", pa.int32()),
-        ]
-    )
-
-
-def span_struct(id_types: IdTypes) -> pa.DataType:
-    """Return the struct type a :class:`~timenet.types.Span` is stored as.
-
-    Args:
-        id_types: The resolved id storage types.
-
-    Returns:
-        The struct type used for a task's ``scope`` and for localization target spans.
-    """
-    return pa.struct(
-        [
-            ("start_us", pa.int64()),  # microseconds in the seconds frame, a step ordinal in steps
-            ("end_us", pa.int64()),  # null => the span is a point
-            ("time_series_ids", pa.list_(id_types["time_series_id"])),  # a step span stores its one id here
-            ("frame", pa.string()),  # "seconds" or "steps". Null on a legacy partition means seconds.
         ]
     )
 
@@ -249,18 +90,6 @@ class IdCodec:
             The codec for those columns.
         """
         return cls(frozenset(uuid16))
-
-    @classmethod
-    def from_id_types(cls, id_types: IdTypes) -> "IdCodec":
-        """Build a codec from resolved Arrow id types (the reader's entry point).
-
-        Args:
-            id_types: Mapping from logical id to its Arrow type.
-
-        Returns:
-            The codec for those columns.
-        """
-        return cls(frozenset(name for name, arrow_type in id_types.items() if arrow_type == UUID16))
 
     def encode(self, logical: str, value: object) -> object:
         """Encode one id to 16 raw bytes for a ``uuid16`` column, else pass it through unchanged.
@@ -300,107 +129,3 @@ class IdCodec:
             The encoded list.
         """
         return [self.encode(logical, value) for value in values]
-
-    def encode_span(self, span: Span | None) -> dict | None:
-        """Encode a span to its struct row, encoding the series ids it is scoped to.
-
-        Args:
-            span: The span, or ``None`` for a whole-record scope.
-
-        Returns:
-            The struct row, or ``None``.
-
-        Raises:
-            TimeFValidationError: If ``span`` is not a concrete time or step span.
-        """
-        if span is None:
-            return None
-        if isinstance(span, StepSpan):  # one id, stored as a single-element list
-            series_ids = self.encode_list("time_series_id", (span.time_series_id,))
-            start = span.start
-        elif isinstance(span, TimeSpan):
-            series_ids = (
-                None if span.time_series_ids is None else self.encode_list("time_series_id", span.time_series_ids)
-            )
-            start = span.start_us
-        else:
-            raise TimeFValidationError(f"cannot encode {span!r}: not a concrete span")
-        return {
-            "start_us": start,
-            "end_us": None if span.is_point else span.exclusive_end,
-            "time_series_ids": series_ids,
-            "frame": span.frame,
-        }
-
-    def decode(self, logical: str, value: object) -> str:
-        """Decode one required id, turning 16 raw bytes back into a canonical string for ``uuid16``.
-
-        Args:
-            logical: The logical id the column holds.
-            value: The raw cell value (bytes for a ``uuid16`` column, string otherwise).
-
-        Returns:
-            The canonical id string.
-        """
-        if logical in self.uuid16:
-            return id_from_bytes(cast(bytes, value))
-        return cast(str, value)
-
-    def decode_opt(self, logical: str, value: object) -> str | None:
-        """Decode an optional id (for example, ``source_id``), passing ``None`` through.
-
-        Args:
-            logical: The logical id the column holds.
-            value: The raw cell value, or ``None``.
-
-        Returns:
-            The canonical id string, or ``None``.
-        """
-        return None if value is None else self.decode(logical, value)
-
-    def decode_list(self, logical: str, values: object) -> list[str]:
-        """Decode a list of id values element-wise via :meth:`decode`.
-
-        Args:
-            logical: The logical id the column holds.
-            values: The raw cell values.
-
-        Returns:
-            The decoded id strings.
-        """
-        return [self.decode(logical, value) for value in cast(list, values)]
-
-    def decode_span(self, row: object) -> Span | None:
-        """Rebuild a span from its struct row, decoding the series ids it is scoped to.
-
-        Args:
-            row: The struct row read from a task partition, or ``None``.
-
-        Returns:
-            The span, or ``None``.
-
-        Raises:
-            TimeFFormatError: If the frame is neither ``"seconds"`` nor ``"steps"``, or a step span's
-                stored id list is empty.
-        """
-        if row is None:
-            return None
-        struct = cast("dict", row)
-        series_ids = struct["time_series_ids"]
-        start, end = struct["start_us"], struct["end_us"]
-        frame = struct.get("frame") or "seconds"  # a legacy partition has no frame column
-        # A round-tripped span must come back as the leaf type its frame and bounds describe, or it
-        # stops comparing equal to the one that was written.
-        if frame == "steps":
-            if not series_ids:
-                raise TimeFFormatError("a step span stores the one series it counts on, but its id list is empty")
-            time_series_id = self.decode_list("time_series_id", series_ids)[0]  # one id, stored as a list
-            if end is None:
-                return StepPoint(time_series_id=time_series_id, start=start)
-            return StepInterval(time_series_id=time_series_id, start=start, stop=end)
-        if frame != "seconds":
-            raise TimeFFormatError(f"unknown span frame {frame!r}; expected 'seconds' or 'steps'")
-        time_series_ids = None if series_ids is None else tuple(self.decode_list("time_series_id", series_ids))
-        if end is None:
-            return TimePoint(start_us=start, time_series_ids=time_series_ids)
-        return TimeInterval(start_us=start, end_us=end, time_series_ids=time_series_ids)

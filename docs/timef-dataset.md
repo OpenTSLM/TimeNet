@@ -203,7 +203,7 @@ lead_i.annotate(
 
 ## Schema and persistence
 
-`derive_schema()` collects the TimeSeries specifications, annotation descriptors, and concrete Task
+`derive_schema()` collects the Signal specifications, annotation descriptors, and concrete Task
 types found in the dataset. It does not load Signal values.
 
 Write a version with the declarative helper:

@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import (
@@ -108,7 +108,7 @@ def test_scope_series_id_resolution(make_series):
         task=ClassificationTask(
             inputs=(record,),
             targets=("beat",),
-            scope=TimePoint.seconds(0.0, time_series_ids=(ts.time_series_id,)),
+            scope=TimePoint.seconds(0.0, time_series_ids=(ts.id,)),
         )
     )
     with pytest.raises(ValueError, match="unknown time_series_id"):
@@ -176,7 +176,7 @@ def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
         dtype="uint8",
         value_shape=(8, 8, 3),
     )
-    image = TimeSeries.from_loader(
+    image = Signal.from_loader(
         spec=image_spec,
         name="image",
         time_axis=RegularAxis.from_rate_hz(1),
@@ -217,7 +217,7 @@ def test_no_loader_calls_during_build():
         name="S",
         unit_value=ureg.dimensionless,
     )
-    ts = TimeSeries.from_loader(spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
+    ts = Signal.from_loader(spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
     ds.derive_schema()
@@ -225,7 +225,7 @@ def test_no_loader_calls_during_build():
 
 
 def test_add_record_rejects_duplicate_time_series_ids(make_series):
-    # TimeSeries uses identity equality with an auto-uuid id, so the same instance twice would
+    # Signal uses identity equality with an auto-uuid id, so the same instance twice would
     # silently collapse to one series on write.
     ts = make_series()
     with pytest.raises(TimeFValidationError, match="duplicate signal IDs"):
