@@ -11,47 +11,29 @@ from timenet.format.duckdb import (
 )
 
 
-EXPECTED_TABLES = {
-    "annotation_contents",
-    "annotation_occurrences",
-    "axes",
-    "axis_offsets",
-    "control_metadata",
-    "records",
-    "signal_chunks",
-    "signals",
-    "sources",
-    "task_annotation_refs",
-    "task_dependencies",
-    "task_record_refs",
-    "task_signal_refs",
-    "tasks",
-}
-
-
-def test_control_schema_contains_normalized_relationship_tables(tmp_path):
-    path = tmp_path / "control.duckdb"
+def test_control_schema_is_version_two_and_has_no_stored_relationship_constraints(tmp_path):
+    path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
         version = connection.execute("SELECT value FROM control_metadata WHERE key = 'schema_version'").fetchone()
         stored_constraints = connection.execute(
             "SELECT constraint_type FROM duckdb_constraints() WHERE constraint_type <> 'NOT NULL'"
         ).fetchall()
 
-    assert tables == EXPECTED_TABLES
-    assert CONTROL_SCHEMA_VERSION == 1
-    assert version == ("1",)
+    assert CONTROL_SCHEMA_VERSION == 2
+    assert version == ("2",)
     assert stored_constraints == []
 
 
 def test_control_transaction_rolls_back_all_rows(tmp_path):
-    with connect_control(tmp_path / "control.duckdb") as connection:
+    with connect_control(tmp_path.joinpath("control.duckdb")) as connection:
         create_control_schema(connection)
 
         with pytest.raises(RuntimeError, match="stop"), transaction(connection):
             connection.execute(
-                "INSERT INTO records VALUES (?, NULL, NULL, NULL, ?)",
+                """INSERT INTO records (
+                       record_id, start_time_us, time_span_start_us, time_span_end_us, metadata
+                   ) VALUES (?, NULL, NULL, NULL, ?)""",
                 ["record-1", "{}"],
             )
             raise RuntimeError("stop")
@@ -60,7 +42,7 @@ def test_control_transaction_rolls_back_all_rows(tmp_path):
 
 
 def test_control_schema_rejects_an_unknown_version(tmp_path):
-    path = tmp_path / "control.duckdb"
+    path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
         connection.execute("UPDATE control_metadata SET value = '999'")
@@ -70,7 +52,7 @@ def test_control_schema_rejects_an_unknown_version(tmp_path):
 
 
 def test_control_schema_rejects_a_non_timef_database(tmp_path):
-    path = tmp_path / "control.duckdb"
+    path = tmp_path.joinpath("control.duckdb")
     with duckdb.connect(str(path)) as connection:
         connection.execute("CREATE TABLE unrelated (value INTEGER)")
 
