@@ -78,7 +78,7 @@ dataset.describe()  # identity, counts, a quick preview
 
 # Each signal converts to Arrow or NumPy, so it drops straight into pandas:
 series = dataset.records[0].time_series[0]
-df = pd.DataFrame({series.signal: series.to_numpy()})
+df = pd.DataFrame({series.name: series.to_numpy()})
 print(df.head())
 ```
 
@@ -87,6 +87,6 @@ print(df.head())
     pure-NumPy workflow, remove it.
 
 `load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values.
-`to_arrow()` and `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
+`to_arrow()` and `to_numpy()` on a [`Signal`](timef-dataset.md) pull the values on demand. See
 [Client](client.md) for search, version pinning, PyTorch, and the CLI. See
 [Connectors](connectors.md) and [Build](build.md) to build your own datasets.

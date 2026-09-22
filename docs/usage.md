@@ -42,7 +42,7 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
     values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
     # tsqa is an ordinal series: it has an order and no timeline, so there is no time
     # column to build. A regularly sampled series would use series.time_axis.time_offset_us(i).
-    frame = pd.DataFrame({series.signal: values})
+    frame = pd.DataFrame({series.name: values})
     ```
 
 === "polars"
@@ -56,7 +56,7 @@ Each series carries its own `signal` and `time_axis`. It reads its values lazily
 
     # pl.from_arrow reads the Arrow array into a polars Series without a copy.
     column = pl.from_arrow(series.to_arrow())
-    frame = pl.DataFrame({series.signal: column})
+    frame = pl.DataFrame({series.name: column})
     ```
 
 === "Spark"

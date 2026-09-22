@@ -288,7 +288,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
         restored = reader.read()
     assert {record.record_id for record in restored.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
     record = next(one for one in restored.records if one.record_id == "sleep-edfx-SC4901E0")
-    assert len(record.time_series) == len(_SIGNALS)
+    assert len(record.signals) == len(_SIGNALS)
     lights_off = next(one for one in record.annotations if one.key == "lights_off")
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
@@ -419,7 +419,7 @@ def test_the_series_values_match_the_recording_they_were_read_from(release, monk
     # fails here.
     dataset = _convert(release, monkeypatch)
     record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
-    series = next(one for one in record.signals if one.signal == _SIGNALS[0])
+    series = next(one for one in record.signals if one.name == _SIGNALS[0])
     written = edfio.read_edf(release / _STUDY / "SC4901E0-PSG.edf").signals[0].data
     read_back = series.to_numpy()
     assert len(read_back) == len(written)

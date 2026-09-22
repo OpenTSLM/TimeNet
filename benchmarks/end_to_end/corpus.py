@@ -10,7 +10,7 @@ from typing import Any, cast
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.types import (
     Annotation,
@@ -63,7 +63,7 @@ def _add_record(
     *,
     record_id: str,
     source_name: str,
-    signals: tuple[TimeSeries, ...],
+    signals: tuple[Signal, ...],
     metadata: dict[str, object] | None = None,
 ) -> Record:
     """Add one explicit benchmark hierarchy.
@@ -113,7 +113,7 @@ def _scalar_series(
     signal: str,
     signal_index: int,
     scale: int,
-) -> TimeSeries:
+) -> Signal:
     """Construct one portable scalar float32 series.
 
     Returns:
@@ -125,7 +125,7 @@ def _scalar_series(
         unit_value=ureg.Unit(scenario.unit),
     )
     values = pa.array(_values(scenario_index, signal_index, scenario.steps, scale), type=pa.float32())
-    return TimeSeries.from_loader(
+    return Signal.from_loader(
         loader=lambda: values,
         spec=spec,
         name=signal,
@@ -142,7 +142,7 @@ def _nonfloat_series(
     values: tuple[str, ...] | np.ndarray,
     scale: int,
     categories: tuple[str, ...] = (),
-) -> TimeSeries:
+) -> Signal:
     """Construct one portable scalar non-float series, shareable by both backends.
 
     Args:
@@ -170,7 +170,7 @@ def _nonfloat_series(
             array = array.dictionary_encode()
     else:
         array = pa.array(np.repeat(np.asarray(values), scale, axis=0))
-    return TimeSeries.from_loader(
+    return Signal.from_loader(
         loader=lambda: array,
         spec=spec,
         name=name,
@@ -283,7 +283,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
     ecg = records["ecg"]
     for index in range(1, 8 * scale):
         signals = tuple(
-            TimeSeries.from_loader(
+            Signal.from_loader(
                 spec=signal.spec,
                 name=signal.name,
                 time_axis=signal.time_axis,
@@ -316,7 +316,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         signal_count = 1 + index % 3
         length = 64 + (index % 8) * 32
         series = tuple(
-            TimeSeries.from_loader(
+            Signal.from_loader(
                 loader=_loader(_values(4, signal, length, 1)),
                 spec=finance_spec,
                 name=f"c{signal}",
@@ -347,7 +347,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
     for index in range(64 * scale):
         offset = 0.75 if index % 2 == 0 else -0.75
         values = (_values(0, index, 64, 1) * 0.1 + offset).astype(np.float32)
-        series = TimeSeries.from_loader(
+        series = Signal.from_loader(
             loader=_loader(values),
             spec=vibration_spec,
             name="signal",
@@ -376,9 +376,9 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
 def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
     """Add Zarr-only N-D and non-float32 workloads."""
 
-    def tensor(values: np.ndarray, spec: TimeSeriesSpec, signal: str) -> TimeSeries:
+    def tensor(values: np.ndarray, spec: TimeSeriesSpec, signal: str) -> Signal:
         array = pa.FixedShapeTensorArray.from_numpy_ndarray(values, dim_names=dimensions_by_spec[spec.spec_type])
-        return TimeSeries.from_loader(
+        return Signal.from_loader(
             spec=spec,
             name=signal,
             time_axis=RegularAxis.from_rate_hz(50),

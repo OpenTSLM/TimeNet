@@ -734,12 +734,12 @@ class DuckDBControlWriter:
         """Insert one record's source tree and signals.
 
         Raises:
-            TimeFValidationError: If the record still uses the retired flat layout, or a Source or
-                Signal ID is already used elsewhere in the dataset.
+            TimeFValidationError: If the record has no Sources, or a Source or Signal ID is already
+                used elsewhere in the dataset.
         """
         if not record.sources:
             raise TimeFValidationError(
-                f"record {record.record_id!r} has no Source hierarchy; this TimeF version does not store flat time_series"
+                f"record {record.record_id!r} has no Sources; a Record stores its Signals under Sources"
             )
 
         def write_source(source: Any, parent_key: int | None) -> None:
