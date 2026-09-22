@@ -12,7 +12,7 @@ from timenet.errors import TimeFFormatError
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 1
+CONTROL_SCHEMA_VERSION = 2
 """Schema version written into :data:`CONTROL_FILE`."""
 
 
@@ -22,7 +22,18 @@ CREATE TABLE control_metadata (
     value VARCHAR NOT NULL
 );
 
+CREATE SEQUENCE object_key_sequence START 1;
+CREATE SEQUENCE axis_key_sequence START 1;
+CREATE SEQUENCE content_key_sequence START 1;
+CREATE SEQUENCE occurrence_key_sequence START 1;
+
+CREATE TABLE datasets (
+    dataset_key BIGINT NOT NULL DEFAULT nextval('object_key_sequence'),
+    dataset_id VARCHAR NOT NULL
+);
+
 CREATE TABLE records (
+    record_key BIGINT NOT NULL DEFAULT nextval('object_key_sequence'),
     record_id VARCHAR NOT NULL,
     start_time_us BIGINT,
     time_span_start_us BIGINT,
@@ -31,14 +42,16 @@ CREATE TABLE records (
 );
 
 CREATE TABLE sources (
+    source_key BIGINT NOT NULL DEFAULT nextval('object_key_sequence'),
     source_id VARCHAR NOT NULL,
-    record_id VARCHAR NOT NULL,
-    parent_source_id VARCHAR,
+    record_key BIGINT NOT NULL,
+    parent_source_key BIGINT,
     name VARCHAR NOT NULL,
     metadata JSON NOT NULL
 );
 
 CREATE TABLE axes (
+    axis_key BIGINT NOT NULL DEFAULT nextval('axis_key_sequence'),
     axis_id VARCHAR NOT NULL,
     axis_type VARCHAR NOT NULL,
     period_numerator_us BIGINT,
@@ -49,31 +62,31 @@ CREATE TABLE axes (
 );
 
 CREATE TABLE axis_offsets (
-    axis_id VARCHAR NOT NULL,
+    axis_key BIGINT NOT NULL,
     position BIGINT NOT NULL,
     offset_us BIGINT NOT NULL
 );
 
 CREATE TABLE signals (
+    signal_key BIGINT NOT NULL DEFAULT nextval('object_key_sequence'),
     signal_id VARCHAR NOT NULL,
-    source_id VARCHAR NOT NULL,
+    source_key BIGINT NOT NULL,
     name VARCHAR NOT NULL,
-    axis_id VARCHAR NOT NULL,
+    axis_key BIGINT NOT NULL,
     spec_type VARCHAR NOT NULL,
     spec_name VARCHAR NOT NULL,
     unit VARCHAR,
     dtype VARCHAR NOT NULL,
-    categories JSON NOT NULL,
-    value_shape JSON NOT NULL,
-    dimension_names JSON NOT NULL,
+    categories VARCHAR[] NOT NULL,
+    value_shape BIGINT[] NOT NULL,
+    dimension_names VARCHAR[] NOT NULL,
     nullable BOOLEAN NOT NULL,
-    data_source JSON,
     n_values BIGINT NOT NULL,
     metadata JSON NOT NULL
 );
 
 CREATE TABLE signal_chunks (
-    signal_id VARCHAR NOT NULL,
+    signal_key BIGINT NOT NULL,
     chunk_index BIGINT NOT NULL,
     value_path VARCHAR NOT NULL,
     chunk_major_index BIGINT NOT NULL,
@@ -82,63 +95,87 @@ CREATE TABLE signal_chunks (
 );
 
 CREATE TABLE annotation_contents (
+    content_key BIGINT NOT NULL DEFAULT nextval('content_key_sequence'),
     content_id VARCHAR NOT NULL,
     name VARCHAR NOT NULL,
-    value JSON,
+    value_kind VARCHAR,
+    text_value VARCHAR,
+    integer_value BIGINT,
+    float_value DOUBLE,
+    boolean_value BOOLEAN,
+    text_list_value VARCHAR[],
     unit VARCHAR,
     metadata JSON NOT NULL
 );
 
 CREATE TABLE annotation_occurrences (
+    occurrence_key BIGINT NOT NULL DEFAULT nextval('occurrence_key_sequence'),
     occurrence_id VARCHAR NOT NULL,
-    content_id VARCHAR NOT NULL,
+    content_key BIGINT NOT NULL,
     object_type VARCHAR NOT NULL,
-    object_id VARCHAR NOT NULL,
+    object_key BIGINT NOT NULL,
     span_type VARCHAR NOT NULL,
     start_us BIGINT,
     end_us BIGINT,
-    signal_ids JSON,
+    signal_keys BIGINT[],
     provenance JSON,
     confidence DOUBLE,
     metadata JSON NOT NULL
 );
 
 CREATE TABLE tasks (
+    task_key BIGINT NOT NULL DEFAULT nextval('object_key_sequence'),
     task_id VARCHAR NOT NULL,
     task_type VARCHAR NOT NULL,
     prompt VARCHAR,
-    scope JSON,
-    payload JSON NOT NULL,
+    scope_type VARCHAR,
+    scope_start BIGINT,
+    scope_end BIGINT,
+    scope_signal_keys BIGINT[],
+    has_inline_targets BOOLEAN NOT NULL,
+    target_schema VARCHAR,
+    unit VARCHAR,
+    target_name VARCHAR,
+    mode VARCHAR,
     rationale VARCHAR,
     metadata JSON NOT NULL
 );
 
-CREATE TABLE task_record_refs (
-    task_id VARCHAR NOT NULL,
-    field VARCHAR NOT NULL,
+CREATE TABLE task_targets (
+    task_key BIGINT NOT NULL,
     position BIGINT NOT NULL,
-    record_id VARCHAR NOT NULL
+    target_kind VARCHAR NOT NULL,
+    text_value VARCHAR,
+    integer_value BIGINT,
+    float_value DOUBLE,
+    boolean_value BOOLEAN,
+    record_key BIGINT,
+    signal_key BIGINT,
+    span_start BIGINT,
+    span_end BIGINT,
+    signal_keys BIGINT[]
 );
 
-CREATE TABLE task_signal_refs (
-    task_id VARCHAR NOT NULL,
+CREATE TABLE task_record_refs (
+    task_key BIGINT NOT NULL,
     field VARCHAR NOT NULL,
     position BIGINT NOT NULL,
-    signal_id VARCHAR NOT NULL
+    record_key BIGINT NOT NULL
 );
 
 CREATE TABLE task_annotation_refs (
-    task_id VARCHAR NOT NULL,
+    task_key BIGINT NOT NULL,
     field VARCHAR NOT NULL,
     position BIGINT NOT NULL,
-    occurrence_id VARCHAR NOT NULL
+    occurrence_key BIGINT NOT NULL
 );
 
 CREATE TABLE task_dependencies (
-    task_id VARCHAR NOT NULL,
+    task_key BIGINT NOT NULL,
     position BIGINT NOT NULL,
-    parent_task_id VARCHAR NOT NULL
+    parent_task_key BIGINT NOT NULL
 );
+
 """
 
 
