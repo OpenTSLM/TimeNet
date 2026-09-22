@@ -8,9 +8,6 @@ MANIFEST_FILE = "manifest.json"
 SHARD_DIR = "time_series"
 SHARD_TEMPLATE = "time_series/part-{:08d}.parquet"
 
-TASKS_DIR = "tasks"
-TASK_PART_TEMPLATE = "tasks/task={task_type}/part-{:08d}.parquet"
-
 # Control-plane tables, each sharded into numbered parts under their own directory. part_path() caps
 # the part number at PART_INDEX_DIGITS so the zero-padded names stay lexically sortable.
 RECORDS_TEMPLATE = "records/part-{:08d}.parquet"
