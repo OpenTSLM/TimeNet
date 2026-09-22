@@ -1,6 +1,6 @@
 ---
 icon: lucide/table-2
-description: "The in-memory TimeFDataset model: records, tasks, and time series."
+description: "The in-memory TimeFDataset hierarchy: Tasks, Records, Sources, and Signals."
 tags:
   - reference
   - dataset
@@ -8,287 +8,223 @@ tags:
 
 # TimeFDataset
 
-`TimeFDataset` is the in-memory model that a connector populates during `convert()`. It holds records
-and their tasks as Python objects. `TimeFDataset` does no I/O. The [`TimeFWriter`](timef-writer.md)
-handles persistence. `TimeFDataset` lives in `timenet.dataset`.
+`TimeFDataset` is the in-memory TimeF model. A connector builds ordinary Python objects, registers
+them with the dataset, and writes one immutable version. The hierarchy is:
 
----
+```
+Task ──N:M── Record ──1:N── Source ──1:N── Signal ──N:1── TimeAxis
+                                  └──1:N── Source
+```
 
-## TimeSeries
+`Source` is recursive. `Signal` is the leaf that owns the values, a `TimeAxis`, and a
+`TimeSeriesSpec`. Several Signals can reference the same immutable axis or specification object.
 
-A `TimeSeries` is a reference to one logical stream of time-series data. It supports optional
-windowing and a lazy Arrow loader.
+## Signal
+
+A `Signal` is one named, one-dimensional stream. Give it eager `data`, or a lazy `loader` and an
+explicit `n_values`:
 
 ```python
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.dataset.axis import RegularAxis
 
-TimeSeries(
-    spec=vibration,           # a TimeSeriesSpec (the modality)
-    signal="axial",           # the signal this series carries
-    time_axis=RegularAxis.from_rate_hz(500),
-    # Callable[[], pa.Array] matching the spec's dtype and value_shape
-    loader=load_axial,
-    source_id="rec_001",      # optional
-    n_values=5000,            # how many values the loader will return
+axis = RegularAxis.from_rate_hz(500)
+
+lead_i = Signal(
+    id="lead-i",
+    name="I",
+    data=lead_i_values,
+    time_axis=axis,
+    spec=ecg_spec,
 )
 ```
-
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spec` | `TimeSeriesSpec` | yes | The modality (shared across signals). |
-| `signal` | `str` | yes | The logical stream name (for example `"axial"` or `"rgb_frames"`). |
-| `time_axis` | `TimeAxis` | yes | Where the values sit in time: `RegularAxis`, `IrregularAxis`, or `OrdinalAxis`. |
-| `n_values` | `int` | yes | How many values the series holds. The writer validates the loader against this number. |
-| `loader` | `Callable[[], pa.Array]` | yes | A lazy loader that returns scalar values or an Arrow fixed-shape tensor array. |
-| `source_id` | `str \| None` | no | Identifier of the raw recording that this series came from. |
-| `time_series_id` | `str` | no | Persistent handle (auto uuid7). The writer dedupes by it. |
-| `time_offsets_loader` | `Callable[[], pa.Array] \| None` | no | One int64 microsecond time offset per value. `IrregularAxis` requires this field. Other axis types reject it. |
-
-`TimeSeries` is frozen and uses identity equality (`eq=False`). The writer dedupes by
-`time_series_id`. If a connector reuses one instance, or gives two instances the same explicit ID,
-both collapse to one chunk on disk.
-Consumers read values through `to_arrow()` (Arrow, zero-copy) or `to_numpy()`. The connector supplies
-`loader` at build. [`TimeFReader`](timef-reader.md) supplies `loader` again on read-back. In both
-cases, `loader` remains the lazy boundary. `read_steps(start, stop)` lets range-aware storage loaders
-select a temporal subsection, then return it as Arrow. Older connector callables do not support this.
-They fall back to a full-read slice.
-
-`TimeSeriesSpec.dtype`, `value_shape`, and `dimension_names` describe one timestep. Scalar series keep
-the defaults `float32`, `()`, and `()`. An RGB camera, for example, uses `dtype="uint8"`,
-`value_shape=(height, width, 3)`, and names `("height", "width", "color")`. A text signal uses
-`dtype="str"`, and a categorical signal uses `dtype="enum"`. The full
-logical shape is always `(n_steps, *value_shape)`.
-
-If a connector already holds the values in memory, use the classmethod
-`TimeSeries.from_values(values, *, spec, signal, time_axis, source_id=None, time_series_id=None)`.
-This method wraps the values in a loader cast to the spec's dtype. For a `"str"` or `"enum"` spec,
-pass the labels and the loader keeps them as text. It takes `n_values` from the length of the array.
-If a series stores time offsets instead of computing them, use
-`TimeSeries.from_irregular(values, *, time_offsets_us, ...)`. This method derives the axis from the
-stream, so the two values cannot disagree. Use the `loader=` constructor above only for lazy sources
-(files, remote shards).
-
-`from_values()` and `from_irregular()` convert the values once and retain the resulting Arrow array.
-Repeated reads reuse that array without repeating the conversion.
-If you supply a loader, that loader controls its own reads and stored results.
-The constructors still use NumPy to convert numeric NumPy inputs.
-Enum inputs use dictionary encoding, which stores each distinct label once.
-The constructors compare those distinct labels with the declared categories.
-
-An **ordinal** series has positions but no clock. It is an ordered sequence, for example `TSQA`, whose
-values carry an order but no calendar time. Build it with an `OrdinalAxis`. An ordinal series has no
-rate and no timeline. As a result, a task on this series uses steps instead of seconds for its scope
-and forecast (see [tasks](data-model/tasks.md)).
-
-```python
-from timenet.dataset import TimeSeries
-from timenet.dataset.axis import OrdinalAxis
-
-# TSQA: an ordered sequence of values with no wall clock
-series = TimeSeries.from_values(
-    values,                       # the ordered values
-    spec=tsqa_spec,
-    signal="series",
-    time_axis=OrdinalAxis(),
-    time_series_id="tsqa",
-)
-```
-
----
-
-## Record
-
-A `Record` is one logical unit of time-series data, for example a recording, a session, a sensor
-bundle, or a market window. A connector creates it with `TimeFDataset.add_record`.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `record_id` | `str` | Auto uuid7 (or explicit, for deterministic output). |
-| `time_series` | `tuple[TimeSeries, ...]` | The record's logical streams. |
-| `subject_ids` | `tuple[str, ...]` | Subjects (empty for subject-less domains). |
-| `task_ids` | `tuple[str, ...]` | Ids of tasks attached via `add_task` (populated after construction). |
-| `annotations` | `tuple[Annotation, ...]` | Attached via `add_annotation`. |
-| `start_time` | `datetime \| int \| None` | The wall-clock anchor that relative time zero refers to, for every series and annotation in the record. Pass a timezone-aware `datetime` or a whole number of Unix microseconds. Construction normalizes either value to microseconds. `Record` rejects a bare float, because both seconds and microseconds are plausible readings of it. `None` means no wall-clock reference exists, for example for de-identified or synthetic data. If no wall-clock reference exists, do not invent one. |
-| `time_span` | `TimeInterval \| None` | The overall span of the session on the source recording timeline. Some recordings have series with gaps between them. An unscoped span, for example a note taken while every sensor was briefly off, can fall inside such a gap. `time_span` must carry no `time_series_ids`. It must contain every series' window. When `time_span` is set, `Record` validates an unscoped span against it instead of against the union of the series' windows. |
+| `id` | `str` | Stable identity. The default is a UUIDv7. |
+| `name` | `str` | Human-readable name within the Source. |
+| `spec` | `TimeSeriesSpec` | Unit, dtype, shape, and modality contract. |
+| `time_axis` | `TimeAxis` | Regular, irregular, or ordinal placement of values. |
+| `data` | array-like | Eager values. Mutually exclusive with `loader`. |
+| `loader` | callable | Lazy Arrow value loader. Mutually exclusive with `data`. |
+| `n_values` | `int` | Required with a lazy loader and inferred from eager data. |
+| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
+| `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
 
-All series and annotations in an anchored record share this clock and relative-time coordinate system.
-Use `record.has_absolute_time` to find out whether the anchor is known.
+`to_arrow()`, `to_numpy()`, and `read_steps()` materialize values. The TimeF reader supplies a lazy
+storage loader, so reading the hierarchy does not load the arrays.
 
-`add_annotation(annotation)` attaches the annotation and returns it. It validates a temporal
-annotation's span with the same rule that a task's `scope` uses. A span scoped to named
-`time_series_ids` must lie inside the *intersection* of those series' windows. If an unscoped span
-declares a `time_span`, `add_annotation` validates the span against the record's `time_span`.
-Otherwise, `add_annotation` validates the span against the *union* of the series' windows. A span
-that leaves the window this rule selects warns with `SpanOutsideWindowWarning` and is kept as it was
-given. Some sources state a region that reaches past the signals it was written for, and a connector
-records what the source says. Pass `warn_when_outside=False` to raise `TimeFValidationError` instead.
-The reader keeps the same default, so it reads back a span the writer accepted.
+Irregular Signals also provide `time_offsets_loader`. Regular axes calculate their offsets from
+their cadence, and ordinal axes describe order without a clock.
 
-`add_annotations([...])` attaches an iterable the same way, but as one all-or-nothing operation. It
-validates the whole batch first. It leaves the record untouched if any annotation fails.
+Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 
-`to_arrow()` and `to_numpy()` return the sole signal's 1-D values (Arrow or NumPy) for the common
-single-signal record. For a multi-signal record, both methods raise `ValueError`. In that case, index
-`time_series` directly.
+## Source
 
----
+A `Source` represents a device, sensor, or subsystem. It can contain both direct Signals and child
+Sources:
 
-## TimeFDataset
+```python
+from timenet.dataset import Source
+
+accelerometer = Source(
+    id="accelerometer",
+    name="Accelerometer",
+    signals=(acceleration_x, acceleration_y, acceleration_z),
+)
+
+imu = Source(
+    id="imu",
+    name="IMU",
+    sources=(accelerometer, gyroscope, magnetometer),
+)
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `str` | Stable identity. The default is a UUIDv7. |
+| `name` | `str` | Human-readable Source name. |
+| `sources` | `tuple[Source, ...]` | Direct child Sources. |
+| `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
+| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
+| `metadata` | `dict[str, object]` | Optional device, sensor, or subsystem metadata. |
+
+`walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
+with two parents, and a Signal with two owners.
+
+Call `source.annotate(annotation)` for a Source annotation. A selection attaches annotation content
+to several Signals in one operation:
+
+```python
+source.select(signals=(lead_i, lead_ii)).annotate(annotation)
+source.select(signal_names=("I", "II")).annotate(annotation)
+```
+
+Object selection is the safer form. Name selection is useful when only names are available and
+fails if a name is absent or ambiguous.
+
+## Record
+
+A `Record` is one recording session. It owns one or more root Sources and can carry session-level
+annotations and metadata:
+
+```python
+from timenet.dataset import Record
+
+record = Record(
+    record_id="record-123",
+    sources=(imu,),
+    metadata={"site": "lab-a"},
+)
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `record_id` | `str` | Stable identity. `record.id` is the public alias. |
+| `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
+| `subject_ids` | `tuple[str, ...]` | Optional subject identifiers. |
+| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
+| `metadata` | `dict[str, object]` | Optional session metadata. |
+| `start_time` | `datetime \| int \| None` | Optional wall-clock anchor in Unix microseconds. |
+| `time_span` | `TimeInterval \| None` | Optional overall session interval. |
+
+`record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
+the same deterministic traversal used by the writer.
+
+Call `record.annotate(annotation)` to attach an occurrence. Temporal annotations are validated
+against the relevant Signal windows. `time_point()` and `time_interval()` convert wall-clock values
+against an anchored Record.
+
+## Task
+
+`Task` is abstract. A concrete task such as `AnswerTask` or `ClassificationTask` refers directly to
+one or more input Records:
+
+```python
+from timenet.types import AnswerTask
+
+task = AnswerTask(
+    id="diagnosis-123",
+    inputs=(record,),
+    prompt="Diagnose this patient.",
+    target="The recording shows no cardiac activity.",
+)
+```
+
+The Task-to-Record relationship is many-to-many. One Task can compare several Records, and one
+Record can appear in many Tasks. Concrete task classes define their own target fields; TimeNet does
+not wrap targets in generic text or mixed-target containers.
+
+Tasks can also hold input or target Annotation references, references to parent Tasks, task-level
+annotations, and optional metadata. The DuckDB storage layer turns these object references into
+normalized ID relationships and restores the objects when it reads the dataset.
+
+## Building a dataset
+
+Register complete Records independently of Tasks. This supports unlabelled datasets as well as
+supervised ones:
 
 ```python
 from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
-record = dataset.add_record(time_series=(...), subject_ids=("p1",))
-dataset.add_task(record, ClassificationTask(target="faulty"))
-dataset.derive_schema()
+dataset.add_record(record=record)
+dataset.add_task(task=task)
 ```
 
-### `add_record()`
+`add_record()` validates hierarchy ownership and ID uniqueness. `add_task()` requires at least one
+registered input Record and validates object references, answer shape, and temporal scopes. A
+validation error leaves the dataset unchanged.
+
+For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
+inserts that stream once without retaining every Task in memory.
+
+## Annotations
+
+The same `Annotation` type can annotate a Dataset, Task, Record, Source, or Signal. Annotation
+content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
+long payload can be stored once while its occurrences carry independent placement, confidence, and
+provenance.
 
 ```python
-add_record(
-    *, time_series, subject_ids=(),
-    record_id=None, start_time=None, time_span=None,
-) -> Record
+from timenet.types import Annotation, TimePoint
+
+male = Annotation.static(name="patient_sex", value="male")
+record.annotate(male)
+
+lead_i.annotate(
+    Annotation.point(
+        name="lead_status",
+        value="Lead fell off",
+        at=TimePoint.seconds(6),
+    )
+)
 ```
 
-`add_record` creates a record, registers it, and returns it. It raises `TimeFValidationError` if
-`time_series` is empty. Pass `record_id` for deterministic output, for example for golden fixtures.
-Pass `start_time` to anchor the record's relative timeline to wall-clock time. With this anchor, a
-caller can synchronize records across datasets and devices.
+## Schema and persistence
 
-### `add_task()` / `add_tasks()`
+`derive_schema()` collects the TimeSeries specifications, annotation descriptors, and concrete Task
+types found in the dataset. It does not load Signal values.
+
+Write a version with the declarative helper:
 
 ```python
-add_task(records, task) -> Task
-add_tasks(records, tasks) -> tuple[Task, ...]
+from timenet.values_backends import ValuesBackend
+
+version_path = dataset.write(
+    path="./registry",
+    values_backend=ValuesBackend.PARQUET,
+)
 ```
 
-`add_task` and `add_tasks` register a task, or a batch of tasks, against the same record or records.
-`add_task` populates each task's `record_ids`. It appends each task's `id` to every target record's
-`task_ids`. Put `scope` and `from_tasks` on the task itself. These fields describe that one task, not
-the call.
-
-`add_task` validates a task against its records at this point, because it is the first point that has
-both a task and its records. `add_task` raises `TimeFValidationError` in these cases:
-
-- `records` is empty.
-- A task sets both `target` and `target_annotation_ids`, or sets neither, unless its answer is a
-  produced series.
-- A [`Span`](types.md#span) (the `scope` or a localization target) has `time_series_ids` that do not
-  resolve on every target record. A span that falls outside a record's covered span warns with
-  `SpanOutsideWindowWarning` and is kept, the same way an annotation's span is.
-- An `input_annotation_ids` or `target_annotation_ids` entry names an annotation that no target record
-  carries.
-
-`add_tasks` is all-or-nothing. It validates the whole batch before it attaches any task. If one task is
-bad, `add_tasks` raises an error and leaves the dataset untouched. To keep tasks that were added before
-a failure, call `add_task` in a loop instead.
-
-Validation of the whole batch also enforces relationships across the batch:
-
-- Task ids stay unique against the batch and the dataset.
-- Every `from_tasks` parent already exists in the dataset, or the batch includes it.
-- No task derives from itself or closes a cycle.
-
-As a result, a task can derive from another task in the same call, regardless of order.
-
-### `derive_schema()`
+Open a local version with lazy Signal values:
 
 ```python
-derive_schema() -> DatasetSchema
+dataset = TimeFDataset.open(path=version_path)
 ```
 
-`derive_schema` walks the dataset's instances and builds its
-[`DatasetSchema`](types.md#datasetschema). The schema holds the distinct specs, annotation
-descriptors, and task types, deduplicated in the original order. `derive_schema` stores the result in
-`dataset.schema` and returns it. It never reads series values. The engine calls `derive_schema` after
-`convert()` and before the writer runs.
-
-### Properties
-
-`TimeFDataset` exposes these properties:
-
-- `metadata`
-- `records` (tuple, read-only)
-- `tasks` (tuple, read-only)
-- `schema` (`DatasetSchema | None`). This is `None` until `derive_schema()` runs, or until the reader
-  populates it.
-
-### `tasks_of()` / `tasks_for()`
-
-```python
-tasks_of(task_type) -> tuple[Task, ...]
-tasks_for(record, task_type=Task) -> tuple[Task, ...]
-```
-
-`tasks_of` returns every task of a type across the dataset. `tasks_for` resolves one record's
-`task_ids` back to task objects. `tasks_for` can filter the result by type.
-
-### `to_features_and_targets()`
-
-```python
-to_features_and_targets(*, task=None, output="arrow", features="timestep")
-    -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]
-```
-
-`to_features_and_targets` builds an `(X, y)` training pair. **By default, it defers
-materialization.**
-
-The `features` parameter picks the shape of `X`:
-
-- `"timestep"` (the default) gives one feature per point. This is a rectangular
-  `FixedSizeListArray[T]` (or `(n, T)`) matrix, and it needs records of equal length.
-- `"series"` gives one sequence per record. This is a `ListArray` (or `(n,)`) object array, and it
-  also handles series of variable length.
-
-The `output` parameter picks how `to_features_and_targets` builds the arrays:
-
-- `output="arrow"` (the default) builds the arrays directly from the loaders, with no NumPy copy.
-- `output="numpy"` materializes the arrays.
-
-`to_features_and_targets` infers `task` when the dataset has exactly one target-bearing type.
-Otherwise, pass `task` explicitly. Note that `ForecastingTask` has no scalar target.
-
-### `describe()`
-
-```python
-describe(*, rows=5, file=None) -> None
-```
-
-`describe` prints a plain-text summary, similar to the `describe` and `info` methods in pandas. The
-summary includes identity, counts, per-spec columns (name, units, and the value dtype sampled from
-one series), and a preview of the first `rows` records. The preview reads only span metadata, so it
-never loads series values. `describe` works before `derive_schema()` runs, because it computes all
-figures from the records. `describe` needs no CLI or `rich` dependency. It writes to `file`
-(`sys.stdout` by default).
-
-```python
-TimeNet().load("chengsenwang/tsqa").describe()
-```
-
-```text
-chengsenwang/tsqa @ 1.0.0
-  name     TSQA
-  license  Apache-2.0
-
-counts
-  records      48000
-  series       tsqa_series=48000
-  annotations  48000
-  tasks        answer=48000
-
-specs
-  spec         name         value          dtype
-  tsqa_series  TSQA Series  dimensionless  float
-
-records (first 5 of 48000)
-  record_id  signals  length  tasks  annotations
-  row-0      1        64      1      1
-```
-
----
+The stored version contains `manifest.json`, an immutable `control.duckdb`, and a Parquet or Zarr
+values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical
+layout.
 
 See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
