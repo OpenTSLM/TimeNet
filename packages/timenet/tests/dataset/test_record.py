@@ -17,6 +17,17 @@ def test_add_static_annotation(make_series):
     assert record.annotations == (ann,)
 
 
+def test_annotate_binds_a_declarative_annotation(make_series):
+    record = Record(time_series=(make_series(),))
+    content = Annotation(key="patient_sex", value="male", id="sex-male")
+
+    occurrence = record.annotate(content)
+
+    assert occurrence.content_id == content.content_id
+    assert occurrence.occurrence_id is not None
+    assert record.annotations == (occurrence,)
+
+
 def test_add_multiple_annotations_preserves_order(make_series):
     record = Record(time_series=(make_series(),))
     a = record.add_annotation(Annotation(key="age", value=64))
@@ -147,7 +158,7 @@ def test_has_absolute_time(make_series):
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
     # An unscoped span needs a timeline to be placed against. An all-ordinal record has no timed series
     # and no time_span, so there is nothing to check it against and it is refused.
-    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, signal="c", time_axis=OrdinalAxis())
+    ordinal = TimeSeries.from_values([1.0, 2.0, 3.0], spec=make_series().spec, name="c", time_axis=OrdinalAxis())
     record = Record(time_series=(ordinal,))
     with pytest.raises(ValueError, match="no timeline to place it"):
         record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
@@ -240,9 +251,7 @@ def test_time_span_must_be_an_interval(make_series):
 
 
 def _ordinal(spec, n, tsid):
-    return TimeSeries.from_values(
-        [float(i) for i in range(n)], spec=spec, signal="c", time_axis=OrdinalAxis(), time_series_id=tsid
-    )
+    return TimeSeries.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis(), id=tsid)
 
 
 def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):

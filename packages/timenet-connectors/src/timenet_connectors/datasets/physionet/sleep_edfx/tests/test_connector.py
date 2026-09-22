@@ -146,7 +146,13 @@ def _annotations(dataset: TimeFDataset, record_id: str, key: str) -> list:
 def _asked(task) -> tuple[str, ...]:
     # A task id is generated, so two builds never share one. What a task asks is what a
     # consumer reads, and this is that. Every part is text, so a list of these sorts.
-    return (type(task).__name__, str(task.target), str(task.scope), str(task.record_ids), str(task.prompt))
+    return (
+        type(task).__name__,
+        str(task.targets),
+        str(task.scope),
+        str(tuple(record.id for record in task.inputs)),
+        str(task.prompt),
+    )
 
 
 def test_a_recording_name_states_a_subject_number_and_a_night():
@@ -321,17 +327,17 @@ def test_the_schema_names_every_task_type(release, monkeypatch):
     }
 
 
-def test_every_streamed_task_carries_its_own_record_ids(release, monkeypatch):
+def test_every_streamed_task_carries_its_own_input_records(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     known = {record.record_id for record in dataset.records}
     for task in _streamed(dataset):
-        assert task.record_ids
-        assert set(task.record_ids) <= known
+        assert task.inputs
+        assert {record.id for record in task.inputs} <= known
 
 
-def test_the_vocabularies_are_registered_and_belong_to_no_record(release, monkeypatch):
+def test_the_vocabularies_are_dataset_annotations_and_belong_to_no_record(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    registered = {one.id for one in dataset._registered_annotations.values()}
+    registered = {one.id for one in dataset.annotations}
     assert registered == {
         "sleep-edfx-vocabulary-sleep_stage",
         "sleep-edfx-vocabulary-sex",
@@ -378,7 +384,9 @@ def test_a_span_carrying_annotation_asks_for_a_region_and_not_a_value(release, m
     dataset = _convert(release, monkeypatch)
     moment = _annotations(dataset, "sleep-edfx-SC4901E0", "lights_off")[0].span
     assert moment is not None
-    asked = [one for one in _streamed(dataset) if isinstance(one, TemporalLocalizationTask) and one.target == (moment,)]
+    asked = [
+        one for one in _streamed(dataset) if isinstance(one, TemporalLocalizationTask) and one.targets == (moment,)
+    ]
     assert asked
 
 
@@ -411,7 +419,7 @@ def test_the_series_values_match_the_recording_they_were_read_from(release, monk
     # fails here.
     dataset = _convert(release, monkeypatch)
     record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
-    series = next(one for one in record.time_series if one.signal == _SIGNALS[0])
+    series = next(one for one in record.signals if one.signal == _SIGNALS[0])
     written = edfio.read_edf(release / _STUDY / "SC4901E0-PSG.edf").signals[0].data
     read_back = series.to_numpy()
     assert len(read_back) == len(written)
