@@ -1,13 +1,13 @@
 import json
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.format.constants import ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE, RECORDS_TEMPLATE, part_path
 from timenet.manifest import Manifest
 from timenet.testing import make_dataset
 from timenet.types import (
@@ -39,38 +39,46 @@ def test_writes_expected_layout(tmp_path):
     version_dir = _written(tmp_path)
     assert (version_dir / "manifest.json").exists()
     parts = Manifest.from_json((version_dir / "manifest.json").read_text()).files.all_parts()
-    # Read the paths from the manifest rather than hard-coding part numbers; check each artifact lands
-    # under its own directory and every listed part exists on disk.
-    for prefix in ("records/", "annotations/", "time_series_index/", "time_series/", "tasks/task="):
-        assert any(rel.startswith(prefix) for rel in parts), f"expected a part under {prefix!r}"
+    assert "control.duckdb" in parts
+    assert any(path.startswith("time_series/") for path in parts)
     for rel in parts:
         assert (version_dir / rel).exists()
-
-
-def test_control_tables_route_part_names_through_part_path(tmp_path, monkeypatch):
-    # records/annotations/time_series_index must render part names through part_path (which guards the
-    # 8-digit ceiling), like tasks and shards, not by formatting the template directly.
-    seen: list[str] = []
-
-    def spy(template, index, **fields):
-        seen.append(template)
-        return part_path(template, index, **fields)
-
-    monkeypatch.setattr("timenet.writer.writer.part_path", spy)
-    _written(tmp_path)
-    assert {RECORDS_TEMPLATE, ANNOTATIONS_TEMPLATE, INDEX_TEMPLATE} <= set(seen)
 
 
 def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.dataset_id == "timenet/hello-world"
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     assert manifest.counts.records == 3
     assert len(manifest.schema.time_series_specs) == 2
     # files listed in the manifest all exist
     for rel in manifest.files.all_parts():
         assert (version_dir / rel).exists()
+
+
+def test_manifest_counts_match_the_control_database(tmp_path):
+    version_dir = _written(tmp_path)
+    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+
+    def row_count(connection, query):
+        row = connection.execute(query).fetchone()
+        assert row is not None
+        return row[0]
+
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        assert manifest.counts.records == row_count(connection, "SELECT count(*) FROM records")
+        assert manifest.counts.sources == row_count(connection, "SELECT count(*) FROM sources")
+        assert manifest.counts.signals == row_count(connection, "SELECT count(*) FROM signals")
+        assert manifest.counts.axes == row_count(connection, "SELECT count(*) FROM axes")
+        assert manifest.counts.annotation_contents == row_count(connection, "SELECT count(*) FROM annotation_contents")
+        assert manifest.counts.annotation_occurrences == row_count(
+            connection, "SELECT count(*) FROM annotation_occurrences"
+        )
+        assert manifest.counts.signal_chunks == row_count(connection, "SELECT count(*) FROM signal_chunks")
+        assert manifest.counts.signals_by_spec == dict(
+            connection.execute("SELECT spec_type, count(*) FROM signals GROUP BY spec_type").fetchall()
+        )
 
 
 def test_manifest_has_per_file_checksum_and_size(tmp_path):
@@ -85,11 +93,10 @@ def test_manifest_has_per_file_checksum_and_size(tmp_path):
 def test_manifest_data_files_are_lists_of_parts(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    for parts in (manifest.files.records, manifest.files.annotations, manifest.files.time_series_index):
-        assert isinstance(parts, tuple)
-        assert len(parts) >= 1
+    assert len(manifest.files.control) == 1
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
-    for key in ("records", "annotations", "time_series_index", "tasks", "time_series"):
+    assert set(raw_files) == {"control", "time_series"}
+    for key in ("control", "time_series"):
         assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
         for entry in raw_files[key]:
             assert set(entry) == {"path", "checksum", "size"}, f"{key} entries are {{path, checksum, size}}"
@@ -124,21 +131,31 @@ def test_values_carry_the_selected_encoding(tmp_path):
 def test_long_series_splits_into_multiple_chunks(tmp_path):
     # Tiny chunk cap forces the long hello_world series to split.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        index = connection.execute(
+            """SELECT signals.signal_id, chunks.chunk_index
+               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+        ).fetchall()
     chunks_per_series: dict[str, set] = {}
-    for row in index:
-        chunks_per_series.setdefault(row["time_series_id"], set()).add(row["chunk_idx"])
+    for signal_id, chunk_index in index:
+        chunks_per_series.setdefault(signal_id, set()).add(chunk_index)
     assert any(len(chunks) > 1 for chunks in chunks_per_series.values())
 
 
 def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    row = index[0]
-    shard = pq.ParquetFile(version_dir / row["chunk_file"])
-    table = shard.read_row_group(row["chunk_major_idx"])
-    chunk = table.column("values")[row["chunk_minor_idx"]]
-    assert len(chunk) == row["n_values"]
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        row = connection.execute(
+            """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
+                      chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               ORDER BY signals.signal_id, chunks.chunk_index LIMIT 1"""
+        ).fetchone()
+    assert row is not None
+    value_path, major_index, minor_index, n_values = row
+    shard = pq.ParquetFile(version_dir / value_path)
+    chunk = shard.read_row_group(major_index).column("values")[minor_index]
+    assert len(chunk) == n_values
 
 
 def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
@@ -215,13 +232,20 @@ def test_abort_leaves_no_partial_dir(tmp_path):
     )
     record = dataset.add_record(
         record=Record(
-            time_series=(
-                TimeSeries(spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader),
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_loader(
+                            spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader
+                        ),
+                    ),
+                ),
             ),
         )
     )
     record.add_annotation(Annotation(key="k", value=1))
-    dataset.add_task(record, ClassificationTask(target="x"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
     dataset.derive_schema()
 
     with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset) as writer:
@@ -249,51 +273,35 @@ def test_per_series_array_contract_enforced(tmp_path):
     import pyarrow as pa  # noqa: PLC0415
 
     # declares 5 observations, loader returns 3
-    ts = TimeSeries(
+    ts = TimeSeries.from_loader(
         spec=spec,
-        signal="c",
+        name="c",
         time_axis=RegularAxis.from_rate_hz(1),
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         n_values=5,
     )
-    dataset.add_record(record=Record(time_series=(ts,)))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
 
 
-def test_records_parquet_content(tmp_path):
+def test_control_database_contains_the_hierarchy(tmp_path):
     version_dir = _written(tmp_path)
-    rows = {r["record_id"]: r for r in pq.read_table(version_dir / "records/part-00000000.parquet").to_pylist()}
-    assert set(rows) == {"record-0", "record-1", "record-2"}
-    # shared series appears in both record-0 and record-1
-    ids0 = {ts["time_series_id"] for ts in rows["record-0"]["time_series"]}
-    ids1 = {ts["time_series_id"] for ts in rows["record-1"]["time_series"]}
-    assert "ts-shared" in ids0 & ids1
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        record_ids = {row[0] for row in connection.execute("SELECT record_id FROM records").fetchall()}
+        source_count = connection.execute("SELECT count(*) FROM sources").fetchone()
+        signal_count = connection.execute("SELECT count(*) FROM signals").fetchone()
+    assert record_ids == {"record-0", "record-1", "record-2"}
+    assert source_count is not None and source_count[0] >= len(record_ids)
+    assert signal_count is not None and signal_count[0] > 0
 
 
-def test_shared_series_stored_once(tmp_path):
+def test_tasks_store_their_concrete_types(tmp_path):
     version_dir = _written(tmp_path)
-    # the shared series has one chunk row in the shards, but two index rows (one per record)
-    shard_rows = [
-        r
-        for shard in version_dir.glob("time_series/part-*.parquet")
-        for r in pq.read_table(shard).to_pylist()
-        if r["time_series_id"] == "ts-shared"
-    ]
-    index_rows = [
-        r
-        for r in pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-        if r["time_series_id"] == "ts-shared"
-    ]
-    assert len(shard_rows) == 1
-    assert len(index_rows) == 2
-
-
-def test_tasks_partitioned_by_type(tmp_path):
-    version_dir = _written(tmp_path)
-    parts = {p.parent.name for p in version_dir.glob("tasks/task=*/part-*.parquet")}
-    assert parts == {"task=classification", "task=answer", "task=scalar_prediction", "task=temporal_localization"}
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        task_types = {row[0] for row in connection.execute("SELECT DISTINCT task_type FROM tasks").fetchall()}
+    assert task_types == {"classification", "answer", "scalar_prediction", "temporal_localization"}
 
 
 def test_int32_guard_is_exposed():
@@ -324,54 +332,42 @@ def test_same_id_different_series_rejected(tmp_path):
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    a = TimeSeries(
+    a = TimeSeries.from_loader(
         spec=spec,
-        signal="a",
+        name="a",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        time_series_id="ts-x",
+        id="ts-x",
     )
-    b = TimeSeries(  # same id, different signal and window
+    b = TimeSeries.from_loader(  # same id, different signal and window
         spec=spec,
-        signal="b",
+        name="b",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
-        time_series_id="ts-x",
+        id="ts-x",
     )
-    dataset.add_record(record=Record(time_series=(a,), record_id="s-a"))
-    dataset.add_record(record=Record(time_series=(b,), record_id="s-b"))
-    dataset.derive_schema()
-    with (
-        pytest.raises(TimeFValidationError, match="claimed by two different series"),
-        TimeFWriter(tmp_path, dataset) as writer,
-    ):
-        writer.write()
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), record_id="s-a"))
+    with pytest.raises(TimeFValidationError, match="already belong to another Source"):
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), record_id="s-b"))
 
 
-def test_same_series_shared_across_records_still_dedupes(tmp_path):
-    # The supported sharing path: the same instance in two records must still collapse to one shard.
+def test_same_signal_cannot_be_owned_by_two_records(tmp_path):
     spec = TimeSeriesSpec(
         spec_type="s",
         name="S",
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    shared = TimeSeries(
+    shared = TimeSeries.from_loader(
         spec=spec,
-        signal="a",
+        name="a",
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        time_series_id="ts-shared",
+        id="ts-shared",
     )
-    dataset.add_record(record=Record(time_series=(shared,), record_id="s-a"))
-    dataset.add_record(record=Record(time_series=(shared,), record_id="s-b"))
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path, dataset) as writer:
-        writer.write()
-    manifest = Manifest.from_json((tmp_path / "demo" / "dup" / "1.0.0" / "manifest.json").read_text())
-    # the shared series is written once, though two records reference it
-    assert manifest.counts.time_series_chunks == 1
-    assert manifest.counts.records == 2
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(shared,)),), record_id="s-a"))
+    with pytest.raises(TimeFValidationError, match="already belong to another Source"):
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(shared,)),), record_id="s-b"))
