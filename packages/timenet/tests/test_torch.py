@@ -7,7 +7,7 @@ torch = pytest.importorskip("torch")
 
 from torch.utils.data import Dataset  # noqa: E402
 
-from timenet.dataset import TimeFDataset, TimeSeries  # noqa: E402
+from timenet.dataset import Signal, TimeFDataset  # noqa: E402
 from timenet.dataset.axis import RegularAxis  # noqa: E402
 from timenet.errors import TimeFValidationError  # noqa: E402
 from timenet.testing import make_dataset  # noqa: E402
@@ -72,7 +72,7 @@ def _typed_dataset(dtype, values):
         unit_value=ureg.dimensionless,
         dtype=dtype,
     )
-    ts = TimeSeries.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
+    ts = Signal.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/torch",

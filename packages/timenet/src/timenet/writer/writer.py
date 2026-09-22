@@ -1,32 +1,26 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
 from collections.abc import Callable, Iterable
-import json
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, assert_never
+from typing import Any
 import uuid
 
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import TimeFDataset, TimeSeries
-from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset import Signal, TimeFDataset
+from timenet.dataset.axis import IrregularAxis, to_time_offsets_us
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
-    ANNOTATIONS_TEMPLATE,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_COMPRESSION,
-    DEFAULT_CONTROL_SHARD_TARGET_BYTES,
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
-    INDEX_TEMPLATE,
     MANIFEST_FILE,
-    RECORDS_TEMPLATE,
-    part_path,
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
@@ -35,13 +29,9 @@ from timenet.format.schemas import (
     UUID16,
     IdCodec,
     IdTypes,
-    annotations_schema,
-    index_schema,
-    records_schema,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types import Annotation
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -50,9 +40,7 @@ from timenet.values_backends.writer import (
     ZarrValuesConfig,
     make_values_backend,
 )
-from timenet.writer import encodings
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
-from timenet.writer.sharded import ShardedTableWriter
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
@@ -65,7 +53,6 @@ class TimeFWriter:
         dataset: TimeFDataset,
         *,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
-        control_shard_target_bytes: int = DEFAULT_CONTROL_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
@@ -81,8 +68,6 @@ class TimeFWriter:
             root: Parent directory. The writer creates ``<root>/<dataset_id>/<version>/``.
             dataset: The populated dataset. The writer derives the schema automatically if needed.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
-            control_shard_target_bytes: Split a control table (records, annotations, index, tasks) into
-                a new part once the in-memory Arrow size of the emitted rows exceeds this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
@@ -122,7 +107,6 @@ class TimeFWriter:
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
-        self._control_shard_target_bytes = control_shard_target_bytes
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -242,7 +226,7 @@ class TimeFWriter:
             values["record_id"].append(record.record_id)
             values["subject_id"].extend(record.subject_ids)
             for ts in record.signals:
-                values["time_series_id"].append(ts.time_series_id)
+                values["time_series_id"].append(ts.id)
                 if ts.source_id is not None:
                     values["source_id"].append(ts.source_id)
             for ann in record.annotations:
@@ -264,7 +248,7 @@ class TimeFWriter:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _dedupe_series(self) -> tuple[list[TimeSeries], dict[str, list[str]]]:
+    def _dedupe_series(self) -> tuple[list[Signal], dict[str, list[str]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
         Sharing one series across records is the supported dedupe path. Two different series that
@@ -280,34 +264,32 @@ class TimeFWriter:
             TimeFValidationError: If two series share a ``time_series_id`` but describe different
                 signals.
         """
-        unique: dict[str, TimeSeries] = {}
+        unique: dict[str, Signal] = {}
         series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
         for record in self._dataset.records:
             for ts in record.signals:
-                existing = unique.get(ts.time_series_id)
+                existing = unique.get(ts.id)
                 if existing is None:
-                    unique[ts.time_series_id] = ts
+                    unique[ts.id] = ts
                 elif existing is not ts and _series_identity(existing) != _series_identity(ts):
                     raise TimeFValidationError(
-                        f"time_series_id {ts.time_series_id!r} is claimed by two different series: "
+                        f"time_series_id {ts.id!r} is claimed by two different series: "
                         f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
                         f"per signal, or reuse the same series instance to share it across records"
                     )
-                pair = (ts.time_series_id, record.record_id)
+                pair = (ts.id, record.record_id)
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
-                    series_to_records.setdefault(ts.time_series_id, []).append(record.record_id)
+                    series_to_records.setdefault(ts.id, []).append(record.record_id)
         # Group a recording's series together (source_id) before splitting by signal, so all leads of
         # one record are contiguous: the writer reads the record's source once, and a reader pulls a
         # record's series from one place instead of scattered across signal-ordered shards. Falls back
         # to signal order when source_id is unset (one series per record), matching the prior layout.
-        ordered = sorted(
-            unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.signal, ts.time_series_id)
-        )
+        ordered = sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.name, ts.id))
         return ordered, series_to_records
 
-    def _write_values(self, unique_series: list[TimeSeries]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -353,7 +335,7 @@ class TimeFWriter:
         self._value_encoding = dict(result.value_encoding)
         return result.placements
 
-    def _read_and_validate(self, ts: TimeSeries) -> pa.Array:  # noqa: PLR6301
+    def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
         """Read a series' values and enforce the per-series array contract.
 
         Args:
@@ -388,26 +370,25 @@ class TimeFWriter:
                 )
         if not valid_type:
             raise TimeFValidationError(
-                f"series {ts.time_series_id!r} must load dtype={ts.spec.dtype}, "
+                f"series {ts.id!r} must load dtype={ts.spec.dtype}, "
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
         if values.null_count and not ts.spec.nullable:
-            raise TimeFValidationError(f"series {ts.time_series_id!r} has null values but nullable=False")
+            raise TimeFValidationError(f"series {ts.id!r} has null values but nullable=False")
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
-            raise TimeFValidationError(f"series {ts.time_series_id!r} may have nulls only for whole timesteps")
+            raise TimeFValidationError(f"series {ts.id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
             # Compare each distinct label with the allowed categories.
             # This avoids creating a Python object for every value in the series.
             _validate_enum_values(ts.spec, values.dictionary.to_pylist())
         if len(values) != ts.n_values:
             raise TimeFValidationError(
-                f"series {ts.time_series_id!r}: its loader returned {len(values)} values but it "
-                f"declares n_values={ts.n_values}"
+                f"series {ts.id!r}: its loader returned {len(values)} values but it declares n_values={ts.n_values}"
             )
         return values
 
-    def _read_time_offsets(self, ts: TimeSeries) -> pa.Array | None:  # noqa: PLR6301
+    def _read_time_offsets(self, ts: Signal) -> pa.Array | None:  # noqa: PLR6301
         """Read an irregular series' time offsets and check them against what it declares.
 
         The method returns ``None`` for every other axis shape. The backend writes that as a null cell.
@@ -427,188 +408,21 @@ class TimeFWriter:
         if ts.time_offsets_loader is None:
             return None
         axis = ts.time_axis
-        if not isinstance(axis, IrregularAxis):  # pragma: no cover - TimeSeries.__post_init__ pairs these
-            raise TimeFValidationError(
-                f"series {ts.time_series_id!r} carries time offsets but has {type(axis).__name__}"
-            )
+        if not isinstance(axis, IrregularAxis):  # pragma: no cover - Signal.__post_init__ pairs these
+            raise TimeFValidationError(f"series {ts.id!r} carries time offsets but has {type(axis).__name__}")
         time_offsets = to_time_offsets_us(ts.time_offsets_loader().to_numpy(zero_copy_only=False))
         if len(time_offsets) != ts.n_values:
             raise TimeFValidationError(
-                f"series {ts.time_series_id!r}: its time_offsets_loader returned {len(time_offsets)} time offsets "
+                f"series {ts.id!r}: its time_offsets_loader returned {len(time_offsets)} time offsets "
                 f"but it declares n_values={ts.n_values}"
             )
         if int(time_offsets[0]) != axis.first_us or int(time_offsets[-1]) != axis.last_us:
             raise TimeFValidationError(
-                f"series {ts.time_series_id!r}: its axis claims the stream runs "
+                f"series {ts.id!r}: its axis claims the stream runs "
                 f"{axis.first_us}..{axis.last_us} us but the stream runs "
                 f"{int(time_offsets[0])}..{int(time_offsets[-1])} us"
             )
         return pa.array(time_offsets)
-
-    # ---- metadata tables -----------------------------------------------------------------------
-
-    def _control_sink(
-        self,
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> ShardedTableWriter:
-        """Open a control-table sink wired to this writer's staging dir, byte budgets, and compression.
-
-        One place owns that wiring, so the materialized tables and the streamed task write share it.
-
-        Args:
-            schema: The Arrow schema for the table.
-            part_path: Maps a part index to its relative path.
-            dictionary_columns: Columns to dictionary-encode.
-            column_encoding: Optional per-column encoding overrides.
-
-        Returns:
-            A sink ready to accept rows via :meth:`ShardedTableWriter.add`.
-        """
-        encoding_kwargs: dict[str, Any] = {
-            "dictionary_columns": dictionary_columns,
-            "column_encoding": column_encoding,
-            "compression": self._compression,
-            "data_page_size": self._data_page_size,
-        }
-        if self._compression_level is not None:
-            encoding_kwargs["compression_level"] = self._compression_level
-        return ShardedTableWriter(
-            schema,
-            part_path,
-            staging_dir=self._staging_dir,
-            control_target_bytes=self._control_shard_target_bytes,
-            row_group_target_bytes=self._row_group_target_bytes,
-            encoding=encodings.ParquetEncoding(**encoding_kwargs),
-        )
-
-    def _write_control_table(
-        self,
-        rows: Iterable[dict],
-        schema: pa.Schema,
-        part_path: Callable[[int], str],
-        *,
-        dictionary_columns: list[str],
-        column_encoding: dict[str, str] | None = None,
-    ) -> list[str]:
-        sink = self._control_sink(
-            schema, part_path, dictionary_columns=dictionary_columns, column_encoding=column_encoding
-        )
-        for row in rows:
-            sink.add(row)
-        return sink.finish(write_empty_part=True)
-
-    def _write_records(self) -> None:
-        codec = self._codec
-        rows: list[dict] = [
-            {
-                "record_id": codec.encode("record_id", record.record_id),
-                "start_time_us": record.start_time,
-                "time_span": codec.encode_span(record.time_span),
-                "subject_ids": codec.encode_list("subject_id", record.subject_ids),
-                "time_series": [_time_series_struct(ts, codec) for ts in record.time_series],
-                "task_ids": codec.encode_list("task_id", record.task_ids),
-                "annotation_ids": codec.encode_list("annotation_id", [ann.id for ann in record.annotations]),
-            }
-            for record in self._dataset.records
-        ]
-        rows.sort(key=lambda r: r["record_id"])
-        self._record_parts = self._write_control_table(
-            iter(rows),
-            records_schema(self._id_types),
-            lambda index: part_path(RECORDS_TEMPLATE, index),
-            dictionary_columns=encodings.RECORDS_DICTIONARY,
-        )
-
-    def _annotation_row(self, ann: Annotation) -> dict:
-        """Build an annotation's stored row with an empty ``record_ids`` for the caller to fill.
-
-        Args:
-            ann: The annotation to encode.
-
-        Returns:
-            The row dict; a record-carried annotation appends its record ids, a registered one leaves
-            the list empty.
-        """
-        codec = self._codec
-        return {
-            "id": codec.encode("annotation_id", ann.id),
-            "key": ann.key,
-            "value": None if ann.value is None else json.dumps(ann.value),
-            "source": ann.source,
-            "span": codec.encode_span(ann.span),
-            "record_ids": [],
-        }
-
-    def _write_annotations(self) -> None:
-        codec = self._codec
-        by_id: dict[str, dict] = {}
-        for record in self._dataset.records:
-            for ann in record.annotations:
-                row = by_id.setdefault(ann.id, self._annotation_row(ann))
-                row["record_ids"].append(codec.encode("record_id", record.record_id))
-        for ann in self._dataset.registered_annotations:
-            # A registered annotation that no record carries writes with an empty record_ids: tasks
-            # reference it by id, and the reader resolves it from the table, not through a record.
-            by_id.setdefault(ann.id, self._annotation_row(ann))
-        rows = sorted(by_id.values(), key=lambda r: r["id"])
-        self._annotation_parts = self._write_control_table(
-            iter(rows),
-            annotations_schema(self._id_types),
-            lambda index: part_path(ANNOTATIONS_TEMPLATE, index),
-            dictionary_columns=encodings.ANNOTATIONS_DICTIONARY,
-        )
-
-    def _write_index(
-        self, placements: dict[tuple[str, int], ChunkPlacement], series_to_records: dict[str, list[str]]
-    ) -> None:
-        # Emit rows in encoded (record_id, time_series_id, chunk_idx) order through nested iteration.
-        # This keeps the parts globally sorted and avoids materializing the whole index in memory.
-        # The reader selects the parts where a probe lands, then bisects each part. This approach
-        # requires global order across the split.
-        codec = self._codec
-        record_to_series: dict[str, list[str]] = {}
-        for time_series_id, record_ids in series_to_records.items():
-            for record_id in record_ids:
-                record_to_series.setdefault(record_id, []).append(time_series_id)
-        chunks_by_series: dict[str, list[int]] = {}
-        for time_series_id, chunk_idx in placements:  # noqa: PLE1141 - keys are (id, chunk) tuples
-            chunks_by_series.setdefault(time_series_id, []).append(chunk_idx)
-        for chunk_idxs in chunks_by_series.values():
-            chunk_idxs.sort()
-
-        enc_sid: dict[str, Any] = {sid: codec.encode("record_id", sid) for sid in record_to_series}
-        enc_tid: dict[str, Any] = {tid: codec.encode("time_series_id", tid) for tid in chunks_by_series}
-
-        def rows() -> Iterable[dict]:
-            for record_id in sorted(record_to_series, key=lambda s: enc_sid[s]):
-                series = record_to_series[record_id]
-                for time_series_id in sorted(series, key=lambda t: enc_tid[t]):
-                    for chunk_idx in chunks_by_series[time_series_id]:
-                        placement = placements[time_series_id, chunk_idx]
-                        yield {
-                            "record_id": enc_sid[record_id],
-                            "time_series_id": enc_tid[time_series_id],
-                            "spec_type": placement.spec_type,
-                            "signal": placement.signal,
-                            "chunk_idx": chunk_idx,
-                            "chunk_file": placement.chunk_file,
-                            "chunk_major_idx": placement.data_index.major_idx,
-                            "chunk_minor_idx": placement.data_index.minor_idx,
-                            "n_values": placement.n_values,
-                        }
-
-        self._index_rows = sum(len(chunks_by_series[t]) for series in record_to_series.values() for t in series)
-        self._index_parts = self._write_control_table(
-            rows(),
-            index_schema(self._id_types),
-            lambda index: part_path(INDEX_TEMPLATE, index),
-            dictionary_columns=encodings.INDEX_DICTIONARY,
-            column_encoding=encodings.INDEX_ENCODING,
-        )
 
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
@@ -715,7 +529,7 @@ class TimeFWriter:
             self._progress_cb(WriteProgressEvent(stage=stage, completed=completed, total=total))
 
 
-def _series_identity(ts: TimeSeries) -> tuple:
+def _series_identity(ts: Signal) -> tuple:
     """Return the fields that must agree for two series to be the same signal.
 
     This compares the descriptive fields that the writer persists, not the values. The ``loader`` is a
@@ -728,51 +542,7 @@ def _series_identity(ts: TimeSeries) -> tuple:
     Returns:
         The identifying fields, suitable for equality comparison and for error messages.
     """
-    return (ts.spec.spec_type, ts.signal, ts.time_axis, ts.source_id, ts.n_values)
-
-
-def _axis_columns(axis: TimeAxis) -> dict:
-    """Return the shape-specific axis columns. Set every column the shape does not use to null.
-
-    The dispatch is positive and ends in :func:`~typing.assert_never`. A new axis shape fails here at
-    type-check time instead of writing a row of nulls under another shape's tag.
-
-    Args:
-        axis: The series' time axis.
-
-    Returns:
-        The axis columns of the series struct.
-    """
-    empty = {
-        "period_numerator_us": None,
-        "period_denominator": None,
-        "start_index": None,
-        "first_time_offset_us": None,
-        "last_time_offset_us": None,
-    }
-    if isinstance(axis, RegularAxis):
-        return empty | {
-            "period_numerator_us": axis.period_us.numerator,
-            "period_denominator": axis.period_us.denominator,
-            "start_index": axis.start_index,
-        }
-    if isinstance(axis, IrregularAxis):
-        return empty | {"first_time_offset_us": axis.first_us, "last_time_offset_us": axis.last_us}
-    if isinstance(axis, OrdinalAxis):
-        return empty
-    assert_never(axis)
-
-
-def _time_series_struct(ts: TimeSeries, codec: IdCodec) -> dict:
-    return {
-        "spec_type": ts.spec.spec_type,
-        "signal": ts.signal,
-        "source_id": codec.encode("source_id", ts.source_id),
-        "time_series_id": codec.encode("time_series_id", ts.time_series_id),
-        "axis_type": str(ts.time_axis.axis_type),
-        **_axis_columns(ts.time_axis),
-        "n_values": ts.n_values,
-    }
+    return (ts.spec.spec_type, ts.name, ts.time_axis, ts.source_id, ts.n_values)
 
 
 def _ordered_unique(items: Iterable[str]) -> list[str]:

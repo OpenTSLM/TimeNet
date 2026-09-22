@@ -21,7 +21,7 @@ def test_spec_construction_modality_only():
     spec = _ecg_spec()
     assert spec.spec_type == "ecg_lead"
     assert spec.unit_value == ureg.millivolt
-    assert not hasattr(spec, "signal")  # signal lives on TimeSeries, not the spec
+    assert not hasattr(spec, "signal")  # signal lives on Signal, not the spec
 
 
 def test_spec_frozen():

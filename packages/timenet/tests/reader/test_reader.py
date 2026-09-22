@@ -6,7 +6,7 @@ import pickle
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
@@ -60,7 +60,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    signal = TimeSeries(
+    signal = Signal(
         spec=TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt),
         name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),

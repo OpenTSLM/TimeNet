@@ -99,7 +99,7 @@ flow reads it straight back.
 - Types are plain dataclasses. Specs and annotation content are typed
   [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
   synthesis. That keeps multiprocessing `DataLoader` workers safe.
-- Values are Arrow in, Arrow out. A [`TimeSeries`](timef-dataset.md) exposes `to_arrow()`,
+- Values are Arrow in, Arrow out. A [`Signal`](timef-dataset.md) exposes `to_arrow()`,
   `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
   per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
   dtype-preserving multidimensional values.

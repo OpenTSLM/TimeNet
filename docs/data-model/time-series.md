@@ -78,6 +78,6 @@ a function that combines records into a batch.
 
 ## Sharing across records
 
-To share one signal across several records, attach the same `TimeSeries` instance to each. You can also
+To share one signal across several records, attach the same `Signal` instance to each. You can also
 attach two instances with the same explicit `time_series_id`. The [writer](../timef-writer.md) dedupes by
 `time_series_id`. It stores the bytes one time, no matter how many records reference them.
