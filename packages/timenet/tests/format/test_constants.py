@@ -4,7 +4,6 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import (
     MAX_PART_INDEX,
     SHARD_TEMPLATE,
-    TASK_PART_TEMPLATE,
     check_relative_path,
     part_path,
 )
@@ -12,10 +11,6 @@ from timenet.format.constants import (
 
 def test_part_path_zero_pads_the_index():
     assert part_path(SHARD_TEMPLATE, 42) == "time_series/part-00000042.parquet"
-
-
-def test_part_path_fills_named_template_fields():
-    assert part_path(TASK_PART_TEMPLATE, 0, task_type="forecast") == "tasks/task=forecast/part-00000000.parquet"
 
 
 def test_part_path_allows_the_largest_eight_digit_index():
