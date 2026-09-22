@@ -7,6 +7,7 @@ from pathlib import Path
 import duckdb
 
 from timenet.errors import TimeFFormatError
+from timenet.format.control_schema import schema_ddl
 
 
 CONTROL_FILE = "control.duckdb"
@@ -14,132 +15,6 @@ CONTROL_FILE = "control.duckdb"
 
 CONTROL_SCHEMA_VERSION = 1
 """Schema version written into :data:`CONTROL_FILE`."""
-
-
-_SCHEMA = """
-CREATE TABLE control_metadata (
-    key VARCHAR NOT NULL,
-    value VARCHAR NOT NULL
-);
-
-CREATE TABLE records (
-    record_id VARCHAR NOT NULL,
-    start_time_us BIGINT,
-    time_span_start_us BIGINT,
-    time_span_end_us BIGINT,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE sources (
-    source_id VARCHAR NOT NULL,
-    record_id VARCHAR NOT NULL,
-    parent_source_id VARCHAR,
-    name VARCHAR NOT NULL,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE axes (
-    axis_id VARCHAR NOT NULL,
-    axis_type VARCHAR NOT NULL,
-    period_numerator_us BIGINT,
-    period_denominator BIGINT,
-    origin_us BIGINT,
-    first_us BIGINT,
-    last_us BIGINT
-);
-
-CREATE TABLE axis_offsets (
-    axis_id VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    offset_us BIGINT NOT NULL
-);
-
-CREATE TABLE signals (
-    signal_id VARCHAR NOT NULL,
-    source_id VARCHAR NOT NULL,
-    name VARCHAR NOT NULL,
-    axis_id VARCHAR NOT NULL,
-    spec_type VARCHAR NOT NULL,
-    spec_name VARCHAR NOT NULL,
-    unit VARCHAR,
-    dtype VARCHAR NOT NULL,
-    categories JSON NOT NULL,
-    value_shape JSON NOT NULL,
-    dimension_names JSON NOT NULL,
-    nullable BOOLEAN NOT NULL,
-    data_source JSON,
-    n_values BIGINT NOT NULL,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE signal_chunks (
-    signal_id VARCHAR NOT NULL,
-    chunk_index BIGINT NOT NULL,
-    value_path VARCHAR NOT NULL,
-    chunk_major_index BIGINT NOT NULL,
-    chunk_minor_index BIGINT,
-    n_values BIGINT NOT NULL
-);
-
-CREATE TABLE annotation_contents (
-    content_id VARCHAR NOT NULL,
-    name VARCHAR NOT NULL,
-    value JSON,
-    unit VARCHAR,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE annotation_occurrences (
-    occurrence_id VARCHAR NOT NULL,
-    content_id VARCHAR NOT NULL,
-    object_type VARCHAR NOT NULL,
-    object_id VARCHAR NOT NULL,
-    span_type VARCHAR NOT NULL,
-    start_us BIGINT,
-    end_us BIGINT,
-    signal_ids JSON,
-    provenance JSON,
-    confidence DOUBLE,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE tasks (
-    task_id VARCHAR NOT NULL,
-    task_type VARCHAR NOT NULL,
-    prompt VARCHAR,
-    scope JSON,
-    payload JSON NOT NULL,
-    rationale VARCHAR,
-    metadata JSON NOT NULL
-);
-
-CREATE TABLE task_record_refs (
-    task_id VARCHAR NOT NULL,
-    field VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    record_id VARCHAR NOT NULL
-);
-
-CREATE TABLE task_signal_refs (
-    task_id VARCHAR NOT NULL,
-    field VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    signal_id VARCHAR NOT NULL
-);
-
-CREATE TABLE task_annotation_refs (
-    task_id VARCHAR NOT NULL,
-    field VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    occurrence_id VARCHAR NOT NULL
-);
-
-CREATE TABLE task_dependencies (
-    task_id VARCHAR NOT NULL,
-    position BIGINT NOT NULL,
-    parent_task_id VARCHAR NOT NULL
-);
-"""
 
 
 def connect_control(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -162,7 +37,7 @@ def create_control_schema(connection: duckdb.DuckDBPyConnection) -> None:
         connection: A writable connection to a new database.
     """
     with transaction(connection):
-        connection.execute(_SCHEMA)
+        connection.execute(schema_ddl())
         connection.execute(
             "INSERT INTO control_metadata VALUES (?, ?)",
             ["schema_version", str(CONTROL_SCHEMA_VERSION)],
