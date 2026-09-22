@@ -34,6 +34,11 @@ Annotation(key="condition", value="healthy")
 Annotation(key="operating_hours", value=1200, unit="hours")
 ```
 
+A value is a string, an integer, a float, a boolean, or a list of strings. A list holds a closed
+vocabulary, such as the labels a classification target can take. Nested mappings are not values.
+Put structured facts in `metadata`, or split them into one annotation per key so each stays
+filterable. An annotation with no value is a marker and needs a span.
+
 <figure markdown="span">
   ![A band over the whole recording marking a record-level fact](../assets/figures/annotation-static.svg)
 </figure>
