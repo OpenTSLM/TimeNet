@@ -9,7 +9,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.source import Source
-from timenet.dataset.time_series import Signal, TimeSeries
+from timenet.dataset.time_series import Signal
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Annotation, Span, StepSpan, TimeInterval, TimePoint, TimeSpan, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
@@ -18,7 +18,7 @@ from timenet.types.clock import check_int64, offset_us, unix_us
 def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is keyword-only)
     label: str,
     span: Span,
-    time_series: tuple[TimeSeries, ...],
+    time_series: tuple[Signal, ...],
     record_id: str,
     time_span: TimeInterval | None = None,
     *,
@@ -58,26 +58,25 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
             past its steps.
     """
     if isinstance(span, StepSpan):
-        ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
+        ts = next((t for t in time_series if t.id == span.time_series_id), None)
         if ts is None:
             raise TimeFValidationError(
                 f"{label} references unknown time_series_id {span.time_series_id!r} on record {record_id!r}"
             )
         if ts.span_us is not None:  # axis-fit: steps only on a series with no timeline
             raise TimeFValidationError(
-                f"{label} counts in steps, but series {ts.time_series_id!r} on record {record_id!r} has a "
+                f"{label} counts in steps, but series {ts.id!r} on record {record_id!r} has a "
                 f"timeline; name the region in seconds instead"
             )
         if span.exclusive_end > ts.n_values:
             raise TimeFValidationError(
-                f"{label} runs past the {ts.n_values} steps of series {ts.time_series_id!r} on record "
-                f"{record_id!r}: got {span!r}"
+                f"{label} runs past the {ts.n_values} steps of series {ts.id!r} on record {record_id!r}: got {span!r}"
             )
         return
     if not isinstance(span, TimeSpan):  # Span is abstract. Only time and step spans reach here
         raise TimeFValidationError(f"{label} is not a concrete span: {span!r}")
     scope = span.time_series_ids
-    covered = {ts.time_series_id: ts.span_us for ts in time_series if scope is None or ts.time_series_id in scope}
+    covered = {ts.id: ts.span_us for ts in time_series if scope is None or ts.id in scope}
     for series_id in scope or ():
         if series_id not in covered:
             raise TimeFValidationError(
@@ -204,8 +203,6 @@ class Record:
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
-    time_series: tuple[TimeSeries, ...] = ()
-    """Legacy flat streams. New records use :attr:`sources`."""
     sources: tuple[Source, ...] = ()
     """The root sources that belong to this recording."""
     record_id: str = field(default_factory=new_id)
@@ -277,15 +274,13 @@ class Record:
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
                     raise TimeFValidationError(
                         f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
-                        f"every series' window, but {ts.time_series_id!r} covers {window} us"
+                        f"every series' window, but {ts.id!r} covers {window} us"
                     )
 
     @property
     def signals(self) -> tuple[Signal, ...]:
         """Return every signal in this record's hierarchy."""
-        if self.sources:
-            return tuple(self.walk_signals())
-        return tuple(self.time_series)
+        return tuple(self.walk_signals())
 
     def walk_sources(self) -> Iterable[Source]:
         """Yield all sources in deterministic depth-first order.
@@ -449,10 +444,10 @@ class Record:
         """Read the sole signal's values as an Arrow array, for the common single-signal record.
 
         Returns:
-            The single :class:`TimeSeries`' values as a 1-D Arrow array.
+            The single :class:`Signal`' values as a 1-D Arrow array.
 
         Raises:
-            ValueError: If the record has more than one signal, read ``time_series[i]`` explicitly then.
+            ValueError: If the record has more than one signal, read ``signals[i]`` explicitly then.
         """
         if len(self.signals) != 1:
             raise ValueError(
@@ -465,6 +460,6 @@ class Record:
         """Read the sole signal's values as a NumPy array (materializes :meth:`to_arrow`).
 
         Returns:
-            The single :class:`TimeSeries`' values as a 1-D ``np.ndarray``.
+            The single :class:`Signal`' values as a 1-D ``np.ndarray``.
         """
         return self.to_arrow().to_numpy(zero_copy_only=False)

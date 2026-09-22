@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
@@ -236,7 +236,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
                 Source(
                     name="Source",
                     signals=(
-                        TimeSeries.from_loader(
+                        Signal.from_loader(
                             spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=bad_loader
                         ),
                     ),
@@ -273,7 +273,7 @@ def test_per_series_array_contract_enforced(tmp_path):
     import pyarrow as pa  # noqa: PLC0415
 
     # declares 5 observations, loader returns 3
-    ts = TimeSeries.from_loader(
+    ts = Signal.from_loader(
         spec=spec,
         name="c",
         time_axis=RegularAxis.from_rate_hz(1),
@@ -332,7 +332,7 @@ def test_same_id_different_series_rejected(tmp_path):
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    a = TimeSeries.from_loader(
+    a = Signal.from_loader(
         spec=spec,
         name="a",
         time_axis=RegularAxis.from_rate_hz(1),
@@ -340,7 +340,7 @@ def test_same_id_different_series_rejected(tmp_path):
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         id="ts-x",
     )
-    b = TimeSeries.from_loader(  # same id, different signal and window
+    b = Signal.from_loader(  # same id, different signal and window
         spec=spec,
         name="b",
         time_axis=RegularAxis.from_rate_hz(1),
@@ -360,7 +360,7 @@ def test_same_signal_cannot_be_owned_by_two_records(tmp_path):
         unit_value=ureg.dimensionless,
     )
     dataset = _dup_dataset()
-    shared = TimeSeries.from_loader(
+    shared = Signal.from_loader(
         spec=spec,
         name="a",
         time_axis=RegularAxis.from_rate_hz(1),

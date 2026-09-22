@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
@@ -79,7 +79,7 @@ _COSINE = TimeSeriesSpec(
 
 
 def _series(spec, signal, n, time_series_id, source_id, phase=0.0):  # noqa: PLR0913, PLR0917
-    return TimeSeries.from_loader(
+    return Signal.from_loader(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
@@ -137,7 +137,7 @@ def make_dataset() -> TimeFDataset:
             Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
             Annotation(
                 key="artifact",
-                span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
                 id="art-0",
             ),
         ]
@@ -168,7 +168,7 @@ def make_dataset() -> TimeFDataset:
                 mode=LocalizationMode.SPARSE,
                 targets=(
                     TimePoint.seconds(0.5),
-                    TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
+                    TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
                 ),
                 id="task-localize-0",
             ),
@@ -204,7 +204,7 @@ def make_dataset() -> TimeFDataset:
             inputs=(record2,),
             targets=("onset",),
             id="task-cls-2",
-            scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
+            scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.id,)),
         ),
     )
     return dataset
@@ -266,15 +266,15 @@ def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: 
         )
 
 
-def _assert_series_equal(record_id: str, expected: tuple[TimeSeries, ...], actual: tuple[TimeSeries, ...]) -> None:
+def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
     """Assert two tuples of series (matched by ``time_series_id``) are equal, values included."""
-    exp = {ts.time_series_id: ts for ts in expected}
-    act = {ts.time_series_id: ts for ts in actual}
+    exp = {ts.id: ts for ts in expected}
+    act = {ts.id: ts for ts in actual}
     assert exp.keys() == act.keys(), f"time_series ids differ for {record_id}"
     for series_id, exp_ts in exp.items():
         act_ts = act[series_id]
         assert exp_ts.spec == act_ts.spec, f"spec differs for {series_id}"
-        assert exp_ts.signal == act_ts.signal, f"signal differs for {series_id}"
+        assert exp_ts.name == act_ts.name, f"signal differs for {series_id}"
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
         assert exp_ts.metadata == act_ts.metadata, f"metadata differs for {series_id}"
         assert exp_ts.annotations == act_ts.annotations, f"annotations differ for {series_id}"

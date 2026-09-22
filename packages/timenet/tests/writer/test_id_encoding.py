@@ -5,7 +5,7 @@ import uuid
 import duckdb
 import pyarrow as pa
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -40,7 +40,7 @@ def _spec():
 
 
 def _series():
-    return TimeSeries.from_loader(
+    return Signal.from_loader(
         spec=_spec(),
         name="c",
         time_axis=RegularAxis.from_rate_hz(1),
@@ -144,7 +144,7 @@ def test_forecasting_target_span_round_trips(tmp_path):
         )
     )
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
-    series_id = record.signals[0].time_series_id
+    series_id = record.signals[0].id
     span = TimeInterval.seconds(1.0, 3.0, time_series_ids=(series_id,))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
@@ -168,9 +168,9 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
             license=License.MIT,
         )
     )
-    ordinal = TimeSeries.from_values([float(i) for i in range(6)], spec=_spec(), name="c", time_axis=OrdinalAxis())
+    ordinal = Signal.from_values([float(i) for i in range(6)], spec=_spec(), name="c", time_axis=OrdinalAxis())
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ordinal,)),)))
-    series_id = record.signals[0].time_series_id
+    series_id = record.signals[0].id
     span = StepInterval(time_series_id=series_id, start=4, stop=6)
     scope = StepInterval(time_series_id=series_id, start=0, stop=4)
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
@@ -202,13 +202,13 @@ def test_span_series_ids_round_trip(tmp_path):
     )
     series = _series()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
-    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.time_series_id,))
+    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.id,))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
     dataset.add_task(
         task=TemporalLocalizationTask(
             inputs=(record,),
             prompt="Locate the onsets.",
-            targets=(TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),),
+            targets=(TimePoint.seconds(1.0, time_series_ids=(series.id,)),),
         )
     )
     dataset.derive_schema()
@@ -219,7 +219,7 @@ def test_span_series_ids_round_trip(tmp_path):
     assert tasks[ClassificationTask].scope == scope
     localization = tasks[TemporalLocalizationTask]
     assert isinstance(localization, TemporalLocalizationTask)
-    assert localization.targets == (TimePoint.seconds(1.0, time_series_ids=(series.time_series_id,)),)
+    assert localization.targets == (TimePoint.seconds(1.0, time_series_ids=(series.id,)),)
 
 
 def test_correspondence_record_targets_round_trip(tmp_path):

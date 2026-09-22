@@ -40,21 +40,6 @@ _DICTIONARY_MARKERS = frozenset({"RLE_DICTIONARY", "PLAIN_DICTIONARY"})
 """Footer names for dictionary-encoded indices. PLAIN_DICTIONARY is the name used before Parquet
 version 2.4."""
 
-INDEX_DICTIONARY = ["spec_type", "signal", "chunk_file"]
-INDEX_ENCODING = {
-    "chunk_idx": "DELTA_BINARY_PACKED",
-    "chunk_major_idx": "DELTA_BINARY_PACKED",
-    "chunk_minor_idx": "DELTA_BINARY_PACKED",
-}
-
-RECORDS_DICTIONARY = [
-    "time_series.list.element.spec_type",
-    "time_series.list.element.signal",
-    "time_series.list.element.axis_type",
-]
-
-ANNOTATIONS_DICTIONARY = ["key"]
-
 
 def byte_stream_split_supported(dtype: str) -> bool:
     """Return whether BYTE_STREAM_SPLIT is a legal encoding for a values dtype (floats only).
