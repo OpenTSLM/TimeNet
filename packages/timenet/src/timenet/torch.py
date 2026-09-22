@@ -18,7 +18,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.types import Task
 
@@ -188,7 +188,7 @@ class _ReaderItems:
         return [(record, tuple(tasks_by_record[record.record_id])) for record in records]
 
 
-def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
+def _series_tensor(ts: Signal) -> Shaped[Tensor, " time *value"]:
     """Convert one series to a tensor with its time and per-step dimensions.
 
     Args:
@@ -202,7 +202,7 @@ def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
     return _series_tensor_and_mask(ts)[0]
 
 
-def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *value"], Tensor]:
+def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"], Tensor]:
     """Convert one series to a tensor plus its validity mask.
 
     Args:
@@ -219,8 +219,7 @@ def _series_tensor_and_mask(ts: TimeSeries) -> tuple[Shaped[Tensor, " time *valu
     """
     if ts.spec.dtype == "str":
         raise TimeFValidationError(
-            f"string series {ts.time_series_id!r} has no tensor representation; "
-            "read it via TimeSeries.to_arrow() instead"
+            f"string series {ts.id!r} has no tensor representation; read it via Signal.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
         # index_in finds each label's position in the categories using C code.

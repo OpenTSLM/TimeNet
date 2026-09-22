@@ -8,7 +8,7 @@ The caller reads the entries and passes them in. This module reads no file.
 span of the record as well.
 """
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.errors import TimeFFormatError
 from timenet.types import Annotation, TimeInterval
 from timenet_connectors.bases.edf import reader
@@ -20,9 +20,7 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 _signal_names_for_annotations = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
 
 
-def _signal_ids_of_annotation(
-    record_id: str, series: tuple[TimeSeries, ...], signals: tuple[str, ...]
-) -> tuple[str, ...]:
+def _signal_ids_of_annotation(record_id: str, series: tuple[Signal, ...], signals: tuple[str, ...]) -> tuple[str, ...]:
     """Give the time series ids of named signals, in the order they were named.
 
     Args:
@@ -36,7 +34,7 @@ def _signal_ids_of_annotation(
     Raises:
         TimeFFormatError: If the recording does not hold one of the named signals.
     """
-    by_signal = {one.signal: one.time_series_id for one in series}
+    by_signal = {one.name: one.id for one in series}
     missing = [signal for signal in signals if signal not in by_signal]
     if missing:
         raise TimeFFormatError(f"{record_id}: does not hold the signals {missing}")
@@ -69,7 +67,7 @@ def measure_overrun_microseconds(entries: tuple[reader.EdfAnnotation, ...], end_
 def build(
     record_id: str,
     entries: tuple[reader.EdfAnnotation, ...],
-    series: tuple[TimeSeries, ...],
+    series: tuple[Signal, ...],
 ) -> list[Annotation]:
     """Give one annotation for each entry of a scoring, in file order.
 

@@ -13,7 +13,7 @@ import uuid
 from _fake_registry import build_service_fake
 import pytest
 
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
@@ -43,7 +43,7 @@ def _second_dataset() -> TimeFDataset:
         )
     )
     spec = TimeSeriesSpec(spec_type="ecg_lead", name="ECG Lead", unit_value=ureg.millivolt)
-    series = TimeSeries.from_loader(
+    series = Signal.from_loader(
         spec=spec,
         name="II",
         time_axis=RegularAxis.from_rate_hz(16),

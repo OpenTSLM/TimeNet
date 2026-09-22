@@ -56,7 +56,7 @@ comparisons work across `iter_records()` and `iter_tasks()` from one reader.
 ## Type reconstruction
 
 `TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
-descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
+descriptors. It does not create any classes at runtime. `Signal.spec` is the `TimeSeriesSpec`
 descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances,
 reading each value from its typed column so an integer comes back as an integer and a boolean as a
 boolean, and rebuilds spans as `TimePoint`, `TimeInterval`, `StepPoint`, or `StepInterval`. It
@@ -109,7 +109,7 @@ an integrity check at construction time. It reopens every listed file through th
 For a dataset that passes writer validation, `TimeFReader(...).read()` restores every record's
 `record_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
 `signal`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
-preserved. It restores each task's payload and resolved `from_tasks`. `TimeSeries` object identity is
+preserved. It restores each task's payload and resolved `from_tasks`. `Signal` object identity is
 not preserved. `time_series_id` is the durable handle.
 
 ---

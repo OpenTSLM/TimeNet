@@ -509,7 +509,6 @@ class DuckDBControlReader:
                 Record(
                     record_id=record_id,
                     sources=root_sources,
-                    time_series=tuple(signal for source in root_sources for signal in source.walk_signals()),
                     annotations=annotations.get(("Record", record_id), ()),
                     start_time=record_row.start_time_us,
                     time_span=span,
