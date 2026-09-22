@@ -151,8 +151,11 @@ def test_annotation_descriptor_normalizes_pint_unit_to_string():
     assert d.unit == "millivolt"
 
 
-def test_value_type_of_map():
-    assert value_type_of({"panas_pa": 30, "panas_na": 12}) == "map"
+def test_value_type_of_rejects_maps_and_non_string_lists():
+    with pytest.raises(TimeFValidationError):
+        value_type_of({"panas_pa": 30, "panas_na": 12})
+    with pytest.raises(TimeFValidationError, match="strings only"):
+        value_type_of([1, 2])
 
 
 def test_value_type_of_rejects_unsupported_type():

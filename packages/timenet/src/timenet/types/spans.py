@@ -29,6 +29,7 @@ from typing import ClassVar
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import check_int64, seconds_to_us
+from timenet.types.trust import is_trusted
 
 
 def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
@@ -109,6 +110,8 @@ class TimeSpan(Span):
             TimeFValidationError: If an abstract base is constructed, if ``start_us`` is not whole
                 microseconds, or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
         """
+        if is_trusted():
+            return
         super().__post_init__()
         _check_whole(
             "TimeSpan start_us",
@@ -172,6 +175,8 @@ class TimeInterval(TimeSpan):
             TimeFValidationError: If ``end_us`` is not whole microseconds, or is not greater than
                 ``start_us``.
         """
+        if is_trusted():
+            return
         super().__post_init__()
         _check_whole(
             "TimeInterval end_us",
@@ -239,6 +244,8 @@ class StepSpan(Span):
             TimeFValidationError: If an abstract base is constructed, if ``time_series_id`` is empty,
                 or if ``start`` is not a whole ordinal ``>= 0``.
         """
+        if is_trusted():
+            return
         super().__post_init__()
         if not self.time_series_id:
             raise TimeFValidationError("StepSpan time_series_id must name one series; got an empty id")
@@ -272,6 +279,8 @@ class StepInterval(StepSpan):
         Raises:
             TimeFValidationError: If ``stop`` is not a whole ordinal, or is not greater than ``start``.
         """
+        if is_trusted():
+            return
         super().__post_init__()
         _check_whole("StepInterval stop", self.stop, unit="a whole step ordinal")
         if self.stop <= self.start:

@@ -156,7 +156,8 @@ def value_type_of(value: Any) -> str | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list" | "map"``, or ``None`` for a pure marker.
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker. A list
+        holds strings only, such as the vocabulary of a classification target.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
@@ -169,10 +170,12 @@ def value_type_of(value: Any) -> str | None:
         (int, "int"),
         (float, "float"),
         (str, "str"),
-        (list | tuple, "list"),
-        (dict, "map"),
     )
     for value_type, tag in tags:
         if isinstance(value, value_type):
             return tag
+    if isinstance(value, list | tuple):
+        if all(isinstance(item, str) for item in value):
+            return "list"
+        raise TimeFValidationError("annotation list values must hold strings only")
     raise TimeFValidationError(f"unsupported annotation value type: {type(value).__name__}")
