@@ -20,7 +20,6 @@ from timenet.types import (
     AnnotationType,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Task,
     TaskType,
     TimeSeriesSpec,
@@ -37,7 +36,7 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -64,7 +63,7 @@ class Manifest:
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int = 1
+    timef_format_version: int = 2
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
@@ -74,8 +73,8 @@ class Manifest:
         without parsing the metadata block. The two values must match.
 
         Raises:
-            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id`` does
-                not match ``metadata.dataset_id``.
+            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, ``dataset_id`` does
+                not match ``metadata.dataset_id``, or the required control database is missing.
         """
         if (
             type(self.timef_format_version) is not int
@@ -95,6 +94,8 @@ class Manifest:
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
+        if len(self.files.control) != 1:
+            raise TimeNetInvalidManifestError("TimeF manifest must declare exactly one files.control entry")
 
     # ---- serialization -------------------------------------------------------------------------
 
@@ -225,15 +226,6 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
                 "spec_type": spec.spec_type,
                 "name": spec.name,
                 "unit_value": str(spec.unit_value),
-                "data_source": (
-                    {
-                        "data_source_type": spec.data_source.data_source_type,
-                        "name": spec.data_source.name,
-                        "provider": spec.data_source.provider,
-                    }
-                    if spec.data_source is not None
-                    else None
-                ),
                 "dtype": spec.dtype,
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
@@ -263,7 +255,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
                 spec_type=entry["spec_type"],
                 name=entry["name"],
                 unit_value=ureg.Unit(entry["unit_value"]),
-                data_source=_data_source(entry.get("data_source")),
                 dtype=entry.get("dtype", "float32"),
                 categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),
@@ -292,20 +283,6 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
         raise TimeNetInvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
 
 
-def _data_source(entry: dict[str, Any] | None) -> DataSource | None:
-    """Rebuild a spec's data source from the record stored beside it.
-
-    Args:
-        entry: The stored ``data_source`` object, or ``None``.
-
-    Returns:
-        The data source, or ``None`` if the spec declares none.
-    """
-    if entry is None:
-        return None
-    return DataSource(data_source_type=entry["data_source_type"], name=entry["name"], provider=entry.get("provider"))
-
-
 def _resolve_task(task_type: str) -> type[Task]:
     try:
         return TASKS[TaskType(task_type)]
@@ -316,12 +293,14 @@ def _resolve_task(task_type: str) -> type[Task]:
 def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
     return {
         "records": counts.records,
-        "annotations": counts.annotations,
-        "registered_annotations": counts.registered_annotations,
+        "sources": counts.sources,
+        "signals": counts.signals,
+        "axes": counts.axes,
+        "annotation_contents": counts.annotation_contents,
+        "annotation_occurrences": counts.annotation_occurrences,
         "tasks": dict(counts.tasks),
-        "time_series_chunks": counts.time_series_chunks,
-        "time_series_index_rows": counts.time_series_index_rows,
-        "time_series_specs": dict(counts.time_series_specs),
+        "signal_chunks": counts.signal_chunks,
+        "signals_by_spec": dict(counts.signals_by_spec),
     }
 
 
@@ -329,12 +308,14 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
     try:
         return ManifestCounts(
             records=data.get("records", 0),
-            annotations=data.get("annotations", 0),
-            registered_annotations=data.get("registered_annotations", 0),
+            sources=data.get("sources", 0),
+            signals=data.get("signals", 0),
+            axes=data.get("axes", 0),
+            annotation_contents=data.get("annotation_contents", 0),
+            annotation_occurrences=data.get("annotation_occurrences", 0),
             tasks=dict(data.get("tasks", {})),
-            time_series_chunks=data.get("time_series_chunks", 0),
-            time_series_index_rows=data.get("time_series_index_rows", 0),
-            time_series_specs=dict(data.get("time_series_specs", {})),
+            signal_chunks=data.get("signal_chunks", 0),
+            signals_by_spec=dict(data.get("signals_by_spec", {})),
         )
     except (ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
@@ -342,10 +323,7 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
     return {
-        "records": [_part_to_dict(part) for part in files.records],
-        "annotations": [_part_to_dict(part) for part in files.annotations],
-        "time_series_index": [_part_to_dict(part) for part in files.time_series_index],
-        "tasks": [_part_to_dict(part) for part in files.tasks],
+        "control": [_part_to_dict(part) for part in files.control],
         "time_series": [_part_to_dict(part) for part in files.time_series],
     }
 
@@ -357,10 +335,7 @@ def _part_to_dict(part: FilePart) -> dict[str, Any]:
 def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
     try:
         return ManifestFiles(
-            records=_parts(data["records"], "records"),
-            annotations=_parts(data["annotations"], "annotations"),
-            time_series_index=_parts(data["time_series_index"], "time_series_index"),
-            tasks=_parts(data.get("tasks", ()), "tasks"),
+            control=_parts(data["control"], "control"),
             time_series=_parts(data.get("time_series", ()), "time_series"),
         )
     except (KeyError, ValueError, TypeError, AttributeError) as exc:

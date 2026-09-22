@@ -5,8 +5,10 @@ This module needs the ``torch`` extra (``pip install 'timenet[torch]'``). The me
 use PyTorch do not need to install it.
 """
 
-from collections.abc import Callable
-from typing import Any
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from jaxtyping import Shaped
 import numpy as np
@@ -16,9 +18,23 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, TimeFDataset, TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import Task
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
+
+
+class _ItemSource(Protocol):
+    """Where a :class:`TimeFTorchDataset` gets records and their tasks."""
+
+    def __len__(self) -> int: ...
+
+    def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
+        """Return the records at ``indices`` with their tasks, in order."""
+        ...
 
 
 class TimeFTorchDataset(Dataset):
@@ -34,51 +50,142 @@ class TimeFTorchDataset(Dataset):
     Variable shapes and custom task or annotation objects need a suitable transform or ``collate_fn``.
     ``batch_size=1`` still combines records into a batch and needs the same handling.
     Uniform tensors with empty tasks and annotations support default batching.
+
+    Build it from a materialized :class:`~timenet.dataset.TimeFDataset`, or with
+    :meth:`from_reader` from a :class:`~timenet.reader.TimeFReader` so records and tasks hydrate
+    per batch instead of all at once. A ``DataLoader`` calls :meth:`__getitems__` with a whole batch
+    of indices, and the reader-backed view answers it with one round of queries for the batch.
     """
 
-    def __init__(self, dataset: TimeFDataset, *, transform: Callable[[dict[str, Any]], Any] | None = None) -> None:
+    def __init__(
+        self,
+        dataset: TimeFDataset | None = None,
+        *,
+        transform: Callable[[dict[str, Any]], Any] | None = None,
+        items: _ItemSource | None = None,
+    ) -> None:
         """Wrap a dataset.
 
         Args:
             dataset: The dataset to view. Its per-series values load only when accessed.
             transform: An optional callable applied to each item dict before it is returned.
+            items: A prepared item source, used by :meth:`from_reader` instead of ``dataset``.
+
+        Raises:
+            TimeFValidationError: If neither or both of ``dataset`` and ``items`` are given.
         """
+        if (dataset is None) == (items is None):
+            raise TimeFValidationError("TimeFTorchDataset needs a dataset or an item source, not both")
+        self._items: _ItemSource = items if items is not None else _DatasetItems(cast("TimeFDataset", dataset))
+        self._transform = transform
+
+    @classmethod
+    def from_reader(
+        cls,
+        reader: TimeFReader,
+        *,
+        transform: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> TimeFTorchDataset:
+        """View an open reader without materializing its records or tasks.
+
+        Each ``__getitems__`` call hydrates the batch's records in one query round and their tasks
+        in another, so memory stays proportional to the batch. The reader pickles without its
+        connection, so ``DataLoader`` workers each reopen the control database.
+
+        Args:
+            reader: The reader to draw records and tasks from.
+            transform: An optional callable applied to each item dict before it is returned.
+
+        Returns:
+            The lazy view.
+        """
+        return cls(items=_ReaderItems(reader), transform=transform)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, index: int) -> Any:
+        return self.__getitems__([index])[0]
+
+    def __getitems__(self, indices: Sequence[int]) -> list[Any]:  # noqa: PLW3201 - DataLoader batch hook
+        """Return the items at ``indices``, hydrating the whole batch together.
+
+        Args:
+            indices: Record positions, in the order the items are returned.
+
+        Returns:
+            One item dict, or transformed item, per index.
+        """
+        items = [self._item(record, tasks) for record, tasks in self._items.fetch(indices)]
+        return items if self._transform is None else [self._transform(item) for item in items]
+
+    @staticmethod
+    def _item(record: Record, tasks: tuple[Task, ...]) -> dict[str, Any]:
+        pairs = tuple(_series_tensor_and_mask(signal) for signal in record.signals)
+        return {
+            "record_id": record.record_id,
+            "series": tuple(values for values, _ in pairs),
+            "series_masks": tuple(mask for _, mask in pairs),
+            "tasks": tasks,
+            "annotations": record.annotations,
+        }
+
+
+class _DatasetItems:
+    """Items from a materialized dataset, resolved through each record's ``task_ids``."""
+
+    def __init__(self, dataset: TimeFDataset) -> None:
         self._records = dataset.records
         self._tasks_by_id = {task.id: task for task in dataset.tasks}
-        self._transform = transform
 
     def __len__(self) -> int:
         return len(self._records)
 
-    def __getitem__(self, index: int) -> Any:
-        record = self._records[index]
-        pairs = tuple(_series_tensor_and_mask(ts) for ts in record.time_series)
-        item: dict[str, Any] = {
-            "record_id": record.record_id,
-            "series": tuple(values for values, _ in pairs),
-            "series_masks": tuple(mask for _, mask in pairs),
-            "tasks": tuple(self._resolve_task(task_id, record.record_id) for task_id in record.task_ids),
-            "annotations": record.annotations,
-        }
-        return self._transform(item) if self._transform is not None else item
-
-    def _resolve_task(self, task_id: str, record_id: str) -> Task:
-        """Return the task that a record references. Raise an error if the id does not exist.
-
-        Args:
-            task_id: A task id from the record's ``task_ids``.
-            record_id: The id of the record that references the task. Used in the error message.
-
-        Returns:
-            The resolved :class:`~timenet.types.Task`.
+    def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
+        """Return the records at ``indices`` with their tasks, in order.
 
         Raises:
-            TimeFValidationError: If no task with ``task_id`` exists in the dataset.
+            TimeFValidationError: If a record references a task id that does not exist.
         """
-        task = self._tasks_by_id.get(task_id)
-        if task is None:
-            raise TimeFValidationError(f"record {record_id!r} references unknown task id {task_id!r}")
-        return task
+        items: list[tuple[Record, tuple[Task, ...]]] = []
+        for index in indices:
+            record = self._records[index]
+            tasks = []
+            for task_id in record.task_ids:
+                task = self._tasks_by_id.get(task_id)
+                if task is None:
+                    raise TimeFValidationError(f"record {record.record_id!r} references unknown task id {task_id!r}")
+                tasks.append(task)
+            items.append((record, tuple(tasks)))
+        return items
+
+
+class _ReaderItems:
+    """Items hydrated from a reader per batch: one query round for the records, one for their tasks."""
+
+    def __init__(self, reader: TimeFReader) -> None:
+        self._reader = reader
+        self._record_ids: tuple[str, ...] | None = None
+
+    def _ids(self) -> tuple[str, ...]:
+        if self._record_ids is None:
+            self._record_ids = self._reader.record_ids()
+        return self._record_ids
+
+    def __len__(self) -> int:
+        return len(self._ids())
+
+    def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
+        """Return the records at ``indices`` with their tasks, in order."""
+        ids = self._ids()
+        records = tuple(self._reader.iter_records([ids[index] for index in indices]))
+        tasks_by_record: dict[str, list[Task]] = {record.record_id: [] for record in records}
+        for task in self._reader.read_tasks(records):
+            for record in task.inputs:
+                attached = tasks_by_record.get(record.record_id)
+                if attached is not None:
+                    attached.append(task)
+        return [(record, tuple(tasks_by_record[record.record_id])) for record in records]
 
 
 def _series_tensor(ts: TimeSeries) -> Shaped[Tensor, " time *value"]:
