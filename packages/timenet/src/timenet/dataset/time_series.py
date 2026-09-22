@@ -200,16 +200,6 @@ class Signal:
         set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
 
-    @property
-    def time_series_id(self) -> str:
-        """Return the transitional storage identity alias."""
-        return self.id
-
-    @property
-    def signal(self) -> str:
-        """Return the transitional signal-name alias."""
-        return self.name
-
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation and return it.
 
@@ -234,12 +224,12 @@ class Signal:
         if not self.name:
             raise ValueError("Signal.name must be non-empty")
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
-            raise TimeFValidationError(f"TimeSeries.n_values must be a positive integer, got {self.n_values!r}")
+            raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)
         if irregular and self.time_offsets_loader is None:
             raise TimeFValidationError(
                 "an IrregularAxis series must carry time_offsets_loader: the axis states no cadence, so "
-                "nothing else can say where its values sit. Build it with TimeSeries.from_irregular()"
+                "nothing else can say where its values sit. Build it with Signal.from_irregular()"
             )
         if not irregular and self.time_offsets_loader is not None:
             raise TimeFValidationError(
@@ -278,7 +268,7 @@ class Signal:
         time_axis: TimeAxis,
         source_id: str | None = None,
         id: str | None = None,
-    ) -> "TimeSeries":
+    ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
         Use this constructor for values already in memory. It converts them once to an Arrow array
@@ -298,7 +288,7 @@ class Signal:
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
-            The constructed :class:`TimeSeries`.
+            The constructed :class:`Signal`.
         """
         return cls(
             spec=spec,
@@ -319,7 +309,7 @@ class Signal:
         name: str,
         source_id: str | None = None,
         id: str | None = None,
-    ) -> "TimeSeries":
+    ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
 
         The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
@@ -337,7 +327,7 @@ class Signal:
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
-            The constructed :class:`TimeSeries`.
+            The constructed :class:`Signal`.
 
         Raises:
             TimeFValidationError: If the time offsets are unusable, or there is not exactly one per
@@ -485,9 +475,9 @@ class Signal:
                 past the series' steps. If the located range is empty.
         """
         if isinstance(span, StepInterval):
-            if span.time_series_id != self.time_series_id:
+            if span.time_series_id != self.id:
                 raise TimeFValidationError(
-                    f"a step span counts on {span.time_series_id!r}, not this series {self.time_series_id!r}"
+                    f"a step span counts on {span.time_series_id!r}, not this series {self.id!r}"
                 )
             if span.stop > self.n_values:
                 raise TimeFValidationError(
@@ -505,24 +495,19 @@ class Signal:
             stop = int(np.searchsorted(offsets, span.end_us, side="left"))
         elif isinstance(axis, OrdinalAxis):
             raise TimeFValidationError(
-                f"a seconds span has no step range on ordinal series {self.time_series_id!r}, which has "
+                f"a seconds span has no step range on ordinal series {self.id!r}, which has "
                 f"no timeline; name the horizon in steps instead"
             )
         else:
             assert_never(axis)
         if start < 0 or stop > self.n_values:
             raise TimeFValidationError(
-                f"span {span!r} runs past the {self.n_values} steps of series {self.time_series_id!r}: "
+                f"span {span!r} runs past the {self.n_values} steps of series {self.id!r}: "
                 f"it resolves to ({start}, {stop})"
             )
         if stop <= start:
             raise TimeFValidationError(
-                f"span {span!r} covers no steps of series {self.time_series_id!r}: it resolves to the "
+                f"span {span!r} covers no steps of series {self.id!r}: it resolves to the "
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)
-
-
-# Transitional alias for the lower commits in the stack. The final API-removal commit deletes it
-# after the bundled connectors and consumers use ``Signal``.
-TimeSeries = Signal
