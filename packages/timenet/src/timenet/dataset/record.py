@@ -216,6 +216,8 @@ class Record:
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible recording metadata."""
     start_time: datetime | int | None = None
     """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
     and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
@@ -252,8 +254,6 @@ class Record:
             TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
                 contain some series' window.
         """
-        if self.time_series and self.sources:
-            raise TimeFValidationError("Record accepts either legacy time_series or sources, not both")
         if self.sources:
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
@@ -383,6 +383,18 @@ class Record:
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached
+
+    def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
+        """Attach one annotation through the declarative API.
+
+        Args:
+            annotation: The typed annotation to attach.
+            warn_when_outside: Warn and keep a temporal annotation outside the recording window.
+
+        Returns:
+            The attached annotation occurrence.
+        """
+        return self.add_annotation(annotation, warn_when_outside=warn_when_outside)
 
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
