@@ -6,11 +6,13 @@ metric at one sampling interval, named ``{incident}_{index}_{interval_seconds}.p
 form: one row per (epoch, tag group) observation. The filename is the only correct join key to the QA
 table's ``query_group``; the file's own ``query_name`` column names a different series on most files.
 
-Each of the 750 questions becomes one record that carries the one or two metrics the question cites,
-one signal per tag group, plus an :class:`~timenet.types.AnswerTask` holding the question and its
-answer. The release publishes each metric at up to six intervals and no interval covers every metric,
-so a record uses the finest interval published for every series it cites. That keeps all 750
-questions and opens 205 of the 748 files, which is also the scope this connector downloads.
+Each series file a question resolves to becomes one record: one :class:`~timenet.dataset.Source` for
+the metric, one signal per tag group. Each of the 750 questions becomes an
+:class:`~timenet.types.AnswerTask` whose ``inputs`` are the one or two records the question cites, in
+the order it cites them. The release publishes each metric at up to six intervals and no interval
+covers every metric, so a question uses the finest interval published for every series it cites. That
+keeps all 750 questions and opens 205 of the 748 files, which is also the scope this connector
+downloads and the number of records it builds.
 
 A row whose value is null is carried as a missing timestep, and a signal that skips a step of its
 file's grid carries its own time offsets. The README beside this module records what the release
@@ -32,10 +34,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import Annotation, AnswerTask, DataSource, TimeSeriesSpec, ureg
+from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 
 
 REPO = "Datadog/ARFBench"
@@ -47,8 +49,8 @@ TS_DIR = "arfbench-ts-data"
 
 ANCHOR_US = 1_741_305_600_000_000
 """A derived origin: 2025-03-07T00:00:00Z, the UTC day boundary the corpus starts in. The release
-states no zero of its own. Every record shares this one, so a metric that two questions cite has one
-set of time offsets and is stored once."""
+states no zero of its own. Every record shares this one, so the two records a question cites agree
+about what a time offset means and a reader can compare them offset for offset."""
 
 US_PER_S = 1_000_000
 _EMPTY_SIGNAL = "value"
@@ -57,13 +59,14 @@ _EMPTY_SIGNAL = "value"
 _ID_PREFIX = "arfbench"
 """The one prefix every id this connector states is built from."""
 
-_SOURCE = DataSource(data_source_type="huggingface", name="ARFBench", provider="Datadog")
+_FLAGS = ("interpolate_1", "interpolate_2")
+"""The QA table's two interpolation flags, carried on the tasks that set them."""
+
 _METRIC = TimeSeriesSpec(
     spec_type="metric",
     name="Observability metric",
     unit_value=ureg.dimensionless,
     dtype="float64",
-    data_source=_SOURCE,
     nullable=True,
 )
 
@@ -171,17 +174,44 @@ def _options_id(options: Sequence[str]) -> str:
     return f"{_ID_PREFIX}-options-{digest[:12]}"
 
 
-def _record_id(index: int) -> str:
-    """Build the record id of one question, from its row number in the QA table.
+def _value_id(key: str, value: str) -> str:
+    """Build the content id of a task annotation whose value repeats across questions.
 
-    The record loop and the task stream both name a record through this function, so a streamed task
-    names the record the loop built.
+    Every task that states the same ``(key, value)`` shares one annotation content and carries its
+    own occurrence, so a value like ``Tier 1`` is stored once.
+
+    Args:
+        key: The annotation key.
+        value: The annotation value.
+
+    Returns:
+        The annotation id.
+    """
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()  # noqa: S324 (an id, not security)
+    return f"{_ID_PREFIX}-{key}-{digest[:12]}"
+
+
+def _record_id(series_id: str, interval_s: int) -> str:
+    """Build the record id of one series file.
+
+    Args:
+        series_id: The metric's id, such as ``35928_0``.
+        interval_s: The file's sampling interval in seconds.
+
+    Returns:
+        The record id.
+    """
+    return f"{_ID_PREFIX}-{series_id}-{interval_s}"
+
+
+def _task_id(index: int) -> str:
+    """Build the task id of one question, from its row number in the QA table.
 
     Args:
         index: The question's row number.
 
     Returns:
-        The record id.
+        The task id.
     """
     return f"{_ID_PREFIX}-{index:03d}"
 
@@ -208,7 +238,7 @@ def _read_file(path: str) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]
     arbitrary, and the pandas index the files carry does not restore it. Time offsets are measured
     from :data:`ANCHOR_US`, the zero every record shares.
 
-    Two files stay decoded at once. The writer sorts the series it writes by ``source_id``, which is
+    Two files stay decoded at once. The writer groups the series it writes by ``source_id``, which is
     the file, so it asks for one file's signals in a run and this cache answers them from one decode.
 
     Args:
@@ -293,7 +323,7 @@ def _offsets_loader(path: str, signal: str) -> Callable[[], pa.Array]:
     return load
 
 
-def _signals_for(path: str, series_id: str, interval_s: int) -> tuple[TimeSeries, ...]:
+def _signals_for(path: str, series_id: str, interval_s: int) -> tuple[Signal, ...]:
     """Build one metric's signals, with lazy loaders and an axis per signal.
 
     A signal that holds every step of its file's grid gets a regular axis. A signal that skips a step
@@ -314,9 +344,9 @@ def _signals_for(path: str, series_id: str, interval_s: int) -> tuple[TimeSeries
         offsets = signals[name][0]
         regular = int(offsets[0]) % step_us == 0 and bool(np.all(np.diff(offsets) == step_us))
         built.append(
-            TimeSeries(
+            Signal.from_loader(
                 spec=_METRIC,
-                signal=f"{series_id}/{name}",
+                name=name,
                 time_axis=(
                     RegularAxis.from_rate_hz(Fraction(1, interval_s)).at_index(int(offsets[0]) // step_us)
                     if regular
@@ -325,37 +355,64 @@ def _signals_for(path: str, series_id: str, interval_s: int) -> tuple[TimeSeries
                 loader=_values_loader(path, name),
                 time_offsets_loader=None if regular else _offsets_loader(path, name),
                 source_id=f"{series_id}@{interval_s}s",
-                time_series_id=f"{_ID_PREFIX}-{series_id}-{interval_s}-{index}",
+                id=f"{_ID_PREFIX}-{series_id}-{interval_s}-{index}",
                 n_values=len(offsets),
             )
         )
     return tuple(built)
 
 
-def _record_annotations(row: Mapping[str, str], cited: Sequence[str], interval_s: int) -> list[Annotation]:
-    """Build one question's record annotations.
+def _record_for(path: Path, series_id: str, interval_s: int) -> Record:
+    """Build the record of one series file: one source for the metric, one signal per tag group.
+
+    Args:
+        path: The series file.
+        series_id: The metric's id, such as ``35928_0``.
+        interval_s: The file's sampling interval in seconds.
+
+    Returns:
+        The record, anchored at :data:`ANCHOR_US` and annotated with the metric, its incident and
+        its interval.
+    """
+    record_id = _record_id(series_id, interval_s)
+    record = Record(
+        record_id=record_id,
+        sources=(
+            Source(
+                id=f"{record_id}-source",
+                name=f"metric {series_id} at {interval_s} s",
+                signals=_signals_for(str(path), series_id, interval_s),
+            ),
+        ),
+        start_time=ANCHOR_US,
+    )
+    record.add_annotations(
+        [
+            Annotation(key="metric_id", value=series_id),
+            Annotation(key="incident_id", value=series_id.partition("_")[0]),
+            Annotation(key="interval_s", value=interval_s, unit="second"),
+        ]
+    )
+    return record
+
+
+def _task_annotations(row: Mapping[str, str]) -> list[Annotation]:
+    """Build one question's task annotations.
 
     The two interpolation flags ride only on the rows that set them, because this connector
     interpolates nothing either way.
 
     Args:
         row: The QA row.
-        cited: The series ids the row cites.
-        interval_s: The chosen sampling interval in seconds.
 
     Returns:
-        The annotations to attach.
+        The annotations to attach to the task.
     """
-    incidents = list(dict.fromkeys(series_id.partition("_")[0] for series_id in cited))
     annotations = [
-        Annotation(key="task_category", value=row["task_category"]),
-        Annotation(key="difficulty", value=row["difficulty"]),
-        Annotation(key="query_group", value=row["query_group"]),
-        Annotation(key="interval_s", value=interval_s, unit="second"),
-        Annotation(key="incident_ids", value=incidents),
+        Annotation(key=key, value=row[key], id=_value_id(key, row[key])) for key in ("task_category", "difficulty")
     ]
     annotations.extend(
-        Annotation(key=flag, value=True) for flag in ("interpolate_1", "interpolate_2") if row[flag] == "1"
+        Annotation(key=flag, value=True, id=f"{_ID_PREFIX}-{flag}") for flag in _FLAGS if row[flag] == "1"
     )
     return annotations
 
@@ -416,67 +473,77 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
         return [ARFBenchSource(qa_csv=qa_csv, ts_dir=root / TS_DIR, published=published)]
 
     def convert(self, raw_refs: list[ARFBenchSource]) -> TimeFDataset:
-        """Build one record per question, sharing the signals of a metric that several cite.
+        """Build one record per series file and stream one task per question over those records.
 
-        A first pass registers one annotation per distinct candidate-answer list, so the tasks
-        reference shared lists instead of each carrying its own. The second pass builds the records. A
-        metric is read once per interval and its signals are reused, so a metric several questions
-        cite is stored once.
+        A first pass over the QA table resolves each question to its ``(metric, interval)`` pairs and
+        collects the distinct candidate-answer lists. One record is then built per distinct pair, so a
+        metric several questions cite is stored once and each of its signals has one owner, and one
+        ``answer_options`` annotation is attached to the dataset per distinct list, so the tasks
+        reference shared lists instead of each carrying its own.
 
         The tasks are not built here. They stream from the QA table through :meth:`_iter_tasks`, so
-        no record carries the id of its task.
+        no record carries the id of its tasks.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.
 
         Returns:
-            The dataset: one record per question, and a task stream of one task per question.
+            The dataset: one record per series file, and a task stream of one task per question.
         """
         source = raw_refs[0]
         dataset = TimeFDataset(metadata=self.metadata())
-        option_sets = {tuple(json.loads(row["options_str"])) for row in _iter_qa_rows(source.qa_csv)}
-        dataset.register_annotations(
-            Annotation(key="answer_options", value=list(options), id=_options_id(options))
-            for options in sorted(option_sets)
-        )
+        option_sets: set[tuple[str, ...]] = set()
+        cited_files: set[tuple[str, int]] = set()
+        for row in _iter_qa_rows(source.qa_csv):
+            option_sets.add(tuple(json.loads(row["options_str"])))
+            interval_s = _interval_for(_cited_series(row), source.published)
+            cited_files.update((series_id, interval_s) for series_id in _cited_series(row))
 
-        signals: dict[tuple[str, int], tuple[TimeSeries, ...]] = {}
-        for index, row in enumerate(_iter_qa_rows(source.qa_csv)):
-            cited = _cited_series(row)
-            interval_s = _interval_for(cited, source.published)
-            time_series: tuple[TimeSeries, ...] = ()
-            for series_id in cited:
-                key = (series_id, interval_s)
-                if key not in signals:
-                    path = source.ts_dir / f"{series_id}_{interval_s}.parquet"
-                    signals[key] = _signals_for(str(path), series_id, interval_s)
-                time_series += signals[key]
-            record = dataset.add_record(time_series=time_series, record_id=_record_id(index), start_time=ANCHOR_US)
-            record.add_annotations(_record_annotations(row, cited, interval_s))
-
-        dataset.set_task_stream([AnswerTask], lambda: self._iter_tasks(source))
+        options = {
+            _options_id(candidates): dataset.annotate(
+                Annotation(key="answer_options", value=list(candidates), id=_options_id(candidates))
+            )
+            for candidates in sorted(option_sets)
+        }
+        records = {
+            key: dataset.add_record(record=_record_for(source.ts_dir / f"{key[0]}_{key[1]}.parquet", *key))
+            for key in sorted(cited_files)
+        }
+        dataset.set_task_stream([AnswerTask], lambda: self._iter_tasks(source, records, options))
         return dataset
 
     @staticmethod
-    def _iter_tasks(source: ARFBenchSource) -> Iterator[AnswerTask]:
-        """Yield one :class:`AnswerTask` per QA row, on the record that row built.
+    def _iter_tasks(
+        source: ARFBenchSource,
+        records: Mapping[tuple[str, int], Record],
+        options: Mapping[str, Annotation],
+    ) -> Iterator[AnswerTask]:
+        """Yield one :class:`AnswerTask` per QA row, over the records of the series the row cites.
 
         The QA table is read again here rather than held, so the stream answers the same rows every
         time the writer asks for them.
 
         Args:
             source: The download handle naming the QA table.
+            records: The records :meth:`convert` built, keyed by ``(metric, interval)``.
+            options: The dataset's ``answer_options`` occurrences, keyed by content id.
 
         Yields:
-            Each question as an answer task, naming its record and its candidate-answer annotation.
+            Each question as an answer task, naming its records and its candidate-answer annotation.
         """
         for index, row in enumerate(_iter_qa_rows(source.qa_csv)):
-            yield AnswerTask(
+            cited = _cited_series(row)
+            interval_s = _interval_for(cited, source.published)
+            task = AnswerTask(
+                id=_task_id(index),
+                inputs=tuple(records[series_id, interval_s] for series_id in cited),
                 prompt=row["question"],
-                target=row["correct_answer"],
-                input_annotation_ids=(_options_id(json.loads(row["options_str"])),),
-                record_ids=(_record_id(index),),
+                targets=(row["correct_answer"],),
+                input_annotations=(options[_options_id(json.loads(row["options_str"]))],),
             )
+            for annotation in _task_annotations(row):
+                task.annotate(annotation)
+            yield task
 
 
 CONNECTOR = ARFBenchConnector
