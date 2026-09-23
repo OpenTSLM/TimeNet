@@ -72,9 +72,15 @@ Decides: nothing in the conversion. It is repeated here because much of the corp
 
 One record is one row of one shard.
 
-**Signals.** One `TimeSeries` per inner list of the row's `time_series` column, named `s0`, `s1` and
-so on in the order the row states. Every series in a row has the same length *(measured: 0 ragged
-rows)*. Lengths run from 64 to 96,424 and are constant per source corpus for 31 of the 37 corpora.
+**Signals.** One `Signal` per inner list of the row's `time_series` column, named `s0`, `s1` and
+so on in the order the row states, with the id `<record id>-s0` and so on. Every series in a row has
+the same length *(measured: 0 ragged rows)*. Lengths run from 64 to 96,424 and are constant per
+source corpus for 31 of the 37 corpora.
+
+**One `Source` holds them all**, named after the corpus the row was drawn from, which is the value of
+the `dataset` column. The release states that corpus and nothing finer, not the recording, the
+subject or the sensor, so the corpus is the one source every signal of the row has. Its id is
+`<record id>-source`.
 
 The corpus states **no unit for anything**, so every series is dimensionless. It is not that the
 values have no unit; it is that the release does not say what it is.
@@ -99,8 +105,9 @@ axis *(measured)*.
 | `caption0` to `caption3` | the caption, as the release wrote it | the four caption columns |
 | `all_nan_signals` | which series holds no numbers | only on the 96 rows that need it |
 
-A caption annotation states an id of its own, `<record id>-caption0` and so on, because the tasks
-answer by reference to it. Every other annotation here lets its id default.
+A caption annotation states an id of its own, `<record id>-caption0` and so on, so a reader who
+follows a task's answer lands on an id that names the record and the column. Every other annotation
+here lets its id default.
 
 Eight of the 37 corpora state `-` for `Source`, so their records carry `-` as their `source_url`
 *(measured)*: `Capture24`, `auditory`, `dalia`, `maus`, `mendeley`, `Phyatt`, `ppg_ecg` and
@@ -123,11 +130,11 @@ number in that name.
 | write this row's caption | `AnswerTask`, no prompt | **2,474,032** | the whole record |
 
 Four tasks per record over 618,508 records, one per caption column *(measured)*. A task's answer is
-the caption annotation the record carries, named through `target_annotation_ids`, and not a second
-copy of the text. So a caption is reachable from the record it describes: a streamed task never
-reaches `Record.task_ids`, so a caption held only by a task could be found from the task and never
-from the record. The cost is that a build holds the captions in memory until the writer has walked
-them.
+the caption annotation the record carries, named through `target_annotations` as the occurrence
+attached to that record, and not a second copy of the text. So a caption is reachable from the record
+it describes: a streamed task never reaches `Record.task_ids`, so a caption held only by a task could
+be found from the task and never from the record. The cost is that a build holds the captions in
+memory until the writer has walked them.
 
 They are flat: nothing records that `caption1` to `caption3` are rewrites of `caption0`. That
 relation is real for most of the corpus and empty for the 105,085 `ChatTS` rows whose four captions
