@@ -1,6 +1,6 @@
 [project]
 name = "timenet-connectors"
-version = "0.1.0"
+version = "0.11.0"
 description = "Dataset connectors for TimeNet: dataset-specific logic to fetch and convert sources into the TimeF format."
 readme = "README.md"
 license = "MIT"
@@ -27,7 +27,7 @@ dependencies = [
     "numpy>=2.1",
     "pyarrow>=21",
     # [build] pulls PyYAML + jsonschema: connectors load and validate their card YAML at build time.
-    "timenet[build]>=0.0.1",
+    "timenet[build]>=0.11.0",
     "typer>=0.12",
 ]
 
