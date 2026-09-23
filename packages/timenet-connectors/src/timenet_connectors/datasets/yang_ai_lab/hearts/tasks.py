@@ -13,8 +13,9 @@ consumer does not have, so every such reference names the signal that carries th
 instead. The release also interpolates per-case values into some prompts, and one prompt is shared
 by every case of its directory, so those are dropped. This connector's README lists every edit.
 
-A ``target_schema`` is a different thing from a task type. It must equal the id of the registered
-annotation that holds the answer vocabulary, so :func:`name_vocabulary` builds both from one string.
+A ``target_schema`` is a different thing from a task type. It must equal the content id of the
+dataset annotation that holds the answer vocabulary, so :func:`name_vocabulary` builds both from one
+string.
 """
 
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from timenet.dataset import Record
 from timenet.errors import TimeFFormatError
 from timenet.types import (
     Annotation,
@@ -94,8 +96,8 @@ class TaskDefinition:
 def name_vocabulary(id_prefix: str, task: str) -> str:
     """Build the id of one task directory's shared answer-options annotation.
 
-    A ``ClassificationTask`` states this id in ``target_schema`` and references the annotation
-    through ``input_annotation_ids``, so both ends read it from here.
+    A ``ClassificationTask`` states this id in ``target_schema`` and carries the annotation's
+    dataset occurrence in ``input_annotations``, so both ends read it from here.
 
     Args:
         id_prefix: The connector's id prefix.
@@ -380,6 +382,9 @@ TASK_TYPES: tuple[type[Task], ...] = tuple(dict.fromkeys(definition.task_type fo
 def option_annotations(id_prefix: str) -> tuple[Annotation, ...]:
     """Build the shared answer-vocabulary annotations the closed-answer tasks reference.
 
+    These belong to no record. The connector attaches each one to the dataset once and hands the
+    occurrence to every task of its directory.
+
     Args:
         id_prefix: The connector's id prefix.
 
@@ -480,6 +485,28 @@ def plain(value: Any) -> Any:
     return value
 
 
+def annotation_value(value: Any) -> str | int | float | bool | list[str]:
+    """Rebuild a payload node as a value an annotation can hold.
+
+    An annotation value is a string, a number, a boolean, or a list of strings, and nothing else.
+    A scalar or a list of strings is kept as itself. A mapping or any other sequence becomes
+    canonical JSON with sorted keys, the same text an answer task holds for a structured answer, so
+    the Coswara symptom map reaches the consumer whole rather than flattened.
+
+    Args:
+        value: A node read out of a payload.
+
+    Returns:
+        The value an annotation stores.
+    """
+    rebuilt = plain(value)
+    if isinstance(rebuilt, str | int | float | bool):
+        return rebuilt
+    if isinstance(rebuilt, list) and all(isinstance(item, str) for item in rebuilt):
+        return rebuilt
+    return json.dumps(rebuilt, sort_keys=True, default=str)
+
+
 def _answer_text(answer: Any) -> str:
     """Serialize a structured answer to the one string an answer task holds.
 
@@ -501,20 +528,21 @@ def _answer_text(answer: Any) -> str:
 
 def build_task(
     definition: TaskDefinition,
-    record_id: str,
+    record: Record,
     answer: Any,
-    input_annotation_ids: tuple[str, ...],
+    input_annotations: tuple[Annotation, ...],
     id_prefix: str,
 ) -> Task:
     """Build the task for one test case.
 
-    The task is streamed rather than attached, so it carries its own ``record_ids``.
+    The task is streamed rather than attached, so it carries its own record in ``inputs``.
 
     Args:
         definition: The task directory's definition.
-        record_id: The owning record's id.
+        record: The record the test case became.
         answer: The payload's ``GT`` value.
-        input_annotation_ids: The annotations the reference harness shows its agent.
+        input_annotations: The attached annotation occurrences the reference harness shows its
+            agent, the answer vocabulary first.
         id_prefix: The connector's id prefix.
 
     Returns:
@@ -523,22 +551,22 @@ def build_task(
     Raises:
         TimeFFormatError: If the answer does not fit the task type.
     """
-    task_id = f"{record_id}-qa"
+    task_id = f"{record.record_id}-qa"
     shared: dict[str, Any] = {
         "id": task_id,
         "prompt": definition.prompt,
-        "input_annotation_ids": input_annotation_ids,
-        "record_ids": (record_id,),
+        "input_annotations": input_annotations,
+        "inputs": (record,),
     }
     if definition.task_type is ClassificationTask:
         return ClassificationTask(
-            target=_label(definition, answer),
+            targets=(_label(definition, answer),),
             target_schema=name_vocabulary(id_prefix, definition.task),
             **shared,
         )
     if definition.task_type is ScalarPredictionTask:
         return ScalarPredictionTask(
-            target=float(answer), unit=definition.unit, target_name=definition.target_name, **shared
+            targets=(float(answer),), unit=definition.unit, target_name=definition.target_name, **shared
         )
     if definition.task_type is TemporalLocalizationTask:
         # The release's own prompt declares this answer a float, so the minutes are carried to the
@@ -546,5 +574,5 @@ def build_task(
         micros = round(float(answer) * _US_PER_MINUTE)
         if micros < 0:
             raise TimeFFormatError(f"{definition.directory} answer {answer!r} is a negative minute offset")
-        return TemporalLocalizationTask(target=(TimePoint.micros(micros),), **shared)
-    return AnswerTask(target=_answer_text(answer), **shared)
+        return TemporalLocalizationTask(targets=(TimePoint.micros(micros),), **shared)
+    return AnswerTask(targets=(_answer_text(answer),), **shared)

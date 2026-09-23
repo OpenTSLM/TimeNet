@@ -10,7 +10,7 @@
 # corpus, so the card says `other` and the README says what that means.
 yaml_schema_version: 1
 dataset_id: yang-ai-lab/hearts
-dataset_version: 1.0.0
+dataset_version: 2.0.0
 name: HEARTS frozen test cases
 description: >-
   The released test cases of a health time-series agent benchmark. One record is one case: the
