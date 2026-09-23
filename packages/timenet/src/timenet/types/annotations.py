@@ -13,7 +13,7 @@ manifest.
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
-from typing import Any
+from typing import Any, Protocol
 
 import pint
 
@@ -127,6 +127,28 @@ def annotation_type_of(annotation: Annotation) -> AnnotationType:
     if annotation.span is None:
         return AnnotationType.STATIC
     return AnnotationType.POINT if annotation.span.is_point else AnnotationType.INTERVAL
+
+
+class SupportsAnnotate(Protocol):
+    """Anything an annotation occurrence can be attached to.
+
+    ``annotate`` binds a fresh occurrence of ``annotation`` to this object and returns it; the
+    returned occurrence is what a Task names in ``input_annotations`` or ``target_annotations``.
+    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, and
+    the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
+    one annotation out over several Signals and returns every occurrence it created. The contract is
+    checked statically; there is no runtime ``isinstance`` support because ``annotations`` is a
+    property.
+    """
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return the occurrences attached to this object."""
+        ...
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one occurrence of ``annotation`` and return it."""
+        ...
 
 
 @dataclass(frozen=True)
