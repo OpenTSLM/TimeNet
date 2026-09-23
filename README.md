@@ -1,75 +1,73 @@
 # TimeNet
 
-*Download and explore time-series datasets through one standardized format.*
+*Find, build, and load time-series datasets through one shared format.*
 
 > [!NOTE]
-> This is a pre-release version and is subject to change. We are actively working on
-> improvements around performance and integrations, and welcome community contributions.
+> TimeNet is a pre-release project. Its public API and the TimeF format can change before 1.0.
 
 [![PyPI](https://img.shields.io/pypi/v/timenet)](https://pypi.org/project/timenet/)
 [![Docs](https://img.shields.io/badge/docs-docs.timenet.ai-1f6feb)](https://docs.timenet.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE)
 
-Time-series data is fragmented. TimeNet standardizes it. Every dataset used to ship in its own
-shape, forcing teams to rewrite the same loading code again and again. TimeF replaces that with
-one shared format and one set of tools to find, download, and load any dataset the same way,
-whether it holds ECGs, accelerometer traces, or market prices.
+Time-series datasets use many incompatible layouts. TimeF gives them one storage format. TimeNet
+provides one API to find, build, download, and load them.
 
-TimeNet hands you the data and stops there. Training, inference, and modeling are up to you.
+TimeNet handles the data layer. Model training, inference, and evaluation stay in your chosen
+framework.
 
-We're actively growing TimeNet: adding datasets, integrating time-series ML models, and building
-connectors to data processing libraries. Contributions in any of these areas are welcome.
+## Quick start
 
-Full documentation: <https://docs.timenet.ai/>
+TimeNet needs Python 3.11 or newer.
+
+```bash
+uv add 'timenet[cli]'
+uv tool install timenet-connectors
+timenet-build build timenet/hello-world --out .timenet-registry
+```
+
+Load the local build with Python:
+
+```python
+from timenet.client import TimeNet
+
+dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+dataset.describe()
+
+signal = dataset.records[0].signals[0]
+values = signal.to_numpy()
+```
+
+This example uses a local registry, so it works without registry credentials or network access.
+
+See the [Get started guide](https://docs.timenet.ai/get-started.html) for installation options and a
+longer example.
 
 ## How it fits together
 
 ![TimeNet architecture diagram](https://raw.githubusercontent.com/OpenTSLM/TimeNet/main/docs/assets/architecture.svg)
 
-A connector turns a raw source into a manifest plus parquet and publishes it to a registry. The
-client reads the manifest from the registry and loads the data. Reading never runs connector code,
-so everything a consumer needs to interpret the parquet lives in the manifest.
+A connector converts a raw source into a TimeF version. The version contains:
 
-- `BaseConnector` is the only contract a new data source must satisfy.
-- `TimeFDataset` is the in-memory model a connector populates during `convert()`.
-- `TimeFWriter` serializes a populated `TimeFDataset` to disk.
-- `TimeFReader` reads a TimeF version directory back into a `TimeFDataset`.
+- `manifest.json`, which identifies the dataset and lists its files
+- `control.duckdb`, which stores the hierarchy and relationships
+- a Parquet or Zarr values plane, which stores Signal values
 
-## Components
+A registry stores immutable TimeF versions. The client reads a version without importing its
+connector.
 
-The project is a [uv](https://docs.astral.sh/uv/) workspace with two packages under `packages/`,
-plus the registry they read from and write to.
+The repository is a [uv](https://docs.astral.sh/uv/) workspace with two packages:
 
-| Part | What it is | Ships |
-| --- | --- | --- |
-| `timenet` | the SDK and CLI | the TimeF format, reader/writer, registry client, engine, `BaseConnector` |
-| `timenet-connectors` | the producer package | connector recipes, dataset cards, and the `timenet-build` CLI |
-| registry | a served location | compiled manifests plus parquet; can be public, a private internal one, or a local directory |
+| Package | Purpose |
+| --- | --- |
+| `timenet` | The TimeF model, reader, writer, registries, SDK, and consumer CLI. |
+| `timenet-connectors` | Dataset connectors and the `timenet-build` producer CLI. |
 
-See the [architecture guide](https://docs.timenet.ai/architecture.html) for the full map, and the
-[concepts page](https://docs.timenet.ai/concepts.html) for the terminology.
-
-## Install
-
-Requires Python 3.11 or newer (tested on 3.11 to 3.13).
-
-```bash
-uv add timenet            # core: TimeF format, reader/writer, registry client
-uv add 'timenet[cli]'     # add the timenet console command
-uv add 'timenet[torch]'   # add load_torch (PyTorch Dataset); works with any torch build
-```
-
-Once installed, the CLI is available as `timenet`. See [Get started](https://docs.timenet.ai/get-started.html)
-to load your first dataset.
+Read the [architecture guide](https://docs.timenet.ai/architecture.html) for the complete design.
 
 ## License
 
-TimeNet is released under the [MIT License](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE).
+TimeNet uses the [MIT License](https://github.com/OpenTSLM/TimeNet/blob/main/LICENSE).
 
-### Dataset licenses
-
-The MIT License covers TimeNet's own code, not the datasets it fetches. Each dataset keeps its
-upstream license. Check the `license` and `source_url` fields on a dataset's card to see what applies
-and where the data comes from. Some sources, such as PhysioNet, only grant credentialed access, so
-follow their terms when you download. See
-[Dataset licensing](https://docs.timenet.ai/catalog/licensing/) for the full note.
+This license covers the TimeNet code, not the datasets that connectors fetch. Each dataset keeps
+its upstream license and access terms. Read the
+[dataset licensing guide](https://docs.timenet.ai/catalog/licensing.html) before redistribution.

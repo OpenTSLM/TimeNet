@@ -19,7 +19,7 @@ from typing import ClassVar, assert_never
 
 import pyarrow as pa
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.zarr.config import ZarrValuesConfig
 
@@ -93,10 +93,10 @@ class BaseValuesBackend(ABC):
     @abstractmethod
     def write_series(
         self,
-        unique_series: list[TimeSeries],
+        unique_series: list[Signal],
         *,
-        read_and_validate: Callable[[TimeSeries], pa.Array],
-        read_time_offsets: Callable[[TimeSeries], pa.Array | None],
+        read_and_validate: Callable[[Signal], pa.Array],
+        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:

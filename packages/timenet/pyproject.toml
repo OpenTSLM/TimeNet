@@ -1,6 +1,6 @@
 [project]
 name = "timenet"
-version = "0.1.0"
+version = "0.11.0"
 description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
 readme = "README.md"
 license = "MIT"
@@ -21,6 +21,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "duckdb>=1.5,<1.6",
     "httpx>=0.28",
     "jaxtyping>=0.3",
     "numpy>=2.1",

@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
@@ -39,10 +39,10 @@ def _dataset(signals) -> TimeFDataset:
         )
     )
     series = tuple(
-        TimeSeries.from_values(values, spec=spec, signal=name, time_axis=RegularAxis.from_rate_hz(1))
+        Signal.from_values(values, spec=spec, name=name, time_axis=RegularAxis.from_rate_hz(1))
         for name, spec, values in signals
     )
-    dataset.add_record(time_series=series, record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), record_id="record-0"))
     dataset.derive_schema()
     return dataset
 
@@ -75,7 +75,7 @@ def test_mixed_dtype_signals_read_back_typed(tmp_path):
     version_dir = _write(tmp_path, _dataset(_mixed_signals()))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = reader.read().records[0]
-    by_signal = {ts.signal: ts for ts in record.time_series}
+    by_signal = {ts.name: ts for ts in record.signals}
     assert by_signal["acc"].to_arrow().type == pa.float32()
     assert by_signal["acc"].to_numpy().tolist() == np.array([0.1, 0.2, 0.3], dtype=np.float32).tolist()
     assert by_signal["steps"].to_arrow().type == pa.int16()

@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
@@ -55,13 +55,13 @@ def _dataset(
         start = i * per_record
         end = start + per_record if i < n_records - 1 else len(values)
         record_values = values[start:end]
-        ts = TimeSeries.from_values(
+        ts = Signal.from_values(
             record_values,
             spec=spec,
-            signal="stage",
+            name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
-        dataset.add_record(time_series=(ts,), record_id=f"record-{i}")
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"record-{i}"))
     dataset.derive_schema()
     return dataset
 
@@ -113,10 +113,10 @@ def test_non_enum_rejects_categories():
 def test_enum_rejects_values_outside_codebook():
     spec = _spec()
     with pytest.raises(TimeFValidationError, match="outside its categories"):
-        TimeSeries.from_values(
+        Signal.from_values(
             ["awake", "unknown"],
             spec=spec,
-            signal="stage",
+            name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
 
@@ -125,7 +125,7 @@ def test_enum_round_trips_labels(tmp_path):
     labels = ["awake", "deep", "awake", "rem"]
     version_dir = _write(tmp_path, _dataset(labels))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().records[0].time_series[0]
+        series = reader.read().records[0].signals[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
     assert result.cast(pa.string()).to_pylist() == labels
@@ -152,7 +152,7 @@ def test_enum_read_range_returns_labels(tmp_path):
     labels = ["awake", "light", "deep", "rem", "awake"]
     version_dir = _write(tmp_path, _dataset(labels))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().records[0].time_series[0]
+        series = reader.read().records[0].signals[0]
     result = series.read_steps(1, 4)
     assert result.cast(pa.string()).to_pylist() == ["light", "deep", "rem"]
 
@@ -162,7 +162,7 @@ def test_enum_zarr_round_trip(tmp_path):
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = reader.read().records[0].time_series[0]
+        series = reader.read().records[0].signals[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
     assert result.cast(pa.string()).to_pylist() == labels
@@ -173,7 +173,7 @@ def test_enum_zarr_empty_range(tmp_path):
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        ts = reader.read().records[0].time_series[0]
+        ts = reader.read().records[0].signals[0]
     empty = ts.read_steps(2, 2)
     assert len(empty) == 0
     assert pa.types.is_dictionary(empty.type)
@@ -198,7 +198,7 @@ def test_enum_multi_shard_different_value_subsets(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
     for i, record in enumerate(loaded.records):
-        ts = record.time_series[0]
+        ts = record.signals[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
         result_labels = result.cast(pa.string()).to_pylist()
@@ -225,7 +225,7 @@ def test_enum_multi_row_group_dictionary_consistency(tmp_path):
         loaded = reader.read()
     all_labels = []
     for record in loaded.records:
-        ts = record.time_series[0]
+        ts = record.signals[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
         all_labels.extend(result.cast(pa.string()).to_pylist())
@@ -255,8 +255,8 @@ def test_enum_streaming_write_read(tmp_path):
     )
     spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
     for i, labels in enumerate(records_labels):
-        ts = TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-        dataset.add_record(time_series=(ts,), record_id=f"s-{i}")
+        ts = Signal.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"s-{i}"))
     dataset.derive_schema()
 
     version_dir = _write(
@@ -270,7 +270,7 @@ def test_enum_streaming_write_read(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
     for i, record in enumerate(loaded.records):
-        ts = record.time_series[0]
+        ts = record.signals[0]
         result = ts.to_arrow()
         assert pa.types.is_dictionary(result.type)
         assert result.cast(pa.string()).to_pylist() == records_labels[i]
@@ -306,18 +306,18 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(time_series=(ts1,), record_id="s-0")
-    dataset.add_record(time_series=(ts2,), record_id="s-1")
+    ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, shard_target_bytes=64, chunk_max_bytes=32)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
 
-    s0 = loaded.records[0].time_series[0]
-    s1 = loaded.records[1].time_series[0]
+    s0 = loaded.records[0].signals[0]
+    s1 = loaded.records[1].signals[0]
 
     arr0 = s0.to_arrow()
     arr1 = s1.to_arrow()
@@ -348,18 +348,18 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
             domains=(Domain.GENERAL,),
         )
     )
-    ts1 = TimeSeries.from_values(["a", "b", "c"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = TimeSeries.from_values(["c", "d", "e"], spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(time_series=(ts1,), record_id="s-0")
-    dataset.add_record(time_series=(ts2,), record_id="s-1")
+    ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=32)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
 
-    s0 = loaded.records[0].time_series[0]
-    s1 = loaded.records[1].time_series[0]
+    s0 = loaded.records[0].signals[0]
+    s1 = loaded.records[1].signals[0]
 
     assert s0.to_arrow().cast(pa.string()).to_pylist() == ["a", "b", "c"]
     assert s1.to_arrow().cast(pa.string()).to_pylist() == ["c", "d", "e"]

@@ -5,6 +5,7 @@ from timenet.types.annotations import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    SupportsAnnotate,
     annotation_type_of,
     value_type_of,
 )
@@ -22,7 +23,7 @@ from timenet.types.spans import (
     TimePoint,
     TimeSpan,
 )
-from timenet.types.specs import DataSource, TimeSeriesSpec
+from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import (
     TASKS,
     AnswerTask,
@@ -30,8 +31,8 @@ from timenet.types.tasks import (
     ForecastingTask,
     LocalizationMode,
     ScalarPredictionTask,
+    TargetItem,
     Task,
-    TaskRefs,
     TaskType,
     TemporalLocalizationTask,
     TSCorrespondenceTask,
@@ -51,7 +52,6 @@ __all__ = [
     "AnnotationType",
     "AnswerTask",
     "ClassificationTask",
-    "DataSource",
     "DatasetMetadata",
     "DatasetSchema",
     "Domain",
@@ -63,11 +63,12 @@ __all__ = [
     "StepInterval",
     "StepPoint",
     "StepSpan",
+    "SupportsAnnotate",
     "TSCorrespondenceTask",
     "TSEditingTask",
     "TSGenerationTask",
+    "TargetItem",
     "Task",
-    "TaskRefs",
     "TaskType",
     "TemporalLocalizationTask",
     "TimeInterval",

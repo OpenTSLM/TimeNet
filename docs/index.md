@@ -7,10 +7,9 @@ tags:
 
 # TimeNet
 
-TimeNet is a Python library and CLI. You use it to register, fetch, and explore time-series
-datasets in a shared format called TimeF. TimeF gives every dataset one on-disk shape and one
-way to load it. A consumer reads ECGs, accelerometer traces, and market series through the same
-API.
+TimeNet gives time-series datasets one format and one Python API. You can build a raw source into
+TimeF, publish the result to a registry, and load it without dataset-specific code. The same objects
+represent ECGs, accelerometer traces, market series, and other sequential data.
 
 !!! info "Scope"
     TimeNet is not a modeling toolkit. Training, inference, model definitions, and evaluation
@@ -20,16 +19,14 @@ API.
 
 ![TimeNet architecture diagram](assets/architecture.svg)
 
-A [connector](connectors.md) turns a raw source into a TimeF version and publishes it to a
-[registry](registry.md). TimeF keeps its control plane in Parquet and stores series values in either
-Parquet or Zarr. The [client](client.md) reads the manifest from the registry and loads the data.
-Reading never runs connector code. Against a local registry, `load` can first build a dataset that the
-registry does not have from an installed connector (see [Build & publish](build.md)).
+A [connector](connectors.md) turns a raw source into a TimeF version. A
+[registry](registry.md) stores immutable versions. The [client](client.md) searches the registry and
+loads datasets with lazy Signal values. Consumer code never runs a connector.
 
 - [`BaseConnector`](connectors.md) is the only contract a new data source must satisfy.
 - [`TimeFDataset`](timef-dataset.md) is the in-memory model a connector populates during `convert()`.
-- [`TimeFWriter`](timef-writer.md) serializes a populated `TimeFDataset` to disk.
-- [`TimeFReader`](timef-reader.md) reads a TimeF version directory back into a `TimeFDataset`.
+- [`TimeFWriter`](timef-writer.md) writes a populated dataset as one immutable version.
+- [`TimeFReader`](timef-reader.md) restores the version without loading every Signal value.
 
 ## Where next
 

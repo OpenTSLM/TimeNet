@@ -11,9 +11,9 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
-from typing import Any
+from typing import Any, Protocol
 
 import pint
 
@@ -65,7 +65,15 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     id: str = field(default_factory=new_id)
-    """Unique identifier, a UUIDv7 string by default."""
+    """Reusable content identifier, a UUIDv7 string by default."""
+    occurrence_id: str | None = field(default=None, compare=False)
+    """Identity of one attachment. It is assigned by ``annotate()``."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Optional metadata that is part of the reusable content."""
+    confidence: float | None = field(default=None, compare=False)
+    """Optional confidence for this particular application."""
+    occurrence_metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+    """Optional metadata for this particular application."""
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
@@ -92,6 +100,20 @@ class Annotation:
                 f"a value, or a span to mark a region of the timeline"
             )
 
+    @property
+    def content_id(self) -> str:
+        """Return the identity of the reusable annotation content."""
+        return self.id
+
+    @property
+    def name(self) -> str:
+        """Return the annotation's public name."""
+        return self.key
+
+    def _new_occurrence(self) -> "Annotation":
+        """Return an internal copy representing one new attachment occurrence."""
+        return replace(self, occurrence_id=new_id())
+
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:
     """Return the :class:`AnnotationType` shape of an annotation instance.
@@ -105,6 +127,28 @@ def annotation_type_of(annotation: Annotation) -> AnnotationType:
     if annotation.span is None:
         return AnnotationType.STATIC
     return AnnotationType.POINT if annotation.span.is_point else AnnotationType.INTERVAL
+
+
+class SupportsAnnotate(Protocol):
+    """Anything an annotation occurrence can be attached to.
+
+    ``annotate`` binds a fresh occurrence of ``annotation`` to this object and returns it; the
+    returned occurrence is what a Task names in ``input_annotations`` or ``target_annotations``.
+    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, and
+    the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
+    one annotation out over several Signals and returns every occurrence it created. The contract is
+    checked statically; there is no runtime ``isinstance`` support because ``annotations`` is a
+    property.
+    """
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return the occurrences attached to this object."""
+        ...
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one occurrence of ``annotation`` and return it."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -134,7 +178,8 @@ def value_type_of(value: Any) -> str | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list" | "map"``, or ``None`` for a pure marker.
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker. A list
+        holds strings only, such as the vocabulary of a classification target.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
@@ -147,10 +192,12 @@ def value_type_of(value: Any) -> str | None:
         (int, "int"),
         (float, "float"),
         (str, "str"),
-        (list | tuple, "list"),
-        (dict, "map"),
     )
     for value_type, tag in tags:
         if isinstance(value, value_type):
             return tag
+    if isinstance(value, list | tuple):
+        if all(isinstance(item, str) for item in value):
+            return "list"
+        raise TimeFValidationError("annotation list values must hold strings only")
     raise TimeFValidationError(f"unsupported annotation value type: {type(value).__name__}")

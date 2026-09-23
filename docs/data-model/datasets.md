@@ -35,7 +35,6 @@ back to the exact TimeF bytes of one version, not a moving target.
 
 ## Where a dataset lives
 
-A [registry](../registry.md) serves a dataset. It hands the compiled manifests and parquet to the
-[SDK](../client.md). A registry never runs connector code. It can be a local directory, an S3 prefix,
-or a remote host. The output of [build](../build.md) is itself a valid registry. The same
-`org/name` id resolves across all of them.
+A [registry](../registry.md) serves committed TimeF versions to the [SDK](../client.md). It can be a
+local directory, an S3 prefix, or a remote service. A registry never runs connector code. A local
+[build](../build.md) output is also a registry, so the SDK can read it directly.

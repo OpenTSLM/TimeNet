@@ -228,7 +228,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backe
     if backend != "zarr" or find_spec("zarr") is not None:
         with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
             dataset = reader.read()
-            assert len(dataset.records[0].time_series[0].to_numpy()) == 16
+            assert len(dataset.records[0].signals[0].to_numpy()) == 16
 
     # The isolated child is the sole narrator: each status line appears exactly once.
     assert result.stderr.count("🔧 Building 'timenet/hello-world'…") == 1

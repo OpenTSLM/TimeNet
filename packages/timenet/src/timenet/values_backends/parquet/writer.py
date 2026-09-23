@@ -14,7 +14,7 @@ import logging
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE, part_path
 from timenet.format.schemas import IdCodec, shard_schema
@@ -149,10 +149,10 @@ class ParquetValuesBackend(BaseValuesBackend):
 
     def write_series(
         self,
-        unique_series: list[TimeSeries],
+        unique_series: list[Signal],
         *,
-        read_and_validate: Callable[[TimeSeries], pa.Array],
-        read_time_offsets: Callable[[TimeSeries], pa.Array | None],
+        read_and_validate: Callable[[Signal], pa.Array],
+        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -451,7 +451,7 @@ def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.
 
 
 def _plan_chunks(
-    ts: TimeSeries, values: pa.Array, chunk_max_bytes: int, time_offsets: pa.Array | None = None
+    ts: Signal, values: pa.Array, chunk_max_bytes: int, time_offsets: pa.Array | None = None
 ) -> list[_Chunk]:
     """Split a validated series into backend-independent logical chunks.
 
@@ -476,9 +476,9 @@ def _plan_chunks(
             sub = sub.cast(_ENUM_LEAF)
         chunks.append(
             _Chunk(
-                time_series_id=ts.time_series_id,
+                time_series_id=ts.id,
                 spec_type=ts.spec.spec_type,
-                signal=ts.signal,
+                signal=ts.name,
                 chunk_idx=chunk_idx,
                 n_values=len(sub),
                 dtype=ts.spec.dtype,
