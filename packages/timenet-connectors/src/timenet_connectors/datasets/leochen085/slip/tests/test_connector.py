@@ -175,9 +175,19 @@ def test_one_record_per_row_with_a_positional_id(tmp_path: Path) -> None:
 def test_a_row_becomes_one_signal_per_inner_list(tmp_path: Path) -> None:
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     records = SlipConnector().convert([source]).records
-    assert [s.signal for s in records[0].time_series] == ["s0"]
-    assert [s.signal for s in records[1].time_series] == ["s0", "s1"]
-    assert [s.n_values for s in records[1].time_series] == [2, 2]
+    assert [s.name for s in records[0].signals] == ["s0"]
+    assert [s.name for s in records[1].signals] == ["s0", "s1"]
+    assert [s.n_values for s in records[1].signals] == [2, 2]
+
+
+def test_a_row_has_one_source_named_after_the_corpus_it_was_cut_from(tmp_path: Path) -> None:
+    # The release states which corpus a row came from and nothing finer, so that corpus is the one
+    # source every signal of the row has.
+    source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
+    records = SlipConnector().convert([source]).records
+    assert [[s.name for s in r.sources] for r in records] == [["BIDMC32HR"], ["Wind Farms"]]
+    assert [s.id for r in records for s in r.sources] == [f"{r.record_id}-source" for r in records]
+    assert [s.id for s in records[1].signals] == ["slip-shard-00003-row-000001-s0", "slip-shard-00003-row-000001-s1"]
 
 
 def test_every_series_states_its_record_as_its_source_id(tmp_path: Path) -> None:
@@ -187,7 +197,7 @@ def test_every_series_states_its_record_as_its_source_id(tmp_path: Path) -> None
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     records = SlipConnector().convert([source]).records
     for record in records:
-        assert [s.source_id for s in record.time_series] == [record.record_id] * len(record.time_series)
+        assert [s.source_id for s in record.signals] == [record.record_id] * len(record.signals)
 
 
 def test_a_shape_is_read_per_row_and_not_per_corpus(tmp_path: Path) -> None:
@@ -206,15 +216,15 @@ def test_a_shape_is_read_per_row_and_not_per_corpus(tmp_path: Path) -> None:
         },
     )
     records = SlipConnector().convert([SlipSource(shards=(shard,), meta_csv=_meta(tmp_path))]).records
-    assert [s.n_values for r in records for s in r.time_series] == [2, 4]
+    assert [s.n_values for r in records for s in r.signals] == [2, 4]
 
 
 def test_the_axis_comes_from_the_corpus_the_row_names(tmp_path: Path) -> None:
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     records = SlipConnector().convert([source]).records
     # BIDMC32HR states no rate, so its series records order and claims none.
-    assert isinstance(records[0].time_series[0].time_axis, OrdinalAxis)
-    axis = records[1].time_series[0].time_axis
+    assert isinstance(records[0].signals[0].time_axis, OrdinalAxis)
+    axis = records[1].signals[0].time_axis
     assert isinstance(axis, RegularAxis)
     assert axis.period_us == 4_000_000
 
@@ -222,8 +232,8 @@ def test_the_axis_comes_from_the_corpus_the_row_names(tmp_path: Path) -> None:
 def test_the_values_are_read_when_the_loader_is_called(tmp_path: Path) -> None:
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     records = SlipConnector().convert([source]).records
-    assert records[0].time_series[0].to_numpy().tolist() == [1.0, 2.0, 3.0]
-    assert records[1].time_series[1].to_numpy().tolist() == [6.0, 7.0]
+    assert records[0].signals[0].to_numpy().tolist() == [1.0, 2.0, 3.0]
+    assert records[1].signals[1].to_numpy().tolist() == [6.0, 7.0]
 
 
 def test_convert_reads_no_values_through_a_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,7 +250,7 @@ def test_convert_reads_no_values_through_a_loader(tmp_path: Path, monkeypatch: p
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     records = SlipConnector().convert([source]).records
     assert reads == []
-    records[0].time_series[0].to_arrow()
+    records[0].signals[0].to_arrow()
     assert len(reads) == 1
 
 
@@ -265,7 +275,8 @@ def test_a_record_carries_its_four_captions_under_the_columns_they_came_from(tmp
         ("caption2", "a second rewrite."),
         ("caption3", "a third rewrite."),
     ]
-    # The ids are built, not generated: a streamed task answers by reference to them.
+    # The ids are built, not generated, so a reader who follows a task's answer lands on an id that
+    # names the record and the column.
     assert [a.id for a in captions] == [f"slip-shard-00003-row-000000-caption{index}" for index in range(4)]
 
 
@@ -275,12 +286,15 @@ def test_four_tasks_per_record_each_answering_with_one_caption(tmp_path: Path) -
     tasks = list(_iter_tasks(dataset.records))
     assert len(tasks) == 8
     first = tasks[:4]
-    assert [t.target_annotation_ids for t in first] == [
-        (f"slip-shard-00003-row-000000-caption{index}",) for index in range(4)
+    record = dataset.records[0]
+    assert [t.target_annotations for t in first] == [
+        (next(a for a in record.annotations if a.key == f"caption{index}"),) for index in range(4)
     ]
-    assert {t.record_ids for t in first} == {("slip-shard-00003-row-000000",)}
+    # The task names the occurrence the record carries, and not a fresh copy of the annotation.
+    assert all(t.target_annotations[0].occurrence_id is not None for t in first)
+    assert all(t.inputs == (record,) for t in first)
     # The answer is the stored annotation, never a second copy of it.
-    assert [t.target for t in first] == [None] * 4
+    assert [t.targets for t in first] == [None] * 4
     # A streamed task states no id; these are the generated UUIDv7s, and all that matters is that
     # four distinct tasks exist.
     assert len({t.id for t in first}) == 4
@@ -290,8 +304,8 @@ def test_the_task_stream_gives_the_same_tasks_when_read_again(tmp_path: Path) ->
     # set_task_stream needs a source it can read again, so a generator that empties itself is a bug.
     source = SlipSource(shards=(_shard(tmp_path),), meta_csv=_meta(tmp_path))
     dataset = SlipConnector().convert([source])
-    once = [(t.record_ids, t.target_annotation_ids) for t in _iter_tasks(dataset.records)]
-    again = [(t.record_ids, t.target_annotation_ids) for t in _iter_tasks(dataset.records)]
+    once = [(t.inputs[0].record_id, t.target_annotations[0].occurrence_id) for t in _iter_tasks(dataset.records)]
+    again = [(t.inputs[0].record_id, t.target_annotations[0].occurrence_id) for t in _iter_tasks(dataset.records)]
     assert once == again
     assert len(once) == 8
 
@@ -319,7 +333,7 @@ def test_a_series_with_no_numbers_is_kept_annotated_and_logged(
     with caplog.at_level(logging.WARNING):
         records = SlipConnector().convert([source]).records
     # The series is built, not dropped, and an annotation names it.
-    assert [s.signal for s in records[0].time_series] == ["s0", "s1"]
+    assert [s.name for s in records[0].signals] == ["s0", "s1"]
     empty = [a for a in records[0].annotations if a.key == "all_nan_signals"]
     assert [a.value for a in empty] == [["s1"]]
     # Two records, one warning: the count is the fact, not each occurrence.
@@ -492,11 +506,12 @@ def test_a_write_gives_the_values_and_the_captions_back_and_reads_each_row_group
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         read_back = reader.read()
         tasks = reader.tasks
-    values = [s.to_numpy().tolist() for r in read_back.records for s in r.time_series]
+    values = [s.to_numpy().tolist() for r in read_back.records for s in r.signals]
     assert values == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]
-    # Every task's answer resolves to a caption the record carries.
-    captions = {a.id: a.value for r in read_back.records for a in r.annotations}
+    # Every task's answer resolves to a caption occurrence its own record carries.
+    carried = {a.occurrence_id for r in read_back.records for a in r.annotations}
     assert len(tasks) == 16
-    answers = [captions[a] for t in tasks for a in t.target_annotation_ids]
+    assert all(t.target_annotations[0].occurrence_id in carried for t in tasks)
+    answers = [a.value for t in tasks for a in t.target_annotations]
     assert answers.count("a caption.") == 1
     assert answers.count("a rewrite.") == 4
