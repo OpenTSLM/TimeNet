@@ -55,9 +55,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=time_series),),
             )
             dataset.add_record(record=record)
-            record.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
+            record.annotate(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
             if row.get("Label"):
-                record.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
+                record.annotate(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
             dataset.add_task(
                 task=AnswerTask(
                     inputs=(record,),

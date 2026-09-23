@@ -61,7 +61,7 @@ def _uuid_dataset(*, record_id=None):
     sources = (Source(name="Source", signals=series),)
     record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
     dataset.add_record(record=record)
-    record.add_annotation(Annotation(key="k", value=1))
+    record.annotate(Annotation(key="k", value=1))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
     dataset.derive_schema()
     return dataset

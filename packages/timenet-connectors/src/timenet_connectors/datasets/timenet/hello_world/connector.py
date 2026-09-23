@@ -239,7 +239,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ),
         )
         dataset.add_record(record=record1)
-        record1.add_annotation(cohort)  # same instance and id, so the annotation is shared
+        record1.annotate(cohort)  # same instance and id, so the annotation is shared
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of

@@ -17,7 +17,7 @@ def _record(signals, **kwargs):
 
 def test_add_static_annotation(make_series):
     record = _record((make_series(),))
-    ann = record.add_annotation(Annotation(key="age", value=64))
+    ann = record.annotate(Annotation(key="age", value=64))
     assert ann.value == 64
     assert record.annotations == (ann,)
 
@@ -35,21 +35,21 @@ def test_annotate_binds_a_declarative_annotation(make_series):
 
 def test_add_multiple_annotations_preserves_order(make_series):
     record = _record((make_series(),))
-    a = record.add_annotation(Annotation(key="age", value=64))
-    b = record.add_annotation(Annotation(key="sex", value="M"))
+    a = record.annotate(Annotation(key="age", value=64))
+    b = record.annotate(Annotation(key="sex", value="M"))
     assert record.annotations == (a, b)
 
 
 def test_signal_level_point_resolves_series_id(make_series):
     ts = make_series()
     record = _record((ts,))
-    record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(0.002, time_series_ids=(ts.id,))))
+    record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(0.002, time_series_ids=(ts.id,))))
 
 
 def test_signal_level_annotation_unknown_id_rejected(make_series):
     record = _record((make_series(),))
     with pytest.raises(ValueError, match="unknown"):
-        record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
+        record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
 
 
 def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
@@ -58,7 +58,7 @@ def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
     a = make_series(signal="I", values=(0.0,) * 5000)  # [0, 10) s
     b = make_series(signal="II", values=(0.0,) * 10000)  # [0, 20) s
     record = _record((a, b))
-    record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
+    record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
     assert record.annotations[0].key == "artifact"
 
 
@@ -66,11 +66,11 @@ def test_trial_level_interval_common_span_ok(make_series):
     a = make_series(signal="I", values=(0.0,) * 5000)
     b = make_series(signal="II", values=(0.0,) * 5000)
     record = _record((a, b))
-    record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
+    record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
 
 
 def test_empty_time_series_ids_rejected():
-    # The annotation itself rejects `()`, so add_annotation never sees one.
+    # The annotation itself rejects `()`, so annotate never sees one.
     with pytest.raises(ValueError, match="must be None"):
         Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=()))
 
@@ -80,7 +80,7 @@ def test_trial_level_point_needs_no_common_span(make_series):
     b = make_series(signal="II", values=(0.0,) * 10000)
     record = _record((a, b))
     # A point marker imposes no common-span requirement.
-    record.add_annotation(Annotation(key="stimulus", span=TimePoint.seconds(1.0)))
+    record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0)))
 
 
 def test_to_numpy_single_signal(make_series):
@@ -164,14 +164,14 @@ def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
     ordinal = Signal.from_values([1.0, 2.0, 3.0], spec=make_series().spec, name="c", time_axis=OrdinalAxis())
     record = _record((ordinal,))
     with pytest.raises(ValueError, match="no timeline to place it"):
-        record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
+        record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
 
 
 def test_annotation_span_outside_the_window_is_rejected(make_series):
     # 5000 values at 500 Hz is a 10 s window [0, 10); an interval past it means nothing on the data.
     record = _record((make_series(values=(0.0,) * 5000),))
     with pytest.raises(TimeFValidationError, match="falls outside record"):
-        record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(5.0, 20.0)), warn_when_outside=False)
+        record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(5.0, 20.0)), warn_when_outside=False)
 
 
 def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
@@ -184,14 +184,14 @@ def test_annotation_in_a_gap_is_rejected_without_a_time_span(make_series):
     record = _record((early, late))
     # 15 s falls in the [10, 20) s gap, inside neither series.
     with pytest.raises(TimeFValidationError, match="falls in a gap"):
-        record.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)), warn_when_outside=False)
+        record.annotate(Annotation(key="note", span=TimePoint.seconds(15.0)), warn_when_outside=False)
 
 
 def test_an_outside_span_warns_and_is_kept(make_series):
     record = _record((make_series(values=(0.0,) * 5000),))  # a 10 s window [0, 10)
     span = TimeInterval.seconds(5.0, 20.0)
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        record.add_annotation(Annotation(key="artifact", span=span))
+        record.annotate(Annotation(key="artifact", span=span))
     assert record.annotations[0].span == span  # kept, not trimmed
 
 
@@ -203,7 +203,7 @@ def test_annotation_in_a_gap_is_accepted_with_a_time_span(make_series):
         signal="late", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
     record = _record((early, late), time_span=TimeInterval.seconds(0.0, 30.0))
-    record.add_annotation(Annotation(key="note", span=TimePoint.seconds(15.0)))  # inside the session span
+    record.annotate(Annotation(key="note", span=TimePoint.seconds(15.0)))  # inside the session span
     assert record.annotations[0].key == "note"
 
 
@@ -216,10 +216,10 @@ def test_a_scoped_span_must_lie_within_the_intersection(make_series):
     )  # [5, 15) s
     record = _record((early, late))
     ids = (early.id, late.id)
-    record.add_annotation(Annotation(key="ok", span=TimeInterval.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
+    record.annotate(Annotation(key="ok", span=TimeInterval.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
     # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
     with pytest.raises(TimeFValidationError, match="falls outside record"):
-        record.add_annotation(
+        record.annotate(
             Annotation(key="bad", span=TimePoint.seconds(3.0, time_series_ids=ids)), warn_when_outside=False
         )
 
@@ -232,7 +232,7 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
     record = _record((early, late))
     ids = (early.id, late.id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
-        record.add_annotation(
+        record.annotate(
             Annotation(key="bad", span=TimePoint.seconds(5.0, time_series_ids=ids)), warn_when_outside=False
         )
 

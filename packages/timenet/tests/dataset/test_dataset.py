@@ -142,8 +142,8 @@ def test_derive_schema(make_series):
     ds = _dataset()
     ts = make_series()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
-    record.add_annotation(Annotation(key="age", value=64, unit="years"))
-    record.add_annotation(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.004)))
+    record.annotate(Annotation(key="age", value=64, unit="years"))
+    record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.004)))
     ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
 
     schema = ds.derive_schema()
@@ -191,9 +191,9 @@ def test_derive_schema_rejects_conflicting_specs_with_same_type(make_series):
 def test_derive_schema_rejects_conflicting_annotation_descriptors(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    s1.add_annotation(Annotation(key="age", value=64))
+    s1.annotate(Annotation(key="age", value=64))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    s2.add_annotation(Annotation(key="age", value="sixty-four"))
+    s2.annotate(Annotation(key="age", value="sixty-four"))
     with pytest.raises(ValueError, match="conflicting descriptors"):
         ds.derive_schema()
 
@@ -343,7 +343,7 @@ def test_add_task_requires_an_answer(make_series):
 def test_add_task_rejects_an_answer_given_twice(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    annotation = record.add_annotation(Annotation(key="stage", value="N2"))
+    annotation = record.annotate(Annotation(key="stage", value="N2"))
     with pytest.raises(TimeFValidationError, match="one answer representation"):
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("N2",), target_annotations=(annotation,)))
 
@@ -351,7 +351,7 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    annotation = record.add_annotation(Annotation(key="stage", value="N2", span=TimeInterval.seconds(0.0, 0.004)))
+    annotation = record.annotate(Annotation(key="stage", value="N2", span=TimeInterval.seconds(0.0, 0.004)))
     task = dataset.add_task(
         task=TemporalLocalizationTask(inputs=(record,), prompt="Segment it.", target_annotations=(annotation,))
     )
@@ -613,7 +613,7 @@ def test_to_features_and_targets_keeps_a_scalar_target_numeric(make_series):
 def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    annotation = s.add_annotation(Annotation(key="stage", value="N2"))
+    annotation = s.annotate(Annotation(key="stage", value="N2"))
     ds.add_task(task=ClassificationTask(inputs=(s,), target_annotations=(annotation,)))
     with pytest.raises(ValueError, match="exactly one scalar target"):
         ds.to_features_and_targets(task=ClassificationTask)
@@ -638,7 +638,7 @@ def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
     )
     outside = TimePoint.seconds(50.0)
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        record.add_annotation(Annotation(key="mark", span=outside))
+        record.annotate(Annotation(key="mark", span=outside))
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=outside))
 
@@ -749,7 +749,7 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
 
     def gen():
-        ann = record.add_annotation(Annotation(key="peak", span=TimePoint.seconds(0.0)))
+        ann = record.annotate(Annotation(key="peak", span=TimePoint.seconds(0.0)))
         yield ClassificationTask(inputs=(record,), targets=("x",), input_annotations=(ann,))
 
     (task,) = ds.add_tasks(tasks=gen())
