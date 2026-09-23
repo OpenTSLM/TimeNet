@@ -1,6 +1,6 @@
 ---
 icon: lucide/code
-description: "The TimeNet client: browse a registry and load datasets from Python."
+description: "Browse a registry and load TimeF datasets from Python."
 tags:
   - guide
   - client
@@ -8,153 +8,150 @@ tags:
 
 # Client
 
-`TimeNet` is the single Python entry point to TimeNet. It wraps a [registry](registry.md) (the
-catalog) and a local storage path (the download cache). Against a local registry, `load` builds a
-dataset that the registry does not have. This needs an installed package that registers a connector
-for the dataset id. See [Build & publish](build.md). Against a remote registry, `load` never
-runs connector code. The module `timenet.client` contains `TimeNet`.
+`TimeNet` is the main Python entry point for dataset consumers. It wraps one
+[registry](registry.md) and one local storage directory.
 
 ```python
 from timenet.client import TimeNet
 from timenet.types import Domain
 
-client = TimeNet()   # the hosted registry (timenet://)
+client = TimeNet(".timenet-registry")
 
-for meta in client.search(domain=Domain.CARDIOLOGY):
-    print(meta.dataset_id)
+for metadata in client.search(domain=Domain.CARDIOLOGY):
+    print(metadata.dataset_id)
 
-# read in place through the registry, lazy values
 dataset = client.load("timenet/hello-world")
-values = dataset.records[0].time_series[0].to_numpy()
+values = dataset.records[0].signals[0].to_numpy()
 ```
 
-## Construction
+## Choose a registry
 
-```python
-TimeNet(registry=None, *, storage_path=None)
-```
-
-TimeNet selects the registry in this order: the `registry` argument, then the environment variable
-`$TIMENET_REGISTRY`, then the hosted TimeNet registry (`timenet://`). The `registry` argument can
-accept a `BaseRegistry` object, a local path, a `file://` URI, an `s3://` URI, or a hosted
-`timenet://` or `http(s)://` URL:
-
-```python
-client = TimeNet()                     # the hosted registry (timenet://)
-client = TimeNet("./local_registry")   # any directory a build wrote to
-```
-
-A `timenet-build build` writes to a local registry, so set `$TIMENET_REGISTRY` (or pass the path)
-to load a local build back.
-
-## Configuration
-
-By default, TimeNet stores all local state under `~/.cache/timenet/`. If you set the home, TimeNet
-relocates everything below it. Each per-area variable can override only its own path. The
-precedence for any value is **CLI flag / argument > environment variable > default**.
-
-| Env var | Default | What |
-| --- | --- | --- |
-| `TIMENET_HOME` | `~/.cache/timenet` | Root; setting it relocates everything below. |
-| `TIMENET_REGISTRY` | `<home>/registry` | The catalog to browse and pull from (local path or remote URL), and where `timenet-build build` writes unless `--out` overrides it. A remote value makes `build` fail: there is nowhere local to write. |
-| `TIMENET_STORAGE` | `<home>/storage` | Local copies that `download` fetches from the registry as an explicit disk cache. |
-| `TIMENET_CACHE` | `<home>/cache` | Raw sources fetched during build (removed after a successful build). |
-| `TIMENET_TOKEN` | _(unset)_ | Bearer token for a remote registry; unset reads anonymously (enough for public data). |
-| `TIMENET_DOWNLOAD_MODE` | `on_demand` | How a remote `load` fetches bytes: `on_demand` (lazy range reads, cache-first) or `full` (download the whole version first). |
-| `TIMENET_ISOLATION` | `on` | Whether a build runs in an environment built from the connector's requirements. `off` runs it in the current interpreter. |
-
-The configuration is a `pydantic-settings` model, `timenet.config.TimeNetSettings`. You can add new
-settings there.
-
-## Methods
-
-| Method | Description |
-| --- | --- |
-| `list()` | Returns the metadata for every dataset. |
-| `get(dataset_id, version=None)` | Returns a dataset's [manifest](manifest.md). |
-| `search(...)` | Filters datasets. This mirrors [`registry.search`](registry.md#search). |
-| `download(dataset_id, version=None, *, force=False)` | Copies a version's files into local storage as an explicit disk cache, and returns the directory. This method is idempotent unless you set `force`. |
-| `load(dataset_id, version=None, *, download=None)` | Reads a `TimeFDataset` with lazy per-series values, in place, through the registry's `open_version` handle. This does not download the whole dataset. `download` (`"full"` / `"on_demand"`) overrides the fetch mode for a remote registry; it is ignored for local. |
-| `load_torch(dataset_id, version=None)` | Wraps `load` in a read-only `torch.utils.data.Dataset`. This needs the `torch` extra. |
-
-## Remote loading
-
-Against a remote registry, `load` fetches bytes one of two ways, set by `TIMENET_DOWNLOAD_MODE`
-(default `on_demand`) or the per-call `download=` argument:
-
-- `on_demand`: the reader range-reads Parquet footers and value slices straight from presigned URLs,
-  pulling only the bytes a query touches. It is cache-first, reusing any complete files a prior `full`
-  load or `download()` left in `TIMENET_STORAGE`.
-- `full`: download the whole version into `TIMENET_STORAGE` first (in parallel, committed atomically),
-  then read it locally. This is what `download()` does.
-
-```python
-client = TimeNet("timenet://")
-# Uses $TIMENET_DOWNLOAD_MODE (on_demand by default).
-client.load("chengsenwang/tsqa")
-# Force a full download, then read locally.
-client.load("chengsenwang/tsqa", download_mode="full")
-```
-
-A Zarr-backed version always takes the `full` path: its store driver can't range-read presigned URLs.
-Both modes are no-ops for a local registry, which already reads in place, and `download=` is ignored
-there.
-
-## Versions
-
-You can pin a version by adding a suffix `@<version>` to the id. Without a suffix, or with
-`@latest`, you get the latest committed version. This works everywhere that TimeNet accepts an id,
-in the SDK and in the CLI:
-
-```python
-client.get("chengsenwang/tsqa@1.0.0")   # pinned
-client.load("chengsenwang/tsqa")         # latest (default)
-client.load("chengsenwang/tsqa@latest")  # latest, explicit
-```
-
-The methods `get`, `download`, `load`, and `load_torch` also accept an explicit `version=`
-argument. If you pass both a `@version` reference and `version=`, TimeNet raises an error. If you
-pin a version that is not committed, TimeNet raises `TimeNetDatasetNotFoundError`. The methods `list` and
-`search` always report the latest version.
-
-## PyTorch
-
-`load_torch` returns a `TimeFTorchDataset`. This is a read-only, map-style
-`torch.utils.data.Dataset`. Each item is a dict. The dict contains the record's `series` as
-dtype-preserving tensors with shape `(n_steps, *value_shape)`, plus `record_id`, `tasks`, and
-`annotations`.
+Create a client with a registry object, path, or URL:
 
 ```python
 from timenet.client import TimeNet
 
-# needs: pip install 'timenet[torch]'
-ds = TimeNet().load_torch("chengsenwang/tsqa")
-item = ds[0]
-series, question = item["series"][0], item["tasks"][0].question
+hosted = TimeNet()
+local = TimeNet(".timenet-registry")
+s3 = TimeNet("s3://my-bucket/timenet")
+private = TimeNet("https://registry.example.com")
 ```
 
-To feed a `DataLoader`, select the fields that your model needs. Use a `transform` on the dataset,
-or a `collate_fn` on the loader, for this selection. The item's `tasks` and `annotations` are
-Python objects, not tensors. Series lengths also vary between records.
+`TimeNet()` selects a registry in this order:
+
+1. The `registry` argument.
+2. The `TIMENET_REGISTRY` environment variable.
+3. The hosted registry, `timenet://`.
+
+The [getting-started example](get-started.md) uses an explicit local path so its build and load use
+the same registry.
+
+## Local state
+
+TimeNet stores local state under `~/.cache/timenet` by default.
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `TIMENET_HOME` | `~/.cache/timenet` | Parent directory for local state. |
+| `TIMENET_REGISTRY` | unset | Registry URL or local path. |
+| `TIMENET_STORAGE` | `<home>/storage` | Complete versions downloaded from a registry. |
+| `TIMENET_CACHE` | `<home>/cache` | Raw source files used during builds. |
+| `TIMENET_TOKEN` | unset | Bearer token for a remote registry. |
+| `TIMENET_ISOLATION` | `on` | Whether connector builds use isolated environments. |
+
+An explicit argument takes precedence over an environment variable. An environment variable takes
+precedence over its default.
+
+The model for these values is `timenet.config.TimeNetSettings`.
+
+## Browse datasets
+
+The client provides these discovery methods:
+
+| Method | Result |
+| --- | --- |
+| `list()` | Metadata for the latest version of every dataset. |
+| `get(dataset_id, version=None)` | One dataset manifest. |
+| `search(...)` | Metadata that matches registry filters. |
+
+`search()` accepts filters for free text, domains, task classes, licenses, Signal specifications,
+dataset IDs, and tags. See [Registry search](registry.md#search) for their matching rules.
+
+## Load or download
+
+`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
+loader.
 
 ```python
-from torch.utils.data import DataLoader
+dataset = client.load("timenet/hello-world")
+signal = dataset.records[0].signals[0]
+window = signal.read_steps(0, 100)
+```
 
-loader = DataLoader(
-    ds,
-    batch_size=8,
-    collate_fn=lambda b: [(x["series"][0], x["tasks"][0].target) for x in b],
+For a local registry, the reader opens the version in place. If the version is missing, `load()` can
+build it from an installed connector.
+
+```python
+dataset = TimeNet(".timenet-registry").load(
+    "timenet/hello-world",
+    auto_build=True,
 )
 ```
 
-TimeNet imports the torch module only when needed. If you never call `load_torch`, you do not need
-torch installed.
+Set `auto_build=False` to report a missing local version without starting a build. Remote registries
+never run connector code.
+
+For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
+load reuses that committed copy. An S3 registry reads in place unless the storage directory already
+contains a complete copy.
+
+`download()` always copies the complete version into local storage:
+
+```python
+path = client.download("chengsenwang/tsqa@1.0.0")
+```
+
+Use `force=True` to replace an existing local copy.
+
+## Pin a version
+
+Append `@<version>` to a dataset ID:
+
+```python
+client.get("chengsenwang/tsqa@1.0.0")
+client.load("chengsenwang/tsqa@latest")
+```
+
+The `get`, `download`, `load`, and `load_torch` methods also accept `version=`. Do not supply a
+version in both places.
+
+## Load for PyTorch
+
+`load_torch()` returns a read-only `torch.utils.data.Dataset`. Install the `torch` extra before you
+use it.
+
+```python
+from timenet.client import TimeNet
+
+dataset = TimeNet(".timenet-registry").load_torch("timenet/hello-world")
+item = dataset[0]
+
+signal = item["series"][0]
+mask = item["series_masks"][0]
+task = item["tasks"][0]
+print(task.prompt, task.targets)
+```
+
+Each item also contains `record_id` and record-level `annotations`. Signal lengths and task objects
+can vary between records. Use a `transform` or `collate_fn` that matches your model.
+
+TimeNet imports PyTorch only when this adapter is used.
 
 ## Command line
 
-Every method in this page has an equivalent shell command. See the
-[`timenet` CLI](cli/timenet.md).
+The [`timenet` CLI](cli/timenet.md) provides the same discovery and download operations for shell
+workflows.
 
 ---
 
-See the [API reference for `timenet.client`](api/client.md) for the full symbol listing.
+See the [API reference for `timenet.client`](api/client.md) for every parameter and return type.

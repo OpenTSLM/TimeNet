@@ -1,6 +1,6 @@
 ---
 icon: lucide/target
-description: "Tasks: the labeled training targets built from a record, one class per output kind."
+description: "Tasks connect input Records to ordered targets, annotations, and other stored objects."
 tags:
   - guide
   - concepts
@@ -8,337 +8,216 @@ tags:
 
 # Tasks
 
-A task is a labeled training target. It references one or more [records](records.md). The task **class
-is the type tag**. You can use it as a search filter, for example `search(task=ClassificationTask)`. The
-**instance carries the payload**.
+A Task describes one modeling problem. It holds ordered input Records and one representation of the
+expected output.
 
-Every task has the same shape: *inputs -> one typed answer*. This shared frame lives on the base class.
-Every task, whatever its type, can carry these fields:
+```python
+from timenet.types import ClassificationTask
 
-| Field | What it is |
+task = ClassificationTask(
+    inputs=(record,),
+    targets=("faulty",),
+    target_schema="condition",
+)
+dataset.add_task(task=task)
+```
+
+The concrete class identifies the task type. `ClassificationTask` and `AnswerTask` are different
+task types, even when both contain string targets.
+
+## Common fields
+
+Every Task supports these fields:
+
+| Field | Purpose |
 | --- | --- |
-| `record_ids` | The records the task is about, populated by `add_task`. |
-| `prompt` | What the model is asked. `None` for an unprompted task. |
-| `scope` | A [`Span`](#the-span-primitive) narrowing the input to a region. `None` means the whole record. |
-| `input_annotation_ids` | Annotations handed to the model as context. |
-| `target` | The answer, typed by the subclass. |
-| `target_annotation_ids` | The answer *by reference*: stored annotations rather than an inline copy. |
-| `rationale` | A chain of thought to train on. |
-| `from_tasks` | Source tasks this one was derived from. |
+| `id` | Stable Task identity. |
+| `inputs` | Ordered input Records. |
+| `targets` | Ordered inline values or stored objects. |
+| `prompt` | Optional instruction or question. |
+| `scope` | Optional input region. |
+| `input_annotations` | Attached Annotation occurrences supplied as context. |
+| `target_annotations` | Attached Annotation occurrences used as the answer. |
+| `rationale` | Optional explanation associated with the answer. |
+| `from_tasks` | Parent Tasks from which this Task derives. |
+| `annotations` | Annotations that describe the Task itself. |
+| `metadata` | JSON-compatible Task details. |
 
-Because prompt and scope are shared, a task type is defined by only **what kind of thing its answer
-is**. The answer is a category, free text, a number, a set of regions, or a produced series. There are
-eight concrete types.
+`targets` can contain strings, numbers, Booleans, Records, Signals, or Spans. `None` means that
+`target_annotations` supplies the answer. An empty tuple is an explicit empty answer.
 
-## The Span primitive
+A Task cannot set both `targets` and `target_annotations`.
 
-A span is one region a task or annotation localizes. It has two independent traits: its shape (a point
-or a half-open interval `[start, stop)`) and its frame (time or steps). The frame changes what the
-numbers mean, so the frame is the type. The four concrete leaves are `TimePoint`, `TimeInterval`,
-`StepPoint`, and `StepInterval`. `Span`, `TimeSpan`, and `StepSpan` are abstract bases you annotate with
-(`Span` for any span), not construct.
+## Register Tasks
 
-A **time span** reads its bounds as whole microseconds on the **source recording timeline**. This is
-the same frame a series' axis places its values in. So a time span stays meaningful on a windowed
-record that starts partway into the recording. It covers the whole record when `time_series_ids` is
-`None`, or a subset of series when it names them (a tuple of ids).
+Register all referenced objects before you register the Task:
 
 ```python
-from timenet.types import TimeInterval, TimePoint
-
-# an interval on one signal
-TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",))
-
-# a point, every signal
-TimePoint.seconds(1.2)
+dataset.add_record(record=record)
+dataset.add_task(task=task)
 ```
 
-Besides `seconds`, both build from `micros` (whole microseconds). For a wall-clock moment, use
-`record.time_point(at)` / `record.time_interval(start, end)`, which read the record's own `start_time`.
+`add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It also attaches
+the Task ID to each input Record.
 
-A **step span** reads its bounds as ordinal indices into one series' own array. A step index means
-nothing without a series to count on. So a step span names exactly one series via `time_series_id`
-(a single str). It takes no unit builders. Construct it plainly. Steps exist for a series that has no
-timeline at all: an ordinal sequence has positions but no clock. `TSQA` is such a series, an ordered
-sequence of values with no calendar time. Steps 132 to 143 of one are this step interval:
+Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in the same batch.
 
-```python
-from timenet.types import StepInterval
+For a large task corpus, use `set_task_stream()`. The writer validates each streamed Task before it
+writes the Task. A stream does not keep the complete task set in memory. TimeNet therefore cannot
+check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
 
-StepInterval(time_series_id="tsqa", start=132, stop=144)
-```
+## Scope an input
 
-The series' **axis** decides which frame fits, not the caller. A timeline axis (regular or irregular)
-takes a time span. An ordinal axis takes a step span. `add_task` checks a span against the axis of every
-series it names, and rejects a mismatch.
-
-Spans cover both directions of time localization. A `scope` is a region **given** to the model. A
-`TemporalLocalizationTask` target is a region the model must **find**.
-
-## ClassificationTask
-
-One categorical label. With no `scope`, the task labels the whole record. With a `scope`, it labels that
-region. These are the same question asked of different amounts of input. So they are one type.
-`target_schema` names the vocabulary of the label.
+`scope` restricts the region supplied to the model:
 
 ```python
 from timenet.types import ClassificationTask, TimeInterval
 
-ClassificationTask(target="faulty", target_schema="condition")
-
-ClassificationTask(
-    target="fault_episode",
-    target_schema="condition",
-    scope=TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",)),
-)
-```
-
-<figure markdown="span">
-  ![A series in, one label out](../assets/figures/task-classification.svg)
-</figure>
-
-<figure markdown="span">
-  ![A window in the series in, a label for that window out](../assets/figures/task-classification-scoped.svg)
-</figure>
-
-## AnswerTask
-
-Free-form text out. With no `prompt`, the task is a caption. With a `prompt`, it answers a question.
-
-```python
-from timenet.types import AnswerTask
-
-AnswerTask(
-    target=(
-        "A 10-second vibration trace with rising amplitude and a periodic "
-        "impact after 5 s."
-    )
-)
-
-AnswerTask(
-    prompt="Is the machine healthy?",
-    target="No, a bearing fault is present",
-)
-```
-
-<figure markdown="span">
-  ![A series in, free text out](../assets/figures/task-answer-caption.svg)
-</figure>
-
-<figure markdown="span">
-  ![A series and a question in, one answer out](../assets/figures/task-answer.svg)
-</figure>
-
-If you add a `rationale`, the same task supervises the reasoning and the answer. The field is on the base
-class. So this is not a separate type: **any** task can carry a chain of thought.
-
-```python
-from timenet.types import AnswerTask, ClassificationTask
-
-base = ClassificationTask(target="faulty", target_schema="condition")
-
-AnswerTask(
-    prompt="Does this trace show a bearing fault? Walk through your reasoning.",
-    rationale=(
-        "The vibration amplitude grows steadily after 5 s and a sharp "
-        "impact repeats once per shaft revolution. That periodicity matches "
-        "the bearing's ball-pass frequency rather than imbalance, which "
-        "would track shaft speed."
+task = ClassificationTask(
+    inputs=(record,),
+    scope=TimeInterval.seconds(
+        5.0,
+        8.0,
+        time_series_ids=("vibration",),
     ),
-    target="Yes, an outer-race bearing fault",
-    from_tasks=(base,),
+    targets=("fault_episode",),
 )
 ```
 
-<figure markdown="span">
-  ![A question in, a chain of steps then an answer out](../assets/figures/task-answer-rationale.svg)
-</figure>
+Use `TimePoint` or `TimeInterval` for a timeline Signal. Use `StepPoint` or `StepInterval` for an
+ordinal Signal.
 
-## ScalarPredictionTask
+## Built-in task types
 
-One number out. The task keeps the quantity and its physical unit as data. A regression target encoded as
-a string in an answer task loses its type. A `float` with a `unit` keeps regression metrics, batching,
-and unit-aware conversion simple.
+TimeNet defines eight task classes:
+
+| Class | Modeling operation | Typical target items |
+| --- | --- | --- |
+| `ClassificationTask` | Select one or more labels. | Strings. |
+| `AnswerTask` | Answer a question or caption the inputs. | Strings. |
+| `ScalarPredictionTask` | Predict typed quantities. | Integers or floats. |
+| `TemporalLocalizationTask` | Locate events or regions. | Points or intervals. |
+| `ForecastingTask` | Predict future values. | Records, Signals, or intervals. |
+| `TSEditingTask` | Transform input time-series data. | Records or Signals. |
+| `TSGenerationTask` | Generate time-series data from a prompt. | Records or Signals. |
+| `TSCorrespondenceTask` | Match inputs to candidates. | Records or Signals. |
+
+The target collection stays uniform across these classes. Each subclass adds only the configuration
+that its operation needs.
+
+### Classification
 
 ```python
-from timenet.types import ScalarPredictionTask, TimeInterval
+ClassificationTask(
+    inputs=(record,),
+    targets=("healthy",),
+    target_schema="condition",
+)
+```
 
+`target_schema` can name a registered Annotation that holds the label vocabulary.
+
+### Answer and rationale
+
+```python
+AnswerTask(
+    inputs=(record,),
+    prompt="Does this trace show a bearing fault?",
+    rationale="The repeated impacts match a bearing fault.",
+    targets=("Yes",),
+)
+```
+
+A missing prompt makes the Task an unprompted caption or description.
+
+### Scalar prediction
+
+```python
 ScalarPredictionTask(
-    target=62.0,
+    inputs=(record,),
+    targets=(62.0,),
     unit="bpm",
     target_name="mean_heart_rate",
-    scope=TimeInterval.seconds(0.0, 30.0),
 )
 ```
 
-<figure markdown="span">
-  ![A series over a window in, one typed number out](../assets/figures/task-scalar-prediction.svg)
-</figure>
+The class keeps the quantity name and physical unit separate from the numeric target.
 
-## TemporalLocalizationTask
-
-Regions out: find where something happens, from a description of it. This task is the inverse of a scoped
-`ClassificationTask`, which supplies the region and asks for its label. One type covers event detection,
-segmentation, and change-point detection. They share this target: a tuple of `TimePoint` or
-`TimeInterval` spans.
-
-`mode` says whether unmarked time is allowed. `SPARSE` means only the marked spans are claimed (R-peaks).
-`EXHAUSTIVE` means the spans must tile the region of interest, and a gap is an error (sleep staging).
+### Temporal localization
 
 ```python
-from timenet.types import LocalizationMode, TemporalLocalizationTask, TimePoint
+from timenet.types import (
+    LocalizationMode,
+    TemporalLocalizationTask,
+    TimePoint,
+)
 
 TemporalLocalizationTask(
+    inputs=(record,),
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
-    target=(
+    targets=(
         TimePoint.seconds(1.20, time_series_ids=("II",)),
         TimePoint.seconds(2.05, time_series_ids=("II",)),
     ),
 )
-
-TemporalLocalizationTask(
-    prompt="Segment the night into sleep stages.",
-    mode=LocalizationMode.EXHAUSTIVE,
-    # the answer is the stored annotations
-    target_annotation_ids=("ann-n2-0007", "ann-n3-0008"),
-)
 ```
 
-<figure markdown="span">
-  ![A few spans and points out; unmarked time is unlabeled](../assets/figures/task-localization-sparse.svg)
-</figure>
+`SPARSE` says that unmarked time is unspecified. `EXHAUSTIVE` says that the targets describe the
+complete region of interest.
 
-<figure markdown="span">
-  ![Contiguous segments tile the recording; gaps are errors](../assets/figures/task-localization-exhaustive.svg)
-</figure>
+### Forecasting, editing, and generation
 
-## ForecastingTask
-
-Continue the context into the future. The future is either a whole separate record
-(`target_record_id`) or a region of the record the task is attached to (`target_span`). The task sets
-exactly one, never both and never neither. The record-id form references ids rather than raw arrays, so
-context and horizon stay traceable to their dataset versions.
+These Tasks can target stored Records or Signals directly:
 
 ```python
-from timenet.types import ForecastingTask
-
 ForecastingTask(
-    context_record_ids=("2024-01-01",), target_record_id="2024-01-02"
+    inputs=(history,),
+    targets=(future,),
 )
-```
-
-`target_span` lets a single unsplit series carry a horizon, so a dataset can ship the raw recording
-rather than a context/target pair. It is the region to predict: a `TimeInterval` on the recording
-timeline, or a `StepInterval` on an ordinal series. It must be an interval, never a point. A point has
-no duration, so it names no values. It needs an explicit `scope` for the context. The default
-`scope=None` means the whole record, which includes the region to predict.
-
-```python
-from timenet.types import ForecastingTask, TimeInterval
-
-# forecast the last 12 s of a 144 s recording, given the first 132 s as context
-ForecastingTask(
-    scope=TimeInterval.seconds(0.0, 132.0),
-    target_span=TimeInterval.seconds(132.0, 144.0),
-)
-```
-
-An ordinal series has no clock, so its horizon is named in steps instead. A purely ordinal sequence
-(order only, no calendar time) takes its last 12 steps as the horizon, given the first 132 as context:
-
-```python
-from timenet.types import ForecastingTask, StepInterval
-
-ForecastingTask(
-    scope=StepInterval(time_series_id="sequence", start=0, stop=132),
-    target_span=StepInterval(time_series_id="sequence", start=132, stop=144),
-)
-```
-
-<figure markdown="span">
-  ![Observed past in, predicted future out](../assets/figures/task-forecasting.svg)
-</figure>
-
-## TSEditingTask
-
-A series out: transform the source record into the target record, as the `prompt` instructs. This task
-covers denoising, filtering, and deliberate corruption. Both sides of the edit are stored records.
-
-```python
-from timenet.types import TSEditingTask
 
 TSEditingTask(
+    inputs=(raw_record,),
     prompt="Remove the baseline wander.",
-    source_record_id="ecg-raw",
-    target_record_id="ecg-clean",
+    targets=(clean_record,),
 )
-```
-
-<figure markdown="span">
-  ![An input series in, a transformed series out](../assets/figures/task-editing.svg)
-</figure>
-
-## TSGenerationTask
-
-A series out from a text specification alone.
-
-```python
-from timenet.types import TSGenerationTask
 
 TSGenerationTask(
-    prompt="Generate a 150 bpm sinus-tachycardia ECG, 10 s at 500 Hz.",
-    target_record_id="ecg-synth-0001",
+    prompt="Generate 10 seconds of a 150 bpm ECG.",
+    targets=(synthetic_record,),
 )
 ```
 
-<figure markdown="span">
-  ![A text spec in, a new series out](../assets/figures/task-generation.svg)
-</figure>
+A generation Task can have no input Records.
 
-## TSCorrespondenceTask
-
-Relate one series to others. The task's `record_ids` are the query. `candidate_record_ids` is the pool
-that the answer comes from. `target` names the correct one(s). If you leave the pool empty, the task is
-open-ended.
+### Correspondence
 
 ```python
-from timenet.types import TSCorrespondenceTask
-
 TSCorrespondenceTask(
-    prompt="Which recording is most similar to this one?",
-    candidate_record_ids=("rec-a", "rec-b", "rec-c"),
-    target=("rec-b",),
+    inputs=(query,),
+    candidate_records=(record_a, record_b, record_c),
+    targets=(record_b,),
 )
 ```
 
-<figure markdown="span">
-  ![A query series and candidates in, the matching candidate out](../assets/figures/task-correspondence.svg)
-</figure>
+An empty `candidate_records` tuple means that the candidate pool is dataset-wide.
 
-## Context or target
+## Compose Tasks
 
-You can use an annotation two ways in a task:
+`from_tasks` records derivation between Tasks:
 
-- as **context**: something the model reads to help it answer (`input_annotation_ids`), or
-- as the **target**: the thing the model must produce (`target_annotation_ids`).
-
-The same annotation can be the context for one task and the target of another. A task gives its answer
-either inline in `target` **or** by reference in `target_annotation_ids`, never both. `add_task` rejects a
-task that gives both. A pointer to stored annotations avoids a copy of, for example, a night of
-sleep-stage intervals in a task row.
-
-Tasks can also build on each other. With `from_tasks`, one task feeds into another. So a simple label can
-seed a harder task about the same record. A few basic labels turn into many richer training examples.
-
-```mermaid
-flowchart LR
-    A["an annotation"]
-    C["a task that uses it as <b>context</b><br/><i>input_annotation_ids</i>"]
-    T["a task that uses it as <b>target</b><br/><i>target_annotation_ids</i>"]
-    A -->|as context| C
-    A -->|as target| T
-    B["a base task<br/><i>a simple label</i>"]
-    R["a follow-up task<br/><i>from_tasks=(base,)</i>"]
-    B -->|builds on| R
+```python
+label = ClassificationTask(
+    inputs=(record,),
+    targets=("faulty",),
+)
+answer = AnswerTask(
+    inputs=(record,),
+    prompt="Is this machine healthy?",
+    targets=("No",),
+    from_tasks=(label,),
+)
+dataset.add_tasks(tasks=(label, answer))
 ```
+
+TimeNet rejects missing parents, self-references, and derivation cycles.

@@ -12,9 +12,8 @@ A connector is the unit of dataset integration. Each dataset has one connector c
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
 knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
 
-`BaseConnector` is the contract for a connector. It lives in the `timenet` package
-(`timenet.connectors`). Concrete connectors live in the `timenet-connectors` repo, next to their
-[dataset card](manifest.md).
+`BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
+`timenet-connectors`, beside their [dataset cards](manifest.md).
 
 ---
 
@@ -36,7 +35,7 @@ The two stages stay separate. This lets the engine drive
 | Method | Nature | Contract |
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
-| `convert(raw_refs)` | CPU only | Parse the references into a `TimeFDataset` with lazy Arrow loaders. The method does not use the network. |
+| `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
 
 You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
@@ -45,15 +44,12 @@ these two forms. The engine always calls the synchronous `download()`. Its defau
 runs `download_async` to completion. As a result, an async connector needs no event loop code of its
 own.
 
-`metadata()` and `store()` are concrete methods. A connector inherits them. They are not stages that
-you implement.
+`metadata()` is a concrete method that reads the dataset card. The engine owns storage and calls the
+writer after conversion.
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
   card. `metadata().dataset_id` must match the connector's built id.
-- `store()` writes the dataset through a [`TimeFWriter`](timef-writer.md). If the schema is absent, it
-  derives the schema first. It returns the committed version directory. Most connectors never
-  override it.
 
 A connector takes no constructor arguments. Configuration comes from environment variables that
 `__init__` reads. `TRaw` is the reference type that the connector defines, for example a path, a small
@@ -62,23 +58,23 @@ dataclass, or an S3 key. The connector is generic through PEP 695:
 
 ---
 
-## Sharing data
+## Reusing descriptors
 
-To share time-series data across records, attach the same `TimeSeries` instance to each record. You
-can also attach two instances that have the same explicit `time_series_id`. The writer removes
-duplicates by `time_series_id`, so it stores the bytes only once. The writer also removes duplicate
-annotations, by `id`.
+Each Signal has exactly one owning Source. Do not attach one Signal to several Sources or Records.
+TimeNet rejects that ambiguous ownership.
+
+Signals can share immutable `TimeAxis` and `TimeSeriesSpec` objects. Annotation content can also be
+reused. Each call to `annotate()` creates a separate occurrence for the selected owner.
 
 ---
 
 ## Discovery and layout
 
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
-concrete connector lives in its own folder, at `datasets/<org>/<name>/` (lowercase Python package
-names). The package's `__init__.py` exposes a module-level `CONNECTOR`, and a `dataset.yaml` card sits
-beside it, next to a `requirements.txt` when the connector needs libraries of its own. As a result,
-`timenet-build build <org>/<name>` imports only that package. Reusable bases live under `bases/`.
-Each connector declares its own id in `metadata()`. An id is a lowercase `org/name` pair.
+concrete connector lives under `timenet_connectors/datasets/<org>/<name>/`. Use lowercase Python
+package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml` and an optional
+`requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
+bases live under `timenet_connectors/bases/`.
 
 ## Dependencies and credentials
 
@@ -104,7 +100,7 @@ a connector that you did not check.
 
 Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
 automatically (needed only for gated or private sources). Downloaded source files cache under
-`<TIMENET_CACHE>` (see [client config](client.md#configuration)).
+`<TIMENET_CACHE>` (see [client local state](client.md#local-state)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
 and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
@@ -163,13 +159,9 @@ pull their database archive.
 ## Example connectors
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
-  a fully deterministic dataset, so it also serves as the round-trip fixture. It covers two modalities
-  over one shared data source, a series shared across records, and a windowed record. It also covers a
-  series sized to force a chunk split, and all three annotation shapes, with one shared. Beyond these,
-  it covers a `ClassificationTask -> AnswerTask` chain, a scalar prediction, a temporal localization,
-  and a scoped classification. Its dataset card, `dataset.yaml`, sits beside it in
-  `datasets/timenet/hello_world/`.
-- `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a `TimeSeries`, and each
+  a deterministic dataset for examples and round-trip tests. It covers nested Sources, shared
+  descriptors, windowed Signals, annotations, and several task types.
+- `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a Signal, and each
   row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
   `requirements.txt` names `huggingface_hub`.
 
@@ -185,9 +177,8 @@ To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.b
 while you write a connector for a large source, because each rebuild downloads the source again.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
-references and does not touch the network. As a result, a test can hand it a checked-in fixture and
-skip `download` entirely. See each connector's `tests/fixtures/` directory (for example
-`datasets/chengsenwang/tsqa/tests/fixtures/`) and the `_convert()` helpers next to them.
+references and does not touch the network. A test can therefore pass small local inputs or synthetic
+references directly to `convert()` and skip `download`.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per

@@ -1,6 +1,6 @@
 ---
 icon: lucide/highlighter
-description: "Annotations: scoped side-information on a record that becomes task context or targets."
+description: "Annotations attach typed context to TimeF objects and optional timeline regions."
 tags:
   - guide
   - concepts
@@ -8,87 +8,101 @@ tags:
 
 # Annotations
 
-An annotation is side-information attached to a [record](records.md). Every annotation has two parts.
-The **scope** says which signals and which point or window in time the annotation refers to. The
-free-text **content** can be as short as a tag or as long as a paragraph of reasoning. One
-`Annotation` class covers every case. The optional `span` says how the annotation sits in time.
-A span is a `TimePoint` or a `TimeInterval`. Both read as microseconds on the source recording
-timeline. The step frame (`StepPoint` and `StepInterval`, counted in a series' own ordinals) is for
-[tasks](tasks.md) on an ordinal series. Annotations do not use it. The `Annotation` class is a
-keyword-only frozen dataclass with `key`, `value`, `unit` and `description` fields. A connector
-authors it directly, or subclasses it with field defaults for reuse.
-
-## Record-wide facts
-
-An `Annotation` with no `span` has no time reference. It describes the whole recording. It requires a
-`value`. Record-level facts live here: a subject's attributes, the machine id, its firmware version,
-an operating mode, or a single condition label. A record has no metadata field, so this is where such
-context belongs. The fact travels with every window drawn later from the record.
+An `Annotation` stores reusable content. An annotation occurrence attaches that content to a Dataset,
+Task, Record, Source, or Signal.
 
 ```python
 from timenet.types import Annotation
 
-Annotation(key="age", value=54, unit="years")
-Annotation(key="sex", value="F")
-Annotation(key="condition", value="healthy")
-Annotation(key="operating_hours", value=1200, unit="hours")
+condition = Annotation(
+    key="condition",
+    value="healthy",
+    description="Condition assigned by the source dataset.",
+)
+occurrence = record.annotate(condition)
 ```
 
-<figure markdown="span">
-  ![A band over the whole recording marking a record-level fact](../assets/figures/annotation-static.svg)
-</figure>
+`annotate()` returns the attached occurrence. A Task must refer to this occurrence, not the unattached
+content object.
 
-## One time offset
+## Content and occurrence fields
 
-An `Annotation` whose `span` is a `TimePoint` marks one time offset on one or more signals. This
-shape fits discrete events: a shock, a valve actuation, a detected spike. Points are cheap to store.
-Detectors often produce them in bulk. Points then serve as anchors for downstream windowing. To
-target specific signals, pass `time_series_ids`. To target the whole record, leave it `None`. A
-`TimePoint` reads its offset as microseconds on the source recording timeline. `seconds()` converts
-from recording seconds for you.
+Reusable content includes these fields:
+
+- `key`, `value`, `unit`, and `description`
+- `id`, which identifies the reusable content
+- `metadata`, which stores JSON-compatible content details
+
+Each occurrence adds its own identity, source, confidence, and metadata. This design lets several
+objects share one long description without sharing occurrence details.
+
+## Static context
+
+An Annotation without a `span` describes its complete owner:
 
 ```python
-from timenet.types import Annotation, TimePoint
-
-Annotation(key="impact", span=TimePoint.seconds(4.2, time_series_ids=("vibration",)))
+record.annotate(Annotation(key="age", value=54, unit="years"))
+record.annotate(Annotation(key="condition", value="healthy"))
 ```
 
-<figure markdown="span">
-  ![A marker at one time offset on a signal](../assets/figures/annotation-point.svg)
-</figure>
+Use `metadata` for untyped implementation details. Use an Annotation when consumers need a named,
+typed fact.
 
-## A bounded window
+## Points and intervals
 
-An `Annotation` whose `span` is a `TimeInterval` covers a start-to-end window on one or more
-signals. This span is the most common one. The half-open range `[start, end)` must have an end that
-exceeds its start. The full scoping grammar lives here: which signals by which time range. The
-`value` and free-text `description` can carry the full reading of what happens in that window.
+A `TimePoint` marks one offset. A `TimeInterval` covers a half-open range, `[start, end)`.
 
 ```python
-from timenet.types import Annotation, TimeInterval
+from timenet.types import Annotation, TimeInterval, TimePoint
 
-Annotation(
-    key="fault",
-    value="bearing fault",
-    span=TimeInterval.seconds(5.0, 8.0, time_series_ids=("vibration",)),
+record.annotate(
+    Annotation(
+        key="impact",
+        span=TimePoint.seconds(
+            4.2,
+            time_series_ids=("vibration",),
+        ),
+    )
+)
+
+record.annotate(
+    Annotation(
+        key="fault",
+        value="bearing fault",
+        span=TimeInterval.seconds(
+            5.0,
+            8.0,
+            time_series_ids=("vibration",),
+        ),
+    )
 )
 ```
 
-<figure markdown="span">
-  ![A shaded window on a signal](../assets/figures/annotation-interval.svg)
-</figure>
+Leave `time_series_ids=None` when the span covers the complete owner. Supply Signal IDs to restrict
+the span to specific Signals.
 
-## Across signals
+Time spans use whole microseconds on the source recording timeline. Step spans are reserved for
+Tasks on ordinal Signals.
 
-Annotations are not tied to one signal. A single event can span a vibration sensor, a temperature
-probe, and a current sensor together. The shared timing indicates one physical process, not a
-per-signal artifact.
+## Valid values
 
-<figure markdown="span">
-  ![Three stacked signals sharing one window](../assets/figures/cross-sensor.svg)
-</figure>
+An annotation value can be a string, integer, float, Boolean, or list of strings. A list can define a
+closed label vocabulary.
 
-A record holds a *list* of annotations. Several spans can sit on one signal. Windows can overlap or
-nest. All three ways of sitting in time can coexist on one signal. The text field is free-form, so an
-annotation can carry a multi-sentence reading rather than a label. This reading lets the annotation
-become a reasoning target. That is the bridge to [tasks](tasks.md).
+An Annotation must have a value, a span, or both. A marker can omit its value when its span carries
+the meaning.
+
+## Use annotations in Tasks
+
+A Task can use attached occurrences as input context or as its expected output:
+
+```python
+task = AnswerTask(
+    inputs=(record,),
+    prompt="What condition does the source report?",
+    target_annotations=(occurrence,),
+)
+```
+
+Use `input_annotations` for context. Use `target_annotations` for the answer. A Task cannot combine
+inline `targets` with `target_annotations`.

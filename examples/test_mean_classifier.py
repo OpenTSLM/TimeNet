@@ -11,6 +11,8 @@ command without adding it to your environment. From the repo root::
     uv run --with scikit-learn examples/test_mean_classifier.py
 """
 
+from pathlib import Path
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
@@ -19,9 +21,10 @@ from timenet.client import TimeNet
 import timenet_connectors
 
 
-# Build the connector's dataset into the local registry (idempotent), then load it back through the SDK.
-timenet_connectors.build("timenet/test-mean")
-dataset = TimeNet().load("timenet/test-mean")
+# Build and load through the same explicit local registry.
+registry = Path(".timenet-registry")
+timenet_connectors.build("timenet/test-mean", out=registry)
+dataset = TimeNet(registry).load("timenet/test-mean")
 
 # A quick tour of what we loaded: identity, counts, specs, and a record preview.
 dataset.describe()

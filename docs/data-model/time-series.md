@@ -1,83 +1,97 @@
 ---
 icon: lucide/waypoints
-description: "Time series: one signal of a record, its values typed by a spec."
+description: "Signals hold typed values on regular, irregular, or ordinal axes."
 tags:
   - guide
   - concepts
 ---
 
-# Time series
+# Signals and time series
 
-A time series is one signal of a [record](records.md): typed values over time. A record carries one
-or more time series. Each one has a `time_series_id` (for example, the vibration and temperature signals
-of a machine). The [`TimeSeriesSpec`](../types.md) gives the type and the unit of the values. A time
-offset is always in microseconds, and a sampling rate is always in hertz. A g-scale accelerometer signal
-and a °C temperature signal therefore read through the same API.
-
-<figure markdown="span">
-  ![One signal labelled with its time_series_id, spec, and units](../assets/figures/time-series-example.svg)
-</figure>
-
-## Time offsets and timestamps
-
-The docs and the API use two words for time, and they do not mean the same thing.
-
-A **time offset** is a position on the series' own axis: microseconds from the record's relative zero.
-Every axis quantity is a time offset. The bounds of a [span](annotations.md) are also time offsets. A
-time offset gives the position of a value inside its recording. It says nothing about the calendar day.
-
-A **timestamp** is an absolute point on the wall clock, in Unix microseconds. Exactly one field carries a
-timestamp: the `start_time` of a record. The relative zero of the record refers to this `start_time`.
-
-The wall clock therefore enters a dataset one time, and it composes by addition:
-
-```text
-value timestamp = record.start_time + value time offset
-```
-
-A recording with no known date has time offsets and no timestamps. This is a supported case, not missing
-data. A 500 Hz ECG whose source gives no `base_date` sits exactly on its own axis. The question of which
-calendar day it fell on has no answer. The format prefers no answer to a fabricated one.
-
-## Reading values
-
-Values load lazily through Apache Arrow. When you open a dataset, TimeNet does not pull every array into
-memory. Read a signal with `to_numpy()` or `to_arrow()`:
+A `Signal` is one named stream of values. Its `TimeSeriesSpec` describes each value, and its
+`TimeAxis` describes the sequence.
 
 ```python
-from timenet.client import TimeNet
+import numpy as np
 
-dataset = TimeNet().load("chengsenwang/tsqa")
-series = dataset.records[0].time_series[0]
-values = series.to_numpy()   # a numpy array in the spec's dtype
+from timenet.dataset import Signal
+from timenet.dataset.axis import RegularAxis
+from timenet.types import TimeSeriesSpec
+
+temperature = Signal(
+    id="temperature",
+    name="Temperature",
+    spec=TimeSeriesSpec(
+        spec_type="temperature",
+        name="Temperature",
+        unit_value="degree_Celsius",
+        dtype="float32",
+    ),
+    time_axis=RegularAxis.from_rate_hz(1),
+    data=np.array([20.1, 20.3, 20.2], dtype=np.float32),
+)
 ```
 
-`to_numpy()` raises `TimeFValidationError` if the loaded array contains nulls.
-In some cases, the previous conversion lost the distinction between missing values and NaN.
-A nullable spec without actual nulls still supports this method. NaN and infinity remain valid values.
+A Signal has a stable `id` and a human-readable `name`. A Source owns it, and a Record reaches it
+through that Source hierarchy.
 
-For a nullable series, `to_arrow()` keeps nulls exactly. `to_numpy_and_mask()` returns the values and a
-validity mask, a boolean array that marks present timesteps:
+## Choose an axis
+
+TimeNet provides three axis types:
+
+| Axis | Use it when | Position unit |
+| --- | --- | --- |
+| `RegularAxis` | Values have a fixed sampling rate. | Microseconds derived from the rate. |
+| `IrregularAxis` | The source stores one time offset per value. | Stored microseconds. |
+| `OrdinalAxis` | Values have an order but no clock. | Integer steps. |
+
+A time offset is relative to the Record timeline. It does not identify a calendar date. The optional
+`Record.start_time` supplies that wall-clock anchor.
+
+Do not invent timestamps for an ordinal sequence or a recording with no wall-clock source.
+
+## Describe one timestep
+
+`TimeSeriesSpec` declares the value dtype, unit, nullability, and optional per-timestep shape.
+
+Scalar Signals use `value_shape=()`. An image sequence can use a shape such as
+`(height, width, channels)`.
+
+The complete array shape is `(n_steps, *value_shape)`.
+
+## Read values
+
+Signals expose three common array methods:
 
 ```python
-values, present = series.to_numpy_and_mask()
-values[present]      # only the observed timesteps
+arrow_values = temperature.to_arrow()
+numpy_values = temperature.to_numpy()
+window = temperature.read_steps(0, 2)
 ```
 
-The values array holds zero, false, or an empty string at each missing position.
-That placeholder is not an observation. The mask carries that information.
+`to_arrow()` preserves nulls. `to_numpy()` raises `TimeFValidationError` when the loaded values
+contain nulls.
 
-The PyTorch dataset returns the same pair. The item gives `"series"` for the value tensors.
-It gives `"series_masks"` for one boolean tensor per series.
-A non-nullable series has an all-true mask.
+Use `to_numpy_and_mask()` for nullable values:
 
-Uniform tensors with empty tasks and annotations support default PyTorch batching.
-Variable shapes and custom task or annotation objects need a suitable transform or `collate_fn`,
-a function that combines records into a batch.
-`batch_size=1` still combines records into a batch and needs the same handling.
+```python
+values, present = temperature.to_numpy_and_mask()
+```
 
-## Sharing across records
+The mask marks present timesteps. A placeholder at a missing position is not an observation.
 
-To share one signal across several records, attach the same `TimeSeries` instance to each. You can also
-attach two instances with the same explicit `time_series_id`. The [writer](../timef-writer.md) dedupes by
-`time_series_id`. It stores the bytes one time, no matter how many records reference them.
+## Lazy values
+
+A connector can construct a Signal from in-memory `data`. It can also use `Signal.from_loader()` for
+a source that must remain lazy.
+
+The TimeF reader always supplies lazy storage loaders. Reading a dataset therefore does not load
+every Signal array.
+
+## Ownership and reuse
+
+Each Signal belongs to one Source. Do not attach one Signal instance, or one Signal ID, to several
+Sources or Records.
+
+Several Signals can share the same immutable `TimeAxis` or `TimeSeriesSpec`. This reuse represents a
+shared contract, not shared values.

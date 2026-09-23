@@ -1,74 +1,118 @@
 ---
 icon: lucide/factory
-description: "Build: run a connector through the pipeline and publish a dataset to a registry."
+description: "Build a connector into TimeF and publish the version to a registry."
 tags:
   - guide
   - build
 ---
 
-# Build & publish
+# Build and publish
 
-Build turns a [connector](connectors.md)'s raw source into a stored TimeF version. A version is a
-`manifest.json`, Parquet control tables, and a Parquet or Zarr values plane. TimeNet writes the version
-into a [registry](registry.md). Build runs on your machine. Today it publishes to a local registry. A
-hosted backend is planned. The command [`timenet-build build`](cli/build.md) drives it. This page
-explains what happens underneath.
+A build turns a [connector](connectors.md)'s source data into an immutable TimeF version. The
+version contains `manifest.json`, `control.duckdb`, and Parquet or Zarr Signal values.
 
-## The pipeline
+Use `timenet-build` for normal builds:
 
-Each build runs in its own environment. Before the pipeline starts, `timenet-build` resolves the
-connector's `requirements.txt` (see [Connectors](connectors.md)). Then it re-runs itself under `uv`.
-The build environment layers those requirements over the same `timenet` and `timenet-connectors`
-that the parent runs. Two connectors that need incompatible libraries no longer collide. The
-[manifest](manifest.md) records the build environment as `build_env`.
+```bash
+timenet-build build timenet/hello-world --out .timenet-registry
+```
 
-To run the pipeline in the current interpreter instead, pass `--no-isolation` or set
-`TIMENET_ISOLATION=off`. Use this while you write a connector. The programmatic entry point
-`timenet_connectors.build()` works the same way. It is isolated by default. It runs in-process when
-`TIMENET_ISOLATION=off`.
+The output can be a local directory or a writable registry URL.
 
-The engine runs one connector through five stages in `timenet.engine.run_pipeline`:
+```bash
+# Publish through the hosted registry API.
+timenet-build build org/name --out timenet://
+
+# Publish to S3.
+timenet-build build org/name --out s3://bucket/prefix
+```
+
+See the [`timenet-build` reference](cli/build.md) for all options.
+
+## Isolated build environments
+
+Each connector can declare dependencies in its own `requirements.txt`. By default, the build tool
+creates an isolated `uv` environment for those dependencies. Connectors with incompatible
+requirements do not affect each other or your current environment.
+
+Use `--no-isolation` while developing a connector in the current environment:
+
+```bash
+timenet-build build org/name --out .timenet-registry --no-isolation
+```
+
+`TIMENET_ISOLATION=off` provides the same setting. The manifest records the Python and package
+versions used for the build.
+
+## Pipeline
+
+The engine runs these stages:
+
+1. Read and validate the connector's `dataset.yaml` card.
+2. Download raw artifacts into the build cache.
+3. Convert local artifacts into a `TimeFDataset`.
+4. Derive the dataset schema.
+5. Write or publish the complete TimeF version.
+6. Remove the raw cache after success, unless `--keep-cache` is set.
+
+`--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
+returns the committed version and skips expensive work.
+
+The connector selects Parquet or Zarr by default. Override it when you need to inspect another
+backend:
+
+```bash
+timenet-build build timenet/hello-world \
+    --out .timenet-registry \
+    --values-backend zarr
+```
+
+## Programmatic builds
+
+Use `run_pipeline()` for a local directory:
 
 ```python
+from pathlib import Path
+
 from timenet.engine import run_pipeline
 
-run_pipeline(
-    connector, root, *,
-    cache_dir=None, keep_cache=False, progress_cb=None, force=False,
+version_dir = run_pipeline(
+    connector,
+    Path(".timenet-registry"),
+    values_backend="parquet",
 )
 ```
 
-1. cache: create `cache_dir`. The default is `<TIMENET_CACHE>/<dataset_id>`.
-2. download: `connector.download(cache_dir)` fetches the raw references. Only this stage touches the
-   network.
-3. convert: `connector.convert(raw_refs)` builds an in-memory [`TimeFDataset`](timef-dataset.md).
-4. derive_schema and store: the engine derives the schema first. It then calls `store_dataset()`,
-   which streams the dataset through [`TimeFWriter`](timef-writer.md) and returns the committed
-   version directory.
-5. clean: the engine removes `cache_dir` again. Pass `keep_cache=True`, or `--keep-cache` on the
-   CLI, to keep the raw sources. A `cache_dir` you passed in yourself is never removed.
+Use `publish_pipeline()` with a writable registry:
 
-`run_pipeline` is idempotent. If a version is already committed, it short-circuits, unless you pass
-`force=True`. Distributed (Ray-backed) scheduling is out of scope for now.
+```python
+from timenet.engine import publish_pipeline
+from timenet.registry import open_writable_registry
 
-## Publishing
+registry = open_writable_registry("s3://bucket/prefix")
+version = publish_pipeline(connector, registry)
+```
 
-For a local registry, `store` is the publish step. The output directory is itself a valid local
-registry. [`WritableRegistry.store`](registry.md#writing-to-a-registry) is the general primitive. The S3
-and hosted backends will implement it. Publishing to those backends arrives when they do.
+Both functions accept `force`, `keep_cache`, `cache_dir`, `values_backend`, and a writer progress
+callback.
 
-## The authoring loop
+## Authoring loop
 
-Building a dataset follows one path:
+1. Add a connector package and dataset card under
+   `timenet_connectors/datasets/<org>/<name>/`.
+2. Build into an explicit local registry.
+3. Load that same registry with the SDK and inspect the result.
+4. Run the connector and format checks.
+5. Publish the complete version to its destination registry.
 
-1. Add a connector at `datasets/<org>/<name>/` in `timenet-connectors`. Its `__init__.py` exposes a
-   [`BaseConnector`](connectors.md) as `CONNECTOR`.
-2. Put its [dataset card](manifest.md), `dataset.yaml`, beside it. When the connector loads the card,
-   TimeNet validates it against the packaged `dataset-card.schema.json`.
-3. Build it with [`timenet-build build`](cli/build.md).
-4. Verify the dataset: point the SDK at the output directory. The output directory is itself a valid
-   local registry.
-5. When a hosted backend is available, publish the dataset.
+The local check keeps build and load paths explicit:
 
-See [Connectors](connectors.md) to learn how to write the `download` and `convert` steps. See the
-[`timenet.engine` API](api/engine.md) for the full symbol listing.
+```python
+from timenet.client import TimeNet
+
+dataset = TimeNet(".timenet-registry").load("org/name")
+dataset.describe()
+```
+
+See [Connectors](connectors.md) for the `download()` and `convert()` contract. See the
+[`timenet.engine` API](api/engine.md) for the programmatic interface.

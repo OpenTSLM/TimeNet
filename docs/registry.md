@@ -8,9 +8,9 @@ tags:
 
 # Registry
 
-A registry serves compiled TimeF versions to the SDK. A compiled TimeF version has manifests,
-Parquet control tables, and a values plane in Parquet or Zarr format. A registry never runs
-connector code. The registry code lives in `timenet.registry`.
+A registry serves compiled TimeF versions to the SDK. A compiled TimeF version has a manifest,
+an immutable DuckDB control database, and a values plane in Parquet or Zarr format. A registry never
+runs connector code. The registry code lives in `timenet.registry`.
 
 You can have several registries: a public registry, private internal registries, or a local
 directory. The output of [build](build.md) is itself a valid local registry.
@@ -62,7 +62,7 @@ endpoint override from the environment (`AWS_*` vars, `AWS_PROFILE`, `AWS_ENDPOI
 hardcoded. Install the extra:
 
 ```bash
-pip install 'timenet[s3]'
+uv add 'timenet[s3]'
 ```
 
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the

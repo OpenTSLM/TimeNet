@@ -11,11 +11,11 @@ The consumer command-line tool. It mirrors the [client SDK](../client.md). You c
 from the shell that you do in Python. Install it with the `cli` extra:
 
 ```bash
-pip install 'timenet[cli]'
+uv add 'timenet[cli]'
 ```
 
-You must build a registry first (see [Get started](../get-started.md)). Then you can browse and
-download datasets:
+By default, the command uses the hosted TimeNet registry. You can also select a local or S3
+registry:
 
 ```bash
 timenet list
@@ -44,12 +44,12 @@ after `search`, `-q` is the short form of `--query`.
 
 ## Selecting a registry
 
-The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then the local
-default (`<home>/registry`). [`timenet-build build`](build.md) resolves the same way. Therefore, the
-tool that writes a dataset and the tool that reads it always agree. Today, only local registries serve
-data. The `s3://` and hosted backends are [deferred](../registry.md). See
-[Configuration](../client.md#configuration) for the storage and cache paths that the commands read and
-write.
+The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then
+`timenet://`. The last value selects the hosted registry. Local paths, `file://`, `s3://`,
+`http(s)://`, and `timenet://` are valid selectors.
+
+The build tool has a different final default: it writes to the local registry. Pass the same explicit
+path to both tools when you build and inspect a dataset locally.
 
 ## Pinning versions
 

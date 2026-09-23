@@ -127,9 +127,10 @@ that no record carries, and `target_schema` on a task names the set that its tar
 name alone tells a consumer nothing about what is in the set.
 
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
-a dataset with far more tasks than records, and this release has about 2450 tasks for each
-recording. Streamed tasks are trusted and not validated, so each task carries its own
-`record_ids`, and none appears in `Record.task_ids`.
+a dataset with far more tasks than records. This release has about 2450 tasks for each recording.
+The writer validates each streamed task against the dataset. Checks that need the complete task set,
+such as duplicate IDs and cross-task derivations, do not run. Each task carries its own `inputs`, and
+streamed tasks do not populate `Record.task_ids`.
 
 **The stream reads no file.** It expands the sleep-stage annotations that the records already
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.
