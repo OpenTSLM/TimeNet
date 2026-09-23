@@ -14,44 +14,37 @@ clock, so they take an ordinal axis.
 from fractions import Fraction
 
 from timenet.dataset.axis import OrdinalAxis, RegularAxis, TimeAxis
-from timenet.types import DataSource, TimeSeriesSpec, ureg
+from timenet.types import TimeSeriesSpec, ureg
 
-
-_SOURCE = DataSource(data_source_type="google-drive", name="VerbalTS", provider="SeqML")
 
 _SYNTHETIC = TimeSeriesSpec(
     spec_type="synthetic",
     name="Synthetic generated variable (z-scored)",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
     dtype="float64",
 )
 _WEATHER = TimeSeriesSpec(
     spec_type="weather",
     name="Jena weather variable (z-scored)",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
     dtype="float64",
 )
 _POSE = TimeSeriesSpec(
     spec_type="pose",
     name="Body-joint coordinate (z-scored)",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
     dtype="float64",
 )
 _POWER = TimeSeriesSpec(
     spec_type="power",
     name="Electricity transformer load variable (z-scored)",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
     dtype="float64",
 )
 _TRAFFIC = TimeSeriesSpec(
     spec_type="traffic",
     name="Istanbul traffic index variable (z-scored)",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
     dtype="float64",
 )
 
