@@ -4,7 +4,7 @@
 # derived from the data into manifest.json.
 yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa
-dataset_version: 1.0.0
+dataset_version: 0.2.0
 name: TSQA
 description: "Time-series question answering: a series plus a question/answer per record."
 license: Apache-2.0

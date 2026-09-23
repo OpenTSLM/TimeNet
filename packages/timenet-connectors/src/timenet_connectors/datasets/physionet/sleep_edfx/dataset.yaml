@@ -14,7 +14,7 @@
 # resampling); a recording can span about a day, so trim it to the scored sleep at load time.
 yaml_schema_version: 1
 dataset_id: physionet/sleep-edfx
-dataset_version: 1.0.0
+dataset_version: 0.2.0
 name: Sleep-EDF Expanded
 description: >-
   Whole-night polysomnograms from two studies, one recorded at home and one in hospital, with
