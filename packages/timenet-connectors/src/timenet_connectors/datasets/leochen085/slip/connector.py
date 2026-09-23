@@ -34,7 +34,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.types import Annotation, AnswerTask
@@ -206,8 +206,8 @@ def _record_id(shard: Path, row: int) -> str:
 def _caption_id(record_id: str, index: int) -> str:
     """Give the id of one caption annotation of a record.
 
-    A streamed task answers by reference, so the id has to be built the same way in ``convert`` and
-    in the task stream. Both call this.
+    The tasks answer by reference to the caption occurrences the record carries, so a reader who
+    follows one arrives at an id that names its record and its column rather than a generated one.
 
     Args:
         record_id: The record the caption belongs to.
@@ -298,23 +298,27 @@ class SlipConnector(BaseConnector[SlipSource]):
                 corpus = _corpus(corpora, name, shard, row.index)
                 record_id = _record_id(shard, row.index)
                 axis = OrdinalAxis() if corpus.period_us is None else RegularAxis(period_us=corpus.period_us)
-                record = dataset.add_record(
-                    time_series=tuple(
-                        TimeSeries(
-                            spec=SERIES,
-                            signal=f"s{index}",
-                            time_axis=axis,
-                            loader=_loader_for(
-                                _SignalRef(shard=shard, row_group=row.row_group, offset=row.offset, signal=index)
-                            ),
-                            n_values=length,
-                            source_id=record_id,
-                            time_series_id=f"{record_id}-s{index}",
-                        )
-                        for index, length in enumerate(row.lengths)
-                    ),
-                    record_id=record_id,
+                signals = tuple(
+                    Signal.from_loader(
+                        spec=SERIES,
+                        name=f"s{index}",
+                        time_axis=axis,
+                        loader=_loader_for(
+                            _SignalRef(shard=shard, row_group=row.row_group, offset=row.offset, signal=index)
+                        ),
+                        n_values=length,
+                        source_id=record_id,
+                        id=f"{record_id}-s{index}",
+                    )
+                    for index, length in enumerate(row.lengths)
                 )
+                # The release states which corpus a row was cut from and nothing finer, so that
+                # corpus is the one source every signal of the row has.
+                record = Record(
+                    record_id=record_id,
+                    sources=(Source(id=f"{record_id}-source", name=name, signals=signals),),
+                )
+                dataset.add_record(record=record)
                 captions = _captions(row, shard)
                 annotations = [
                     Annotation(key=SlipKey.SOURCE_DATASET, value=name),
@@ -485,21 +489,23 @@ def _iter_rows(shard: Path) -> Iterator[SlipRow]:
 def _iter_tasks(records: Sequence[Record]) -> Iterator[AnswerTask]:
     """Yield one unprompted :class:`AnswerTask` per caption, for every record.
 
-    The captions are annotations of the record, so a task answers by reference and the stream reads
-    no shard again. It counts nothing: ``convert`` reads every caption once and reports there.
+    The captions are annotations of the record, so a task answers by reference to the occurrence the
+    record carries and the stream reads no shard again. It counts nothing: ``convert`` reads every
+    caption once and reports there.
 
     Args:
         records: The records :meth:`SlipConnector.convert` built, in the order it built them.
 
     Yields:
-        Four tasks per record, each answering with one of that record's caption annotations.
+        Four tasks per record, each answering with one of that record's caption annotations, in
+        column order.
     """
     for record in records:
-        for index in range(len(_CAPTION_COLUMNS)):
-            yield AnswerTask(
-                record_ids=(record.record_id,),
-                target_annotation_ids=(_caption_id(record.record_id, index),),
-            )
+        captions = {
+            annotation.key: annotation for annotation in record.annotations if annotation.key in _CAPTION_COLUMNS
+        }
+        for column in _CAPTION_COLUMNS:
+            yield AnswerTask(inputs=(record,), target_annotations=(captions[column],))
 
 
 CONNECTOR = SlipConnector
