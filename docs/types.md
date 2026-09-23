@@ -8,10 +8,9 @@ tags:
 
 # Types
 
-The TimeF value types live in `timenet.types`. Each concept has one module, re-exported from the
-package. Every schema-carrying type is a **plain frozen dataclass**. Therefore it pickles and
-round-trips through [`TimeFReader`](timef-reader.md) without runtime class synthesis. Errors live in
-`timenet.errors`.
+The TimeF value types live in `timenet.types`. Each concept has one module and is re-exported from
+the package. TimeF uses typed dataclasses rather than runtime-generated classes, so objects pickle
+and round-trip through [`TimeFReader`](timef-reader.md). Errors live in `timenet.errors`.
 
 ---
 
@@ -73,30 +72,11 @@ yourself.
 
 ---
 
-## DataSource
-
-The origin that produced a modality: a device, an API feed, a model, or an institution. It is a flat
-frozen dataclass that you build directly.
-
-```python
-from timenet.types import DataSource
-
-DataSource(data_source_type="vib_sensor", name="Vibration Sensor", provider="Acme")
-```
-
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `data_source_type` | `str` | yes | Type tag identifying the kind of source. |
-| `name` | `str` | yes | Human-readable name. |
-| `provider` | `str \| None` | no | Vendor / originator. |
-
----
-
 ## TimeSeriesSpec
 
 The contract for a measurement **modality**: its type tag, display name, value unit, scalar dtype,
-and per-timestep shape. One spec is shared across every logical stream of a modality. The stream
-identifier lives on [`TimeSeries.signal`](timef-dataset.md), not here.
+and per-timestep shape. Several Signals can share the same specification object. Signal identity and
+name live on [`Signal`](timef-dataset.md#signal), not here.
 
 ```python
 from timenet.types import TimeSeriesSpec, ureg
@@ -113,7 +93,6 @@ vibration = TimeSeriesSpec(
 | `spec_type` | `str` | yes | Dataset-unique modality tag (for example `"vibration"`). |
 | `name` | `str` | yes | Human-readable modality label. |
 | `unit_value` | `pint.Unit` | yes | Any unit (g, °C, mV, dimensionless, ...). |
-| `data_source` | `DataSource \| None` | no | The source that produced this modality. |
 | `dtype` | `str` | no | Canonical NumPy scalar dtype, `"str"` for text, or `"enum"` for a categorical value. Defaults to `"float32"`. |
 | `value_shape` | `tuple[int, ...]` | no | Shape of one timestep, excluding time. `()` means scalar. |
 | `dimension_names` | `tuple[str, ...]` | no | Optional names matching every dimension in `value_shape`. |
@@ -174,17 +153,13 @@ class Vibration(TimeSeriesSpec):
 
 ## Annotations
 
-An annotation is extra context on a [`Record`](timef-dataset.md). It is side information. A task can
-read it as input, or it can become a task's question or answer. It has one of three scope levels, and
-the scopes combine:
+An Annotation is extra context attached to a Dataset, Task, Record, Source, or Signal. Its immutable
+content can be reused. Each call to an object's `annotate()` method creates a separate occurrence,
+so many objects can share a long payload without sharing occurrence identity, time placement,
+confidence, or provenance.
 
-- record: the whole record (a static fact, or a trial-level temporal marker),
-- time range: a time span (`TimePoint` or `TimeInterval`) in the recording timeline,
-- signal: one or more specific signals (`time_series_ids`).
-
-It is one flat frozen dataclass. The optional `span` gives it a shape. `key` / `value` / `unit` /
-`description` / `id` are **instance fields**. Therefore connectors author annotations directly, or
-subclass with field defaults for reuse. The annotations round-trip without runtime class synthesis.
+The optional `span` gives the Annotation a shape. A missing span is static context. `TimePoint` and
+`TimeInterval` place it on a recording timeline, optionally scoped to specific Signal IDs.
 
 | `span` | Extra fields | Scope |
 | --- | --- | --- |
@@ -192,22 +167,25 @@ subclass with field defaults for reuse. The annotations round-trip without runti
 | `TimePoint` | none | One time offset, on specific signals or the whole record. |
 | `TimeInterval` | none | A bounded region, on specific signals or the whole record. |
 
-Shared fields: `key: str`, `value: Any = None`, `unit: str | pint.Unit | None = None`,
-`description: str | None = None`, `id: str` (auto uuid7). `unit` takes either a unit string
+Shared content fields are `key`, `value`, `unit`, `description`, `id`, and `metadata`. Occurrence
+fields are `occurrence_id`, `source`, `confidence`, and `occurrence_metadata`. `unit` takes a string
 (`"years"`) or a `pint.Unit` (`ureg.millivolt`, stored as its canonical name). TimeNet validates both
 against the shared registry on construction. An unrecognized unit string raises `ValueError`. On the
-temporal shapes, `time_series_ids=None` means **trial-level**, that is the whole record. A non-empty
-tuple restricts the annotation to those signals. Each id must match a `TimeSeries.time_series_id` on
-the record.
+temporal shapes, `time_series_ids=None` means the whole target object. A non-empty tuple restricts
+the Annotation to those Signals.
 
 ```python
 from timenet.types import Annotation, TimeInterval, TimePoint
 
-# record scope
-Annotation(key="operating_hours", value=1200, unit="hours")
+# static content
+Annotation.static(name="operating_hours", value=1200, unit="hours")
 
 # time range on the whole record (trial-level)
-Annotation(key="artifact", span=TimeInterval.seconds(10.0, 12.0))
+Annotation.interval(
+    name="artifact",
+    start=TimePoint.seconds(10.0),
+    end=TimePoint.seconds(12.0),
+)
 
 # signal + time range: the vibration and current signals, seconds 5 to 6
 Annotation(
@@ -240,24 +218,25 @@ schema and manifest at write time.
 
 ## Tasks
 
-A task is one labeled training target. It references one or more records. The class is the type tag.
-You can use it as a search filter, for example `search(task=AnswerTask)`. The instance carries the
-payload. Tasks are mutable, so [`add_task`](timef-dataset.md) can populate `record_ids` after
-construction.
+A Task is one concrete modelling problem over one or more Records. `Task` is abstract; its concrete
+class is the type tag and defines the target. In-memory relationships use object references. The
+storage layer normalizes them to IDs and restores the objects on read.
 
 Every task is `inputs -> one typed answer`, and the shared frame lives on the `Task` base:
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `str` | Auto uuid7. |
-| `record_ids` | `tuple[str, ...]` | The records the task is about. `add_task` can populate this after construction. |
+| `inputs` | `tuple[Record, ...]` | Records supplied to the model. At least one is required when registered. |
 | `prompt` | `str \| None` | What the model is asked. `None` means an unprompted task. |
 | `scope` | `Span \| None` | The input region. `None` means the whole record. |
-| `input_annotation_ids` | `tuple[str, ...]` | Annotations given to the model as context. |
+| `input_annotations` | `tuple[Annotation, ...]` | Annotations given to the model as context. |
 | `target` | typed per subclass | The answer, inline. |
-| `target_annotation_ids` | `tuple[str, ...]` | The answer by reference to stored annotations. |
+| `target_annotations` | `tuple[Annotation, ...]` | The answer by reference to stored annotations. |
 | `rationale` | `str \| None` | Chain of thought to train on. Any task can carry one. |
 | `from_tasks` | `tuple[Task, ...]` | Source tasks this one derives from (plus a `from_task_ids` property). |
+| `annotations` | `tuple[Annotation, ...]` | Annotations attached directly to this Task. |
+| `metadata` | `dict[str, object]` | Optional JSON-compatible task metadata. |
 
 A subclass therefore adds only what makes its answer a different *kind* of thing:
 
@@ -267,10 +246,10 @@ A subclass therefore adds only what makes its answer a different *kind* of thing
 | `AnswerTask` | `answer` | `target: str` (free text) | none |
 | `ScalarPredictionTask` | `scalar_prediction` | `target: float` | `unit`, `target_name` |
 | `TemporalLocalizationTask` | `temporal_localization` | `target: tuple[TimePoint \| TimeInterval, ...]` | `mode` |
-| `ForecastingTask` | `forecasting` | a produced series | `context_record_ids`, `target_record_id`, `target_span` |
-| `TSEditingTask` | `ts_editing` | a produced series | `source_record_id`, `target_record_id` |
-| `TSGenerationTask` | `ts_generation` | a produced series | `target_record_id` |
-| `TSCorrespondenceTask` | `ts_correspondence` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
+| `ForecastingTask` | `forecasting` | a produced series | `context_records`, `target_record`, `target_span` |
+| `TSEditingTask` | `ts_editing` | a produced series | `source_record`, `target_record` |
+| `TSGenerationTask` | `ts_generation` | a produced series | `target_record` |
+| `TSCorrespondenceTask` | `ts_correspondence` | matching Records or Signals | `candidate_records` |
 
 `TaskType` is the enum of type tags. TimeNet derives `TASKS` at import from a walk of the `Task`
 subclass tree. Therefore it registers every concrete task in the module by its `task_type`. If two
