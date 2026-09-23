@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
 import pint
 
 from timenet.errors import TimeFValidationError
-from timenet.types.annotations import Annotation
+from timenet.types.annotations import Annotation, SupportsAnnotate
 from timenet.types.ids import new_id
 from timenet.types.spans import Span
 from timenet.types.units import normalize_unit
@@ -48,7 +48,7 @@ class LocalizationMode(StrEnum):
 
 
 @dataclass(kw_only=True)
-class Task(ABC):
+class Task(SupportsAnnotate, ABC):
     """One modelling problem with ordered inputs and ordered output items.
 
     Targets deliberately accept a mixture of supported values. Concrete task classes describe the
@@ -117,7 +117,7 @@ class Task(ABC):
         spans.extend(target for target in self.targets or () if isinstance(target, Span))
         return tuple(spans)
 
-    def check_against_scope(self) -> None:  # noqa: B027 - subclass validation hook
+    def check_against_scope(self) -> None:
         """Validate configuration that depends on the finalized scope."""
 
 

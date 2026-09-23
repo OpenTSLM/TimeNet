@@ -11,7 +11,7 @@ import pyarrow as pa
 from timenet.dataset.source import Source
 from timenet.dataset.time_series import Signal
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Annotation, Span, StepSpan, TimeInterval, TimePoint, TimeSpan, new_id
+from timenet.types import Annotation, Span, StepSpan, SupportsAnnotate, TimeInterval, TimePoint, TimeSpan, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
 
 
@@ -192,7 +192,7 @@ def _reject_outside_union(
 
 
 @dataclass(kw_only=True)
-class Record:
+class Record(SupportsAnnotate):
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
     Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``task_ids`` and
