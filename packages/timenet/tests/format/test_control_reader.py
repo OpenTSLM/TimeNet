@@ -221,7 +221,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     annotation = Annotation(
         key="probe", value=value, id="probe-content", span=None if value is not None else TimePoint(start_us=0)
     )
-    record.add_annotation(annotation)
+    record.annotate(annotation)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 

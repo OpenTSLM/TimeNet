@@ -71,7 +71,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
             record_id="rec-0",
         )
     )
-    options = record.add_annotation(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",
