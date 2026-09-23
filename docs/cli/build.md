@@ -1,88 +1,92 @@
 ---
 icon: lucide/factory
-description: "The timenet-build producer CLI: run a connector through the pipeline into a registry."
+description: "Use timenet-build to convert a source and publish one TimeF version."
 tags:
   - cli
 ---
 
 # `timenet-build`
 
-The producer command-line tool. It drives a [connector](../connectors.md) through the
-[build pipeline](../build.md). It writes a TimeF version directory that a
-[registry](../registry.md) can use. The directory has a `manifest.json`, Parquet control tables, and
-a Parquet or Zarr values plane. The tool ships with `timenet-connectors`, separate from the consumer
-[`timenet`](timenet.md) tool. It needs the `timenet[build]` extra that `timenet-connectors`
-already installs.
+`timenet-build` is the producer CLI. It resolves an installed connector, runs the build pipeline,
+and writes or publishes one TimeF version. It ships with `timenet-connectors`.
 
 ```bash
 uv tool install timenet-connectors
 ```
 
-The built-in connectors ship inside the package. The tool resolves them by dataset id, so that
-install is enough to build them. Clone the repository only to *author* a connector.
+The package includes the built-in connectors. Clone the source repository only when you want to
+author or change a connector.
 
-## `timenet-build build`
+## Build command
 
 ```bash
 timenet-build [--quiet] build <dataset_id> \
-    [--out <dir>] [--force] [--keep-cache] [--no-isolation]
+    [--out <registry>] \
+    [--values-backend parquet|zarr] \
+    [--force] [--keep-cache] [--no-isolation]
 ```
 
-This command runs the connector for `<dataset_id>` through the pipeline: download, convert,
-derive_schema, store. Then it writes the dataset into the output registry.
-
-| Option | Default | What it does |
+| Option | Default | Purpose |
 | --- | --- | --- |
-| `<dataset_id>` | required | The `org/name` id to build. An unknown id lists the ones that exist. |
-| `--out <dir>` | `$TIMENET_REGISTRY`, else `<home>/registry` | Where to write. If the directory is absent, the tool creates it. |
-| `--force`, `-f` | off | Rebuild a version that is already built instead of reusing it. |
-| `--keep-cache` | off | Keep the raw download cache. The tool removes it after a successful build. |
-| `--isolation` / `--no-isolation` | on | Build in an environment made from the connector's `requirements.txt`. `--no-isolation` (or `TIMENET_ISOLATION=off`) builds in the current interpreter. |
-| `--quiet`, `-q` | off | Suppress status output. Belongs to `timenet-build`, not to `build`. |
+| `<dataset_id>` | required | Select the connector by its `org/name` ID. |
+| `--out` | `$TIMENET_REGISTRY`, then the local registry | Select a local or remote output registry. |
+| `--values-backend` | connector setting | Override the Parquet or Zarr values backend. |
+| `--force`, `-f` | off | Rebuild or republish an existing version. |
+| `--keep-cache` | off | Keep downloaded source files after a successful build. |
+| `--no-isolation` | isolation on | Use the current environment instead of a connector-specific one. |
+| `--quiet`, `-q` | off | Hide status output. Place this option before `build`. |
 
-!!! warning "`--quiet` goes before the subcommand"
-    `timenet-build --quiet build <id>` works. `timenet-build build <id> --quiet` exits `2` with
-    `No such option '--quiet'`.
+The output selector accepts:
 
-If `$TIMENET_REGISTRY` names a remote registry (`timenet://`, `s3://`, `http(s)://`), there is no
-local place to build into. Then `build` exits `2` and asks for `--out`.
+- a local path or `file://` URI;
+- `s3://bucket/prefix`;
+- `http://` or `https://` for a registry API;
+- `timenet://` for the hosted TimeNet registry.
 
-## Output streams
+Remote publishing needs the credentials required by that registry. For example, the hosted API can
+use `TIMENET_TOKEN`.
 
-Status lines go to stderr. The committed version directory goes to stdout on its own. A script can
-capture the path without parsing anything:
+## Output
+
+Status goes to stderr. A local build prints the committed version directory to stdout. A remote
+build prints the published version string.
 
 ```bash
-DIR=$(timenet-build --quiet build timenet/hello-world)
-ls "$DIR"/manifest.json
+VERSION_DIR=$(
+    timenet-build --quiet build timenet/hello-world \
+        --out .timenet-registry
+)
+test -f "$VERSION_DIR/manifest.json"
 ```
 
-`--quiet` silences the status lines but never warnings, errors, or that stdout path.
+This separation lets scripts capture the result without parsing progress messages.
 
 ## Exit codes
 
-| Code | When |
+| Code | Meaning |
 | --- | --- |
-| `0` | The tool built the dataset, or reused an already-built version. |
-| `1` | An expected failure (a `TimeNetError`): a one-line `Error: ...` on stderr, no traceback. |
-| `2` | A usage error: an unknown dataset id, a bad flag, or a remote `$TIMENET_REGISTRY`. |
+| `0` | The version was built, published, or reused. |
+| `1` | An expected TimeNet operation failed. |
+| `2` | The command or one of its options is invalid. |
 
-Anything else is a bug and surfaces its traceback.
+Unexpected programming errors keep their traceback.
 
-## Verifying a build
+## Inspect a local build
 
-The output directory is a valid local registry. You can point the SDK straight at it:
+Use the same explicit registry for the build and the consumer:
 
 ```bash
-timenet-build build timenet/hello-world --out ./local_registry
-python -c "from timenet.client import TimeNet; \
-    print(TimeNet('./local_registry').list())"
+timenet-build build timenet/hello-world --out .timenet-registry
+timenet list --registry .timenet-registry
 ```
 
-## Planned commands
+Or load it in Python:
 
-Only `build` exists today. `validate`, `inspect`, and `publish` (to an S3 or hosted registry) are
-planned. They will land with the remote registry backends.
+```python
+from timenet.client import TimeNet
 
-For the authoring loop behind these commands, see [Build & publish](../build.md) and
-[Connectors](../connectors.md).
+dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+```
+
+See [Build and publish](../build.md) for the pipeline and [Connectors](../connectors.md) for the
+authoring contract.

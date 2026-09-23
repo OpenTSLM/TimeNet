@@ -9,8 +9,9 @@ SDK and CLI (`timenet`) to find, download, and load datasets, and a connectors p
 Instructions for contributors and coding agents working in this repository.
 
 ## Documentation Contract
-- `README.md` is human-facing: installation, setup, and a tour of the make targets.
-- `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and repo conventions.
+- `README.md` is human-facing: project purpose, installation, and a first local build.
+- `AGENTS.md` is contributor- and agent-facing: workflow rules, verification requirements, and
+  repository conventions.
 - Keep agent operating instructions here. Don't move them into the README.
 
 ## Documentation

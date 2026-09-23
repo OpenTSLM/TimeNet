@@ -5,7 +5,7 @@ import pint
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import DataSource, TimeSeriesSpec, ureg
+from timenet.types import TimeSeriesSpec, ureg
 
 
 def _ecg_spec(**overrides):
@@ -17,28 +17,11 @@ def _ecg_spec(**overrides):
     return replace(spec, **overrides) if overrides else spec
 
 
-def test_data_source_construction():
-    ds = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
-    assert ds.data_source_type == "holter_x"
-    assert ds.name == "Holter Monitor X"
-    assert ds.provider == "Acme"
-
-
-def test_data_source_provider_optional():
-    assert DataSource(data_source_type="synthetic", name="Synthetic").provider is None
-
-
 def test_spec_construction_modality_only():
     spec = _ecg_spec()
     assert spec.spec_type == "ecg_lead"
     assert spec.unit_value == ureg.millivolt
-    assert spec.data_source is None
-    assert not hasattr(spec, "signal")  # signal lives on TimeSeries, not the spec
-
-
-def test_spec_with_data_source():
-    ds = DataSource(data_source_type="holter_x", name="Holter Monitor X")
-    assert _ecg_spec(data_source=ds).data_source is ds
+    assert not hasattr(spec, "signal")  # signal lives on Signal, not the spec
 
 
 def test_spec_frozen():
@@ -54,7 +37,7 @@ def test_spec_equality_and_hash():
 def test_spec_is_picklable():
     # The whole point of descriptors over dynamic synthesis: read-back objects must pickle
     # for multiprocessing DataLoaders.
-    spec = _ecg_spec(data_source=DataSource(data_source_type="holter_x", name="Holter"))
+    spec = _ecg_spec()
     restored = pickle.loads(pickle.dumps(spec))
     assert restored == spec
 
@@ -127,12 +110,6 @@ def test_spec_rejects_invalid_nd_contract(overrides, message):
         _ecg_spec(**overrides)
 
 
-@pytest.mark.parametrize(("dst", "name"), [("", "X"), ("t", ""), ("t", 0)])
-def test_data_source_rejects_empty_or_non_string_identifiers(dst, name):
-    with pytest.raises(TimeFValidationError, match="non-empty string"):
-        DataSource(data_source_type=dst, name=name)
-
-
 def test_spec_coerces_string_unit_value():
     spec = _ecg_spec(unit_value="millivolt")
     assert spec.unit_value == ureg.millivolt
@@ -148,11 +125,6 @@ def test_spec_rebinds_foreign_registry_unit():
     foreign = pint.UnitRegistry()
     spec = _ecg_spec(unit_value=foreign.millivolt)
     assert spec.unit_value._REGISTRY is ureg
-
-
-def test_spec_rejects_a_non_data_source_data_source():
-    with pytest.raises(TimeFValidationError, match="must be a DataSource or None"):
-        TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless, data_source="acme")  # ty: ignore[invalid-argument-type]
 
 
 def test_str_dtype_validates():

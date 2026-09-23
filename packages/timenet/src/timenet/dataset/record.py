@@ -8,16 +8,17 @@ import warnings
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.time_series import TimeSeries
+from timenet.dataset.source import Source
+from timenet.dataset.time_series import Signal
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Annotation, Span, StepSpan, TimeInterval, TimePoint, TimeSpan, new_id
+from timenet.types import Annotation, Span, StepSpan, SupportsAnnotate, TimeInterval, TimePoint, TimeSpan, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
 
 
 def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is keyword-only)
     label: str,
     span: Span,
-    time_series: tuple[TimeSeries, ...],
+    time_series: tuple[Signal, ...],
     record_id: str,
     time_span: TimeInterval | None = None,
     *,
@@ -57,26 +58,25 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
             past its steps.
     """
     if isinstance(span, StepSpan):
-        ts = next((t for t in time_series if t.time_series_id == span.time_series_id), None)
+        ts = next((t for t in time_series if t.id == span.time_series_id), None)
         if ts is None:
             raise TimeFValidationError(
                 f"{label} references unknown time_series_id {span.time_series_id!r} on record {record_id!r}"
             )
         if ts.span_us is not None:  # axis-fit: steps only on a series with no timeline
             raise TimeFValidationError(
-                f"{label} counts in steps, but series {ts.time_series_id!r} on record {record_id!r} has a "
+                f"{label} counts in steps, but series {ts.id!r} on record {record_id!r} has a "
                 f"timeline; name the region in seconds instead"
             )
         if span.exclusive_end > ts.n_values:
             raise TimeFValidationError(
-                f"{label} runs past the {ts.n_values} steps of series {ts.time_series_id!r} on record "
-                f"{record_id!r}: got {span!r}"
+                f"{label} runs past the {ts.n_values} steps of series {ts.id!r} on record {record_id!r}: got {span!r}"
             )
         return
     if not isinstance(span, TimeSpan):  # Span is abstract. Only time and step spans reach here
         raise TimeFValidationError(f"{label} is not a concrete span: {span!r}")
     scope = span.time_series_ids
-    covered = {ts.time_series_id: ts.span_us for ts in time_series if scope is None or ts.time_series_id in scope}
+    covered = {ts.id: ts.span_us for ts in time_series if scope is None or ts.id in scope}
     for series_id in scope or ():
         if series_id not in covered:
             raise TimeFValidationError(
@@ -192,7 +192,7 @@ def _reject_outside_union(
 
 
 @dataclass(kw_only=True)
-class Record:
+class Record(SupportsAnnotate):
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
     Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``task_ids`` and
@@ -203,8 +203,8 @@ class Record:
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
-    time_series: tuple[TimeSeries, ...]
-    """The logical :class:`TimeSeries` streams the record uses."""
+    sources: tuple[Source, ...] = ()
+    """The root sources that belong to this recording."""
     record_id: str = field(default_factory=new_id)
     """Unique id for the record (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()
@@ -213,6 +213,8 @@ class Record:
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
+    metadata: dict[str, object] = field(default_factory=dict)
+    """Optional JSON-compatible recording metadata."""
     start_time: datetime | int | None = None
     """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
     and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
@@ -233,6 +235,11 @@ class Record:
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
 
+    @property
+    def id(self) -> str:
+        """Return the record's stable public identifier."""
+        return self.record_id
+
     def __post_init__(self) -> None:
         """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
 
@@ -244,6 +251,11 @@ class Record:
             TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
                 contain some series' window.
         """
+        if self.sources:
+            tuple(self.walk_sources())
+            signal_ids = [signal.id for signal in self.walk_signals()]
+            if len(signal_ids) != len(set(signal_ids)):
+                raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
         if self.start_time is not None:
             anchor = unix_us(self.start_time)
             check_int64("Record.start_time", anchor)
@@ -257,13 +269,51 @@ class Record:
                 raise TimeFValidationError(
                     "Record.time_span covers the whole record, so its time_series_ids must be None"
                 )
-            for ts in self.time_series:
+            for ts in self.signals:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
                     raise TimeFValidationError(
                         f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
-                        f"every series' window, but {ts.time_series_id!r} covers {window} us"
+                        f"every series' window, but {ts.id!r} covers {window} us"
                     )
+
+    @property
+    def signals(self) -> tuple[Signal, ...]:
+        """Return every signal in this record's hierarchy."""
+        return tuple(self.walk_signals())
+
+    def walk_sources(self) -> Iterable[Source]:
+        """Yield all sources in deterministic depth-first order.
+
+        Yields:
+            Every source in the record.
+
+        Raises:
+            TimeFValidationError: If a source is attached twice or the hierarchy contains a cycle.
+        """  # noqa: DOC502 - raised by the nested traversal helper
+        seen: set[int] = set()
+        active: set[int] = set()
+
+        def walk(source: Source) -> Iterable[Source]:
+            identity = id(source)
+            if identity in active:
+                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.id!r}")
+            if identity in seen:
+                raise TimeFValidationError(f"source {source.id!r} is attached more than once")
+            seen.add(identity)
+            active.add(identity)
+            yield source
+            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+                yield from walk(child)
+            active.remove(identity)
+
+        for root in sorted(self.sources, key=lambda item: (item.name, item.id)):
+            yield from walk(root)
+
+    def walk_signals(self) -> Iterable[Signal]:
+        """Yield every signal in deterministic source and signal order."""
+        for source in self.walk_sources():
+            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
 
     @property
     def has_absolute_time(self) -> bool:
@@ -308,7 +358,7 @@ class Record:
             time_series_ids=time_series_ids,
         )
 
-    def add_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
+    def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
         """Attach an annotation to the record and return it.
 
         Args:
@@ -316,7 +366,7 @@ class Record:
             warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
         Returns:
-            The attached annotation (the same instance).
+            A new occurrence that shares the input annotation's reusable content.
 
         Raises:
             TimeFValidationError: If the annotation's span references a series not on this record. If a
@@ -325,8 +375,9 @@ class Record:
                 the series' windows and ``warn_when_outside`` is False.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        self.annotations = (*self.annotations, annotation)
-        return annotation
+        attached = annotation._new_occurrence()
+        self.annotations = (*self.annotations, attached)
+        return attached
 
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
@@ -335,42 +386,43 @@ class Record:
 
         The whole batch is validated before any of it is attached: if one annotation fails a check, the
         call raises and leaves the record unchanged. To keep the annotations before a failure attached,
-        loop :meth:`add_annotation` instead.
+        loop :meth:`annotate` instead.
 
         Args:
-            annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
-            warn_when_outside: As on :meth:`add_annotation`.
+            annotations: The annotations to attach. Pass a single one to :meth:`annotate`.
+            warn_when_outside: As on :meth:`annotate`.
 
         Returns:
-            The attached annotations (the same instances), in the order given.
+            New occurrences that share the input annotations' reusable content, in the order given.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_annotation`.
+            TimeFValidationError: as documented on :meth:`annotate`.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         batch = tuple(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        self.annotations = (*self.annotations, *batch)
-        return batch
+        attached = tuple(annotation._new_occurrence() for annotation in batch)
+        self.annotations = (*self.annotations, *attached)
+        return attached
 
     def _validate_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> None:
-        """Run :meth:`add_annotation`'s checks without attaching it.
+        """Run :meth:`annotate`'s checks without attaching it.
 
         Split out so :meth:`add_annotations` can validate a whole batch before committing it in one tuple
         concatenation.
 
         Args:
             annotation: The annotation to check.
-            warn_when_outside: As on :meth:`add_annotation`.
+            warn_when_outside: As on :meth:`annotate`.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_annotation`.
+            TimeFValidationError: as documented on :meth:`annotate`.
         """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
                 f"annotation {annotation.key!r}",
                 annotation.span,
-                self.time_series,
+                self.signals,
                 self.record_id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
@@ -380,22 +432,22 @@ class Record:
         """Read the sole signal's values as an Arrow array, for the common single-signal record.
 
         Returns:
-            The single :class:`TimeSeries`' values as a 1-D Arrow array.
+            The single :class:`Signal`' values as a 1-D Arrow array.
 
         Raises:
-            ValueError: If the record has more than one signal, read ``time_series[i]`` explicitly then.
+            ValueError: If the record has more than one signal, read ``signals[i]`` explicitly then.
         """
-        if len(self.time_series) != 1:
+        if len(self.signals) != 1:
             raise ValueError(
                 f"Record.to_arrow() needs a single-signal record, but this one has "
-                f"{len(self.time_series)} series; read record.time_series[i].to_arrow() instead"
+                f"{len(self.signals)} signals; read record.signals[i].to_arrow() instead"
             )
-        return self.time_series[0].to_arrow()
+        return self.signals[0].to_arrow()
 
     def to_numpy(self) -> np.ndarray:
         """Read the sole signal's values as a NumPy array (materializes :meth:`to_arrow`).
 
         Returns:
-            The single :class:`TimeSeries`' values as a 1-D ``np.ndarray``.
+            The single :class:`Signal`' values as a 1-D ``np.ndarray``.
         """
         return self.to_arrow().to_numpy(zero_copy_only=False)

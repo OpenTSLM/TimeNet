@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
@@ -46,9 +46,9 @@ def test_nullable_requires_a_real_bool(nullable):
 def test_scalar_constructors_preserve_nulls_and_declared_dtype(irregular, dtype, observations, categories):
     spec = _spec(dtype, categories=categories, nullable=True)
     if irregular:
-        series = TimeSeries.from_irregular(observations, time_offsets_us=[0, 2, 4], spec=spec, signal="x")
+        series = Signal.from_irregular(observations, time_offsets_us=[0, 2, 4], spec=spec, name="x")
     else:
-        series = TimeSeries.from_values(observations, spec=spec, signal="x", time_axis=OrdinalAxis())
+        series = Signal.from_values(observations, spec=spec, name="x", time_axis=OrdinalAxis())
     assert series.to_arrow().to_pylist() == observations
     values, valid = series.to_numpy_and_mask()
     assert valid.dtype == np.bool_
@@ -65,13 +65,13 @@ def test_nonnullable_constructors_reject_none(irregular, dtype):
     spec = _spec(dtype, categories=("a",) if dtype == "enum" else ())
     with pytest.raises(TimeFValidationError, match="null"):
         if irregular:
-            TimeSeries.from_irregular([None], time_offsets_us=[0], spec=spec, signal="x")
+            Signal.from_irregular([None], time_offsets_us=[0], spec=spec, name="x")
         else:
-            TimeSeries.from_values([None], spec=spec, signal="x", time_axis=OrdinalAxis())
+            Signal.from_values([None], spec=spec, name="x", time_axis=OrdinalAxis())
 
 
 def _lazy_series(spec, array):
-    return TimeSeries(spec=spec, signal="x", time_axis=OrdinalAxis(), loader=lambda: array, n_values=len(array))
+    return Signal.from_loader(spec=spec, name="x", time_axis=OrdinalAxis(), loader=lambda: array, n_values=len(array))
 
 
 @pytest.mark.parametrize("dtype", ["float32", "int16", "bool", "str", "enum"])
@@ -91,7 +91,7 @@ def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
 def test_float_accepts_nonfinite_observations(tmp_path, value):
     # NaN and infinity are present values, not missing measurements.
     # The nullable flag controls Arrow nulls only.
-    series = TimeSeries.from_values([None, value], spec=_spec(nullable=True), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([None, value], spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
     validated = TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
     assert validated.null_count == 1
@@ -101,7 +101,7 @@ def test_float_accepts_nonfinite_observations(tmp_path, value):
 
 def test_nonfinite_values_are_allowed_when_not_nullable(tmp_path):
     # Floating-point specs allow NaN and infinity, including non-nullable specs.
-    series = TimeSeries.from_values([np.nan], spec=_spec(), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([np.nan], spec=_spec(), name="x", time_axis=OrdinalAxis())
     TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
 
@@ -163,13 +163,13 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
         )
     )
     time_series = (series,) if leading_series is None else (leading_series, series)
-    dataset.add_record(time_series=time_series, record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=time_series),), record_id="record-0"))
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend=values_backend, **writer_kwargs) as writer:
         writer.write()
     version_dir = tmp_path / "timenet/nullable/1.0.0"
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        return reader.read().records[0].time_series[-1]
+        return reader.read().records[0].signals[-1]
 
 
 @pytest.mark.parametrize("values_backend", ["parquet", "zarr"])
@@ -185,7 +185,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
 )
 def test_nullable_scalar_round_trips(tmp_path, values_backend, dtype, observations, categories):
     spec = _spec(dtype, categories=categories, nullable=True)
-    series = TimeSeries.from_values(observations, spec=spec, signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values(observations, spec=spec, name="x", time_axis=OrdinalAxis())
     restored = _write_read(tmp_path, series, values_backend=values_backend)
 
     values = restored.to_arrow()
@@ -203,9 +203,9 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
         pa.array(frames.ravel(), type=pa.float32()), 3, mask=pa.array([False, True, False, False])
     )
     tensor = pa.FixedShapeTensorArray.from_storage(pa.fixed_shape_tensor(pa.float32(), [3]), storage)
-    series = TimeSeries(
+    series = Signal.from_loader(
         spec=_spec(value_shape=(3,), nullable=True),
-        signal="camera",
+        name="camera",
         time_axis=OrdinalAxis(),
         loader=lambda: tensor,
         n_values=4,
@@ -221,7 +221,7 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
 
 def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
     # Non-nullable datasets must not write validity arrays.
-    series = TimeSeries.from_values([1.0, 2.0, 3.0], spec=_spec(), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([1.0, 2.0, 3.0], spec=_spec(), name="x", time_axis=OrdinalAxis())
     _write_read(tmp_path, series, values_backend="zarr")
 
     store = tmp_path / "timenet/nullable/1.0.0" / "time_series.zarr"
@@ -230,7 +230,7 @@ def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
 
 
 def test_torch_exposes_values_and_mask():
-    series = TimeSeries.from_values([1.0, None, 3.0], spec=_spec(nullable=True), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([1.0, None, 3.0], spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/nullable",
@@ -240,7 +240,7 @@ def test_torch_exposes_values_and_mask():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(time_series=(series,), record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
     dataset.derive_schema()
     item = TimeFTorchDataset(dataset)[0]
 
@@ -250,7 +250,7 @@ def test_torch_exposes_values_and_mask():
 
 
 def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
-    series = TimeSeries.from_values([1.0, 2.0], spec=_spec(), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([1.0, 2.0], spec=_spec(), name="x", time_axis=OrdinalAxis())
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/nullable",
@@ -260,7 +260,7 @@ def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(time_series=(series,), record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
     dataset.derive_schema()
     item = TimeFTorchDataset(dataset)[0]
 
@@ -281,8 +281,11 @@ def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, 
     else:
         array = pa.array(observations, type=pa.float32())
     offsets = pa.array([0, 2, 5, 9, 14, 20, 27, 35], type=pa.int64())
-    series = replace(
-        _lazy_series(spec, array),
+    series = Signal.from_loader(
+        spec=spec,
+        name="x",
+        loader=lambda: array,
+        n_values=len(array),
         time_axis=IrregularAxis(first_us=0, last_us=35) if irregular else RegularAxis.from_rate_hz(1),
         time_offsets_loader=(lambda: offsets) if irregular else None,
     )
@@ -290,7 +293,15 @@ def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, 
         tmp_path,
         series,
         values_backend="zarr",
-        leading_series=replace(series, time_series_id="prefix", signal="prefix"),
+        leading_series=Signal.from_loader(
+            spec=series.spec,
+            name="prefix",
+            loader=series.loader,
+            n_values=series.n_values,
+            time_axis=series.time_axis,
+            time_offsets_loader=series.time_offsets_loader,
+            id="prefix",
+        ),
         chunk_max_bytes=4,
         shard_target_bytes=32,
     )
@@ -316,8 +327,8 @@ def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, 
 
 def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monkeypatch):
     spec = _spec(nullable=True)
-    series = TimeSeries.from_values(
-        [9.0, 0.0, None, 99.0, 99.0, None, 0.0, 7.0], spec=spec, signal="x", time_axis=OrdinalAxis()
+    series = Signal.from_values(
+        [9.0, 0.0, None, 99.0, 99.0, None, 0.0, 7.0], spec=spec, name="x", time_axis=OrdinalAxis()
     )
     _write_read(tmp_path, series, values_backend="zarr", chunk_max_bytes=4, shard_target_bytes=32)
     version = DatasetVersion.open_local(tmp_path / "timenet/nullable/1.0.0")
@@ -358,7 +369,7 @@ def test_to_numpy_rejects_actual_nulls(tensor):
 
 def test_to_numpy_allows_nullable_without_nulls_and_preserves_special_floats():
     observations = np.array([0.0, np.nan, np.inf, -np.inf], dtype=np.float32)
-    series = TimeSeries.from_values(observations, spec=_spec(nullable=True), signal="x", time_axis=OrdinalAxis())
+    series = Signal.from_values(observations, spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
     np.testing.assert_array_equal(series.to_numpy(), observations)
 
 
@@ -366,11 +377,11 @@ def test_to_numpy_allows_nullable_without_nulls_and_preserves_special_floats():
 def test_torch_default_batches_mixed_nullable_series(batch_size):
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     for index in range(2):
-        nullable = TimeSeries.from_values(
-            [0.0, None], spec=_spec(nullable=True), signal="missing", time_axis=OrdinalAxis()
+        nullable = Signal.from_values([0.0, None], spec=_spec(nullable=True), name="missing", time_axis=OrdinalAxis())
+        present = Signal.from_values([0.0, 1.0], spec=_spec(), name="present", time_axis=OrdinalAxis())
+        dataset.add_record(
+            record=Record(sources=(Source(name="Source", signals=(nullable, present)),), record_id=f"record-{index}")
         )
-        present = TimeSeries.from_values([0.0, 1.0], spec=_spec(), signal="present", time_axis=OrdinalAxis())
-        dataset.add_record(time_series=(nullable, present), record_id=f"record-{index}")
     batch = next(iter(DataLoader(TimeFTorchDataset(dataset), batch_size=batch_size)))
     assert batch["series_masks"][0].tolist() == [[True, False]] * batch_size
     assert batch["series_masks"][1].tolist() == [[True, True]] * batch_size
@@ -384,7 +395,7 @@ def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
         pa.array(["a", "unknown"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(time_series=(series,), record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
     with pytest.raises(TimeFValidationError, match="categories"):
         TimeFTorchDataset(dataset)[0]
 
@@ -396,7 +407,7 @@ def test_torch_enum_direct_loader_distinguishes_category_zero_from_null(nullable
         pa.array(["a", None, "b"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(time_series=(series,), record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
     if not nullable:
         with pytest.raises(TimeFValidationError, match="null"):
             TimeFTorchDataset(dataset)[0]
@@ -413,9 +424,9 @@ def test_bool_constructors_use_numeric_truth_conversion(irregular, container, ob
     values = container(observations)
     spec = _spec("bool")
     if irregular:
-        series = TimeSeries.from_irregular(values, time_offsets_us=[0, 1], spec=spec, signal="x")
+        series = Signal.from_irregular(values, time_offsets_us=[0, 1], spec=spec, name="x")
     else:
-        series = TimeSeries.from_values(values, time_axis=OrdinalAxis(), spec=spec, signal="x")
+        series = Signal.from_values(values, time_axis=OrdinalAxis(), spec=spec, name="x")
     assert series.to_arrow().to_pylist() == [bool(value) for value in observations]
 
 
@@ -432,8 +443,8 @@ def test_bool_constructors_preserve_none_separately_from_false(irregular, contai
 
     def construct():
         if irregular:
-            return TimeSeries.from_irregular(values, time_offsets_us=[0, 1, 2, 3], spec=spec, signal="x")
-        return TimeSeries.from_values(values, time_axis=OrdinalAxis(), spec=spec, signal="x")
+            return Signal.from_irregular(values, time_offsets_us=[0, 1, 2, 3], spec=spec, name="x")
+        return Signal.from_values(values, time_axis=OrdinalAxis(), spec=spec, name="x")
 
     if nullable:
         series = construct()

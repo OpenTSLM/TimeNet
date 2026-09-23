@@ -1,25 +1,24 @@
 ---
 icon: lucide/rocket
-description: "Install TimeNet and load your first dataset from a registry."
+description: "Install TimeNet and load your first dataset from a local registry."
 tags:
   - getting-started
 ---
 
 # Get started
 
-## Install
+This guide builds a small offline dataset and loads it through the Python client.
 
-TimeNet needs Python 3.11 or newer. The core install stays small. The CLI and the PyTorch loader
-are extras. You can add them.
+## Install the client
+
+TimeNet needs Python 3.11 or newer. Install the core package, then add only the extras that you use.
 
 === "uv (recommended)"
 
-    Add TimeNet to your project with [uv](https://docs.astral.sh/uv/):
-
     ```bash
-    uv add timenet                # core: TimeF format, reader/writer, registry
-    uv add 'timenet[cli]'         # add the timenet console command
-    uv add 'timenet[torch]'       # load_torch; reuses your torch, or pulls the default build
+    uv add timenet
+    uv add 'timenet[cli]'    # add the timenet command
+    uv add 'timenet[torch]'  # add the PyTorch adapter
     ```
 
 === "pip"
@@ -30,63 +29,64 @@ are extras. You can add them.
     pip install 'timenet[torch]'
     ```
 
-=== "Global CLI"
+The `torch` extra accepts any PyTorch build. Install a CPU or accelerator build that matches your
+environment before you add the extra.
 
-    Install the CLIs anywhere. Each CLI gets its own isolated environment:
+## Install the build tool
 
-    ```bash
-    uv tool install 'timenet[cli]'       # the `timenet` command
-    uv tool install timenet-connectors   # `timenet-build` (connector authors)
-    # or, with pipx:  pipx install 'timenet[cli]'
-    ```
-
-The `torch` extra accepts any torch build. If you already have a CUDA torch (for example, for
-training), you keep it as-is. For a small CPU-only torch, install it from the PyTorch CPU index
-first:
+The `timenet-build` command ships in the separate connectors package. Install it as an isolated tool:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+uv tool install timenet-connectors
 ```
 
-To work on TimeNet or author connectors, clone the repo and sync with uv:
+Use `pipx install timenet-connectors` if you use pipx for command-line tools.
+
+## Build the example dataset
+
+Build the offline `timenet/hello-world` dataset into a local registry:
 
 ```bash
-git clone https://github.com/OpenTSLM/TimeNet.git
-cd TimeNet
-make sync  # install the dev environment (workspace + extras)
+timenet-build build timenet/hello-world --out .timenet-registry
 ```
 
-## Load a dataset
+The command needs no network access. It writes this version:
 
-!!! info "No public registry yet"
-    There is no hosted registry yet. First build the offline `timenet/hello-world` dataset into
-    a local registry. The build needs no network. The dataset comes from `timenet-connectors`.
-
-```bash
-timenet-build build timenet/hello-world
+```text
+.timenet-registry/timenet/hello-world/1.0.0/
+├── manifest.json
+├── control.duckdb
+└── time_series/
 ```
 
-The build writes into your local registry. The [`TimeNet`](client.md) client looks there by
-default. Now load the dataset:
+## Load the dataset
+
+Pass the same registry path to the client:
 
 ```python
 import pandas as pd
+
 from timenet.client import TimeNet
 
-dataset = TimeNet().load("timenet/hello-world")
-dataset.describe()  # identity, counts, a quick preview
+client = TimeNet(".timenet-registry")
+dataset = client.load("timenet/hello-world")
+dataset.describe()
 
-# Each signal converts to Arrow or NumPy, so it drops straight into pandas:
-series = dataset.records[0].time_series[0]
-df = pd.DataFrame({series.signal: series.to_numpy()})
-print(df.head())
+signal = dataset.records[0].signals[0]
+frame = pd.DataFrame({signal.name: signal.to_numpy()})
+print(frame.head())
 ```
 
-!!! tip "pandas is optional"
-    The DataFrame step uses pandas (`uv add pandas`). pandas is not a TimeNet dependency. For a
-    pure-NumPy workflow, remove it.
+The hierarchy loads immediately. Signal values remain lazy until `to_arrow()`, `to_numpy()`, or
+`read_steps()` reads them.
 
-`load` reads the dataset into a [`TimeFDataset`](timef-dataset.md) with lazy per-series values.
-`to_arrow()` and `to_numpy()` on a [`TimeSeries`](timef-dataset.md) pull the values on demand. See
-[Client](client.md) for search, version pinning, PyTorch, and the CLI. See
-[Connectors](connectors.md) and [Build](build.md) to build your own datasets.
+!!! tip "pandas is optional"
+    The DataFrame step needs pandas (`uv add pandas`). Remove that step for an Arrow or NumPy
+    workflow.
+
+Continue with these pages:
+
+- [Client](client.md) covers search, version pins, local builds, and PyTorch.
+- [Data model](data-model/index.md) explains Records, Sources, Signals, Annotations, and Tasks.
+- [Connectors](connectors.md) explains how to add a dataset.
+- [Build and publish](build.md) explains local and remote registries.

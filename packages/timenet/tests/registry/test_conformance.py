@@ -13,7 +13,7 @@ import uuid
 from _fake_registry import build_service_fake
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
@@ -43,17 +43,19 @@ def _second_dataset() -> TimeFDataset:
         )
     )
     spec = TimeSeriesSpec(spec_type="ecg_lead", name="ECG Lead", unit_value=ureg.millivolt)
-    series = TimeSeries(
+    series = Signal.from_loader(
         spec=spec,
-        signal="II",
+        name="II",
         time_axis=RegularAxis.from_rate_hz(16),
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
-        time_series_id="other-ts-0",
+        id="other-ts-0",
         n_values=16,
     )
-    record = dataset.add_record(time_series=(series,), record_id="other-record-0")
-    record.add_annotation(Annotation(key="age", value=70, unit="years", id="other-age-0"))
-    dataset.add_task(record, ClassificationTask(target="afib", id="other-task-0"))
+    record = dataset.add_record(
+        record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="other-record-0")
+    )
+    record.annotate(Annotation(key="age", value=70, unit="years", id="other-age-0"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id="other-task-0"))
     return dataset
 
 

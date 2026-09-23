@@ -1,134 +1,156 @@
 ---
 icon: lucide/plug
-description: "Load a TimeNet dataset into pandas, polars, Spark, or PyTorch."
+description: "Load TimeF Signals into pandas, Polars, PyTorch, or another array library."
 tags:
   - usage
   - pandas
   - polars
-  - spark
   - torch
 ---
 
-# Usage
+# Use a dataset
 
-Every dataset loads the same way. Then it hands off to your framework. There are two entry points:
-
-- `TimeNet().load("org/name")` returns an in-memory [`TimeFDataset`](timef-dataset.md) with lazy
-  per-series values. Use it for single-node work (pandas, polars, torch).
-- `TimeNet().download("org/name")` returns the local TimeF version directory. Its control tables are
-  Parquet. Its values plane is Parquet or Zarr, as recorded in the manifest.
-
-Example status:
-
-- [x] pandas: load a record's series into a `DataFrame`
-- [x] polars: `pl.from_arrow` over `to_arrow()`
-- [x] PyTorch: `load_torch` plus a `DataLoader`
-- [ ] Spark: planned
-
-Each series carries its own `signal` and `time_axis`. It reads its values lazily through
-`to_arrow()` / `to_numpy()`. The framework examples below all start from one loaded record.
-
-=== "pandas"
-
-    ```python
-    import numpy as np
-    import pandas as pd
-    from timenet.client import TimeNet
-
-    # read in place through the registry (lazy per-series values)
-    dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.records[0].time_series[0]
-
-    values = series.to_numpy()  # shape: (n_steps, *series.spec.value_shape)
-    # tsqa is an ordinal series: it has an order and no timeline, so there is no time
-    # column to build. A regularly sampled series would use series.time_axis.time_offset_us(i).
-    frame = pd.DataFrame({series.signal: values})
-    ```
-
-=== "polars"
-
-    ```python
-    import polars as pl
-    from timenet.client import TimeNet
-
-    dataset = TimeNet().load("chengsenwang/tsqa")
-    series = dataset.records[0].time_series[0]
-
-    # pl.from_arrow reads the Arrow array into a polars Series without a copy.
-    column = pl.from_arrow(series.to_arrow())
-    frame = pl.DataFrame({series.signal: column})
-    ```
-
-=== "Spark"
-
-    !!! planned "Planned"
-        No Spark recipe yet. `TimeNet().download("chengsenwang/tsqa")` returns the local version
-        directory. Spark can read its Parquet control tables directly. Reading series values depends
-        on the manifest's values backend: Parquet values are accessible to Parquet tooling, while
-        Zarr values need a Zarr-aware reader.
-
-=== "PyTorch"
-
-    ```python
-    from torch.utils.data import DataLoader
-    from timenet.client import TimeNet
-
-    # needs: pip install 'timenet[torch]'
-    ds = TimeNet().load_torch("chengsenwang/tsqa")
-    item = ds[0]
-    series, prompt = item["series"][0], item["tasks"][0].prompt
-
-    # Series lengths vary between records, so batch with a collate_fn that picks
-    # out what the model needs.
-    loader = DataLoader(
-        ds,
-        batch_size=8,
-        collate_fn=lambda batch: [
-            (x["series"][0], x["tasks"][0].target) for x in batch
-        ],
-    )
-    ```
-
-## Example: train a classifier end-to-end
-
-One script does the whole loop: build a dataset, load it, train a model. The `timenet/test-mean`
-demo is simple. Each record is one noisy signal. The label is `above_zero` or `below_zero`, by the
-sign of the mean. So a classifier only must recover that sign.
+Every TimeF dataset loads through the same client. Each Record contains a Source hierarchy, and each
+Source contains Signals.
 
 ```python
+from timenet.client import TimeNet
+
+dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+record = dataset.records[0]
+signal = record.signals[0]
+```
+
+The hierarchy loads first. Signal values load only when an array method reads them.
+
+## Arrow and NumPy
+
+Use `to_arrow()` to preserve Arrow types and nullable values:
+
+```python
+arrow_values = signal.to_arrow()
+```
+
+Use `to_numpy()` when the Signal has no null values:
+
+```python
+numpy_values = signal.to_numpy()
+```
+
+For nullable data, use `to_numpy_and_mask()`. The mask is true for present timesteps.
+
+```python
+values, present = signal.to_numpy_and_mask()
+observed = values[present]
+```
+
+Use `read_steps()` to read one half-open range:
+
+```python
+first_second = signal.read_steps(0, 500)
+```
+
+## pandas
+
+Create a DataFrame from one Signal:
+
+```python
+import pandas as pd
+
+frame = pd.DataFrame({signal.name: signal.to_numpy()})
+```
+
+For a regular timeline, build offsets from the Signal axis:
+
+```python
+offsets_us = [
+    signal.time_axis.time_offset_us(index)
+    for index in range(signal.n_values)
+]
+frame.insert(0, "time_offset_us", offsets_us)
+```
+
+An ordinal Signal has ordered steps but no time offsets. Do not create timestamps for that axis.
+
+## Polars
+
+Polars accepts the Arrow array directly:
+
+```python
+import polars as pl
+
+column = pl.from_arrow(signal.to_arrow())
+frame = pl.DataFrame({signal.name: column})
+```
+
+## PyTorch
+
+Install the adapter with `uv add 'timenet[torch]'`. Then load a map-style PyTorch dataset:
+
+```python
+from timenet.client import TimeNet
+
+torch_dataset = TimeNet(".timenet-registry").load_torch(
+    "timenet/hello-world"
+)
+item = torch_dataset[0]
+
+values = item["series"][0]
+present = item["series_masks"][0]
+targets = item["tasks"][0].targets
+```
+
+The adapter preserves the Signal dtype and per-timestep shape. Each mask has one Boolean value per
+timestep.
+
+Tasks and annotations remain Python objects. Signal lengths can also vary. Supply a model-specific
+`transform` or `collate_fn` when the default PyTorch batching cannot combine them.
+
+## Train a small classifier
+
+The `timenet/test-mean` connector provides a deterministic classification example. Each Record has
+one Signal and one label.
+
+```python
+from pathlib import Path
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
 from timenet.client import TimeNet
 import timenet_connectors
 
-# Build the connector's dataset into the local registry (the producer
-# side), then load it back.
-timenet_connectors.build("timenet/test-mean")
-dataset = TimeNet().load("timenet/test-mean")
+registry = Path(".timenet-registry")
+timenet_connectors.build("timenet/test-mean", out=registry)
+dataset = TimeNet(registry).load("timenet/test-mean")
 
-# Pair each record's values with its target. Materialization is deferred by
-# default (Arrow); ask for output="numpy" since scikit-learn needs it.
 x, y = dataset.to_features_and_targets(output="numpy")
-
 x_train, x_test, y_train, y_test = train_test_split(
-    x, y, test_size=0.25, stratify=y, random_state=0
+    x,
+    y,
+    test_size=0.25,
+    stratify=y,
+    random_state=0,
 )
 model = LogisticRegression(max_iter=1000).fit(x_train, y_train)
-print(f"test accuracy: {model.score(x_test, y_test):.3f}")   # -> 1.000
+print(model.score(x_test, y_test))
 ```
 
-`to_features_and_targets` defers materialization. `output="arrow"` (the default) hands back a
-`FixedSizeListArray` and a string array with no NumPy copy. The example asks for `output="numpy"`
-because scikit-learn needs it. It also takes `features="series"`. This returns one variable-length
-sequence per record (a `ListArray` / object array) instead of the rectangular `"timestep"` matrix.
-`test-mean` has a single task type, so `task` is inferred here. When a dataset carries several
-tasks, pass `task=...`.
+The helper infers the task type because this dataset has one scalar target type. Pass `task=` when a
+dataset contains several eligible task types.
 
-The full runnable version is
+The runnable version is
 [`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
 
-!!! tip "scikit-learn is optional"
-    It backs this example only. It is not a TimeNet dependency. Run `pip install scikit-learn`, then
-    `python examples/test_mean_classifier.py`. TimeNet hands you the values as NumPy or Arrow. The
-    model on top is your choice.
+## Work with downloaded files
+
+`download()` returns a local TimeF version directory:
+
+```python
+path = TimeNet().download("org/name@1.0.0")
+```
+
+The directory contains `manifest.json`, `control.duckdb`, and a Parquet or Zarr values plane. Use the
+TimeNet reader when you need reconstructed Python objects and lazy Signal values.
+
+See [TimeF format](timef-format.md) for direct access to the physical layout.

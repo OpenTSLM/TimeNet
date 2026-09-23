@@ -1,6 +1,6 @@
 ---
 icon: lucide/book-open
-description: "TimeFReader: read a TimeF version directory back into a TimeFDataset."
+description: "Read a TimeF version into a TimeFDataset without running connector code."
 tags:
   - reference
   - reader
@@ -8,104 +8,104 @@ tags:
 
 # TimeFReader
 
-`TimeFReader` converts a committed TimeF version into an in-memory [`TimeFDataset`](timef-dataset.md).
-It is the inverse of [`TimeFWriter`](timef-writer.md). It uses only `manifest.json` and never runs
-connector code. It reads through a [`DatasetVersion`](registry.md) handle, which holds the manifest
-and a view of the version's files on the file system. As a result, a read never opens the registry
-again or parses the manifest again. `TimeFReader` is in the `timenet.reader` module.
+`TimeFReader` opens a committed TimeF version and reconstructs a
+[`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
+handle contains the parsed manifest and access to the version files. The reader never imports or
+runs connector code.
 
 ```python
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion, open_registry
 
-# From a registry (reads in place, no download):
-version = open_registry("~/timenet/registry").open_version("timenet/hello-world")
-# ...or from a version directory already on disk:
-version = DatasetVersion.open_local(version_dir)
+# Read through a registry.
+version = open_registry("~/timenet/registry").open_version(
+    "timenet/hello-world"
+)
+
+# You can also open a version directory directly.
+local_version = DatasetVersion.open_local(version_dir)
 
 with TimeFReader(version) as reader:
     dataset = reader.read()
-    values = dataset.records[0].time_series[0].to_arrow()
+    values = dataset.records[0].signals[0].to_arrow()
 ```
 
-You can use `TimeFReader` as a context manager. Its `close()` method, called by `__exit__`, releases
-the open handles and decoded-chunk caches of the selected values backend.
+Use the reader as a context manager when possible. `close()` releases open value files and decoded
+chunk caches.
 
-## What is eager vs lazy
+## What loads when
 
-`__init__` reads nothing. The handle already has the parsed manifest. Every table resolves on first
-use.
+Creating the reader does not open the control database. The first request for records, tasks, or
+annotations opens `control.duckdb` in read-only mode.
 
-`TimeFReader` reads the time-series index and the annotations table one pruned row group at a time.
-It decodes only the row groups that a lookup's key statistics cannot rule out. Tasks decode on first
-access to `.tasks`. Per-series values and `Record` construction stay lazy. `read()` and
-`iter_records()` build records with loader closures. When the code calls `to_arrow()`, `to_numpy()`,
-or `read_steps()`, these closures pull data from storage.
+Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
+`to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
-`iter_records(record_ids=...)` filters on the stored id column. It streams records one at a time and
-does not build a `TimeFDataset`.
+`iter_records(record_ids=...)` yields records one at a time. It does not create a complete
+`TimeFDataset`.
 
-`TimeFReader` keeps the index as Arrow data and searches it per lookup. It does not expand the index
-into one Python object per row. As a result, when a large dataset opens, the memory it uses stays
-proportional to the size of the index file. It does not grow to a multiple of that size. Each index
-row uses about 180 bytes of memory. A row is one `(record, series, chunk)` tuple.
+Tasks have three useful read paths:
+
+- `tasks` loads and caches every task.
+- `iter_tasks(records)` yields tasks for selected Records in bounded batches.
+- `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
+  Python task objects.
+
+Objects keep their identity within one reader. For example, a task input is the same `Record`
+instance that `iter_records()` returned.
 
 ## Type reconstruction
 
-`TimeFReader` reads specs, data sources, and annotation metadata directly from the manifest's flat
-descriptors. It does not create any classes at runtime. `TimeSeries.spec` is the `TimeSeriesSpec`
-descriptor for its `spec_type`. `TimeFReader` rebuilds annotations as real `Annotation` instances. It
-decodes the values from JSON and rebuilds the span as a `TimePoint`, `TimeInterval`, `StepPoint`, or
-`StepInterval`. It resolves tasks against the built-in `TASKS` registry and links `from_tasks`.
+The manifest describes the dataset schema and its files. The DuckDB control database stores the
+object hierarchy and relationships. The reader combines both sources to rebuild standard TimeNet
+types.
 
-Everything pickles and compares equal to the original data, field by field. This equality is why
-multiprocessing `DataLoader` workers are safe.
+Annotation values return with their stored types. Spans return as `TimePoint`, `TimeInterval`,
+`StepPoint`, or `StepInterval`. The task type selects a built-in task class, and `from_tasks`
+contains resolved Task objects.
 
 ## Value reads
 
-Each series' loader resolves its index rows, sorted by `chunk_idx`. The loader dispatches through the
-manifest's `values_backend`. For Parquet, `chunk_file`, `chunk_major_idx`, and `chunk_minor_idx`
-identify the shard, row group, and row offset. For Zarr, they identify the array path and the start
-offset in time.
+Each Signal has ordered chunk locations in `control.duckdb`. For Parquet, a location identifies a
+shard, row group, and row. For Zarr, it identifies an array path and a range. Range reads select only
+the chunks that intersect the requested range.
 
-Scalars use a primitive Arrow array. N-D values use `pa.FixedShapeTensorArray`, whose length is the
-number of timesteps. `to_numpy()` is the explicit conversion to the array framework and keeps the
-spec's dtype and trailing shape. Range-aware reads select only the requested chunks in time.
-`TimeFReader` caches Parquet handles and decoded Zarr chunks for the life of the reader. When the code
-calls `close()`, it releases them.
+Scalar values use Arrow arrays. Multidimensional values use `pa.FixedShapeTensorArray`.
+`to_numpy()` preserves the declared dtype and trailing shape. The reader caches open Parquet files
+and decoded Zarr chunks until it closes.
 
 ## API
 
 | Member | Description |
 | --- | --- |
-| `read()` | Materialize the full `TimeFDataset`. |
-| `iter_records()` | Yield each `Record` lazily. |
-| `verify()` | Hash every manifest-listed artifact and reject missing or mismatched content. |
-| `metadata` / `schema` / `tasks` / `values_backend` | Reconstructed metadata, schema, tasks, and selected values backend. |
+| `read()` | Create the complete `TimeFDataset`. |
+| `iter_records()` | Yield Records without building a dataset. |
+| `iter_tasks(records)` | Yield tasks for selected Records in bounded batches. |
+| `task_table()` | Return the task table with public IDs. |
+| `target_table()` | Return ordered task targets with public IDs. |
+| `annotation_table()` | Return annotation occurrences with public IDs. |
+| `verify()` | Check every manifest-listed file against its size and checksum. |
+| `metadata` | Return the dataset metadata. |
+| `schema` | Return the dataset schema. |
+| `tasks` | Return all reconstructed tasks. |
+| `values_backend` | Return the selected values backend. |
 
-## Errors
+## Errors and integrity
 
-`DatasetVersion.open_local` and a registry's `open_version` build the handle. If the version directory
-has no `manifest.json`, they raise `FileNotFoundError`. If the manifest is malformed or is an
-unsupported version, they raise `TimeFFormatError` (an `TimeNetInvalidManifestError`).
+`DatasetVersion.open_local()` and `open_version()` require a valid `manifest.json`. They raise
+`TimeFFormatError` for an invalid or unsupported manifest.
 
-Opening the reader reads nothing else. As a result, the reader does not catch a missing or corrupt
-file at open time. The error surfaces on the first access that needs the file. Tasks raise the error
-on first access to `.tasks`. Records raise it on iteration. The index and annotations raise it on the
-first read that needs them.
+Other files remain lazy. A missing `control.duckdb` therefore fails on the first control-plane
+request. A missing values file fails when a Signal reads the affected chunk. Errors include the
+relevant file or table context.
 
-A corrupt control-plane table raises `TimeFFormatError` with its context. You can call `verify()` for
-an integrity check at construction time. It reopens every listed file through the handle and raises
-`TimeFFormatError` on a missing or mismatched file.
+Call `verify()` to check all files before reading data. It raises `TimeFFormatError` when a file is
+missing or does not match the manifest.
 
 ## Round-trip guarantee
 
-For a dataset that passes writer validation, `TimeFReader(...).read()` restores every record's
-`record_id`, `subject_ids`, `task_ids`, and annotations. It also restores each series' `spec`,
-`signal`, `source_id`, `time_series_id`, window, and values, with the exact dtype and shape
-preserved. It restores each task's payload and resolved `from_tasks`. `TimeSeries` object identity is
-not preserved. `time_series_id` is the durable handle.
+For valid writer input, the reader restores Records, Sources, Signals, annotations, and tasks. It
+also restores task relationships and Signal values with their original dtype and shape. Public IDs
+are the durable references. Python object identity from the writer process is not preserved.
 
----
-
-The [API reference for `timenet.reader`](api/reader.md) has the full symbol listing.
+See the [API reference for `timenet.reader`](api/reader.md) for all members.

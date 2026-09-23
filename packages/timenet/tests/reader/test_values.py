@@ -57,7 +57,7 @@ def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
     rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
-    spec = make_dataset().records[0].time_series[0].spec
+    spec = next(signal for record in make_dataset().records for signal in record.signals).spec
 
     # The reader keys its row-group cache on the handle's root, so the same relative path under two
     # different roots must not collide; only version.root is touched here (_shard is stubbed).
@@ -83,7 +83,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         for record in reader.iter_records(with_annotations=False):
-            for series in record.time_series:
+            for series in record.signals:
                 values = series.to_arrow()
                 assert values.offset == 0
                 assert values.get_total_buffer_size() == values.nbytes
@@ -95,8 +95,11 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
-        series = record.time_series[0]
-        rows = reader._index_rows(record.record_id, series.time_series_id)
+        series = record.signals[0]
+        control = reader._control_reader()
+        row = control.connection.execute("SELECT signal_key FROM signals WHERE signal_id = ?", [series.id]).fetchone()
+        assert row is not None
+        rows = control.chunk_rows_by_key(row[0], series.id)
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()
