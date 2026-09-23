@@ -11,6 +11,7 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.series import (
     _audio_rate_hz,
     axis_for,
     series_for,
+    source_for,
     time_offsets_us,
 )
 
@@ -69,18 +70,33 @@ def test_an_audio_rate_that_is_not_a_positive_integer_fails_by_name(rate):
         _audio_rate_hz("coughvid", {"sr": rate}, ("audio",))
 
 
-def test_a_frame_becomes_one_series_per_value_column():
+def test_a_frame_becomes_one_signal_per_value_column():
     frame = pd.DataFrame({"Time (min)": _MINUTES, "CGM (mg/dL)": _GLUCOSE})
     series = series_for("cgmacros", _PATH, {"cgm_df": frame, "GT": 1.0}, _RECORD)
-    assert [item.signal for item in series] == ["cgm_df.CGM (mg/dL)"]
+    assert [item.name for item in series] == ["cgm_df.CGM (mg/dL)"]
     only = series[0]
     assert only.spec.spec_type == "cgm"
     assert only.n_values == 4
-    assert only.time_series_id == f"{_RECORD}-cgm_df.CGM (mg/dL)"
+    assert only.id == f"{_RECORD}-cgm_df.CGM (mg/dL)"
+    assert only.source_id == _RECORD
     assert only.time_axis == IrregularAxis(first_us=0, last_us=540_000_000)
 
 
-def test_the_series_of_one_case_are_sorted_by_signal_name():
+def test_the_source_is_named_after_the_corpus_and_holds_every_signal():
+    frame = pd.DataFrame({"Time (min)": _MINUTES, "CGM (mg/dL)": _GLUCOSE})
+    source = source_for("cgmacros", _PATH, {"cgm_df": frame, "GT": 1.0}, _RECORD)
+    assert source.id == f"{_RECORD}-source"
+    assert source.name == "CGMacros"
+    assert source.metadata == {"provider": "PhysioNet"}
+    assert [signal.name for signal in source.signals] == ["cgm_df.CGM (mg/dL)"]
+
+
+def test_a_directory_that_names_no_corpus_fails_by_name():
+    with pytest.raises(TimeFFormatError, match="names no upstream corpus"):
+        source_for("vitaldb", _PATH, {"GT": 1.0}, _RECORD)
+
+
+def test_the_signals_of_one_case_are_sorted_by_name():
     values = np.linspace(0.2, 0.6, 3)
     payload = {
         "hr_dfs": {"hr_1": pd.DataFrame({"timestamp": pd.to_timedelta([0, 1, 2], unit="s"), "hr": values})},
@@ -91,7 +107,7 @@ def test_the_series_of_one_case_are_sorted_by_signal_name():
         "GT": {"A": "1", "B": "2"},
     }
     series = series_for("harespod", _PATH, payload, _RECORD)
-    assert [item.signal for item in series] == [
+    assert [item.name for item in series] == [
         "hr_dfs.hr_1.hr",
         "respiration_dfs.respiration_A.rsp",
         "respiration_dfs.respiration_B.rsp",
@@ -107,7 +123,7 @@ def test_the_index_column_is_read_as_the_axis_and_not_as_a_series():
         }
     )
     series = series_for("cgmacros", _PATH, {"window_df": frame, "GT": 1}, _RECORD)
-    assert [item.signal for item in series] == ["window_df.Libre GL"]
+    assert [item.name for item in series] == ["window_df.Libre GL"]
 
 
 def test_an_index_column_that_counts_from_somewhere_else_fails_by_name():
@@ -127,7 +143,7 @@ def test_an_index_column_that_counts_from_somewhere_else_fails_by_name():
 def test_the_walk_never_descends_into_the_answer():
     frame = pd.DataFrame({"Time (min)": _MINUTES, "CGM (mg/dL)": _GLUCOSE})
     payload = {"cgm_df": frame, "GT": {"held_out": frame}}
-    assert [item.signal for item in series_for("cgmacros", _PATH, payload, _RECORD)] == ["cgm_df.CGM (mg/dL)"]
+    assert [item.name for item in series_for("cgmacros", _PATH, payload, _RECORD)] == ["cgm_df.CGM (mg/dL)"]
 
 
 def test_an_unknown_value_column_fails_by_name():
