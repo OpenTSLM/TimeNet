@@ -1,4 +1,4 @@
-"""Turning one HEARTS payload into time series: the specs, the axis rule, and the lazy loaders.
+"""Turning one HEARTS payload into signals: the specs, the axis rule, and the lazy loaders.
 
 The axis is decided per series from that series' own time column, never per corpus. HARESPOD frames
 step at a constant 10 ms or 1 s and get a :class:`~timenet.dataset.axis.RegularAxis`. CGMacros
@@ -6,6 +6,9 @@ windows are not uniform: a single reference window carries two-, three- and seve
 among its one-minute ones, so those get an :class:`~timenet.dataset.axis.IrregularAxis` and an
 explicit stream of microsecond offsets. Audio buffers carry no time column and take their rate from
 the payload, or from the reference implementation where the release ships none.
+
+A record's signals hang off one :class:`~timenet.dataset.Source` named after the upstream corpus the
+case was cut from, so the provenance a spec used to state travels with the hierarchy instead.
 """
 
 from collections.abc import Callable, Iterator
@@ -16,67 +19,64 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal, Source
 from timenet.dataset.axis import IrregularAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFFormatError
-from timenet.types import DataSource, TimeSeriesSpec, ureg
+from timenet.types import TimeSeriesSpec, ureg
 from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import dig, load_payload, require_pandas
 
 
-_CGMACROS = DataSource(data_source_type="physionet", name="CGMacros", provider="PhysioNet")
-_HARESPOD = DataSource(data_source_type="figshare", name="HARESPOD", provider="figshare")
-_COSWARA = DataSource(data_source_type="github", name="Coswara-Data", provider="IISc LEAP Lab")
-_COUGHVID = DataSource(data_source_type="zenodo", name="COUGHVID", provider="EPFL EMBED")
-_VCTK = DataSource(data_source_type="datashare", name="VCTK Corpus", provider="University of Edinburgh")
+_CORPORA: dict[str, tuple[str, str]] = {
+    "cgmacros": ("CGMacros", "PhysioNet"),
+    "harespod": ("HARESPOD", "figshare"),
+    "coswara": ("Coswara-Data", "IISc LEAP Lab"),
+    "coughvid": ("COUGHVID", "EPFL EMBED"),
+    "vctk": ("VCTK Corpus", "University of Edinburgh"),
+}
+"""The upstream corpus each release directory redistributes: its name and who publishes it. The name
+becomes the record's :class:`~timenet.dataset.Source`."""
 
 _CGM = TimeSeriesSpec(
     spec_type="cgm",
     name="Interstitial glucose",
     unit_value=ureg.milligram / ureg.deciliter,
     dtype="float64",
-    data_source=_CGMACROS,
 )
 _RESPIRATION_NORM = TimeSeriesSpec(
     spec_type="respiration_norm",
     name="Respiration (min-max scaled)",
     unit_value=ureg.dimensionless,
     dtype="float64",
-    data_source=_HARESPOD,
 )
 _SPO2_NORM = TimeSeriesSpec(
     spec_type="spo2_norm",
     name="Oxygen saturation (min-max scaled)",
     unit_value=ureg.dimensionless,
     dtype="float64",
-    data_source=_HARESPOD,
 )
 _HEART_RATE_NORM = TimeSeriesSpec(
     spec_type="heart_rate_norm",
     name="Heart rate (min-max scaled)",
     unit_value=ureg.dimensionless,
     dtype="float64",
-    data_source=_HARESPOD,
 )
 _AUDIO_COSWARA = TimeSeriesSpec(
     spec_type="audio_coswara",
     name="Coswara respiratory audio",
     unit_value=ureg.dimensionless,
     dtype="float32",
-    data_source=_COSWARA,
 )
 _AUDIO_COUGHVID = TimeSeriesSpec(
     spec_type="audio_coughvid",
     name="COUGHVID cough audio",
     unit_value=ureg.dimensionless,
     dtype="float32",
-    data_source=_COUGHVID,
 )
 _AUDIO_VCTK = TimeSeriesSpec(
     spec_type="audio_vctk",
     name="VCTK speech waveform",
     unit_value=ureg.dimensionless,
     dtype="float32",
-    data_source=_VCTK,
 )
 
 _COLUMN_SPECS: dict[tuple[str, str], TimeSeriesSpec] = {
@@ -300,8 +300,8 @@ def _frame_series(
     record_id: str,
     keys: tuple[str, ...],
     frame: Any,
-) -> Iterator[TimeSeries]:
-    """Yield one series per value column of one frame.
+) -> Iterator[Signal]:
+    """Yield one signal per value column of one frame.
 
     Args:
         source: The corpus the payload came from.
@@ -311,7 +311,7 @@ def _frame_series(
         frame: The frame itself.
 
     Yields:
-        One :class:`~timenet.dataset.TimeSeries` per value column.
+        One :class:`~timenet.dataset.Signal` per value column.
 
     Raises:
         TimeFFormatError: If the frame holds no rows, has no time column, restates its time column
@@ -343,20 +343,20 @@ def _frame_series(
                 f"the (source, column) pair to _COLUMN_SPECS"
             )
         signal = ".".join((*keys, str(column)))
-        yield TimeSeries(
+        yield Signal.from_loader(
             spec=spec,
-            signal=signal,
+            name=signal,
             time_axis=axis,
             loader=_column_loader(path, keys, str(column), spec.dtype),
             time_offsets_loader=_offsets_loader(path, keys, time_column) if irregular else None,
             source_id=record_id,
-            time_series_id=f"{record_id}-{signal}",
+            id=f"{record_id}-{signal}",
             n_values=len(frame),
         )
 
 
-def series_for(source: str, path: Path, payload: dict[str, Any], record_id: str) -> tuple[TimeSeries, ...]:
-    """Build every series one test case carries, in signal order.
+def series_for(source: str, path: Path, payload: dict[str, Any], record_id: str) -> tuple[Signal, ...]:
+    """Build every signal one test case carries, in name order.
 
     Args:
         source: The corpus the payload came from.
@@ -365,13 +365,13 @@ def series_for(source: str, path: Path, payload: dict[str, Any], record_id: str)
         record_id: The owning record's id.
 
     Returns:
-        The record's series, sorted by signal so the order does not depend on dict order.
+        The record's signals, sorted by name so the order does not depend on dict order.
 
     Raises:
         TimeFFormatError: If an audio buffer has no spec, an array has a shape this connector does
             not read, or a frame cannot be read.
     """
-    series: list[TimeSeries] = []
+    series: list[Signal] = []
     for keys, node in _walk(payload, path, require_pandas().DataFrame):
         if isinstance(node, np.ndarray):
             spec = _AUDIO_SPECS.get(source)
@@ -379,16 +379,48 @@ def series_for(source: str, path: Path, payload: dict[str, Any], record_id: str)
                 raise TimeFFormatError(f"HEARTS {source} has a bare array at {'.'.join(keys)} but no audio spec")
             signal = ".".join(keys)
             series.append(
-                TimeSeries(
+                Signal.from_loader(
                     spec=spec,
-                    signal=signal,
+                    name=signal,
                     time_axis=RegularAxis.from_rate_hz(_audio_rate_hz(source, payload, keys)),
                     loader=_array_loader(path, keys, spec.dtype),
                     source_id=record_id,
-                    time_series_id=f"{record_id}-{signal}",
+                    id=f"{record_id}-{signal}",
                     n_values=int(node.size),
                 )
             )
         else:
             series.extend(_frame_series(source, path, record_id, keys, node))
-    return tuple(sorted(series, key=lambda item: item.signal))
+    return tuple(sorted(series, key=lambda item: item.name))
+
+
+def source_for(source: str, path: Path, payload: dict[str, Any], record_id: str) -> Source:
+    """Build the one source a test case's record hangs its signals off.
+
+    The source is named after the upstream corpus the case was cut from, and its metadata names
+    the corpus's publisher, so a consumer can tell a CGMacros window from a HARESPOD segment
+    without reading a spec.
+
+    Args:
+        source: The corpus directory the payload came from.
+        path: The test-case file.
+        payload: The payload read from that file.
+        record_id: The owning record's id.
+
+    Returns:
+        The source holding every signal of the case.
+
+    Raises:
+        TimeFFormatError: If the corpus directory is not one this connector converts, or a signal
+            cannot be built from the payload.
+    """
+    corpus = _CORPORA.get(source)
+    if corpus is None:
+        raise TimeFFormatError(f"HEARTS directory {source!r} names no upstream corpus this connector converts")
+    name, provider = corpus
+    return Source(
+        id=f"{record_id}-source",
+        name=name,
+        signals=series_for(source, path, payload, record_id),
+        metadata={"provider": provider},
+    )
