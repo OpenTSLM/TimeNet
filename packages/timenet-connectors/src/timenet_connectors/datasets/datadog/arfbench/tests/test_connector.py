@@ -77,7 +77,7 @@ _ROWS = [
         "question": "Does either series show an anomaly?",
         "task_category": "Anomaly Presence",
         "difficulty": "Tier 2",
-        # The same option list as row 0, so the two share one registered annotation.
+        # The same option list as row 0, so the two share one dataset annotation.
         "options_str": json.dumps(_YES),
         "correct_answer": _YES[1],
         "query_group": "900_1,901_0",
@@ -85,6 +85,9 @@ _ROWS = [
         "interpolate_2": "0",
     },
 ]
+
+# The four (metric, interval) pairs the three questions resolve to, which is the record list.
+_RECORD_IDS = ["arfbench-900_0-10", "arfbench-900_1-10", "arfbench-900_1-60", "arfbench-901_0-60"]
 
 _CSV_COLUMNS = [
     "Unnamed: 0",
@@ -147,8 +150,16 @@ def dataset(source):
     return ARFBenchConnector().convert([source])
 
 
-def _signal(dataset, record_index, name):
-    return next(ts for ts in dataset.records[record_index].time_series if ts.signal == name)
+def _record(dataset, record_id):
+    return next(record for record in dataset.records if record.record_id == record_id)
+
+
+def _signal(dataset, record_id, name):
+    return next(signal for signal in _record(dataset, record_id).signals if signal.name == name)
+
+
+def _annotation(annotated, key):
+    return next(annotation for annotation in annotated.annotations if annotation.key == key)
 
 
 def test_is_a_connector():
@@ -158,6 +169,7 @@ def test_is_a_connector():
 def test_metadata():
     metadata = ARFBenchConnector().metadata()
     assert metadata.dataset_id == "datadog/arfbench"
+    assert str(metadata.dataset_version) == "2.0.0"
     assert str(metadata.license) == "Apache-2.0"
     assert str(metadata.access) == "open"
     assert metadata.citation is not None
@@ -165,10 +177,10 @@ def test_metadata():
     assert [str(domain) for domain in metadata.domains] == ["observability"]
 
 
-def test_one_record_and_one_task_per_question(dataset):
-    assert [record.record_id for record in dataset.records] == ["arfbench-000", "arfbench-001", "arfbench-002"]
+def test_one_record_per_series_file_and_one_task_per_question(dataset):
+    assert [record.record_id for record in dataset.records] == _RECORD_IDS
     tasks = list(dataset.iter_tasks())
-    assert len(tasks) == len(_ROWS)
+    assert [task.id for task in tasks] == ["arfbench-000", "arfbench-001", "arfbench-002"]
     assert all(isinstance(task, AnswerTask) for task in tasks)
     # The tasks stream, so nothing writes them onto the records.
     assert all(record.task_ids == () for record in dataset.records)
@@ -176,24 +188,29 @@ def test_one_record_and_one_task_per_question(dataset):
 
 def test_the_task_stream_answers_the_same_tasks_every_time_it_is_read(dataset):
     # iter_tasks is public, so a consumer may read the stream again, and a one-shot generator would
-    # yield nothing the second time. The dataset no longer holds every task, so it cannot check ids
-    # for duplicates and this pins that instead.
+    # yield nothing the second time. The writer reads the stream more than once, so the ids have to
+    # come from the rows rather than from a fresh uuid per read.
     first = list(dataset.iter_tasks())
     second = list(dataset.iter_tasks())
     assert len(first) == len(second) == len(_ROWS)
-    assert [task.record_ids for task in first] == [task.record_ids for task in second]
+    assert [task.id for task in first] == [task.id for task in second]
+    assert [[record.id for record in task.inputs] for task in first] == [
+        [record.id for record in task.inputs] for task in second
+    ]
     assert [task.prompt for task in first] == [task.prompt for task in second]
-    assert len({task.id for task in first}) == len(_ROWS)
 
 
 def test_interval_is_the_finest_one_every_cited_metric_publishes(source, dataset):
-    intervals = [
-        next(annotation.value for annotation in record.annotations if annotation.key == "interval_s")
-        for record in dataset.records
-    ]
-    # 900_0 and 900_1 both publish 10 s; 901_0's finest is 60 s, so the last question drops to 60.
-    assert intervals == [10, 10, 60]
     assert source.published == {"900_0": (10,), "900_1": (10, 60), "901_0": (60, 3600)}
+    tasks = list(dataset.iter_tasks())
+    # 900_0 and 900_1 both publish 10 s; 901_0's finest is 60 s, so the last question drops to 60 and
+    # reads 900_1 through its 60 s record, not its 10 s one.
+    assert [[record.id for record in task.inputs] for task in tasks] == [
+        ["arfbench-900_0-10"],
+        ["arfbench-900_0-10", "arfbench-900_1-10"],
+        ["arfbench-900_1-60", "arfbench-901_0-60"],
+    ]
+    assert [_annotation(record, "interval_s").value for record in dataset.records] == [10, 10, 60, 60]
 
 
 def test_a_question_whose_metrics_share_no_interval_is_rejected():
@@ -203,14 +220,14 @@ def test_a_question_whose_metrics_share_no_interval_is_rejected():
 
 def test_rows_come_back_sorted_by_group_then_epoch(dataset):
     # The fixture file stores these 12 rows shuffled and its pandas index does not restore the order.
-    assert list(_signal(dataset, 0, "900_0/dc:1").to_numpy()) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-    assert list(_signal(dataset, 0, "900_0/dc:2").to_numpy()) == [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+    assert list(_signal(dataset, "arfbench-900_0-10", "dc:1").to_numpy()) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert list(_signal(dataset, "arfbench-900_0-10", "dc:2").to_numpy()) == [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
 
 
 def test_the_pandas_index_column_reaches_nothing(dataset):
-    names = {ts.signal for record in dataset.records for ts in record.time_series}
+    names = {signal.name for record in dataset.records for signal in record.signals}
     annotations = [annotation for record in dataset.records for annotation in record.annotations] + list(
-        dataset.registered_annotations
+        dataset.annotations
     )
     assert not any("__index_level_0__" in name for name in names)
     assert not any("__index_level_0__" in f"{a.key}{a.value}" for a in annotations)
@@ -218,7 +235,7 @@ def test_the_pandas_index_column_reaches_nothing(dataset):
 
 
 def test_a_null_value_becomes_a_missing_timestep(dataset):
-    signal = _signal(dataset, 1, "900_1/value")
+    signal = _signal(dataset, "arfbench-900_1-10", "value")
     assert signal.n_values == 4
     assert signal.to_arrow().null_count == 1
     values, valid = signal.to_numpy_and_mask()
@@ -252,7 +269,7 @@ def test_a_file_whose_values_are_all_null_keeps_its_signal(tmp_path):
     path = tmp_path / "900_5_10.parquet"
     _write_hazard_file(path, [("dc:1", 0, None), ("dc:1", 10, None)])
     signals = arfbench._signals_for(str(path), "900_5", 10)
-    assert [ts.signal for ts in signals] == ["900_5/dc:1"]
+    assert [signal.name for signal in signals] == ["dc:1"]
     _, valid = signals[0].to_numpy_and_mask()
     assert list(valid) == [False, False]
 
@@ -280,13 +297,12 @@ def test_an_observation_before_the_shared_anchor_is_rejected(tmp_path):
 
 
 def test_an_empty_tag_label_becomes_a_named_signal(dataset):
-    names = {ts.signal for record in dataset.records for ts in record.time_series}
-    assert "900_1/value" in names
-    assert all(ts.signal for record in dataset.records for ts in record.time_series)
+    assert [signal.name for signal in _record(dataset, "arfbench-900_1-10").signals] == ["value"]
+    assert all(signal.name for record in dataset.records for signal in record.signals)
 
 
 def test_a_complete_signal_gets_a_regular_axis(dataset):
-    axis = _signal(dataset, 0, "900_0/dc:1").time_axis
+    axis = _signal(dataset, "arfbench-900_0-10", "dc:1").time_axis
     assert isinstance(axis, RegularAxis)
     assert axis.period_us == Fraction(10_000_000)
     # The first observation is 10 s after the shared anchor, so it is step 1 of the grid.
@@ -294,78 +310,90 @@ def test_a_complete_signal_gets_a_regular_axis(dataset):
 
 
 def test_a_gapped_signal_gets_an_irregular_axis_with_its_own_offsets(dataset):
-    signal = _signal(dataset, 1, "900_1/value")
+    signal = _signal(dataset, "arfbench-900_1-10", "value")
     assert isinstance(signal.time_axis, IrregularAxis)
     assert (signal.time_axis.first_us, signal.time_axis.last_us) == (0, 50_000_000)
     assert list(signal.time_offsets_us()) == [0, 10_000_000, 40_000_000, 50_000_000]
 
 
 def test_a_single_observation_stays_regular(dataset):
-    signal = _signal(dataset, 2, "901_0/web")
+    signal = _signal(dataset, "arfbench-901_0-60", "web")
     assert signal.n_values == 1
     assert isinstance(signal.time_axis, RegularAxis)
     assert signal.time_axis.start_index == 2
 
 
 def test_a_metric_two_questions_cite_is_stored_once(dataset):
-    shared = _signal(dataset, 0, "900_0/dc:1")
-    assert _signal(dataset, 1, "900_0/dc:1") is shared
-    assert shared.time_series_id == "arfbench-900_0-10-0"
-    assert shared.source_id == "900_0@10s"
+    # Questions 0 and 1 both cite 900_0 at 10 s. They share the one record that owns its signals
+    # rather than each carrying a copy, so the dataset holds four records for five citations.
+    tasks = list(dataset.iter_tasks())
+    shared = _record(dataset, "arfbench-900_0-10")
+    assert tasks[0].inputs[0] is shared
+    assert tasks[1].inputs[0] is shared
+    assert len(dataset.records) == 4
+    signal = _signal(dataset, "arfbench-900_0-10", "dc:1")
+    assert signal.id == "arfbench-900_0-10-0"
+    assert signal.source_id == "900_0@10s"
 
 
-def test_two_metrics_in_one_record_keep_distinct_signal_names(dataset):
-    names = [ts.signal for ts in dataset.records[1].time_series]
-    assert names == ["900_0/dc:1", "900_0/dc:2", "900_1/value"]
+def test_every_record_is_one_metric_at_one_interval(dataset):
+    record = _record(dataset, "arfbench-900_0-10")
+    assert [source.name for source in record.sources] == ["metric 900_0 at 10 s"]
+    assert [signal.name for signal in record.signals] == ["dc:1", "dc:2"]
+    assert record.start_time == arfbench.ANCHOR_US
+    assert [(a.key, a.value, a.unit) for a in record.annotations] == [
+        ("metric_id", "900_0", None),
+        ("incident_id", "900", None),
+        ("interval_s", 10, "second"),
+    ]
 
 
 def test_tasks_carry_the_question_and_its_answer(dataset):
     task = next(iter(dataset.iter_tasks()))
     assert task.prompt == _ROWS[0]["question"]
     assert "\n" in task.prompt
-    assert task.target == _YES[0]
-    assert task.record_ids == ("arfbench-000",)
-    options = {annotation.id: annotation for annotation in dataset.registered_annotations}
-    referenced = options[task.input_annotation_ids[0]]
+    assert task.targets == (_YES[0],)
+    assert [record.id for record in task.inputs] == ["arfbench-900_0-10"]
+    (referenced,) = task.input_annotations
     assert referenced.key == "answer_options"
-    assert task.target in referenced.value
+    assert task.targets[0] in referenced.value
+    # The occurrence the task names is one attached to the dataset, which is what the writer checks.
+    assert referenced.occurrence_id in {annotation.occurrence_id for annotation in dataset.annotations}
 
 
-def test_one_registered_annotation_per_distinct_option_list(dataset):
-    ids = {annotation.id for annotation in dataset.registered_annotations}
+def test_one_dataset_annotation_per_distinct_option_list(dataset):
+    options = [annotation for annotation in dataset.annotations if annotation.key == "answer_options"]
     tasks = list(dataset.iter_tasks())
     # Rows 0 and 2 offer the same two options, so three questions reference two lists.
-    assert len(ids) == 2
-    assert tasks[0].input_annotation_ids == tasks[2].input_annotation_ids
-    assert tasks[1].input_annotation_ids != tasks[0].input_annotation_ids
+    assert len(options) == len(dataset.annotations) == 2
+    assert tasks[0].input_annotations[0].id == tasks[2].input_annotations[0].id
+    assert tasks[1].input_annotations[0].id != tasks[0].input_annotations[0].id
 
 
-def test_record_annotations(dataset):
-    keys = [annotation.key for annotation in dataset.records[0].annotations]
-    assert keys == ["task_category", "difficulty", "query_group", "interval_s", "incident_ids", "interpolate_1"]
-    interval = dataset.records[0].annotations[3]
-    assert (interval.value, interval.unit) == (10, "second")
-    incidents = next(a for a in dataset.records[2].annotations if a.key == "incident_ids")
-    assert incidents.value == ["900", "901"]
+def test_task_annotations(dataset):
+    tasks = list(dataset.iter_tasks())
+    assert [annotation.key for annotation in tasks[0].annotations] == ["task_category", "difficulty", "interpolate_1"]
+    assert [(a.key, a.value) for a in tasks[1].annotations] == [
+        ("task_category", "Anomaly Correlation"),
+        ("difficulty", "Tier 3"),
+    ]
+    # Two questions in the same category share one annotation content and carry their own occurrence.
+    first, third = _annotation(tasks[0], "task_category"), _annotation(tasks[2], "task_category")
+    assert first.value == third.value == "Anomaly Presence"
+    assert first.id == third.id
+    assert first.occurrence_id != third.occurrence_id
     # The flags ride only on the rows that set them.
-    assert not any(a.key.startswith("interpolate") for a in dataset.records[1].annotations)
+    assert _annotation(tasks[0], "interpolate_1").value is True
+    assert not any(a.key.startswith("interpolate") for task in tasks[1:] for a in task.annotations)
 
 
-def test_schema_has_one_spec_and_one_descriptor_per_key(dataset):
+def test_schema_has_one_spec_and_one_descriptor_per_record_key(dataset):
     schema = dataset.derive_schema()
     assert [spec.spec_type for spec in schema.time_series_specs] == ["metric"]
     assert schema.time_series_specs[0].dtype == "float64"
     # A null observation is stored as a missing timestep, which the spec has to allow.
     assert schema.time_series_specs[0].nullable
-    assert {descriptor.key for descriptor in schema.annotations} == {
-        "task_category",
-        "difficulty",
-        "query_group",
-        "interval_s",
-        "incident_ids",
-        "interpolate_1",
-        "answer_options",
-    }
+    assert {descriptor.key for descriptor in schema.annotations} >= {"metric_id", "incident_id", "interval_s"}
     assert schema.tasks == (AnswerTask,)
 
 
@@ -374,20 +402,32 @@ def test_round_trip_through_the_writer_and_the_reader(dataset, tmp_path):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         read_back = reader.read()
-    assert [record.record_id for record in read_back.records] == ["arfbench-000", "arfbench-001", "arfbench-002"]
-    assert len(read_back.tasks) == 3
-    gapped = _signal(read_back, 1, "900_1/value")
+    assert [record.record_id for record in read_back.records] == _RECORD_IDS
+    tasks = sorted(read_back.tasks, key=lambda task: task.id)
+    assert [task.id for task in tasks] == ["arfbench-000", "arfbench-001", "arfbench-002"]
+    # A task's inputs come back as the read records, in citation order, and the reverse map is rebuilt.
+    assert [record.id for record in tasks[1].inputs] == ["arfbench-900_0-10", "arfbench-900_1-10"]
+    assert tasks[1].inputs[0] is _record(read_back, "arfbench-900_0-10")
+    assert [task.id for task in read_back.tasks_for(_record(read_back, "arfbench-900_1-60"))] == ["arfbench-002"]
+    assert {(a.key, a.value) for a in tasks[0].annotations} == {
+        ("task_category", "Anomaly Presence"),
+        ("difficulty", "Tier 1"),
+        ("interpolate_1", True),
+    }
+    assert tasks[0].input_annotations[0].key == "answer_options"
+    assert tasks[0].input_annotations[0].value == _YES
+    gapped = _signal(read_back, "arfbench-900_1-10", "value")
     values, valid = gapped.to_numpy_and_mask()
     assert list(valid) == [True, True, False, True]
     assert [values[index] for index in (0, 1, 3)] == [0.5, 1.5, 5.5]
     assert list(gapped.time_offsets_us()) == [0, 10_000_000, 40_000_000, 50_000_000]
-    regular = _signal(read_back, 0, "900_0/dc:1")
+    regular = _signal(read_back, "arfbench-900_0-10", "dc:1")
     assert regular.time_axis == RegularAxis(period_us=Fraction(10_000_000), start_index=1)
     assert list(regular.to_numpy()) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
 def test_convert_reads_no_values_until_they_are_asked_for(source, dataset):
-    signal = _signal(dataset, 0, "900_0/dc:1")
+    signal = _signal(dataset, "arfbench-900_0-10", "dc:1")
     for parquet in source.ts_dir.glob("*.parquet"):
         parquet.unlink()
     arfbench._read_file.cache_clear()
