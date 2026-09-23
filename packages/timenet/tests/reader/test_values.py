@@ -83,7 +83,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         for record in reader.iter_records(with_annotations=False):
-            for series in record.time_series:
+            for series in record.signals:
                 values = series.to_arrow()
                 assert values.offset == 0
                 assert values.get_total_buffer_size() == values.nbytes
@@ -95,7 +95,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
-        series = record.time_series[0]
+        series = record.signals[0]
         control = reader._control_reader()
         row = control.connection.execute("SELECT signal_key FROM signals WHERE signal_id = ?", [series.id]).fetchone()
         assert row is not None

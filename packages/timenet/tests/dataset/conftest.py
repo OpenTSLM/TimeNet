@@ -3,7 +3,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import TimeSeries
+from timenet.dataset import Signal
 from timenet.dataset.axis import RegularAxis
 from timenet.types import TimeSeriesSpec, ureg
 
@@ -32,6 +32,6 @@ def make_series(spec):
             fields["id"] = fields.pop("time_series_id")
         if "signal" in fields:
             fields["name"] = fields.pop("signal")
-        return TimeSeries.from_loader(**fields)
+        return Signal.from_loader(**fields)
 
     return _make

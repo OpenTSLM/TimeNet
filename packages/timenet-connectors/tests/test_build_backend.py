@@ -65,7 +65,7 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         assert len(dataset.records) == 3
-        assert len(dataset.records[0].time_series[0].to_numpy()) == 16
+        assert len(dataset.records[0].signals[0].to_numpy()) == 16
 
 
 def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, monkeypatch):

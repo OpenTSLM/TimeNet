@@ -12,7 +12,7 @@ import pyarrow as pa
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record, check_span_within_window
 from timenet.dataset.source import Source
-from timenet.dataset.time_series import TimeSeries
+from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
@@ -70,8 +70,8 @@ class TimeFDataset:  # noqa: PLR0904
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
         self._sources_by_id: dict[str, Source] = {}
-        self._signals_by_id: dict[str, TimeSeries] = {}
-        self._signals_by_record_id: dict[str, tuple[TimeSeries, ...]] = {}
+        self._signals_by_id: dict[str, Signal] = {}
+        self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
         self._task_ids: set[str] = set()
         self._annotations: list[Annotation] = []
@@ -128,7 +128,7 @@ class TimeFDataset:  # noqa: PLR0904
         return sorted(duplicates)
 
     @classmethod
-    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, TimeSeries]]:
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, Signal]]:
         """Collect one record's hierarchy and reject IDs repeated inside it.
 
         Returns:
@@ -141,12 +141,8 @@ class TimeFDataset:  # noqa: PLR0904
         source_duplicates = cls._duplicate_ids(source.id for source in sources)
         if source_duplicates:
             raise TimeFValidationError(f"record {record.record_id!r} contains duplicate source IDs {source_duplicates}")
-        signals = (
-            tuple(
-                signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
-            )
-            if sources
-            else tuple(record.time_series)
+        signals = tuple(
+            signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
         )
         signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
         if signal_duplicates:
@@ -686,9 +682,9 @@ class TimeFDataset:  # noqa: PLR0904
         return tuple(found)
 
     @staticmethod
-    def _task_signals(task: Task) -> tuple[TimeSeries, ...]:
+    def _task_signals(task: Task) -> tuple[Signal, ...]:
         """Return all Signals referenced directly as target items."""
-        return tuple(target for target in task.targets or () if isinstance(target, TimeSeries))
+        return tuple(target for target in task.targets or () if isinstance(target, Signal))
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:

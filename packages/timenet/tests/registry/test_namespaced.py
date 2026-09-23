@@ -1,4 +1,4 @@
-from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion, LocalRegistry
@@ -29,7 +29,7 @@ def _namespaced_dataset() -> TimeFDataset:
         name="Series",
         unit_value=ureg.dimensionless,
     )
-    series = TimeSeries.from_loader(
+    series = Signal.from_loader(
         spec=spec,
         name="v",
         time_axis=RegularAxis.from_rate_hz(1),
