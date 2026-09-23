@@ -145,27 +145,34 @@ carried.
 
 ## What one record holds
 
-**Series.** One per value column of every pandas frame in the payload, plus one per bare float
+**One source, named after the corpus.** A record hangs every signal off one `Source`, whose id is
+the record id plus `-source` and whose name is the upstream corpus the case was cut from:
+`CGMacros`, `HARESPOD`, `Coswara-Data`, `COUGHVID` or `VCTK Corpus`. The source's metadata names the
+corpus's publisher (`PhysioNet`, `figshare`, `IISc LEAP Lab`, `EPFL EMBED`, `University of
+Edinburgh`). That is where the provenance lives; a spec states what a signal measures and nothing
+about where it came from.
+
+**Signals.** One per value column of every pandas frame in the payload, plus one per bare float
 array, named after the payload's own key path and the column: `respiration_dfs.respiration_A.rsp`,
-`data.signal`, `waveform`. A record's series are sorted by that name, because a Python dict fixes no
-order and two builds of one release must agree. Over the real release this is 1,555 series and
-211,959,663 values *(measured)*.
+`data.signal`, `waveform`. A signal's id is the record id plus that name. A record's signals are
+sorted by name, because a Python dict fixes no order and two builds of one release must agree. Over
+the real release this is 1,555 signals and 211,959,663 values *(measured)*.
 
 Seven specs cover them:
 
-| spec | unit | dtype | corpus |
+| spec | unit | dtype | source |
 | --- | --- | --- | --- |
-| `cgm` | mg/dL | float64 | CGMacros |
-| `respiration_norm` | dimensionless | float64 | HARESPOD |
-| `spo2_norm` | dimensionless | float64 | HARESPOD |
-| `heart_rate_norm` | dimensionless | float64 | HARESPOD |
-| `audio_coswara` | dimensionless | float32 | Coswara |
-| `audio_coughvid` | dimensionless | float32 | COUGHVID |
-| `audio_vctk` | dimensionless | float32 | VCTK |
+| `cgm` | mg/dL | float64 | `CGMacros` |
+| `respiration_norm` | dimensionless | float64 | `HARESPOD` |
+| `spo2_norm` | dimensionless | float64 | `HARESPOD` |
+| `heart_rate_norm` | dimensionless | float64 | `HARESPOD` |
+| `audio_coswara` | dimensionless | float32 | `Coswara-Data` |
+| `audio_coughvid` | dimensionless | float32 | `COUGHVID` |
+| `audio_vctk` | dimensionless | float32 | `VCTK Corpus` |
 
 The dtypes are the release's own. Nothing is promoted or demoted.
 
-**The time axis is decided per series, from that series' own time column, never per corpus.** A
+**The time axis is decided per signal, from that signal's own time column, never per corpus.** A
 column whose steps are all equal becomes a `RegularAxis` holding a period. Anything else becomes an
 `IrregularAxis` plus an explicit int64 microsecond offset stream. HARESPOD frames step at a constant
 10 ms or 1 s and take the first branch. The CGMacros windows take the second, because they are
@@ -182,13 +189,15 @@ payload's `sr`, or 16000 Hz for VCTK.
 | `testcase_idx` | the case index in that directory | `hearts:provenance` | the file's name |
 | `values_normalized` | `true`, on HARESPOD records only | `hearts:provenance` | the entry below |
 | `audio_quality` | the integer Coswara quality rating | `hearts:provenance` | `data.quality` |
-| `symptoms` | the subject's symptom map | `hearts:agent_input` | the `symptoms` key |
-| `answer_options` | one directory's answer set | registered once per directory | the validators |
+| `symptoms` | the symptom map, as canonical JSON text | `hearts:agent_input` | the `symptoms` key |
+| `answer_options` | one directory's answer set | attached to the dataset once | the validators |
 
-`symptoms` is the only payload field the reference harness shows its agent besides the series, and
-it reaches one Coswara directory. `answer_options` is registered on the dataset and referenced by
-the tasks of its directory, rather than copied onto each of them: 12 annotations in all
-*(measured)*.
+`symptoms` is the only payload field the reference harness shows its agent besides the signals, and
+it reaches one Coswara directory. An annotation value is a string, a number, a boolean or a list of
+strings, so the map is stored as JSON with sorted keys, the same text an `AnswerTask` holds for a
+structured answer; see the entry below. `answer_options` is attached to the dataset once per
+directory, and every task of that directory names that one occurrence rather than carrying a copy:
+12 annotations in all *(measured)*.
 
 **Subject ids are namespaced by their corpus**: `cgmacros-CGMacros-007`, `vctk-p361`. The five
 corpora number their subjects independently and nothing in the release says two ids from different
@@ -216,10 +225,11 @@ question-answering type.
 
 The two scalar directories predict in `mg/dL` and in `mg*min/dL`.
 
-A `ClassificationTask` carries the answer vocabulary of its directory through
-`input_annotation_ids`, and its `target_schema` is the id of that same registered annotation, so the
-field resolves to the set rather than naming a string nothing holds. One function builds the id and
-both ends read it from there.
+A `ClassificationTask` carries the answer vocabulary of its directory in `input_annotations`, as the
+occurrence the dataset attached, and its `target_schema` is the content id of that same annotation,
+so the field resolves to the set rather than naming a string nothing holds. One function builds the
+id and both ends read it from there. The one directory with a `symptoms` input names the record's
+own occurrence of it after the vocabulary.
 
 An answer that is not already text is mapped to the form the harness scores: a boolean becomes
 `"true"` or `"false"` (172 answers), the VCTK direction index 0 or 1 becomes `"forward"` or
@@ -229,7 +239,7 @@ already the label. Every mapped label is checked against that directory's vocabu
 that changes its wording stops the build instead of storing a label nothing accepts.
 
 **The tasks stream, and the connector holds none of them.** `set_task_stream` gets them, so each
-task carries its own `record_ids` and the stored record rows carry no `task_ids`. A consumer who
+task names its own record in `inputs` and the stored record rows carry no `task_ids`. A consumer who
 reads the whole dataset loses nothing by it: `TimeFReader.read()` rebuilds that reverse map from the
 task rows. One who walks the records without their tasks reads the field empty. 1,005 tasks would
 fit in a list, so this follows the repo's convention rather than a memory limit. The stream walks
@@ -342,6 +352,20 @@ records it equals the stored offset stream divided by 60,000,000 *(measured)*, w
 check enforces. Most of the index is not. 903 of the 1,033 frames carry a label that is not a range
 from zero (it is the row's position in the corpus frame the window was cut from) and nothing stored
 recovers it *(measured)*. The other 130 frames carry a plain range.
+
+### The symptom map is stored as JSON text — **Handled**
+
+**Problem.** The one Coswara directory that shows its agent the subject's symptoms hands it a map of
+symptom name to boolean. An annotation value is a string, a number, a boolean or a list of strings,
+and a map is none of those.
+
+**Decision.** Store the map as canonical JSON with sorted keys, under the `symptoms` key the release
+uses, with every NumPy boolean rebuilt as a Python one first. The alternatives lose something: one
+annotation per symptom would drop the map's shape, and a list of the symptoms present would drop the
+ones the release states as absent.
+
+**Consequence.** A consumer parses the text to read a symptom. The 50 maps of that directory are
+short, and nothing else in the release is a map the agent sees.
 
 ### A JSON answer records no dtype — **Handled**
 
@@ -456,9 +480,9 @@ the whole object is rebuilt. That holds for the answer too: it cannot be reached
 the whole payload.
 
 **Decision.** Read each file once in `convert` to learn the shapes, once more in the task stream to
-reach its answer, and let the per-series loaders re-read it when the writer drains them, backed by a
-two-entry payload cache. The cache is small on purpose: the writer walks series in spec-type order,
-so every series of one file that shares a spec type is contiguous in that walk and two entries serve
+reach its answer, and let the per-signal loaders re-read it when the writer drains them, backed by a
+two-entry payload cache. The cache is small on purpose: the writer walks signals in spec-type order,
+so every signal of one file that shares a spec type is contiguous in that walk and two entries serve
 all of them.
 
 **Consequence.** A build reads about 4.0 GB over 1.26 GB of files: every file three times, plus a

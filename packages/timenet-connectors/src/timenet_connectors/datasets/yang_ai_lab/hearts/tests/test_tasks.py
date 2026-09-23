@@ -3,8 +3,10 @@ import json
 import numpy as np
 import pytest
 
+from timenet.dataset import Record
 from timenet.errors import TimeFFormatError
 from timenet.types import (
+    Annotation,
     AnswerTask,
     ClassificationTask,
     ScalarPredictionTask,
@@ -18,6 +20,7 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import (
     TaskDefinition,
     _answer_text,
     _label,
+    annotation_value,
     build_task,
     name_vocabulary,
     option_annotations,
@@ -25,10 +28,11 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import (
 )
 
 
-# This module takes values and gives tasks. Nothing here reads a file.
+# This module takes values and gives tasks. Nothing here reads a file, and the record a task names
+# carries no signal: build_task reads only its id.
 
 _PREFIX = "hearts"
-_RECORD = "hearts-coswara-audio_classification-30"
+_RECORD = Record(record_id="hearts-coswara-audio_classification-30")
 
 
 def _definition(task: str) -> TaskDefinition:
@@ -151,7 +155,7 @@ def test_every_option_of_every_vocabulary_maps_to_itself():
 def test_a_number_with_a_unit_becomes_a_scalar_prediction():
     task = build_task(_definition("iauc_calculation"), _RECORD, 859.8333333333333, (), _PREFIX)
     assert isinstance(task, ScalarPredictionTask)
-    assert task.target == pytest.approx(859.8333333333333)
+    assert task.targets == (pytest.approx(859.8333333333333),)
     assert task.unit == "mg*min/dL"
     assert task.target_name == "postprandial_iauc"
 
@@ -159,13 +163,13 @@ def test_a_number_with_a_unit_becomes_a_scalar_prediction():
 def test_a_structured_answer_becomes_canonical_json():
     task = build_task(_definition("hr_resp_pairing"), _RECORD, {"B": "2", "A": "1"}, (), _PREFIX)
     assert isinstance(task, AnswerTask)
-    assert task.target == '{"A": "1", "B": "2"}'
+    assert task.targets == ('{"A": "1", "B": "2"}',)
 
 
 def test_a_whole_meal_minute_lands_on_the_minute():
     task = build_task(_definition("meal_time_localization"), _RECORD, np.int64(4), (), _PREFIX)
     assert isinstance(task, TemporalLocalizationTask)
-    assert task.target == (TimePoint.micros(4 * 60_000_000),)
+    assert task.targets == (TimePoint.micros(4 * 60_000_000),)
 
 
 def test_a_fractional_meal_minute_keeps_its_fraction():
@@ -173,7 +177,7 @@ def test_a_fractional_meal_minute_keeps_its_fraction():
     # minute without a word, so the fraction reaches the stored microsecond.
     task = build_task(_definition("meal_time_localization"), _RECORD, 4.5, (), _PREFIX)
     assert isinstance(task, TemporalLocalizationTask)
-    assert task.target == (TimePoint.micros(4 * 60_000_000 + 30_000_000),)
+    assert task.targets == (TimePoint.micros(4 * 60_000_000 + 30_000_000),)
 
 
 def test_a_negative_meal_minute_stops_the_build():
@@ -183,13 +187,17 @@ def test_a_negative_meal_minute_stops_the_build():
 
 def test_the_task_carries_the_prompt_and_the_inputs_it_was_given():
     definition = _definition("cough_covid_status_classification_with_symptoms")
-    ids = ("hearts-options-cough_covid_status_classification_with_symptoms", f"{_RECORD}-symptoms")
-    task = build_task(definition, _RECORD, "healthy", ids, _PREFIX)
-    assert task.id == f"{_RECORD}-qa"
+    occurrences = (
+        Annotation(key=OPTIONS_KEY, value=["healthy", "covid_positive"])._new_occurrence(),
+        Annotation(key="symptoms", value="{}")._new_occurrence(),
+    )
+    task = build_task(definition, _RECORD, "healthy", occurrences, _PREFIX)
+    assert task.id == f"{_RECORD.record_id}-qa"
     assert task.prompt == definition.prompt
-    assert task.input_annotation_ids == ids
-    # The task is streamed, so nothing attaches it to its record afterwards.
-    assert task.record_ids == (_RECORD,)
+    assert task.input_annotations == occurrences
+    # The task is streamed, so nothing attaches it to its record afterwards: it names the record.
+    assert task.inputs == (_RECORD,)
+    assert task.inputs[0] is _RECORD
 
 
 @pytest.mark.parametrize(
@@ -204,6 +212,23 @@ def test_the_task_carries_the_prompt_and_the_inputs_it_was_given():
 )
 def test_a_number_is_written_at_its_shortest_round_tripping_text(answer, expected):
     assert _answer_text(answer) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (np.int64(2), 2),
+        (np.bool_(True), True),
+        ("speech", "speech"),
+        (["a", "b"], ["a", "b"]),
+        ({"fever": np.bool_(False), "cough": True}, '{"cough": true, "fever": false}'),
+        ([1, 2], "[1, 2]"),
+    ],
+)
+def test_an_annotation_value_is_a_scalar_a_list_of_strings_or_canonical_json(value, expected):
+    rebuilt = annotation_value(value)
+    assert rebuilt == expected
+    assert type(rebuilt) is type(expected)
 
 
 def test_plain_rebuilds_a_nested_node_out_of_python_types():
