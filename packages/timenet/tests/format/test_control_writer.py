@@ -42,7 +42,7 @@ def _dataset() -> TimeFDataset:
     ecg = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
     monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
     record = Record(record_id="record-1", sources=(monitor,))
-    record.add_annotation(Annotation(id="sex-male", key="patient_sex", value="male"))
+    record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="org/control-writer",

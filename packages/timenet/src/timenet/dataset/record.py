@@ -358,7 +358,7 @@ class Record(SupportsAnnotate):
             time_series_ids=time_series_ids,
         )
 
-    def add_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
+    def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
         """Attach an annotation to the record and return it.
 
         Args:
@@ -379,18 +379,6 @@ class Record(SupportsAnnotate):
         self.annotations = (*self.annotations, attached)
         return attached
 
-    def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
-        """Attach one annotation through the declarative API.
-
-        Args:
-            annotation: The typed annotation to attach.
-            warn_when_outside: Warn and keep a temporal annotation outside the recording window.
-
-        Returns:
-            The attached annotation occurrence.
-        """
-        return self.add_annotation(annotation, warn_when_outside=warn_when_outside)
-
     def add_annotations(
         self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
     ) -> tuple[Annotation, ...]:
@@ -398,17 +386,17 @@ class Record(SupportsAnnotate):
 
         The whole batch is validated before any of it is attached: if one annotation fails a check, the
         call raises and leaves the record unchanged. To keep the annotations before a failure attached,
-        loop :meth:`add_annotation` instead.
+        loop :meth:`annotate` instead.
 
         Args:
-            annotations: The annotations to attach. Pass a single one to :meth:`add_annotation`.
-            warn_when_outside: As on :meth:`add_annotation`.
+            annotations: The annotations to attach. Pass a single one to :meth:`annotate`.
+            warn_when_outside: As on :meth:`annotate`.
 
         Returns:
             New occurrences that share the input annotations' reusable content, in the order given.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_annotation`.
+            TimeFValidationError: as documented on :meth:`annotate`.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         batch = tuple(annotations)
         for annotation in batch:
@@ -418,17 +406,17 @@ class Record(SupportsAnnotate):
         return attached
 
     def _validate_annotation(self, annotation: Annotation, *, warn_when_outside: bool = True) -> None:
-        """Run :meth:`add_annotation`'s checks without attaching it.
+        """Run :meth:`annotate`'s checks without attaching it.
 
         Split out so :meth:`add_annotations` can validate a whole batch before committing it in one tuple
         concatenation.
 
         Args:
             annotation: The annotation to check.
-            warn_when_outside: As on :meth:`add_annotation`.
+            warn_when_outside: As on :meth:`annotate`.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`add_annotation`.
+            TimeFValidationError: as documented on :meth:`annotate`.
         """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(

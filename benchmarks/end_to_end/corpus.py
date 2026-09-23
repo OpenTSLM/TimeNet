@@ -300,7 +300,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             signals=signals,
             metadata={"subject_id": "subject-ecg"},
         )
-        record.add_annotation(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
+        record.annotate(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
@@ -333,7 +333,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             source_name="TSQA row",
             signals=series,
         )
-        record.add_annotation(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
@@ -362,7 +362,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             source_name="Synthetic mean generator",
             signals=(series,),
         )
-        record.add_annotation(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record,),
@@ -409,7 +409,7 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             signals=(tensor(values, spec, name),),
             metadata={"subject_id": f"subject-rich-{name}"},
         )
-        record.add_annotation(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
+        record.annotate(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
 def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
@@ -430,7 +430,7 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
         signals=series,
         metadata={"subject_id": "subject-nonfloat"},
     )
-    record.add_annotation(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
+    record.annotate(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
 
 
 def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
