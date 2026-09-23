@@ -5,6 +5,7 @@ from timenet.types.annotations import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    SupportsAnnotate,
     annotation_type_of,
     value_type_of,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "StepInterval",
     "StepPoint",
     "StepSpan",
+    "SupportsAnnotate",
     "TSCorrespondenceTask",
     "TSEditingTask",
     "TSGenerationTask",

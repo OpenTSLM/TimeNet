@@ -11,7 +11,7 @@ import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Span, StepInterval, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
 
 
 def _validate_enum_values(
@@ -72,7 +72,7 @@ def _array_from_values(
 
 
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
-class Signal:
+class Signal(SupportsAnnotate):
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
 
     Each Signal has exactly one owning Source. Several Signals can share an immutable TimeAxis or

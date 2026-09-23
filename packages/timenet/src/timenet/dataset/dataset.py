@@ -19,6 +19,7 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
+    SupportsAnnotate,
     Task,
     annotation_type_of,
     value_type_of,
@@ -57,7 +58,7 @@ class _TaskValidationIndex:
         return known
 
 
-class TimeFDataset:  # noqa: PLR0904
+class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:

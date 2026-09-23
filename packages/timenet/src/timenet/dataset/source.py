@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, new_id
+from timenet.types import Annotation, SupportsAnnotate, new_id
 
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(kw_only=True)
-class Source:
+class Source(SupportsAnnotate):
     """A device, sensor, or subsystem that contains child sources and signals."""
 
     name: str
