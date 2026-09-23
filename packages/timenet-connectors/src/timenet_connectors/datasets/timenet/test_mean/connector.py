@@ -13,9 +13,9 @@ from pathlib import Path
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
-from timenet.types import ClassificationTask, DataSource, TimeSeriesSpec, ureg
+from timenet.types import ClassificationTask, TimeSeriesSpec, ureg
 
 
 _N_RECORDS = 1000
@@ -24,12 +24,10 @@ _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build byte-for-byte identical
 
-_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SIGNAL = TimeSeriesSpec(
     spec_type="signal",
     name="Signal",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 
 
@@ -67,14 +65,24 @@ class TestMeanConnector(BaseConnector[None]):
             series = TimeSeries.from_values(
                 values,
                 spec=_SIGNAL,
-                signal="signal",
+                name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
                 source_id=f"rec-{index}",
-                time_series_id=f"ts-{index}",
+                id=f"ts-{index}",
             )
-            record = dataset.add_record(time_series=(series,), record_id=f"record-{index}")
+            record = Record(
+                record_id=f"record-{index}",
+                sources=(
+                    Source(
+                        id=f"source-{index}",
+                        name="Synthetic generator",
+                        signals=(series,),
+                    ),
+                ),
+            )
+            dataset.add_record(record=record)
             label = "above_zero" if offset > 0 else "below_zero"
-            dataset.add_task(record, ClassificationTask(target=label, id=f"task-{index}"))
+            dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(label,), id=f"task-{index}"))
         return dataset
 
 

@@ -11,7 +11,7 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from typing import Any
 
@@ -65,7 +65,15 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     id: str = field(default_factory=new_id)
-    """Unique identifier, a UUIDv7 string by default."""
+    """Reusable content identifier, a UUIDv7 string by default."""
+    occurrence_id: str | None = field(default=None, compare=False)
+    """Identity of one attachment. It is assigned by ``annotate()``."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Optional metadata that is part of the reusable content."""
+    confidence: float | None = field(default=None, compare=False)
+    """Optional confidence for this particular application."""
+    occurrence_metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+    """Optional metadata for this particular application."""
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
@@ -91,6 +99,20 @@ class Annotation:
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
+
+    @property
+    def content_id(self) -> str:
+        """Return the identity of the reusable annotation content."""
+        return self.id
+
+    @property
+    def name(self) -> str:
+        """Return the annotation's public name."""
+        return self.key
+
+    def _new_occurrence(self) -> "Annotation":
+        """Return an internal copy representing one new attachment occurrence."""
+        return replace(self, occurrence_id=new_id())
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:
@@ -134,7 +156,8 @@ def value_type_of(value: Any) -> str | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list" | "map"``, or ``None`` for a pure marker.
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker. A list
+        holds strings only, such as the vocabulary of a classification target.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
@@ -147,10 +170,12 @@ def value_type_of(value: Any) -> str | None:
         (int, "int"),
         (float, "float"),
         (str, "str"),
-        (list | tuple, "list"),
-        (dict, "map"),
     )
     for value_type, tag in tags:
         if isinstance(value, value_type):
             return tag
+    if isinstance(value, list | tuple):
+        if all(isinstance(item, str) for item in value):
+            return "list"
+        raise TimeFValidationError("annotation list values must hold strings only")
     raise TimeFValidationError(f"unsupported annotation value type: {type(value).__name__}")

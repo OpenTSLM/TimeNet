@@ -5,14 +5,13 @@ from collections.abc import Callable, Sequence
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
-    DataSource,
     Domain,
     License,
     LocalizationMode,
@@ -67,29 +66,26 @@ def sine_loader(
 
 
 _RATE_HZ = 16.0
-_SOURCE = DataSource(data_source_type="synthetic", name="Synthetic Generator", provider="TimeNet")
 _SINE = TimeSeriesSpec(
     spec_type="sine",
     name="Sine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
     unit_value=ureg.dimensionless,
-    data_source=_SOURCE,
 )
 
 
 def _series(spec, signal, n, time_series_id, source_id, phase=0.0):  # noqa: PLR0913, PLR0917
-    return TimeSeries(
+    return TimeSeries.from_loader(
         spec=spec,
-        signal=signal,
+        name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
         source_id=source_id,
-        time_series_id=time_series_id,
+        id=time_series_id,
         n_values=n,
     )
 
@@ -97,7 +93,7 @@ def _series(spec, signal, n, time_series_id, source_id, phase=0.0):  # noqa: PLR
 def make_dataset() -> TimeFDataset:
     """Build a deterministic dataset that exercises every TimeF feature.
 
-    The dataset covers two modalities over a shared data source. Two records share one series.
+    The dataset covers two modalities over a shared data source. Every signal has one owning source.
     One long series exercises chunk splitting. One record uses a windowed series. It uses all three
     annotation shapes, and one annotation appears in two records. It chains a classification task
     to an answer task, and the answer carries a rationale and an input annotation. It also adds a
@@ -122,12 +118,19 @@ def make_dataset() -> TimeFDataset:
     cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
     record0 = dataset.add_record(
-        time_series=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
-        subject_ids=("subj-0",),
-        record_id="record-0",
-        start_time=9_007_199_254_740_993,  # anchored record, the other records stay unanchored
+        record=Record(
+            record_id="record-0",
+            sources=(
+                Source(
+                    id="source-record-0",
+                    name="Synthetic monitor",
+                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
+                ),
+            ),
+            start_time=9_007_199_254_740_993,
+        )
     )
-    record0.add_annotations(
+    _, record0_cohort, _, _ = record0.add_annotations(
         [
             Annotation(key="age", value=64, unit="years", id="age-0"),
             cohort,
@@ -139,24 +142,31 @@ def make_dataset() -> TimeFDataset:
             ),
         ]
     )
-    classification = ClassificationTask(target="normal", id="task-cls-0")
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
     dataset.add_tasks(
-        record0,
-        [
+        tasks=[
             classification,
             AnswerTask(
+                inputs=(record0,),
                 prompt="What rhythm?",
-                target="Normal.",
+                targets=("Normal.",),
                 rationale="Regular intervals with one peak per cycle.",
-                input_annotation_ids=(cohort.id,),
+                input_annotations=(record0_cohort,),
                 from_tasks=(classification,),
                 id="task-answer-0",
             ),
-            ScalarPredictionTask(target=62.0, unit="bpm", target_name="mean_rate", id="task-scalar-0"),
+            ScalarPredictionTask(
+                inputs=(record0,),
+                targets=(62.0,),
+                unit="bpm",
+                target_name="mean_rate",
+                id="task-scalar-0",
+            ),
             TemporalLocalizationTask(
+                inputs=(record0,),
                 prompt="Locate the stimulus and the artifact.",
                 mode=LocalizationMode.SPARSE,
-                target=(
+                targets=(
                     TimePoint.seconds(0.5),
                     TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.time_series_id,)),
                 ),
@@ -166,18 +176,33 @@ def make_dataset() -> TimeFDataset:
     )
 
     record1 = dataset.add_record(
-        time_series=(shared, _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0)),
-        subject_ids=("subj-1",),
-        record_id="record-1",
+        record=Record(
+            record_id="record-1",
+            sources=(
+                Source(
+                    id="source-record-1",
+                    name="Synthetic monitor",
+                    signals=(
+                        _series(_SINE, "a", 16, "ts-short-1", "rec-1"),
+                        _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0),
+                    ),
+                ),
+            ),
+        )
     )
-    record1.add_annotation(cohort)  # same instance and id, so two records share it
+    record1.add_annotation(cohort)  # A new occurrence shares the cohort content across both records.
 
     window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
-    record2 = dataset.add_record(time_series=(window,), subject_ids=("subj-0",), record_id="record-2")
+    record2 = dataset.add_record(
+        record=Record(
+            record_id="record-2",
+            sources=(Source(id="source-record-2", name="Synthetic monitor", signals=(window,)),),
+        )
+    )
     dataset.add_task(
-        record2,
-        ClassificationTask(
-            target="onset",
+        task=ClassificationTask(
+            inputs=(record2,),
+            targets=("onset",),
             id="task-cls-2",
             scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.time_series_id,)),
         ),
@@ -208,18 +233,37 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     for record_id, exp in exp_records.items():
         act = act_records[record_id]
         assert exp.start_time == act.start_time, f"start_time differs for {record_id}"
-        assert exp.subject_ids == act.subject_ids, f"subject_ids differ for {record_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
+        assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
         assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
             f"annotations differ for {record_id}"
         )
-        _assert_series_equal(record_id, exp.time_series, act.time_series)
+        _assert_sources_equal(record_id, exp.sources, act.sources)
+        _assert_series_equal(record_id, exp.signals, act.signals)
 
     exp_tasks = {t.id: t for t in expected.tasks}
     act_tasks = {t.id: t for t in actual.tasks}
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         assert exp_task == act_tasks[task_id], f"task {task_id} differs"
+
+
+def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
+    """Assert two recursive source hierarchies are logically equal."""
+    exp = {source.id: source for root in expected for source in root.walk_sources()}
+    act = {source.id: source for root in actual for source in root.walk_sources()}
+    assert exp.keys() == act.keys(), f"source ids differ for {record_id}"
+    for source_id, exp_source in exp.items():
+        act_source = act[source_id]
+        assert exp_source.name == act_source.name, f"source name differs for {source_id}"
+        assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
+        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
+        assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
+            f"child sources differ for {source_id}"
+        )
+        assert {signal.id for signal in exp_source.signals} == {signal.id for signal in act_source.signals}, (
+            f"source signals differ for {source_id}"
+        )
 
 
 def _assert_series_equal(record_id: str, expected: tuple[TimeSeries, ...], actual: tuple[TimeSeries, ...]) -> None:
@@ -231,8 +275,9 @@ def _assert_series_equal(record_id: str, expected: tuple[TimeSeries, ...], actua
         act_ts = act[series_id]
         assert exp_ts.spec == act_ts.spec, f"spec differs for {series_id}"
         assert exp_ts.signal == act_ts.signal, f"signal differs for {series_id}"
-        assert exp_ts.source_id == act_ts.source_id, f"source_id differs for {series_id}"
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
+        assert exp_ts.metadata == act_ts.metadata, f"metadata differs for {series_id}"
+        assert exp_ts.annotations == act_ts.annotations, f"annotations differ for {series_id}"
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare

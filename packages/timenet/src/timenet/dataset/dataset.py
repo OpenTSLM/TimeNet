@@ -1,7 +1,8 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from datetime import datetime
+from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
 
@@ -10,6 +11,7 @@ import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record, check_span_within_window
+from timenet.dataset.source import Source
 from timenet.dataset.time_series import TimeSeries
 from timenet.errors import TimeFValidationError
 from timenet.types import (
@@ -18,17 +20,44 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     Task,
-    TimeInterval,
     annotation_type_of,
     value_type_of,
 )
+from timenet.values_backends import ValuesBackend
 
 
 T = TypeVar("T")
 TTask = TypeVar("TTask", bound=Task)
 
 
-class TimeFDataset:
+class _TaskValidationIndex:
+    """Hash-table lookups shared by every task in one validation pass."""
+
+    def __init__(self, dataset: "TimeFDataset") -> None:
+        self.records_by_id = dataset._records_by_id
+        self.signals_by_id = dataset._signals_by_id
+        self.signals_by_record_id = dataset._signals_by_record_id
+        self.dataset_annotation_ids = {
+            annotation.occurrence_id for annotation in dataset._annotations if annotation.occurrence_id is not None
+        }
+        self._record_annotation_ids: dict[str, set[str]] = {}
+
+    def annotation_ids_for(self, record: Record) -> set[str]:
+        """Return occurrence IDs attached anywhere in one Record hierarchy."""
+        known = self._record_annotation_ids.get(record.id)
+        if known is not None:
+            return known
+        annotations = [*record.annotations]
+        for source in record.walk_sources():
+            annotations.extend(source.annotations)
+            for signal in source.signals:
+                annotations.extend(signal.annotations)
+        known = {annotation.occurrence_id for annotation in annotations if annotation.occurrence_id is not None}
+        self._record_annotation_ids[record.id] = known
+        return known
+
+
+class TimeFDataset:  # noqa: PLR0904
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -39,10 +68,14 @@ class TimeFDataset:
         """
         self._metadata = metadata
         self._records: list[Record] = []
+        self._records_by_id: dict[str, Record] = {}
+        self._sources_by_id: dict[str, Source] = {}
+        self._signals_by_id: dict[str, TimeSeries] = {}
+        self._signals_by_record_id: dict[str, tuple[TimeSeries, ...]] = {}
         self._tasks: list[Task] = []
-        # Annotations that tasks reference but no record carries, deduped by id. A task's metadata
-        # (for example a question's answer options) lives here once, referenced by input_annotation_ids,
-        # instead of being copied onto every record the tasks are about.
+        self._task_ids: set[str] = set()
+        self._annotations: list[Annotation] = []
+        # Reusable annotation content that no hierarchy object carries, deduplicated by content ID.
         self._registered_annotations: dict[str, Annotation] = {}
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
@@ -50,105 +83,136 @@ class TimeFDataset:
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def add_record(
-        self,
-        *,
-        time_series: tuple[TimeSeries, ...],
-        subject_ids: tuple[str, ...] = (),
-        record_id: str | None = None,
-        start_time: datetime | int | None = None,
-        time_span: TimeInterval | None = None,
-    ) -> Record:
-        """Create a record, register it, and return it.
+    def add_record(self, *, record: Record) -> Record:
+        """Register and return a complete record.
 
         Args:
-            time_series: The logical :class:`TimeSeries` streams that the record uses.
-            subject_ids: The subjects that this record belongs to. The tuple is empty for
-                domains that have no subjects.
-            record_id: An explicit ID. The default is an automatically generated uuid4 value.
-                Pass an explicit ID for deterministic output, for example for golden test fixtures.
-            start_time: The wall-clock timestamp for the record's relative zero point. This value
-                can be a timezone-aware datetime or a whole number of Unix microseconds. Use
-                ``None`` when no wall-clock reference exists.
-            time_span: The overall span of the session. Use this if the series have gaps that an
-                unscoped span can fall into (see :attr:`Record.time_span`). The value must be a
-                whole-record :class:`~timenet.types.TimeInterval` object that contains every
-                series window.
+            record: The complete record hierarchy to register.
 
         Returns:
-            The newly created :class:`Record`.
+            The same :class:`Record` instance.
 
         Raises:
-            TimeFValidationError: This error occurs if ``time_series`` is empty, or if two series
-                share the same ``time_series_id`` value. The ids must be distinct. The writer uses
-                the ids as shard keys, and :meth:`Record.add_annotation` and :meth:`add_task` both
-                resolve references by these ids. So a repeated id silently merges two signals
-                into one.
+            TimeFValidationError: If the record repeats an object ID or an ID is already registered.
         """
-        if not time_series:
-            raise TimeFValidationError("add_record requires a non-empty time_series")
-        series_ids = [ts.time_series_id for ts in time_series]
-        if len(set(series_ids)) != len(series_ids):
-            duplicates = sorted({sid for sid in series_ids if series_ids.count(sid) > 1})
-            raise TimeFValidationError(f"add_record requires distinct time_series_ids, got duplicates {duplicates}")
-        if record_id is None:
-            record = Record(
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
+        if record.record_id in self._records_by_id:
+            raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
+        record_sources, record_signals = self._index_record_hierarchy(record)
+        repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
+        if repeated_sources:
+            raise TimeFValidationError(
+                f"source id(s) {repeated_sources} already belong to another record; each Source has one owner"
             )
-        else:
-            record = Record(
-                record_id=record_id,
-                time_series=tuple(time_series),
-                subject_ids=tuple(subject_ids),
-                start_time=start_time,
-                time_span=time_span,
+        repeated_signals = sorted(self._signals_by_id.keys() & record_signals.keys())
+        if repeated_signals:
+            raise TimeFValidationError(
+                f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
             )
         self._records.append(record)
+        self._records_by_id[record.record_id] = record
+        self._sources_by_id.update(record_sources)
+        self._signals_by_id.update(record_signals)
+        self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
         return record
 
-    def add_task(self, records: Record | Iterable[Record], task: Task) -> Task:
-        """Register a task and link it to its records.
+    @staticmethod
+    def _duplicate_ids(ids: Iterable[str]) -> list[str]:
+        """Return repeated IDs in sorted order without repeatedly scanning the input."""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for item_id in ids:
+            if item_id in seen:
+                duplicates.add(item_id)
+            else:
+                seen.add(item_id)
+        return sorted(duplicates)
 
-        This method checks every span that the task carries against the records given here. This
-        includes the task's ``scope`` and, for a :class:`~timenet.types.TemporalLocalizationTask`,
-        its target regions. The records are available here, so the method checks them at this
-        point. The method also checks the record and annotation ids that the task references, and
-        the source tasks listed in its ``from_tasks``.
-
-        Set ``scope`` and ``from_tasks`` on the task itself. These fields describe that one task,
-        not the call to this method.
-
-        Args:
-            records: The record, or records, that the task attaches to.
-            task: The task instance. The caller must already set its payload, ``scope``, and
-                ``from_tasks`` fields.
+    @classmethod
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, TimeSeries]]:
+        """Collect one record's hierarchy and reject IDs repeated inside it.
 
         Returns:
-            The registered task. This is the same instance, with the ``record_ids`` field
-            populated.
+            Sources and Signals keyed by their stable public IDs.
 
         Raises:
-            TimeFValidationError: This error occurs if ``records`` is empty. It also occurs if the
-                task's id is already registered, or if a task in ``from_tasks`` is neither
-                registered nor the task itself. It also occurs if a scope-dependent payload rule
-                fails. Examples include a :class:`~timenet.types.ForecastingTask` ``target_span``
-                with no scope, a frame mismatch, or a context that leaks the target. It also occurs if
-                the task sets both ``target`` and ``target_annotation_ids``, or if its answer is
-                not a produced series and it sets neither field. It also occurs if a span's
-                ``time_series_ids`` does not resolve to a series on every target record. It also
-                occurs if the span falls outside a record's covered span. It also occurs if a
-                referenced record or annotation is not registered in this dataset.
+            TimeFValidationError: If two Sources or Signals in the record share an ID.
         """
-        targets = (records,) if isinstance(records, Record) else tuple(records)
-        if not targets:
-            raise TimeFValidationError("add_task requires at least one record")
-        return self._register_batch((task,), targets)[0]
+        sources = tuple(record.walk_sources())
+        source_duplicates = cls._duplicate_ids(source.id for source in sources)
+        if source_duplicates:
+            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate source IDs {source_duplicates}")
+        signals = (
+            tuple(
+                signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
+            )
+            if sources
+            else tuple(record.time_series)
+        )
+        signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
+        if signal_duplicates:
+            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate signal IDs {signal_duplicates}")
+        return (
+            {source.id: source for source in sources},
+            {signal.id: signal for signal in signals},
+        )
 
-    def add_tasks(self, records: Record | Iterable[Record], tasks: Iterable[Task]) -> tuple[Task, ...]:
-        """Register several tasks against the same records, all together or not at all.
+    def write(
+        self,
+        *,
+        path: str | Path,
+        values_backend: ValuesBackend = ValuesBackend.PARQUET,
+    ) -> Path:
+        """Write this dataset as one immutable TimeF version.
+
+        Args:
+            path: Registry root under which the dataset ID and version directories are created.
+            values_backend: Typed values-plane backend selection.
+
+        Returns:
+            The committed version directory.
+        """
+        from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+        root = Path(path)
+        if self.schema is None:
+            self.derive_schema()
+        with TimeFWriter(root, self, values_backend=values_backend) as writer:
+            writer.write()
+        return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
+
+    @classmethod
+    def open(cls, *, path: str | Path) -> "TimeFDataset":
+        """Open one local TimeF version directory.
+
+        Args:
+            path: Directory containing ``manifest.json`` and ``control.duckdb``.
+
+        Returns:
+            The hydrated dataset with lazy Signal values.
+        """
+        from timenet.reader import TimeFReader  # noqa: PLC0415
+        from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+
+        with TimeFReader(DatasetVersion.open_local(path)) as reader:
+            return reader.read()
+
+    def add_task(self, *, task: Task) -> Task:
+        """Validate and register one fully constructed task.
+
+        The Task owns its input and target object references. Registration verifies those objects
+        against this dataset before changing either the dataset or its Records.
+
+        Args:
+            task: The concrete task to register.
+
+        Returns:
+            The same task instance.
+
+        """
+        return self._register_batch((task,))[0]
+
+    def add_tasks(self, *, tasks: Iterable[Task]) -> tuple[Task, ...]:
+        """Register several complete tasks, all together or not at all.
 
         The method validates the whole batch before it attaches any task. If one task fails a
         check, the call raises an error, and the dataset and every task in the batch stay
@@ -160,36 +224,23 @@ class TimeFDataset:
         of tasks within ``tasks`` does not matter.
 
         Args:
-            records: The record, or records, that the tasks attach to.
             tasks: The task instances to register. For a single task, use :meth:`add_task` instead.
 
         Returns:
-            The registered tasks, in the order given. These are the same instances, with the
-            ``record_ids`` field populated.
+            The registered tasks, in the order given.
 
-        Raises:
-            TimeFValidationError: This error occurs if ``records`` is empty. It also occurs if two
-                tasks in the batch share an id, or if one task reuses an id that is already
-                registered. It also occurs if a ``from_tasks`` parent is neither registered nor in
-                the batch, or if the derivation forms a cycle. It also occurs if any task fails a
-                check that :meth:`add_task` documents.
         """
-        targets = (records,) if isinstance(records, Record) else tuple(records)
-        if not targets:
-            raise TimeFValidationError("add_tasks requires at least one record")
-        # Drain `tasks` before validation. A connector generator can attach an annotation and then
+        # Drain tasks before validation. A connector generator can attach an annotation and then
         # yield a task that references it, so the annotation must already be on the record when
         # the method checks the references.
         batch = tuple(tasks)
-        return self._register_batch(batch, targets)
+        return self._register_batch(batch)
 
     def register_annotations(self, annotations: Iterable[Annotation]) -> None:
         """Register annotations that tasks reference but no record carries.
 
-        Deduped by id, so many tasks can share one annotation without copying it. The writer persists
-        these alongside the record annotations, so a task's ``input_annotation_ids`` /
-        ``target_annotation_ids`` resolve without the annotation being attached to a record. Register
-        an annotation before the task that references it (:meth:`add_task` checks the reference).
+        The content is deduplicated by ID. This supports shared vocabularies and other reusable
+        metadata without attaching an occurrence to a hierarchy object.
 
         Args:
             annotations: The annotations to register. A repeated id must map to an equal annotation.
@@ -206,15 +257,28 @@ class TimeFDataset:
                 )
             self._registered_annotations[annotation.id] = annotation
 
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach a static annotation to the dataset.
+
+        Returns:
+            The attached occurrence.
+
+        Raises:
+            TimeFValidationError: If the annotation has a time placement, which is ambiguous across records.
+        """
+        if annotation.span is not None:
+            raise TimeFValidationError("dataset annotations cannot have a time span")
+        attached = annotation._new_occurrence()
+        self._annotations.append(attached)
+        return attached
+
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
         every task in memory is the scaling wall. A streaming connector builds the bounded records and
         registered annotations, then hands the tasks over through ``source``; the writer streams them to
-        disk without a list. Streamed tasks are trusted, not validated the way :meth:`add_task` validates
-        them: each must already have its ``record_ids`` set and reference only registered annotations and
-        existing records. Streamed tasks do not populate ``Record.task_ids``.
+        disk without a list. Streamed tasks do not populate ``Record.task_ids``.
 
         Args:
             task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
@@ -261,18 +325,23 @@ class TimeFDataset:
         Raises:
             TimeFValidationError: If a streamed task fails one of the per-task checks.
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
-        by_id = {record.record_id: record for record in self._records}
+        index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
         for task in self.iter_tasks():
-            self._validate_streamed_task(task, by_id, declared)
+            self._validate_streamed_task(task, index, declared)
             yield task
 
-    def _validate_streamed_task(self, task: Task, by_id: dict[str, Record], declared: set[type[Task]]) -> None:
+    def _validate_streamed_task(
+        self,
+        task: Task,
+        index: _TaskValidationIndex,
+        declared: set[type[Task]],
+    ) -> None:
         """Run the per-task checks a streamed task must pass, without cross-task state.
 
         Args:
             task: The streamed task.
-            by_id: The dataset's records, keyed by ``record_id``.
+            index: Reusable dataset identity and annotation lookups.
             declared: The task types :meth:`set_task_stream` declared.
 
         Raises:
@@ -284,26 +353,29 @@ class TimeFDataset:
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        targets = []
-        for record_id in task.record_ids:
-            record = by_id.get(record_id)
-            if record is None:
+        referenced = self._task_records(task)
+        for record in referenced:
+            registered = index.records_by_id.get(record.id)
+            if registered is not record:
                 raise TimeFValidationError(
-                    f"{type(task).__name__} {task.id!r} attaches to unknown record {record_id!r}"
+                    f"{type(task).__name__} {task.id!r} refers to Record {record.id!r}, which is not "
+                    "registered in this dataset"
                 )
-            targets.append(record)
         task.check_against_scope()
         self._check_task_answer(task)
-        self._check_record_refs(task)
-        self._check_time_series_refs(task, tuple(targets))
-        for record in targets:
+        self._check_signal_refs(task, index)
+        for record in task.inputs:
             for span in task.spans():
                 check_span_within_window(
-                    f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
+                    f"{type(task).__name__} span",
+                    span,
+                    index.signals_by_record_id[record.id],
+                    record.record_id,
+                    record.time_span,
                 )
-        self._check_annotation_refs(task, tuple(targets))
+        self._check_annotation_refs(task, task.inputs, index)
 
-    def _register_batch(self, batch: tuple[Task, ...], targets: tuple[Record, ...]) -> tuple[Task, ...]:
+    def _register_batch(self, batch: tuple[Task, ...]) -> tuple[Task, ...]:
         """Validate a whole batch of tasks, then attach all of it or none of it.
 
         :meth:`add_task` and :meth:`add_tasks` both call this method. This keeps the singular and
@@ -313,11 +385,9 @@ class TimeFDataset:
 
         Args:
             batch: The tasks to register together, already drained from the caller's iterable.
-            targets: The records that the tasks attach to.
 
         Returns:
-            The registered tasks, in order. These are the same instances, with the ``record_ids``
-            field populated.
+            The registered tasks, in order.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
@@ -327,15 +397,23 @@ class TimeFDataset:
             raise TimeFValidationError(
                 "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
             )
-        self._validate_task_batch(batch, targets)
+        self._validate_task_batch(batch)
+        # Extend each record's task_ids once per batch rather than once per task, so a record with
+        # thousands of tasks does not copy its tuple thousands of times.
+        new_task_ids: dict[str, list[str]] = {}
+        records_by_id: dict[str, Record] = {}
         for task in batch:
-            task.record_ids = tuple(record.record_id for record in targets)
-            for record in targets:
-                record.task_ids = (*record.task_ids, task.id)
+            for record in task.inputs:
+                records_by_id[record.id] = record
+                new_task_ids.setdefault(record.id, []).append(task.id)
             self._tasks.append(task)
+            self._task_ids.add(task.id)
+        for record_id, task_ids in new_task_ids.items():
+            record = records_by_id[record_id]
+            record.task_ids = (*record.task_ids, *task_ids)
         return batch
 
-    def _validate_task_batch(self, batch: tuple[Task, ...], targets: tuple[Record, ...]) -> None:
+    def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
         """Run every check that the batch must pass, without attaching anything.
 
         This method checks the cross-task rules that only a batch makes possible, in addition to
@@ -345,23 +423,22 @@ class TimeFDataset:
 
         Args:
             batch: The tasks to register together.
-            targets: The records that the tasks attach to.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
         """
-        registered_ids = {task.id for task in self._tasks}
         batch_ids = [task.id for task in batch]
-        duplicated = sorted({task_id for task_id in batch_ids if batch_ids.count(task_id) > 1})
+        duplicated = sorted(task_id for task_id, count in Counter(batch_ids).items() if count > 1)
         if duplicated:
             raise TimeFValidationError(f"tasks in the batch share an id: {duplicated}")
-        reused = sorted(set(batch_ids) & registered_ids)
+        reused = sorted(self._task_ids.intersection(batch_ids))
         if reused:
             raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
-        known_task_ids = registered_ids | set(batch_ids)
+        known_task_ids = self._task_ids | set(batch_ids)
         for task in batch:
-            for parent_id in task.from_task_ids:
+            for parent in task.from_tasks:
+                parent_id = parent.id
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
                 if parent_id not in known_task_ids:
@@ -370,17 +447,22 @@ class TimeFDataset:
                         f"registered in this dataset or part of the batch"
                     )
         self._check_no_derivation_cycle(batch)
+        index = _TaskValidationIndex(self)
         for task in batch:
+            self._check_record_refs(task, index)
             task.check_against_scope()
             self._check_task_answer(task)
-            self._check_record_refs(task)
-            self._check_time_series_refs(task, tuple(targets))
-            for record in targets:
+            self._check_signal_refs(task, index)
+            for record in task.inputs:
                 for span in task.spans():
                     check_span_within_window(
-                        f"{type(task).__name__} span", span, record.time_series, record.record_id, record.time_span
+                        f"{type(task).__name__} span",
+                        span,
+                        index.signals_by_record_id[record.id],
+                        record.record_id,
+                        record.time_span,
                     )
-            self._check_annotation_refs(task, targets)
+            self._check_annotation_refs(task, task.inputs, index)
 
     @staticmethod
     def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:
@@ -398,7 +480,7 @@ class TimeFDataset:
             TimeFValidationError: If the batch's derivations contain a cycle.
         """
         batch_ids = {task.id for task in batch}
-        parents = {task.id: {p for p in task.from_task_ids if p in batch_ids} for task in batch}
+        parents = {task.id: {parent.id for parent in task.from_tasks if parent.id in batch_ids} for task in batch}
         # Kahn's algorithm: the loop peels off tasks whose parents in the batch are all resolved.
         # A task that remains when the loop can peel off no more tasks sits on a cycle.
         resolved: set[str] = set()
@@ -426,7 +508,7 @@ class TimeFDataset:
             TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
                 across records.
         """
-        specs = self._ordered_unique(ts.spec for record in self._records for ts in record.time_series)
+        specs = self._ordered_unique(signal.spec for record in self._records for signal in record.signals)
         by_spec_type: dict[str, object] = {}
         for spec in specs:
             existing = by_spec_type.get(spec.spec_type)
@@ -471,7 +553,7 @@ class TimeFDataset:
         return self._schema
 
     @classmethod
-    def from_parts(
+    def from_parts(  # noqa: PLR0913 - reader reconstruction names each stored component
         cls,
         *,
         metadata: DatasetMetadata,
@@ -479,6 +561,7 @@ class TimeFDataset:
         tasks: Iterable[Task],
         schema: DatasetSchema,
         registered_annotations: Iterable[Annotation] = (),
+        annotations: Iterable[Annotation] = (),
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -491,14 +574,18 @@ class TimeFDataset:
             schema: The schema reconstructed from the manifest.
             registered_annotations: Annotations that tasks reference but no record carries (see
                 :meth:`register_annotations`).
+            annotations: Annotations attached directly to the dataset.
 
         Returns:
             The dataset, built from these parts.
         """
         dataset = cls(metadata=metadata)
-        dataset._records = list(records)
+        for record in records:
+            dataset.add_record(record=record)
         dataset._tasks = list(tasks)
+        dataset._task_ids = {task.id for task in dataset._tasks}
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
+        dataset._annotations = list(annotations)
         dataset._schema = schema
         return dataset
 
@@ -506,94 +593,102 @@ class TimeFDataset:
     def _check_task_answer(task: Task) -> None:
         """Reject a task whose answer is ambiguous or missing.
 
-        A task answers with exactly one thing: one inline field, or by reference.
-
         Args:
             task: The task to register.
 
         Raises:
-            TimeFValidationError: If the task sets more than one inline answer field, or sets an
-                inline answer together with ``target_annotation_ids``, or sets no answer at all on
-                a task whose answer is not a produced series.
+            TimeFValidationError: If inline targets and target annotations are both present, or if
+                neither representation is present.
         """
         name = type(task).__name__
-        inline = [field_name for field_name in type(task).answer_fields if getattr(task, field_name) is not None]
-        if len(inline) > 1:
+        if task.targets is not None and task.target_annotations:
             raise TimeFValidationError(
-                f"{name} sets multiple inline answers ({', '.join(inline)}); a task answers with exactly one"
+                f"{name} sets inline targets and target_annotations; use one answer representation"
             )
-        if inline and task.target_annotation_ids:
-            raise TimeFValidationError(
-                f"{name} sets an inline answer ({', '.join(inline)}) and target_annotation_ids "
-                f"{list(task.target_annotation_ids)}; the answer is either inline or by reference, not both"
-            )
-        if not type(task).answer_is_record and not inline and not task.target_annotation_ids:
-            raise TimeFValidationError(
-                f"{name} needs an answer: set one of {list(type(task).answer_fields)}, or "
-                f"target_annotation_ids= to point at stored annotations"
-            )
+        if task.targets is None and not task.target_annotations:
+            raise TimeFValidationError(f"{name} needs an answer: set targets= or target_annotations=")
 
-    def _check_annotation_refs(self, task: Task, records: tuple[Record, ...]) -> None:
+    @staticmethod
+    def _check_annotation_refs(
+        task: Task,
+        records: tuple[Record, ...],
+        index: _TaskValidationIndex,
+    ) -> None:
         """Reject an input or target annotation id that no target record carries and none is registered.
 
         Args:
             task: The task to register.
             records: The records that the task attaches to.
+            index: Reusable dataset identity and annotation lookups.
 
         Raises:
             TimeFValidationError: If a referenced annotation id is neither attached to a target
                 record nor registered with :meth:`register_annotations`.
         """
-        known = {annotation.id for record in records for annotation in record.annotations}
-        known |= self._registered_annotations.keys()
-        for field_name in ("input_annotation_ids", "target_annotation_ids"):
-            for annotation_id in getattr(task, field_name):
-                if annotation_id not in known:
+        record_occurrences = tuple(index.annotation_ids_for(record) for record in records)
+        for field_name in ("input_annotations", "target_annotations"):
+            for annotation in getattr(task, field_name):
+                occurrence_id = annotation.occurrence_id
+                if occurrence_id not in index.dataset_annotation_ids and not any(
+                    occurrence_id in known for known in record_occurrences
+                ):
                     raise TimeFValidationError(
-                        f"{type(task).__name__} {field_name} references annotation {annotation_id!r}, "
-                        f"which no target record {[s.record_id for s in records]} carries and which is not "
-                        f"registered with register_annotations"
-                    )
-
-    def _check_record_refs(self, task: Task) -> None:
-        """Reject a payload record id that is not registered in this dataset.
-
-        Args:
-            task: The task to register.
-
-        Raises:
-            TimeFValidationError: If a payload reference names an unknown record.
-        """
-        known = {record.record_id for record in self._records}
-        for field_name in type(task).refs.record_id_fields:
-            value = getattr(task, field_name)
-            record_ids = (value,) if isinstance(value, str) else value or ()
-            for record_id in record_ids:
-                if record_id not in known:
-                    raise TimeFValidationError(
-                        f"{type(task).__name__} {field_name} references unknown record {record_id!r}"
+                        f"{type(task).__name__} {field_name} refers to annotation occurrence "
+                        f"{annotation.occurrence_id!r}, which is not attached to its dataset or input hierarchy"
                     )
 
     @staticmethod
-    def _check_time_series_refs(task: Task, records: tuple[Record, ...]) -> None:
-        """Reject a payload time-series id that no target record carries.
+    def _check_record_refs(task: Task, index: _TaskValidationIndex) -> None:
+        """Reject a task Record object that is not registered in this dataset.
 
         Args:
             task: The task to register.
-            records: The records the task attaches to.
+            index: Reusable dataset identity and annotation lookups.
 
         Raises:
-            TimeFValidationError: If a payload reference names a series absent from every target record.
+            TimeFValidationError: If a task references an unknown or replacement Record object.
         """
-        known = {ts.time_series_id for record in records for ts in record.time_series}
-        for field_name in type(task).refs.time_series_id_fields:
-            value = getattr(task, field_name)
-            series_ids = (value,) if isinstance(value, str) else value or ()
-            for series_id in series_ids:
-                if series_id not in known:
-                    raise TimeFValidationError(
-                        f"{type(task).__name__} {field_name} references series {series_id!r} not on its records"
-                    )
+        for record in TimeFDataset._task_records(task):
+            if index.records_by_id.get(record.id) is not record:
+                raise TimeFValidationError(
+                    f"{type(task).__name__} references Record {record.id!r}, which is not registered in this dataset"
+                )
+
+    @staticmethod
+    def _check_signal_refs(task: Task, index: _TaskValidationIndex) -> None:
+        """Reject a Signal target that is not owned by a registered Record.
+
+        Args:
+            task: The task to register.
+            index: Reusable dataset identity and annotation lookups.
+
+        Raises:
+            TimeFValidationError: If a Signal target is unknown or is a replacement object.
+        """
+        for signal in TimeFDataset._task_signals(task):
+            if index.signals_by_id.get(signal.id) is not signal:
+                raise TimeFValidationError(
+                    f"{type(task).__name__} references Signal {signal.id!r}, which is not registered in this dataset"
+                )
+
+    @staticmethod
+    def _task_records(task: Task) -> tuple[Record, ...]:
+        """Return all Records referenced by a task, without duplicate objects."""
+        candidates = cast("tuple[Record, ...]", getattr(task, "candidate_records", ()))
+        target_records = tuple(target for target in task.targets or () if isinstance(target, Record))
+        found: list[Record] = []
+        seen: set[int] = set()
+        for record in (*task.inputs, *candidates, *target_records):
+            identity = id(record)
+            if identity not in seen:
+                seen.add(identity)
+                found.append(record)
+        return tuple(found)
+
+    @staticmethod
+    def _task_signals(task: Task) -> tuple[TimeSeries, ...]:
+        """Return all Signals referenced directly as target items."""
+        return tuple(target for target in task.targets or () if isinstance(target, TimeSeries))
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
@@ -619,6 +714,11 @@ class TimeFDataset:
     def registered_annotations(self) -> tuple[Annotation, ...]:
         """Annotations registered for tasks to reference, which no record carries (registration order)."""
         return tuple(self._registered_annotations.values())
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return annotations attached to the dataset itself."""
+        return tuple(self._annotations)
 
     @property
     def has_task_stream(self) -> bool:
@@ -671,7 +771,7 @@ class TimeFDataset:
         resolved: list[Task] = []
         for task_id in record.task_ids:
             task = by_id.get(task_id)
-            if task is None or record.record_id not in task.record_ids:
+            if task is None or all(linked is not record for linked in task.inputs):
                 raise TimeFValidationError(
                     f"record {record.record_id!r} links task {task_id!r}, but the task is missing or does "
                     f"not link back to the record"
@@ -705,7 +805,7 @@ class TimeFDataset:
         """Build an ``(X, y)`` training pair. By default, this method defers materialization.
 
         This method requires every record to carry exactly one task of ``task``. It pairs the
-        values of that task's sole signal with the task's ``target``. The ``features`` argument
+        values of that task's sole signal with the task's only scalar target. The ``features`` argument
         chooses the shape of ``X``:
 
         - ``"timestep"`` (the default): one feature per point, in a rectangular matrix. This needs
@@ -736,8 +836,8 @@ class TimeFDataset:
             TimeFValidationError: This error occurs if ``output`` or ``features`` is invalid. It
                 also occurs if ``task`` is omitted and the dataset has zero or several task types
                 with inline targets. It also occurs if a matched task carries no inline target,
-                for example if its answer is a produced series or is stored as
-                ``target_annotation_ids``. It also occurs if a matched record is not single
+                for example if its answer is a produced series or is stored as target annotations.
+                It also occurs if a matched record is not single
                 signal, or if ``features="timestep"`` is asked of records that are not all the
                 same length. It also occurs if the dataset has no records, or if any record does
                 not carry exactly one task of ``task``.
@@ -791,14 +891,10 @@ class TimeFDataset:
                 also occurs if the dataset has no records, or if any record does not carry exactly
                 one task of ``resolved``.
         """
-        if not resolved.target_is_scalar:
-            raise TimeFValidationError(
-                f"{resolved.__name__} does not carry scalar targets supported by to_features_and_targets"
-            )
         matched_by_record: dict[str, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
-            for record_id in candidate.record_ids:
-                matched_by_record.setdefault(record_id, []).append(candidate)
+            for record in candidate.inputs:
+                matched_by_record.setdefault(record.id, []).append(candidate)
         rows: list[pa.Array] = []
         targets: list[object] = []
         for record in self._records:
@@ -808,13 +904,13 @@ class TimeFDataset:
                     f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
-            if matched[0].target is None:
+            inline = matched[0].targets
+            if inline is None or len(inline) != 1 or not isinstance(inline[0], (str, int, float, bool)):
                 raise TimeFValidationError(
-                    f"{resolved.__name__} {matched[0].id!r} has no inline target to use as y; its answer is "
-                    f"a produced series or stored as target_annotation_ids"
+                    f"{resolved.__name__} {matched[0].id!r} needs exactly one scalar target to use as y"
                 )
             rows.append(record.to_arrow())  # Arrow straight from the loader, no NumPy copy
-            targets.append(matched[0].target)
+            targets.append(inline[0])
         if not rows:
             raise TimeFValidationError(f"dataset has no records to build {resolved.__name__} features from")
         return rows, targets
@@ -823,13 +919,19 @@ class TimeFDataset:
         """Infer the dataset's sole task type that carries an inline target, for :meth:`to_features_and_targets`.
 
         Returns:
-            The single task class whose instances carry a ``target``.
+            The single task class whose instances carry inline targets.
 
         Raises:
             TimeFValidationError: If the dataset has zero or several such task types. In that
                 case, pass ``task=`` instead.
         """
-        kinds = {type(task) for task in self._tasks if task.target is not None and type(task).target_is_scalar}
+        kinds = {
+            type(task)
+            for task in self._tasks
+            if task.targets is not None
+            and len(task.targets) == 1
+            and isinstance(task.targets[0], (str, int, float, bool))
+        }
         if len(kinds) == 1:
             return kinds.pop()
         names = ", ".join(sorted(kind.__name__ for kind in kinds)) or "(none)"

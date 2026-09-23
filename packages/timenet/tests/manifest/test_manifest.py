@@ -15,7 +15,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     DatasetSchema,
-    DataSource,
     Domain,
     License,
     TimeSeriesSpec,
@@ -24,13 +23,14 @@ from timenet.types import (
 )
 
 
+_CONTROL = (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),)
+
+
 def _manifest(*, values_backend: str = "parquet") -> Manifest:
-    holter = DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
         unit_value=ureg.millivolt,
-        data_source=holter,
     )
     schema = DatasetSchema(
         time_series_specs=(ecg,),
@@ -55,17 +55,17 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
         schema=schema,
         counts=ManifestCounts(
             records=2,
-            annotations=4,
+            sources=2,
+            signals=2,
+            axes=1,
+            annotation_contents=3,
+            annotation_occurrences=4,
             tasks={"classification": 2},
-            time_series_chunks=3,
-            time_series_index_rows=3,
-            time_series_specs={"ecg_lead": 2},
+            signal_chunks=3,
+            signals_by_spec={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            records=(FilePart("records.parquet", "sha256:aa", 10),),
-            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
-            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
-            tasks=(FilePart("tasks/task=classification/part-0.parquet", "sha256:dd", 40),),
+            control=_CONTROL,
             time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
         ),
         values_backend=values_backend,
@@ -75,16 +75,13 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
 def test_files_all_parts_concatenates_in_order():
     files = _manifest().files
     assert files.all_parts() == (
-        *(p.path for p in files.records),
-        *(p.path for p in files.annotations),
-        *(p.path for p in files.time_series_index),
-        *(p.path for p in files.tasks),
+        *(p.path for p in files.control),
         *(p.path for p in files.time_series),
     )
 
 
 def test_default_format_version():
-    assert _manifest().timef_format_version == 1
+    assert _manifest().timef_format_version == 2
 
 
 @pytest.mark.parametrize(
@@ -113,10 +110,13 @@ def test_manifest_rejects_unknown_domain():
         Manifest.from_dict(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
+def test_nullable_schema_roundtrips_at_format_version_2():
+    # Nullable schemas retain format version 2. Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
-    base = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=()))
+    base = replace(
+        _manifest(),
+        files=ManifestFiles(control=_CONTROL),
+    )
     spec = replace(base.schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
         dataset_id=base.dataset_id,
@@ -124,24 +124,30 @@ def test_nullable_schema_roundtrips_at_format_version_1():
         files=base.files,
         schema=replace(base.schema, time_series_specs=(spec,)),
     )
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.from_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
 
 
 def test_missing_nullable_defaults_to_false():
-    data = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=())).to_dict()
+    data = replace(
+        _manifest(),
+        files=ManifestFiles(control=_CONTROL),
+    ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
-    assert restored.timef_format_version == 1
+    assert restored.timef_format_version == 2
     assert restored.schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
 @pytest.mark.parametrize("nullable", [1, None, "true"])
 def test_manifest_rejects_nonboolean_nullable(nullable):
-    data = replace(_manifest(), files=ManifestFiles(records=(), annotations=(), time_series_index=())).to_dict()
+    data = replace(
+        _manifest(),
+        files=ManifestFiles(control=_CONTROL),
+    ).to_dict()
     data["schema"]["time_series_specs"][0]["nullable"] = nullable
     with pytest.raises(TimeNetInvalidManifestError, match="nullable"):
         Manifest.from_dict(data)
@@ -169,26 +175,14 @@ def test_json_roundtrip():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 1
+    assert d["timef_format_version"] == 2
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
     assert d["schema"]["time_series_specs"][0]["unit_value"] == "millivolt"
-    # the record sits on the spec, so nothing has to be resolved against a side table on read
-    assert d["schema"]["time_series_specs"][0]["data_source"] == {
-        "data_source_type": "holter_x",
-        "name": "Holter Monitor X",
-        "provider": "Acme",
-    }
-    assert "data_sources" not in d["schema"]
+    assert "data_source" not in d["schema"]["time_series_specs"][0]
     assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "answer"}]
     assert d["counts"]["tasks"] == {"classification": 2}
-
-
-def test_from_dict_reads_the_data_source_stored_on_the_spec():
-    schema = Manifest.from_dict(_manifest().to_dict()).schema
-    spec = schema.time_series_specs[0]
-    assert spec.data_source == DataSource(data_source_type="holter_x", name="Holter Monitor X", provider="Acme")
 
 
 def test_from_dict_resolves_tasks_to_real_classes():
@@ -245,7 +239,7 @@ def test_from_dict_requires_core_blocks(missing):
     "entry",
     [
         "oops",  # a bare string where a file descriptor object is required
-        {"path": "records/part-00000000.parquet"},  # missing checksum and size
+        {"path": "time_series/part-00000000.parquet"},  # missing checksum and size
         {"path": "x", "checksum": "sha256:" + "a" * 64},  # missing size
         {"path": 123, "checksum": "sha256:" + "a" * 64, "size": 10},  # path not a string
         {"path": "", "checksum": "sha256:" + "a" * 64, "size": 10},  # empty path
@@ -254,14 +248,14 @@ def test_from_dict_requires_core_blocks(missing):
         {"path": "x", "checksum": "sha256:" + "a" * 64, "size": True},  # bool masquerading as an int
         {"path": "/etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # absolute path
         {"path": "../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal above root
-        {"path": "records/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
+        {"path": "time_series/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
     ],
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
     # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
     # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
     d = _manifest().to_dict()
-    d["files"]["records"] = [entry]
+    d["files"]["time_series"] = [entry]
     with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
@@ -355,18 +349,14 @@ def test_codec_roundtrip_property(version, records, task_counts):
             license=License.MIT,
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
-        files=ManifestFiles(
-            records=(FilePart("records.parquet", "sha256:aa", 10),),
-            annotations=(FilePart("annotations.parquet", "sha256:bb", 20),),
-            time_series_index=(FilePart("time_series_index.parquet", "sha256:cc", 30),),
-        ),
+        files=ManifestFiles(control=_CONTROL),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest
 
 
 @pytest.mark.parametrize(
     ("block", "key"),
-    [("metadata", "tags"), ("metadata", "domains"), ("files", "tasks"), ("files", "time_series")],
+    [("metadata", "tags"), ("metadata", "domains"), ("files", "control"), ("files", "time_series")],
 )
 def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters

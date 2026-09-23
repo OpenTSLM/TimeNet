@@ -1,12 +1,12 @@
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import zarr
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
@@ -61,24 +61,35 @@ def test_spec_types_encode_to_distinct_single_path_segments():
 
 def test_index_locator_resolves_to_values(tmp_path):
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    row = index[0]
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        row = connection.execute(
+            """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
+                      chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               ORDER BY signals.signal_id LIMIT 1"""
+        ).fetchone()
+    assert row is not None
+    value_path, major_index, minor_index, n_values = row
     # Zarr locator: chunk_file=array path, chunk_major_idx=element start, chunk_minor_idx unused.
-    assert row["chunk_minor_idx"] is None
-    array = zarr.open_array(store=version_dir / row["chunk_file"], mode="r")
-    chunk = np.asarray(array[row["chunk_major_idx"] : row["chunk_major_idx"] + row["n_values"]])
-    assert len(chunk) == row["n_values"]
+    assert minor_index is None
+    array = zarr.open_array(store=version_dir / value_path, mode="r")
+    chunk = np.asarray(array[major_index : major_index + n_values])
+    assert len(chunk) == n_values
 
 
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     version_dir = _write(tmp_path, chunk_max_bytes=64)
-    index = pq.read_table(version_dir / "time_series_index/part-00000000.parquet").to_pylist()
-    keys = [(row["record_id"], row["time_series_id"]) for row in index]
-    assert len(keys) == len(set(keys))
-    long_series = next(row for row in index if row["time_series_id"] == "ts-long-1")
-    assert long_series["n_values"] == 512  # the fixture's long series, unsplit
+    with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
+        index = connection.execute(
+            """SELECT signals.signal_id, chunks.n_values
+               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+        ).fetchall()
+    signal_ids = [row[0] for row in index]
+    assert len(signal_ids) == len(set(signal_ids))
+    long_series = next(row for row in index if row[0] == "ts-long-1")
+    assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
 def test_shard_aligned_appends_round_trip(tmp_path):
@@ -160,24 +171,33 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(
-            TimeSeries(
-                spec=spec,
-                signal="rgb",
-                time_axis=RegularAxis.from_rate_hz(30),
-                n_values=len(frames),
-                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=spec.dimension_names),
-                time_series_id="camera-1",
+        record=Record(
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_loader(
+                            spec=spec,
+                            name="rgb",
+                            time_axis=RegularAxis.from_rate_hz(30),
+                            n_values=len(frames),
+                            loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                                frames, dim_names=spec.dimension_names
+                            ),
+                            id="camera-1",
+                        ),
+                    ),
+                ),
             ),
-        ),
-        record_id="record-camera",
+            record_id="record-camera",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).time_series[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
@@ -214,25 +234,34 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(
-            TimeSeries(
-                spec=nd_spec,
-                signal="rgb",
-                time_axis=RegularAxis.from_rate_hz(10),
-                time_series_id="cam-1",
-                n_values=len(frames),
-                loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(frames, dim_names=nd_spec.dimension_names),
+        record=Record(
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_loader(
+                            spec=nd_spec,
+                            name="rgb",
+                            time_axis=RegularAxis.from_rate_hz(10),
+                            id="cam-1",
+                            n_values=len(frames),
+                            loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                                frames, dim_names=nd_spec.dimension_names
+                            ),
+                        ),
+                        TimeSeries.from_loader(
+                            spec=scalar_spec,
+                            name="i",
+                            time_axis=RegularAxis.from_rate_hz(10),
+                            id="sig-1",
+                            n_values=6,
+                            loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
+                        ),
+                    ),
+                ),
             ),
-            TimeSeries(
-                spec=scalar_spec,
-                signal="i",
-                time_axis=RegularAxis.from_rate_hz(10),
-                time_series_id="sig-1",
-                n_values=6,
-                loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
-            ),
-        ),
-        record_id="record-0",
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
@@ -269,8 +298,17 @@ def test_str_round_trip(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
-        record_id="record-0",
+        record=Record(
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+                    ),
+                ),
+            ),
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
@@ -301,8 +339,17 @@ def test_str_empty_range_read(tmp_path):
         )
     )
     dataset.add_record(
-        time_series=(TimeSeries.from_values(labels, spec=spec, signal="stage", time_axis=RegularAxis.from_rate_hz(1)),),
-        record_id="record-0",
+        record=Record(
+            sources=(
+                Source(
+                    name="Source",
+                    signals=(
+                        TimeSeries.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
+                    ),
+                ),
+            ),
+            record_id="record-0",
+        )
     )
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:

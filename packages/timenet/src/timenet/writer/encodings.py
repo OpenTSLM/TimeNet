@@ -12,7 +12,6 @@ options. It also reads the choice back from the footer of a finished file. Encod
 from dataclasses import dataclass
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
@@ -55,8 +54,6 @@ RECORDS_DICTIONARY = [
 ]
 
 ANNOTATIONS_DICTIONARY = ["key"]
-
-_TASK_CATEGORICAL = ("target", "target_schema", "target_name", "unit", "mode")
 
 
 def byte_stream_split_supported(dtype: str) -> bool:
@@ -131,23 +128,6 @@ def applied_matches(value_encoding: ValueEncoding, applied: set[str]) -> bool:
     if value_encoding is ValueEncoding.BYTE_STREAM_SPLIT:
         return "BYTE_STREAM_SPLIT" in applied
     return "PLAIN" in applied and not (applied & _DICTIONARY_MARKERS)
-
-
-def task_dictionary(schema: pa.Schema) -> list[str]:
-    """Return the categorical columns to dictionary-encode for a task partition.
-
-    Only string columns qualify for dictionary encoding. The ``target`` column has two possible
-    types. It is a float for a scalar prediction. It is a list of span structs for a localization.
-    For the float type, dictionary encoding gives no benefit. For the list-of-structs type,
-    dictionary encoding fails.
-
-    Args:
-        schema: The task partition's Arrow schema.
-
-    Returns:
-        The subset of categorical task columns present in the schema as strings.
-    """
-    return [name for name in _TASK_CATEGORICAL if name in schema.names and pa.types.is_string(schema.field(name).type)]
 
 
 @dataclass(frozen=True)

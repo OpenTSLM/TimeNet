@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Source, TimeFDataset, TimeSeries
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
@@ -39,10 +39,10 @@ def _dataset(signals) -> TimeFDataset:
         )
     )
     series = tuple(
-        TimeSeries.from_values(values, spec=spec, signal=name, time_axis=RegularAxis.from_rate_hz(1))
+        TimeSeries.from_values(values, spec=spec, name=name, time_axis=RegularAxis.from_rate_hz(1))
         for name, spec, values in signals
     )
-    dataset.add_record(time_series=series, record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), record_id="record-0"))
     dataset.derive_schema()
     return dataset
 

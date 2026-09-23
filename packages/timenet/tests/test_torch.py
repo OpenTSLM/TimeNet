@@ -1,5 +1,7 @@
 import pytest
 
+from timenet.dataset import Record, Source
+
 
 torch = pytest.importorskip("torch")
 
@@ -42,7 +44,7 @@ def test_getitem_structure():
 def test_getitem_values_match():
     dataset = make_dataset()
     item = TimeFTorchDataset(dataset)[0]
-    expected = dataset.records[0].time_series[0].to_numpy()
+    expected = dataset.records[0].signals[0].to_numpy()
     assert item["series"][0].numpy().tolist() == expected.tolist()
 
 
@@ -70,7 +72,7 @@ def _typed_dataset(dtype, values):
         unit_value=ureg.dimensionless,
         dtype=dtype,
     )
-    ts = TimeSeries.from_values(values, spec=spec, signal="c", time_axis=RegularAxis.from_rate_hz(1))
+    ts = TimeSeries.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/torch",
@@ -81,7 +83,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(time_series=(ts,), record_id="record-0")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id="record-0"))
     return dataset
 
 
@@ -100,3 +102,28 @@ def test_str_series_has_no_tensor_representation():
     dataset = _typed_dataset("str", ["awake", "deep"])
     with pytest.raises(TimeFValidationError, match="no tensor representation"):
         TimeFTorchDataset(dataset)[0]
+
+
+def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
+    from timenet.reader import TimeFReader  # noqa: PLC0415
+    from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+    from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    materialized = TimeFTorchDataset(TimeFReader(DatasetVersion.open_local(version_dir)).read())
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        lazy = TimeFTorchDataset.from_reader(reader)
+        assert len(lazy) == len(materialized) == len(dataset.records)
+        batch = lazy.__getitems__([0, 2])
+        single = lazy[0]
+
+    for expected, item in zip(materialized.__getitems__([0, 2]), batch, strict=True):
+        assert item["record_id"] == expected["record_id"]
+        assert [task.id for task in item["tasks"]] == sorted(task.id for task in expected["tasks"])
+        assert all(torch.equal(a, b) for a, b in zip(item["series"], expected["series"], strict=True))
+    assert single["record_id"] == batch[0]["record_id"]
+    assert all(task.inputs[0] is batch[0]["tasks"][0].inputs[0] for task in batch[0]["tasks"])
