@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from timenet.dataset.dataset import TimeFDataset
-    from timenet.dataset.time_series import TimeSeries
+    from timenet.dataset.time_series import Signal
 
 
-def point_count(series: TimeSeries) -> int:
+def point_count(series: Signal) -> int:
     """Return a series' value count, without loading values.
 
     Args:
@@ -65,7 +65,7 @@ def _identity(dataset: TimeFDataset) -> str:
     return "\n".join(lines)
 
 
-def _counts(dataset: TimeFDataset, unique_series: dict[str, TimeSeries]) -> str:
+def _counts(dataset: TimeFDataset, unique_series: dict[str, Signal]) -> str:
     task_counts = Counter(str(task.task_type) for task in dataset.tasks)
     annotation_ids = {ann.id for record in dataset.records for ann in record.annotations}
     spec_counts = Counter(ts.spec.spec_type for ts in unique_series.values())
@@ -80,10 +80,10 @@ def _counts(dataset: TimeFDataset, unique_series: dict[str, TimeSeries]) -> str:
     return "\n".join(lines)
 
 
-def _specs(unique_series: dict[str, TimeSeries]) -> str:
+def _specs(unique_series: dict[str, Signal]) -> str:
     if not unique_series:
         return ""
-    representative: dict[str, TimeSeries] = {}
+    representative: dict[str, Signal] = {}
     for series in unique_series.values():
         representative.setdefault(series.spec.spec_type, series)
     header = ("spec", "name", "value", "dtype")

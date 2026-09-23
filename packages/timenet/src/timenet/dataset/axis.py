@@ -261,7 +261,7 @@ class IrregularAxis:
 
     This axis holds only the pair a builder can state and the writer can verify without a read. That
     pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
-    them through :attr:`~timenet.dataset.TimeSeries.time_offsets_us`.
+    them through :attr:`~timenet.dataset.Signal.time_offsets_us`.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
     identity and round-trips as a value through the records struct. An axis holding the array does
