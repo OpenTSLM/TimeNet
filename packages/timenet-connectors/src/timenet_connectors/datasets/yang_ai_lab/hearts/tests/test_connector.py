@@ -198,7 +198,15 @@ def _record(dataset, record_id):
 
 def _task(dataset, record_id):
     # The tasks stream, so they are read off the source rather than held on the dataset.
-    return next(task for task in dataset.iter_tasks() if task.record_ids == (record_id,))
+    return next(task for task in dataset.iter_tasks() if _input_ids(task) == (record_id,))
+
+
+def _input_ids(task) -> tuple[str, ...]:
+    return tuple(record.record_id for record in task.inputs)
+
+
+def _signal(record, name):
+    return next(signal for signal in record.signals if signal.name == name)
 
 
 def test_is_a_connector():
@@ -226,9 +234,10 @@ def test_converts_one_record_per_test_case_in_canonical_order(dataset):
 def test_every_id_this_connector_writes_is_built_on_one_prefix(dataset):
     written = (
         [record.record_id for record in dataset.records]
-        + [series.time_series_id for record in dataset.records for series in record.time_series]
+        + [source.id for record in dataset.records for source in record.walk_sources()]
+        + [signal.id for record in dataset.records for signal in record.signals]
         + [annotation.id for record in dataset.records for annotation in record.annotations]
-        + [annotation.id for annotation in dataset.registered_annotations]
+        + [annotation.id for annotation in dataset.annotations]
         + [task.id for task in dataset.iter_tasks()]
     )
     assert written
@@ -258,13 +267,22 @@ def test_schema_derives(dataset):
     }
 
 
+def test_a_record_hangs_its_signals_off_one_source_named_after_the_corpus(dataset):
+    record = _record(dataset, "hearts-harespod-hr_resp_pairing-00")
+    assert [source.name for source in record.sources] == ["HARESPOD"]
+    assert record.sources[0].id == "hearts-harespod-hr_resp_pairing-00-source"
+    assert record.sources[0].metadata == {"provider": "figshare"}
+    assert len(record.sources[0].signals) == len(record.signals) == 4
+    assert _record(dataset, "hearts-cgmacros-iauc_calculation-00").sources[0].name == "CGMacros"
+
+
 def test_a_uniform_frame_gets_a_cadence_and_a_wavering_one_gets_offsets(dataset):
     pairing = _record(dataset, "hearts-harespod-hr_resp_pairing-00")
-    axes = {series.signal: series.time_axis for series in pairing.time_series}
+    axes = {signal.name: signal.time_axis for signal in pairing.signals}
     assert axes["respiration_dfs.respiration_A.rsp"] == RegularAxis(period_us=Fraction(10_000))
     assert axes["hr_dfs.hr_1.hr"] == RegularAxis(period_us=Fraction(1_000_000))
 
-    localization = _record(dataset, "hearts-cgmacros-meal_time_localization-07").time_series[0]
+    localization = _record(dataset, "hearts-cgmacros-meal_time_localization-07").signals[0]
     assert localization.time_axis == IrregularAxis(first_us=0, last_us=113 * 60_000_000)
     offsets = localization.time_offsets_us()
     assert len(offsets) == localization.n_values == len(_MEAL_MINUTES)
@@ -272,22 +290,18 @@ def test_a_uniform_frame_gets_a_cadence_and_a_wavering_one_gets_offsets(dataset)
 
 
 def test_audio_rate_comes_from_the_payload_and_vctk_from_the_reference_implementation(dataset):
-    coswara = _record(dataset, "hearts-coswara-audio_classification-30").time_series[0]
-    assert coswara.signal == "data.signal"
+    coswara = _record(dataset, "hearts-coswara-audio_classification-30").signals[0]
+    assert coswara.name == "data.signal"
     assert coswara.time_axis == RegularAxis.from_rate_hz(44_100)
-    vctk = _record(dataset, "hearts-vctk-waveform_temporal_direction_detection-39").time_series[0]
+    vctk = _record(dataset, "hearts-vctk-waveform_temporal_direction_detection-39").signals[0]
     assert vctk.time_axis == RegularAxis.from_rate_hz(16_000)
 
 
 def test_values_are_bit_exact_and_keep_their_dtype(dataset):
-    respiration = next(
-        series
-        for series in _record(dataset, "hearts-harespod-hr_resp_pairing-00").time_series
-        if series.signal == "respiration_dfs.respiration_A.rsp"
-    )
+    respiration = _signal(_record(dataset, "hearts-harespod-hr_resp_pairing-00"), "respiration_dfs.respiration_A.rsp")
     assert np.array_equal(respiration.to_numpy(), _RESPIRATION)
     assert respiration.to_numpy().dtype == np.dtype("float64")
-    audio = _record(dataset, "hearts-coswara-audio_classification-30").time_series[0]
+    audio = _record(dataset, "hearts-coswara-audio_classification-30").signals[0]
     assert np.array_equal(audio.to_numpy(), _SIGNAL)
     assert audio.to_numpy().dtype == np.dtype("float32")
 
@@ -308,12 +322,12 @@ def test_convert_builds_no_values_and_keeps_no_frames(tmp_path, monkeypatch):
     load_payload.cache_clear()
     shutil.rmtree(root)
     with pytest.raises(OSError):
-        _record(built, "hearts-vctk-waveform_temporal_direction_detection-39").time_series[0].to_arrow()
+        _record(built, "hearts-vctk-waveform_temporal_direction_detection-39").signals[0].to_arrow()
 
 
 def test_loaders_can_be_called_again(dataset):
-    series = _record(dataset, "hearts-vctk-waveform_temporal_direction_detection-39").time_series[0]
-    assert np.array_equal(series.to_numpy(), series.to_numpy())
+    signal = _record(dataset, "hearts-vctk-waveform_temporal_direction_detection-39").signals[0]
+    assert np.array_equal(signal.to_numpy(), signal.to_numpy())
 
 
 def test_audio_type_is_absent_because_the_release_derives_an_answer_from_it(dataset):
@@ -345,48 +359,54 @@ def test_a_two_window_case_carries_both_of_its_subjects():
 def test_the_task_stream_gives_the_same_tasks_when_read_again(dataset):
     # set_task_stream reads its source more than once, so a generator that empties itself writes no
     # task at all. This stream walks the tree again, so reading it twice reads every payload twice.
-    once = [(task.id, task.record_ids) for task in dataset.iter_tasks()]
-    again = [(task.id, task.record_ids) for task in dataset.iter_tasks()]
+    once = [(task.id, _input_ids(task)) for task in dataset.iter_tasks()]
+    again = [(task.id, _input_ids(task)) for task in dataset.iter_tasks()]
     assert once == again
     assert len(once) == len(dataset.records)
 
 
 def test_every_streamed_task_names_its_own_record_and_carries_a_distinct_id(dataset):
-    # Nothing sets a streamed task's record_ids, and the dataset holds no task list, so its
+    # Nothing attaches a streamed task to its record, and the dataset holds no task list, so its
     # duplicate-id check does not run. Both are pinned here instead.
-    assert [task.record_ids for task in dataset.iter_tasks()] == [(record.record_id,) for record in dataset.records]
-    ids = [task.id for task in dataset.iter_tasks()]
+    tasks = list(dataset.iter_tasks())
+    assert [_input_ids(task) for task in tasks] == [(record.record_id,) for record in dataset.records]
+    assert all(task.inputs[0] is _record(dataset, task.inputs[0].record_id) for task in tasks)
+    assert all(not record.task_ids for record in dataset.records)
+    ids = [task.id for task in tasks]
     assert len(set(ids)) == len(ids)
 
 
 def test_classification_carries_the_label_and_the_id_of_its_vocabulary(dataset):
     task = _task(dataset, "hearts-coswara-audio_classification-30")
     assert isinstance(task, ClassificationTask)
-    assert task.target == "speech"
+    assert task.targets == ("speech",)
     assert task.target_schema == name_vocabulary("hearts", "audio_classification")
-    options = next(a for a in dataset.registered_annotations if a.id == task.target_schema)
-    assert options.id in task.input_annotation_ids
+    options = next(a for a in dataset.annotations if a.id == task.target_schema)
+    # The task carries the dataset's own occurrence, not a fresh copy of the content.
+    assert [a.occurrence_id for a in task.input_annotations] == [options.occurrence_id]
+    assert options.occurrence_id is not None
     assert options.value == ["speech", "cough", "breathing"]
 
 
 def test_symptoms_ride_as_an_agent_input_annotation(dataset):
     task = _task(dataset, _SYMPTOMS_RECORD)
     symptoms = next(a for a in _record(dataset, _SYMPTOMS_RECORD).annotations if a.key == "symptoms")
-    assert symptoms.id in task.input_annotation_ids
-    assert symptoms.value == {"cough": True, "fever": False, "cold": False}
+    assert [a.key for a in task.input_annotations] == ["answer_options", "symptoms"]
+    assert task.input_annotations[1].occurrence_id == symptoms.occurrence_id
+    # An annotation value is a scalar or a list of strings, so the map rides as canonical JSON.
+    assert symptoms.value == '{"cold": false, "cough": true, "fever": false}'
+    assert json.loads(symptoms.value) == {"cough": True, "fever": False, "cold": False}
 
 
-def test_a_numpy_boolean_in_an_agent_input_becomes_plain_python(tmp_path):
-    # The writer serializes an annotation value with json.dumps and no default=. np.bool_ is not a
-    # bool subclass, so a NumPy scalar left in here fails the write after the whole download.
+def test_a_numpy_boolean_in_an_agent_input_becomes_plain_json(tmp_path):
+    # json.dumps cannot encode np.bool_, which is not a bool subclass, so a NumPy scalar left in
+    # the map would fail the build after the whole download rather than write `true`.
     payload = dict(_payloads()[f"{_SYMPTOMS_DIR}/0.pkl"])
     payload["symptoms"] = {"cough": np.bool_(True), "fever": np.bool_(False)}
     _write_case(tmp_path, f"{_SYMPTOMS_DIR}/0.pkl", payload)
     built = HeartsConnector().convert([HeartsSource(root=tmp_path)])
     symptoms = next(a for a in _record(built, _SYMPTOMS_RECORD).annotations if a.key == "symptoms")
-    assert symptoms.value == {"cough": True, "fever": False}
-    assert [type(value) for value in symptoms.value.values()] == [bool, bool]
-    assert json.loads(json.dumps(symptoms.value)) == symptoms.value
+    assert symptoms.value == '{"cough": true, "fever": false}'
 
 
 def test_a_meal_minute_lands_inside_the_window_the_record_covers(dataset):
@@ -395,13 +415,14 @@ def test_a_meal_minute_lands_inside_the_window_the_record_covers(dataset):
     # from the same instant.
     task = _task(dataset, "hearts-cgmacros-meal_time_localization-07")
     assert isinstance(task, TemporalLocalizationTask)
-    assert [span.start_us for span in task.target] == [4 * 60_000_000]
+    assert [span.start_us for span in task.spans()] == [4 * 60_000_000]
 
 
 def test_a_float_answer_carries_no_digit_the_source_lacks(dataset):
     task = _task(dataset, "hearts-coughvid-mfcc_mean_std-12")
     assert isinstance(task, AnswerTask)
-    parsed = json.loads(task.target)
+    (answer,) = task.targets
+    parsed = json.loads(answer)
     assert all(isinstance(value, float) for value in parsed["mfcc_mean"] + parsed["mfcc_std"])
     assert [repr(value) for value in parsed["mfcc_mean"]] == [repr(value) for value in _MFCC_MEAN]
     assert [repr(value) for value in parsed["mfcc_std"]] == [repr(value) for value in _MFCC_STD]
@@ -409,7 +430,7 @@ def test_a_float_answer_carries_no_digit_the_source_lacks(dataset):
 
 def test_harespod_values_declare_no_unit_and_say_why(dataset):
     record = _record(dataset, "hearts-harespod-hr_resp_pairing-00")
-    assert {str(series.spec.unit_value) for series in record.time_series} == {"dimensionless"}
+    assert {str(signal.spec.unit_value) for signal in record.signals} == {"dimensionless"}
     normalized = next(a for a in record.annotations if a.key == "values_normalized")
     assert normalized.value is True
     assert "scaling constants" in str(normalized.description)
@@ -469,6 +490,17 @@ def test_convert_round_trips_through_the_writer(tmp_path, dataset):
         restored = reader.read()
     assert len(restored.records) == len(dataset.records)
     assert len(restored.tasks) == len(list(dataset.iter_tasks()))
-    assert {annotation.key for annotation in restored.registered_annotations} == {"answer_options"}
+    assert {annotation.key for annotation in restored.annotations} == {"answer_options"}
     audio = next(r for r in restored.records if r.record_id == "hearts-coswara-audio_classification-30")
-    assert np.array_equal(audio.time_series[0].to_numpy(), _SIGNAL)
+    assert [source.name for source in audio.sources] == ["Coswara-Data"]
+    assert np.array_equal(audio.signals[0].to_numpy(), _SIGNAL)
+    # The reader rebuilds the reverse map the stream never wrote, and resolves each task's inputs
+    # and the occurrences it names.
+    assert all(record.task_ids == (f"{record.record_id}-qa",) for record in restored.records)
+    classification = next(task for task in restored.tasks if task.id == "hearts-coswara-audio_classification-30-qa")
+    assert isinstance(classification, ClassificationTask)
+    assert classification.targets == ("speech",)
+    assert classification.inputs[0].record_id == "hearts-coswara-audio_classification-30"
+    assert [a.id for a in classification.input_annotations] == [classification.target_schema]
+    symptoms = next(task for task in restored.tasks if task.id == f"{_SYMPTOMS_RECORD}-qa")
+    assert [a.key for a in symptoms.input_annotations] == ["answer_options", "symptoms"]
