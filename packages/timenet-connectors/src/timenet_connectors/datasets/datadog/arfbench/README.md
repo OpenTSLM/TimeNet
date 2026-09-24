@@ -1,9 +1,15 @@
 # ARFBench
 
 750 multiple-choice questions about anomalies in Datadog observability metrics. One record is one
-question: it carries the one or two metrics the question cites, one signal per tag group, and an
-`AnswerTask` holding the question and its answer. The release also ships 414 rendered plots of the
-same numbers, which this connector does not convert.
+metric at one sampling interval, one signal per tag group. One `AnswerTask` is one question: its
+inputs are the one or two records the question cites, its prompt is the question and its target the
+correct option. The release also ships 414 rendered plots of the same numbers, which this connector
+does not convert.
+
+The TimeNet 0.2 build of this dataset, still version `1.0.0`, uses a model in which every signal has exactly one
+owning record. The TimeNet 0.1 build had one record per question and shared a metric's series between
+the records that cited it; the section "A metric several questions cite is stored once" says how
+the same rule is kept now.
 
 - **id**: `datadog/arfbench`
 - **source**: https://huggingface.co/datasets/Datadog/ARFBench
@@ -99,13 +105,13 @@ a value means is the English prose inside the question.
 
 ## What one record holds
 
-One record is one row of `arfbench-qa.csv`.
+One record is one series file: one metric at one sampling interval, `{metric}_{interval}.parquet`.
+The interval rule below reaches **205** such files, so the dataset holds 205 records *(measured)*.
 
-**Signals.** One `TimeSeries` per (metric, tag group) pair of the file the question resolves to,
-named `{metric}/{tag label}` and ordered by tag label. A question citing two metrics carries the
-signals of both, which is why the name is prefixed: two metrics in one question can present the same
-tag label, and without the prefix a reader could not tell them apart. Across the scope this is
-**10,556 stored series holding 5,518,548 values** *(measured)*.
+**Signals.** One `Source` named for the metric and its interval, holding one `Signal` per tag group
+of the file, named by the tag label and ordered by it. Two metrics never share a record, so the
+label needs no metric prefix; the record and its `metric_id` annotation say which metric a signal
+belongs to. Across the scope this is **10,556 stored series holding 5,518,548 values** *(measured)*.
 
 Values keep the source's `float64`. The largest in scope is about **6.1e10** *(measured)*, and
 `float32` carries about seven significant digits, so casting would halve the values plane (about
@@ -121,53 +127,69 @@ observation. A signal that skips a step carries its own int64 time offsets under
 
 Every record is anchored at `2025-03-07T00:00:00Z`, and not at its own first observation. That is a
 derived origin, the UTC day boundary the corpus starts in, and the entry below says where it came
-from. The shared zero is what lets one stored copy of a metric serve every question that cites it.
-The side effect is that `start_time` no longer distinguishes records, so a reader looks at the axis
-to see when an incident happened.
+from. The shared zero is what lets a question that cites two metrics read its two records on one
+timeline. The side effect is that `start_time` does not distinguish records, so a reader looks at
+the axis to see when an incident happened.
 
 **Annotations**, all scoped to the whole record:
 
 | key | value | where it came from |
 | --- | --- | --- |
-| `task_category` | one of eight, e.g. `Anomaly Presence` | the `task_category` column |
-| `difficulty` | `Tier 1`, `Tier 2` or `Tier 3` | the `difficulty` column |
-| `query_group` | the metric ids the question cites | the `query_group` column |
-| `interval_s` | the interval this question resolved to | the interval rule, not a column |
-| `incident_ids` | the incidents the metrics came from | parsed from the metric ids |
-| `interpolate_1`, `interpolate_2` | `true` | the rows that set them |
+| `metric_id` | the metric id, e.g. `35928_0` | the file name |
+| `incident_id` | the incident the metric came from, e.g. `35928` | parsed from the metric id |
+| `interval_s` | the file's sampling interval, in seconds | the file name |
 
-`query_group` holds the metric ids as the table writes them, and `interval_s` is in seconds.
-`incident_ids` is a list because **200 of the 750** questions cite metrics from two different
-incidents *(measured)*, and one id per record cannot hold both. The two flags ride only on the
-**47** and **18** rows that set them *(measured)*.
+The facts about a question, its category, its difficulty, its interpolation flags and the metrics
+it cites, ride on the task, under "The tasks this connector builds".
 
-**The record id is positional**: `arfbench-000` to `arfbench-749`, the question's row number in the
-QA table. The table's own unnamed first column is exactly that number, so nothing is invented and
-nothing is carried twice. Two builds of this release give the same ids; a re-release invalidates
-them. Every other id this connector states is built from the same `arfbench` prefix: a signal is
-`arfbench-{metric}-{interval}-{index}` and a shared candidate-answer list is
-`arfbench-options-{digest}`. Record and task annotations carry generated ids, because nothing
-resolves them by id.
+**The record id is the file**: `arfbench-{metric}-{interval}`, such as `arfbench-35928_0-10`. Two
+builds of this release give the same ids; a re-release invalidates them. Every other id this
+connector states is built from the same `arfbench` prefix: a source is the record id plus `-source`,
+a signal is `arfbench-{metric}-{interval}-{index}` with the index counting tag labels in order, a
+task is `arfbench-{row}` from `arfbench-000` to `arfbench-749`, a shared candidate-answer list is
+`arfbench-options-{digest}`, and a shared task-annotation value is `arfbench-{key}-{digest}`. The
+record annotations carry generated ids, because nothing resolves them by id.
 
 ## The tasks this connector builds
 
-| the question | type | count | scope |
+| the question | type | count | inputs |
 | --- | --- | --- | --- |
-| answer this question about these series | `AnswerTask` | **750** *(measured)* | the whole record |
+| answer this question about the series | `AnswerTask` | **750** *(measured)* | its cited records |
 
-There is one task per QA row, and its `prompt` is the question as the table writes it, including the
-embedded newline that splits it across two physical CSV lines: all 750 questions carry one
-*(measured)*. The `target` is the single correct option. The candidate answers do not ride on the
-task; each task points at a shared `answer_options` annotation, and the 750 tasks reference **278**
-of them *(measured)*.
+There is one task per QA row. Its `inputs` are the records of the metrics the row's `query_group`
+cites, at the interval the row resolved to and in the order the row lists them: **417** questions
+cite one metric and **333** cite two *(measured)*. A task's id is positional, `arfbench-000` to
+`arfbench-749`, the question's row number in the QA table. The table's own unnamed first column is
+exactly that number, so nothing is invented and nothing is carried twice.
 
-**The tasks stream.** `convert` builds the records and registers the option lists, then hands the
-tasks over as a stream that re-reads the QA table. Each task names its own record, and none appears
-in `Record.task_ids`, so the record rows on disk carry no task id. A read rebuilds that reverse map
-from what each task says, so `tasks_for()` still answers on a dataset read back from disk. The
-writer validates every streamed task on its way there. What a stream cannot check is what needs all
-750 tasks at once, which here is the duplicate-id check alone: no task in this dataset derives from
-another.
+The `prompt` is the question as the table writes it, including the embedded newline that splits it
+across two physical CSV lines: all 750 questions carry one *(measured)*. The single target is the
+correct option. The candidate answers do not ride on the task; each task's `input_annotations` names
+a shared `answer_options` annotation attached to the dataset, and the 750 tasks reference **278** of
+them *(measured)*.
+
+**Task annotations** describe the question itself:
+
+| key | value | where it came from |
+| --- | --- | --- |
+| `task_category` | one of eight, e.g. `Anomaly Presence` | the `task_category` column |
+| `difficulty` | `Tier 1`, `Tier 2` or `Tier 3` | the `difficulty` column |
+| `interpolate_1`, `interpolate_2` | `true` | the rows that set them |
+
+A category or a tier is one annotation content shared by every task that states it, with an id
+derived from the value, and each task carries its own occurrence. The two flags ride only on the
+**47** and **18** rows that set them *(measured)*. The metrics a question cites and the incidents
+they came from are not repeated on the task: they are the `metric_id` and `incident_id` of its input
+records, and **200 of the 750** questions cite metrics from two different incidents *(measured)*.
+
+**The tasks stream.** `convert` builds the records and attaches the option lists to the dataset,
+then hands the tasks over as a stream that re-reads the QA table. No task appears in
+`Record.task_ids`, so the record rows on disk carry no task id. A read rebuilds that reverse map
+from each task's inputs, so `tasks_for()` still answers on a dataset read back from disk. The writer
+validates every streamed task on its way there. What a stream cannot check is what needs all 750
+tasks at once, which here is the duplicate-id check alone: no task in this dataset derives from
+another. The task ids come from the rows rather than from a fresh uuid, so the writer's second read
+of the stream sees the ids its first read saw.
 
 ## Inconsistencies and decisions
 
@@ -185,8 +207,9 @@ repository before it fetches anything.
 **Consequence.** All 750 questions keep their series. They resolve to **596** at 10 s, **105** at
 60 s, **18** at 300 s, **24** at 1800 s and **7** at 3600 s *(measured)*; no question resolves to
 86400 s. Two questions citing the same metric can therefore read it at two different intervals, and
-`interval_s` on each record says which. This also fixes the download scope at **205 of the 748**
-series files.
+they then name two different records, whose `interval_s` says which. This also fixes the download
+scope, and the record count, at **205 of the 748** series files: **122** records at 10 s, **44** at
+60 s, **13** at 300 s, **21** at 1800 s and **5** at 3600 s *(measured)*.
 
 ### 239,302 rows publish a null value — **Handled**
 
@@ -272,8 +295,8 @@ belongs beside them.
 
 **Problem.** The release states no zero for its timeline. Every file carries absolute epochs, and
 the observations in scope run from **2025-03-07T00:00:10Z to 2025-03-29T23:59:50Z** *(measured)*. A
-record anchored at its own first observation would give one metric a different set of time offsets
-in every question that cites it, and the stored copy could then serve only one of them.
+record anchored at its own first observation would give the two records of a two-metric question
+two different zeros, so the same time offset would name two different moments inside one task.
 
 **Decision.** Anchor every record at `2025-03-07T00:00:00Z`, the UTC day boundary the corpus starts
 in. It is 10 s before the earliest observation in scope, so `ANCHOR_US + offset` reproduces every
@@ -287,28 +310,41 @@ re-pin whose corpus starts earlier fails loudly rather than quietly: `RegularAxi
 ### A metric several questions cite is stored once — **Handled**
 
 **Problem.** The questions overlap heavily. Read naively, per question, the scope holds **52,659**
-record-to-series references and **34,972,881** values *(measured)*.
+question-to-series references and **34,972,881** values *(measured)*. In the TimeNet 0.2 model a
+signal has exactly one owning record, so a record per question could only reach that count by
+copying every cited series into every question, about five times the data.
 
-**Decision.** Read a metric once per interval and hand the same `TimeSeries` objects to every record
-that cites it. The shared anchor is what makes this legal: two records with the same zero agree
-about what a time offset means.
+**Decision.** Make the series file the record, not the question. One record per (metric, interval)
+owns that file's signals once, and a question is a task whose `inputs` list the records it cites.
+The task, not the record, is what carries the question, so nothing about a question is lost by
+moving it there.
 
-**Consequence.** **10,556 stored series and 5,518,548 stored values**, a factor of **6.34**
-*(measured)*. On a full-read throughput comparison this one decision can account for most of a win,
-so a comparison lane needs the same per-file cache to be fair.
+**Consequence.** **205 records, 10,556 stored series and 5,518,548 stored values**, a factor of
+**6.34** against the naive reading *(measured)*, and the same storage as version 1.0.0 of this
+dataset. A consumer that wants "the series of question *n*" walks `task.inputs` rather than one
+record, and a consumer that wants "every question about metric *m*" calls `tasks_for(record)`. On a
+full-read throughput comparison this one decision can account for most of a win, so a comparison
+lane needs the same per-file cache to be fair.
 
-### A signal name is the metric id and the tag label joined — **Handled**
+The alternative was one record per metric, with a child `Source` per interval the metric publishes,
+so the dataset would hold 142 records and a task would name the interval it reads through an
+annotation. That hides the interval rule inside each task and makes a task's inputs wider than what
+the question is about, so a record per file was kept: a task's inputs are exactly the series the
+question asks about.
+
+### An empty tag label becomes a named signal — **Handled**
 
 **Problem.** A metric with no tag grouping carries an empty tag label in the source, and a TimeF
-signal name must be non-empty. Two metrics in one question can also present the same tag label.
+signal name must be non-empty.
 
-**Decision.** The name is `{metric}/{tag label}`, and an empty label becomes the literal `value`.
+**Decision.** A signal is named by its tag label, and an empty label becomes the literal `value`.
+The metric needs no place in the name: a record holds one metric, so two metrics can never present
+the same label inside one record.
 
-**Consequence.** **21 of the 10,556** series are named `.../value` *(measured)*. Read that as a
-placeholder, not as a tag the release wrote. The prefix costs **84,755 B** of name strings across
-the scope *(measured)*. A file that carried both an empty label and a real label spelled `value`
-would put two tag groups under one name, so the decoder raises `TimeFFormatError` instead of losing
-one of them. No file in scope carries that pair *(measured)*.
+**Consequence.** **21 of the 10,556** series are named `value` *(measured)*. Read that as a
+placeholder, not as a tag the release wrote. A file that carried both an empty label and a real
+label spelled `value` would put two tag groups under one name, so the decoder raises
+`TimeFFormatError` instead of losing one of them. No file in scope carries that pair *(measured)*.
 
 ### Only the files the questions resolve to are downloaded — **Handled**
 
@@ -329,9 +365,9 @@ Parquet files would, and the smaller number is the honest one: it is the bytes s
 Python repr of one-key dicts). The two parse to the same list on all **750** rows *(measured)*. The
 750 rows hold only **279** distinct `options_str` strings.
 
-**Decision.** Read `options_str`, drop `options`, and register one `answer_options` annotation per
-distinct parsed list, keyed by a hash of the list rather than of the raw text. Each task points at
-the annotation it shares.
+**Decision.** Read `options_str`, drop `options`, and attach one `answer_options` annotation to the
+dataset per distinct parsed list, keyed by a hash of the list rather than of the raw text. Each
+task's `input_annotations` names the occurrence it shares.
 
 **Consequence.** **278** stored option lists for 279 distinct strings *(measured)*: one pair differs
 only in the whitespace after its commas and parses to the same list, so those two share one
@@ -343,7 +379,8 @@ annotation.
 *(measured)*, and the card says they describe the visualisation an engineer saw. The release does
 not ship the interpolated series.
 
-**Decision.** Store the flags as annotations on the rows that set them. Interpolate nothing.
+**Decision.** Store the flags as annotations on the tasks of the rows that set them. Interpolate
+nothing.
 
 **Consequence.** On those questions the stored series is not what an evaluation following the
 release's intent would show a model. The flag is how a reader finds them.
@@ -352,7 +389,7 @@ release's intent would show a model. The flag is how a reader finds them.
 
 **Problem.** `Unnamed: 0` is a pandas index left in the CSV.
 
-**Decision.** Drop it. It is exactly the row number `0..749` *(measured)*, which the record id
+**Decision.** Drop it. It is exactly the row number `0..749` *(measured)*, which the task id
 already states.
 
 **Consequence.** None: 750 integers that were already stated twice.
@@ -364,8 +401,8 @@ visible after the rows are read and sorted. So `convert` opens all 205 files to 
 signal's axis and length, and the loaders open them again when the writer asks.
 
 **Decision.** Accept the second read and keep it to one decode per file, with an LRU cache of two
-decoded files. Two is enough because the writer asks for series in `source_id` order and `source_id`
-is the file, so one file's signals are always requested in a run.
+decoded files. Two is enough because the writer groups the series it asks for by `source_id`, and
+`source_id` is the file, so one file's signals are always requested in a run.
 
 **Consequence.** A build reads about 110 MB rather than 55. The cache is module-level, so it is
 shared by every connector instance in a process; a test that writes its own fixture clears it.
@@ -377,7 +414,7 @@ closer entry.
 
 **Decision.** `observability`. The alternative was the catch-all `general`.
 
-**Consequence.** It sets the one domain all 750 records are filed under, so it decides which domain
+**Consequence.** It sets the one domain all 205 records are filed under, so it decides which domain
 filter finds this dataset. `general` would be a filter nobody can narrow with.
 
 ### A comparison lane must derive the interval map the same way — **Open**
@@ -398,7 +435,7 @@ questions, with no error raised anywhere.
 ## Warnings this build emits
 
 None. Every inconsistency above holds for the whole release, not for a handful of records, so each
-one is decided in code and written down here. A warning per record would repeat one fact 750 times
+one is decided in code and written down here. A warning per record would repeat one fact 205 times
 and add nothing to the counts in this file.
 
 ## What is not built
