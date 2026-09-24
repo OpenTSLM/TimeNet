@@ -17,10 +17,10 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
-from timenet.types import Annotation, ClassificationTask, DataSource, TimeInterval, TimeSeriesSpec, ureg
+from timenet.types import Annotation, ClassificationTask, TimeInterval, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
 
 
@@ -33,12 +33,23 @@ _PARTICIPANT_FIELDS = ("pid", "age", "sex")
 _METADATA_FILES = {"metadata.csv", "annotation-label-dictionary.csv"}
 _SYMLINK_MODE = 0o120000
 _DICTIONARY_MAP_COUNT = 6
+_PARTICIPANT_COUNT = 151
 _AXIS = RegularAxis.from_rate_hz(100)
-_SOURCE = DataSource(data_source_type="wearable", name="Axivity AX3", provider="University of Oxford")
 _SPECS = {
-    "acceleration": TimeSeriesSpec("acceleration", "Acceleration", ureg.standard_gravity, _SOURCE, "float64"),
-    "text": TimeSeriesSpec("source_text", "Source text", ureg.dimensionless, _SOURCE, "str"),
+    "acceleration": TimeSeriesSpec(
+        spec_type="acceleration",
+        name="Acceleration",
+        unit_value=ureg.standard_gravity,
+        dtype="float64",
+    ),
+    "text": TimeSeriesSpec(
+        spec_type="source_text",
+        name="Source text",
+        unit_value=ureg.dimensionless,
+        dtype="str",
+    ),
 }
+_SOURCE_METADATA = {"data_source_type": "wearable", "provider": "University of Oxford"}
 
 
 @dataclass(frozen=True)
@@ -122,7 +133,12 @@ def _selected_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     for info in archive.infolist():
         name = Path(info.filename)
         allowed = name.name in _METADATA_FILES or (name.name.startswith("P") and name.suffixes == [".csv", ".gz"])
-        if info.is_dir() or name.is_absolute() or ".." in name.parts or name.parts[:1] != (_ROOT,):
+        if (
+            info.is_dir()
+            or name.is_absolute()
+            or ".." in name.parts
+            or name.parent.as_posix() != _ROOT
+        ):
             continue
         if not allowed:
             continue
@@ -261,8 +277,10 @@ def _participant_refs(root: Path) -> list[Capture24Participant]:
         if row is None or set(row) != set(_PARTICIPANT_FIELDS):
             raise TimeFFormatError(f"CAPTURE-24 missing native metadata for {participant_id}")
         refs.append(Capture24Participant(path, participant_id, row["age"], row["sex"], dictionaries))
-    if not refs:
-        raise TimeFFormatError("CAPTURE-24 extraction contains no participant CSV files")
+    if len(refs) != _PARTICIPANT_COUNT:
+        raise TimeFFormatError(
+            f"CAPTURE-24 extraction contains {len(refs)} participant CSV files; expected {_PARTICIPANT_COUNT}"
+        )
     return refs
 
 
@@ -305,30 +323,42 @@ class Capture24Connector(BaseConnector[Capture24Participant]):
                     type=pa.float64() if key in {"x", "y", "z"} else pa.string(),
                 )
 
-            series = tuple(
-                TimeSeries(
+            signals = tuple(
+                Signal.from_loader(
                     spec=_SPECS["acceleration"],
-                    signal=key,
+                    name=key,
                     time_axis=_AXIS,
                     loader=loader(key),
                     source_id=ref.path.name,
-                    time_series_id=f"{record_id}-{key}",
+                    id=f"{record_id}-{key}",
                     n_values=count,
                 )
                 for key in ("x", "y", "z")
             ) + tuple(
-                TimeSeries(
+                Signal.from_loader(
                     spec=_SPECS["text"],
-                    signal=key,
+                    name=key,
                     time_axis=_AXIS,
                     loader=loader(key),
                     source_id=ref.path.name,
-                    time_series_id=f"{record_id}-{key}",
+                    id=f"{record_id}-{key}",
                     n_values=count,
                 )
                 for key in ("time", "annotation")
             )
-            record = dataset.add_record(time_series=series, subject_ids=(ref.participant_id,), record_id=record_id)
+            record = Record(
+                record_id=record_id,
+                subject_ids=(ref.participant_id,),
+                sources=(
+                    Source(
+                        id=f"{record_id}-source",
+                        name="Axivity AX3",
+                        signals=signals,
+                        metadata=_SOURCE_METADATA.copy(),
+                    ),
+                ),
+            )
+            dataset.add_record(record=record)
             record.add_annotations(
                 (
                     Annotation(key="age", value=ref.age, id=f"{record_id}-age"),
@@ -343,9 +373,9 @@ class Capture24Connector(BaseConnector[Capture24Participant]):
             )
             for index, (label, start, end) in enumerate(runs):
                 dataset.add_task(
-                    record,
-                    ClassificationTask(
-                        target=label,
+                    task=ClassificationTask(
+                        inputs=(record,),
+                        targets=(label,),
                         scope=TimeInterval.seconds(start / 100, end / 100),
                         id=f"{record_id}-annotation-{index}",
                     ),
