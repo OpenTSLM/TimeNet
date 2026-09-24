@@ -130,8 +130,20 @@ def _by_id(dataset: TimeFDataset) -> dict[str, Record]:
     return {record.record_id: record for record in dataset.records}
 
 
+def _signals(record: Record):
+    # The record's only source keeps the array's column order; Record.signals sorts by name.
+    (source,) = record.sources
+    return source.signals
+
+
+def _target_id(task: Task) -> str | None:
+    if task.targets is None or len(task.targets) != 1 or not isinstance(task.targets[0], Record):
+        return None
+    return task.targets[0].record_id
+
+
 def _generation_tasks_for(tasks: Iterable[Task], record_id: str) -> list[TSGenerationTask]:
-    return [t for t in tasks if isinstance(t, TSGenerationTask) and t.record_ids == (record_id,)]
+    return [t for t in tasks if isinstance(t, TSGenerationTask) and _target_id(t) == record_id]
 
 
 def test_is_a_connector():
@@ -248,16 +260,25 @@ def test_one_record_per_window_with_padded_ids(corpus):
 
 def test_series_shape_and_ids_follow_the_arrays(corpus):
     record = _by_id(_convert(corpus))["verbalts-Weather-valid-00001"]
-    assert len(record.time_series) == _WEATHER_SIGNALS
-    assert {series.n_values for series in record.time_series} == {_WEATHER_STEPS}
-    assert {series.source_id for series in record.time_series} == {"verbalts-Weather-valid-00001"}
-    assert record.time_series[0].signal == "p (mbar)"
-    assert record.time_series[0].time_series_id == "verbalts-Weather-valid-00001-p (mbar)"
+    signals = _signals(record)
+    assert len(signals) == _WEATHER_SIGNALS
+    assert {series.n_values for series in signals} == {_WEATHER_STEPS}
+    assert {series.source_id for series in signals} == {"verbalts-Weather-valid-00001"}
+    assert signals[0].name == "p (mbar)"
+    assert signals[0].id == "verbalts-Weather-valid-00001-p (mbar)"
+
+
+def test_one_source_per_window_named_after_the_component(corpus):
+    record = _by_id(_convert(corpus))["verbalts-Weather-valid-00001"]
+    (source,) = record.sources
+    assert source.id == "verbalts-Weather-valid-00001-source"
+    assert source.name == "VerbalTS Weather"
+    assert source.sources == ()
 
 
 def test_blindways_names_every_joint_and_axis(corpus):
     record = _by_id(_convert(corpus))["verbalts-BlindWays-train-00000"]
-    names = tuple(series.signal for series in record.time_series)
+    names = tuple(series.name for series in _signals(record))
     assert names[0] == "j00_x"
     assert names[-1] == "j23_z"
     assert len(names) == _BLINDWAYS_SIGNALS
@@ -265,7 +286,7 @@ def test_blindways_names_every_joint_and_axis(corpus):
 
 def test_a_two_signal_synthetic_window_is_named_by_position(corpus):
     record = _by_id(_convert(corpus))["verbalts-synthetic_m-train-00000"]
-    assert tuple(series.signal for series in record.time_series) == ("x0", "x1")
+    assert tuple(series.name for series in _signals(record)) == ("x0", "x1")
 
 
 def test_an_ettm1_signal_is_named_by_its_own_var_id_code(corpus):
@@ -273,31 +294,32 @@ def test_an_ettm1_signal_is_named_by_its_own_var_id_code(corpus):
     codes = _attributes("ETTm1", "train")
     for row in range(_ROWS_PER_SPLIT):
         record = records[f"verbalts-ETTm1-train-{row:05d}"]
-        assert len(record.time_series) == 1
-        assert record.time_series[0].signal == _ETTM1_COLUMNS[int(codes[row, 0])]
+        assert len(record.signals) == 1
+        assert record.signals[0].name == _ETTM1_COLUMNS[int(codes[row, 0])]
 
 
 def test_every_time_series_id_is_unique(corpus):
     dataset = _convert(corpus)
-    ids = [series.time_series_id for record in dataset.records for series in record.time_series]
+    ids = [series.id for record in dataset.records for series in record.signals]
     assert len(set(ids)) == len(ids)
 
 
 def test_axes_come_from_the_component(corpus):
     records = _by_id(_convert(corpus))
-    weather_axis = records["verbalts-Weather-train-00000"].time_series[0].time_axis
+    weather_axis = records["verbalts-Weather-train-00000"].signals[0].time_axis
     assert isinstance(weather_axis, RegularAxis)
     assert weather_axis.period_us == Fraction(600_000_000)
-    assert isinstance(records["verbalts-synthetic_u-train-00000"].time_series[0].time_axis, OrdinalAxis)
+    assert isinstance(records["verbalts-synthetic_u-train-00000"].signals[0].time_axis, OrdinalAxis)
 
 
 def test_values_are_bit_identical_and_the_loader_is_re_callable(corpus):
     record = _by_id(_convert(corpus))["verbalts-Weather-test-00001"]
     source = _values("Weather", "test")
-    for signal, series in enumerate(record.time_series):
+    signals = _signals(record)
+    for signal, series in enumerate(signals):
         assert np.array_equal(series.to_numpy(), source[1, :, signal])
     # The writer calls a loader more than once, so re-slicing must give the same values.
-    assert np.array_equal(record.time_series[0].to_numpy(), source[1, :, 0])
+    assert np.array_equal(signals[0].to_numpy(), source[1, :, 0])
 
 
 def test_convert_maps_the_arrays_and_materialises_no_values(corpus, monkeypatch):
@@ -321,7 +343,7 @@ def test_convert_maps_the_arrays_and_materialises_no_values(corpus, monkeypatch)
     # plane belongs to the task stream, so convert never opens it.
     assert modes.count("r") == len(_FIXTURE_COMPONENTS) * len(_SPLITS) * 2
     monkeypatch.setattr(connector_module.pa, "array", real_pa_array)
-    assert len(dataset.records[0].time_series[0].to_numpy()) == _SYNTHETIC_STEPS
+    assert len(dataset.records[0].signals[0].to_numpy()) == _SYNTHETIC_STEPS
 
 
 def test_annotations_carry_the_context_and_the_codes_but_not_the_captions(corpus):
@@ -350,6 +372,11 @@ def test_a_one_caption_component_carries_one_task(corpus):
 def test_codebooks_are_registered_once_and_carry_their_option_count(corpus):
     dataset = _convert(corpus)
     registered = {annotation.id: annotation for annotation in dataset.registered_annotations}
+    # The content is registered, so the key reaches the schema, and attached once to the dataset, so
+    # a task can name the occurrence. Both hold the same seven annotations.
+    attached = {annotation.id: annotation for annotation in dataset.annotations}
+    assert len(dataset.annotations) == len(attached) == len(registered)
+    assert all(attached[content_id] == annotation for content_id, annotation in registered.items())
     assert set(registered) == {
         "verbalts-codebook-weather-season",
         "verbalts-codebook-weather-time",
@@ -369,35 +396,43 @@ def test_one_generation_task_per_caption_prompted_by_that_caption(corpus):
     assert sum(1 for _ in dataset.iter_tasks()) == n_captions
     tasks = _generation_tasks_for(dataset.iter_tasks(), "verbalts-Weather-train-00000")
     task = next(t for t in tasks if t.prompt == _captions("Weather", "train")[0][2])
-    assert task.target is None
-    assert task.target_annotation_ids == ()
-    assert task.target_record_id == "verbalts-Weather-train-00000"
-    assert task.input_annotation_ids == ("verbalts-codebook-weather-season", "verbalts-codebook-weather-time")
+    # Text in, series out: the model sees the caption only, so the window is the target and not an input.
+    assert task.inputs == ()
+    assert task.target_annotations == ()
+    record = _by_id(dataset)["verbalts-Weather-train-00000"]
+    assert task.targets is not None
+    assert task.targets == (record,)
+    assert task.targets[0] is record
+    assert tuple(a.id for a in task.input_annotations) == (
+        "verbalts-codebook-weather-season",
+        "verbalts-codebook-weather-time",
+    )
+    assert {a.occurrence_id for a in task.input_annotations} <= {a.occurrence_id for a in dataset.annotations}
 
 
 def test_a_weather_window_gets_three_specifications_of_one_target(corpus):
     dataset = _convert(corpus)
     tasks = _generation_tasks_for(dataset.iter_tasks(), "verbalts-Weather-train-00000")
     assert len(tasks) == 3
-    assert {t.target_record_id for t in tasks} == {"verbalts-Weather-train-00000"}
+    assert {_target_id(t) for t in tasks} == {"verbalts-Weather-train-00000"}
     assert [t.prompt for t in tasks] == list(_captions("Weather", "train")[0])
 
 
 def test_the_tasks_stream_and_no_record_lists_its_tasks(corpus):
-    # A streamed task carries its own record_ids, and the link runs one way: nothing walks from a
+    # A streamed task carries its own target record, and the link runs one way: nothing walks from a
     # record to its tasks any more.
     dataset = _convert(corpus)
     assert dataset.has_task_stream
     assert dataset.tasks == ()
     assert all(record.task_ids == () for record in dataset.records)
-    assert all(task.record_ids for task in dataset.iter_tasks())
+    assert all(_target_id(task) is not None for task in dataset.iter_tasks())
 
 
 def test_the_task_stream_gives_the_same_tasks_when_read_again(corpus):
     # set_task_stream needs a source it can read again, so a generator that empties itself is a bug.
     dataset = _convert(corpus)
-    once = [(t.record_ids, t.prompt, t.input_annotation_ids) for t in dataset.iter_tasks()]
-    again = [(t.record_ids, t.prompt, t.input_annotation_ids) for t in dataset.iter_tasks()]
+    once = [(_target_id(t), t.prompt, tuple(a.id for a in t.input_annotations)) for t in dataset.iter_tasks()]
+    again = [(_target_id(t), t.prompt, tuple(a.id for a in t.input_annotations)) for t in dataset.iter_tasks()]
     assert once == again
     assert len(once) == sum(3 if r.record_id.startswith("verbalts-Weather-") else 1 for r in dataset.records)
 
@@ -442,19 +477,27 @@ def test_convert_round_trips_through_the_writer(corpus, tmp_path):
     record = next(r for r in restored.records if r.record_id == "verbalts-Weather-train-00000")
     tasks = _generation_tasks_for(restored.tasks, "verbalts-Weather-train-00000")
     assert {t.prompt for t in tasks} == set(_captions("Weather", "train")[0])
-    assert {t.target_record_id for t in tasks} == {"verbalts-Weather-train-00000"}
-    # The build wrote no record task ids; read() rebuilds the reverse link from the task rows.
-    assert len(restored.tasks_for(record, TSGenerationTask)) == 3
-    assert len(record.time_series) == _WEATHER_SIGNALS
-    assert np.array_equal(record.time_series[0].to_numpy(), _values("Weather", "train")[0, :, 0])
+    assert len(tasks) == 3
+    # The target comes back as the restored Record object itself, not a copy of it.
+    assert all(t.targets is not None and t.targets == (record,) and t.targets[0] is record for t in tasks)
+    assert all(t.inputs == () for t in tasks)
+    assert {tuple(a.id for a in t.input_annotations) for t in tasks} == {
+        ("verbalts-codebook-weather-season", "verbalts-codebook-weather-time")
+    }
+    # A generation task has no input record, and read() links a record to its tasks through inputs
+    # only, so the reverse walk finds nothing; consumers filter the tasks by target instead.
+    assert restored.tasks_for(record, TSGenerationTask) == ()
+    # The reader gives the signals back in name order, so the first column is found by its id.
+    signals = {signal.id: signal for signal in record.signals}
+    assert len(signals) == _WEATHER_SIGNALS
+    pressure = signals["verbalts-Weather-train-00000-p (mbar)"]
+    assert np.array_equal(pressure.to_numpy(), _values("Weather", "train")[0, :, 0])
 
 
 def test_unprefixed_attribute_keys_would_collide(corpus):
     # The guard this connector's key prefix exists for: two descriptors under one key abort the build.
     dataset = _convert(corpus)
-    dataset.records[0].add_annotation(
-        Annotation(key="weather_season", value="fall", id="collide"), warn_when_outside=False
-    )
+    dataset.records[0].annotate(Annotation(key="weather_season", value="fall", id="collide"), warn_when_outside=False)
     with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
         dataset.derive_schema()
 
@@ -469,7 +512,7 @@ def test_a_non_finite_value_is_stored_by_the_writer(corpus, tmp_path):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    series = {ts.time_series_id: ts for record in restored.records for ts in record.time_series}
+    series = {ts.id: ts for record in restored.records for ts in record.signals}
     assert np.isnan(series["verbalts-synthetic_u-train-00000-x0"].to_numpy()[2])
 
 
