@@ -7,6 +7,7 @@ import csv
 from dataclasses import dataclass
 import gzip
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -49,7 +50,7 @@ _SPECS = {
         dtype="str",
     ),
 }
-_SOURCE_METADATA = {"data_source_type": "wearable", "provider": "University of Oxford"}
+_SOURCE_METADATA: dict[str, object] = {"data_source_type": "wearable", "provider": "University of Oxford"}
 
 
 @dataclass(frozen=True)
@@ -133,12 +134,7 @@ def _selected_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     for info in archive.infolist():
         name = Path(info.filename)
         allowed = name.name in _METADATA_FILES or (name.name.startswith("P") and name.suffixes == [".csv", ".gz"])
-        if (
-            info.is_dir()
-            or name.is_absolute()
-            or ".." in name.parts
-            or name.parent.as_posix() != _ROOT
-        ):
+        if info.is_dir() or name.is_absolute() or ".." in name.parts or name.parent.as_posix() != _ROOT:
             continue
         if not allowed:
             continue
@@ -364,7 +360,14 @@ class Capture24Connector(BaseConnector[Capture24Participant]):
                     Annotation(key="age", value=ref.age, id=f"{record_id}-age"),
                     Annotation(key="sex", value=ref.sex, id=f"{record_id}-sex"),
                     Annotation(
-                        key="annotation_label_dictionary", value=ref.annotation_dictionary, id=f"{record_id}-dictionary"
+                        key="annotation_label_dictionary",
+                        value=json.dumps(
+                            ref.annotation_dictionary,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=True,
+                        ),
+                        id=f"{record_id}-dictionary",
                     ),
                     Annotation(
                         key="timestamp_timezone", value="naive_source_text", id=f"{record_id}-timestamp-timezone"
