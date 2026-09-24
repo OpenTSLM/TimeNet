@@ -3,19 +3,21 @@
 # The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
 # derived from the data into manifest.json.
 #
-# Scope: one record per question; one signal per (metric, tag group); the finest sampling interval
-# every metric a question cites publishes, which keeps all 750 questions and opens 205 of the
-# release's 748 series files. The filename is the join key to the QA table, so the files' own
-# query_name column, the pandas index column and the repeated group count are dropped.
+# Scope: one record per series file, which is one metric at one sampling interval, with one signal
+# per tag group; one AnswerTask per question over the one or two records it cites, at the finest
+# interval every cited metric publishes. That keeps all 750 questions and opens 205 of the release's
+# 748 series files, so the dataset holds 205 records and 750 tasks. The filename is the join key to
+# the QA table, so the files' own query_name column, the pandas index column and the repeated group
+# count are dropped.
 #
-# Training convention: the answer rides as an unprompted AnswerTask on the record, with the
-# candidate answers in a shared answer_options annotation. Values keep the source's float64 and the
-# release states no physical unit, so every signal is dimensionless. A row whose value is null is
-# carried as a missing timestep rather than deleted, so a consumer reads these series with
-# to_numpy_and_mask() or to_arrow().
+# Training convention: the question is the task's prompt and the correct option its target, with the
+# candidate answers in a shared answer_options annotation on the dataset. Values keep the source's
+# float64 and the release states no physical unit, so every signal is dimensionless. A row whose
+# value is null is carried as a missing timestep rather than deleted, so a consumer reads these
+# series with to_numpy_and_mask() or to_arrow().
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
-dataset_version: 1.0.0
+dataset_version: 0.2.0
 name: ARFBench
 description: >-
   750 multiple-choice questions about anomalies in 142 observability metrics from 63 Datadog
