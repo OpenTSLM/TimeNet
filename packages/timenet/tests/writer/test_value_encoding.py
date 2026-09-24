@@ -10,7 +10,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import DEFAULT_ROW_GROUP_TARGET_BYTES
-from timenet.manifest import Manifest
+from timenet.manifest import FileGroup, FileKind, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
@@ -87,8 +87,10 @@ def _write(tmp_path, dataset, **kwargs):
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def _manifest(version_dir):
-    return Manifest.from_json((version_dir / "manifest.json").read_text())
+def _time_series(version_dir) -> FileGroup:
+    group = Manifest.from_json((version_dir / "manifest.json").read_text()).files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    return group
 
 
 # ---- the rule ----------------------------------------------------------------------------------
@@ -187,7 +189,7 @@ def test_encoding_sample_source_returns_at_least_one_chunk():
 
 def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
     signals = {("ecg", "I"): quantized(), ("embedding", "e"): continuous(n=5 * 262_144)}
-    default = _manifest(
+    default = _time_series(
         _write(
             tmp_path / "a",
             _dataset(signals),
@@ -195,7 +197,7 @@ def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
             compression_level=1,
         )
     )
-    large = _manifest(
+    large = _time_series(
         _write(
             tmp_path / "b",
             _dataset(signals),
@@ -203,8 +205,8 @@ def test_encoding_choice_is_independent_of_row_group_target(tmp_path):
             compression_level=1,
         )
     )
-    assert default.value_encoding == large.value_encoding
-    assert default.value_encoding == {"ecg": "dictionary", "embedding": "byte_stream_split"}
+    assert default.encoding == large.encoding
+    assert default.encoding == {"ecg": "dictionary", "embedding": "byte_stream_split"}
 
 
 # ---- end-to-end selection ----------------------------------------------------------------------
@@ -220,7 +222,7 @@ def test_writer_picks_per_modality(tmp_path):
             }
         ),
     )
-    assert _manifest(version_dir).value_encoding == {
+    assert _time_series(version_dir).encoding == {
         "ecg": ValueEncoding.DICTIONARY.value,
         "embedding": ValueEncoding.BYTE_STREAM_SPLIT.value,
     }
@@ -247,16 +249,16 @@ def test_every_manifest_shard_exists_and_is_non_empty(tmp_path):
         shard_target_bytes=4096,
         chunk_max_bytes=4096,
     )
-    manifest = _manifest(version_dir)
-    assert manifest.files.time_series
-    for rel in manifest.files.time_series:
+    parts = _time_series(version_dir).parts
+    assert parts
+    for rel in parts:
         assert pq.ParquetFile(version_dir / rel.path).metadata.num_rows > 0
 
 
 def test_writing_twice_reaches_the_same_encoding(tmp_path):
-    first = _manifest(_write(tmp_path / "a", _dataset({("ecg", "I"): quantized()})))
-    second = _manifest(_write(tmp_path / "b", _dataset({("ecg", "I"): quantized()})))
-    assert first.value_encoding == second.value_encoding
+    first = _time_series(_write(tmp_path / "a", _dataset({("ecg", "I"): quantized()})))
+    second = _time_series(_write(tmp_path / "b", _dataset({("ecg", "I"): quantized()})))
+    assert first.encoding == second.encoding
 
 
 # ---- overrides ---------------------------------------------------------------------------------
@@ -265,7 +267,7 @@ def test_writing_twice_reaches_the_same_encoding(tmp_path):
 @pytest.mark.parametrize("forced", [e.value for e in ValueEncoding])
 def test_writer_argument_forces_an_encoding(tmp_path, forced):
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): quantized()}), value_encoding=forced)
-    assert _manifest(version_dir).value_encoding == {"ecg": forced}
+    assert _time_series(version_dir).encoding == {"ecg": forced}
 
 
 def test_unknown_value_encoding_is_rejected_before_staging(tmp_path):
@@ -334,16 +336,16 @@ def test_round_trip_is_bit_exact(tmp_path, forced):
 
 
 def test_reader_needs_no_encoding_hint(tmp_path):
-    # Parquet is self-describing: drop value_encoding from the manifest and the values still read back,
+    # Parquet is self-describing: drop the encoding from the manifest and the values still read back,
     # which is why the reader needed no change and the map is provenance rather than contract.
     values = quantized()
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): values}))
     manifest_path = version_dir / "manifest.json"
     document = json.loads(manifest_path.read_text())
-    assert document.pop("value_encoding") == {"ecg": ValueEncoding.DICTIONARY.value}
+    assert document["files"][1].pop("encoding") == {"ecg": ValueEncoding.DICTIONARY.value}
     manifest_path.write_text(json.dumps(document, indent=2))
 
-    assert Manifest.from_json(manifest_path.read_text()).value_encoding == {}
+    assert _time_series(version_dir).encoding == {}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))

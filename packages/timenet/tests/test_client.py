@@ -7,7 +7,7 @@ from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError
-from timenet.manifest import Manifest
+from timenet.manifest import FileKind, Manifest, ManifestFiles
 from timenet.manifest.files import FilePart
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -89,9 +89,13 @@ def test_download_rejects_path_traversal(registry_root, tmp_path):
     manifest = client.get("timenet/hello-world")
     bad = dataclasses.replace(
         manifest,
-        files=dataclasses.replace(
-            manifest.files,
-            time_series=(FilePart("../../escape.txt", "sha256:0", 0),),
+        files=ManifestFiles(
+            groups=tuple(
+                dataclasses.replace(group, parts=(FilePart("../../escape.txt", "sha256:0", 0),))
+                if group.kind == FileKind.TIME_SERIES
+                else group
+                for group in manifest.files.groups
+            )
         ),
     )
     with pytest.raises(TimeFFormatError, match="escapes"):

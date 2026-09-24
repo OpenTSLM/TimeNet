@@ -30,12 +30,9 @@ def materialize_control(version: DatasetVersion) -> Path:
         A local path suitable for a read-only DuckDB connection.
 
     Raises:
-        TimeFFormatError: If the manifest lacks a control file or the downloaded file fails verification.
+        TimeFFormatError: If the downloaded file fails verification.
     """
-    parts = version.manifest.files.control
-    if len(parts) != 1:
-        raise TimeFFormatError("TimeF manifest does not declare control.duckdb")
-    part = parts[0]
+    part = version.manifest.files.control
     if isinstance(version.filesystem, pafs.LocalFileSystem):
         return Path(version.path(part.path))
 

@@ -10,7 +10,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import FileGroup, FileKind, Manifest, ManifestFiles
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -19,6 +19,12 @@ from timenet.values_backends.zarr import reader as zarr_reader_module
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.values_backends.zarr.writer import _array_name
 from timenet.writer import TimeFWriter
+
+
+def _time_series(files: ManifestFiles) -> FileGroup:
+    group = files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    return group
 
 
 def _write(tmp_path, **kwargs) -> Path:
@@ -32,9 +38,10 @@ def _write(tmp_path, **kwargs) -> Path:
 def test_manifest_records_zarr_backend_and_store_files(tmp_path):
     version_dir = _write(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
-    assert manifest.files.time_series, "expected the zarr store's files to be listed"
-    for part in manifest.files.time_series:
+    group = _time_series(manifest.files)
+    assert group.backend == "zarr"
+    assert group.parts, "expected the zarr store's files to be listed"
+    for part in group.parts:
         assert part.path.startswith("time_series.zarr/")
         assert (version_dir / part.path).is_file()
         assert part.checksum.startswith("sha256:")
@@ -108,7 +115,7 @@ def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
     manifest = Manifest.from_json((out / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
+    assert _time_series(manifest.files).backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         record = next(iter(reader.iter_records()))
         assert len(record.signals[0].to_arrow()) > 0
@@ -197,7 +204,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 1
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)

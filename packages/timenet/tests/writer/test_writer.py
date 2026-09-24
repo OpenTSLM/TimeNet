@@ -8,7 +8,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import FileGroup, FileKind, Manifest, ManifestFiles
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -22,6 +22,12 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 from timenet.writer.encodings import applied_matches, values_encoding_of
 from timenet.writer.value_encoding import ValueEncoding
+
+
+def _time_series(files: ManifestFiles) -> FileGroup:
+    group = files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    return group
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -49,7 +55,7 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     assert manifest.dataset_id == "timenet/hello-world"
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 1
     assert manifest.counts.records == 3
     assert len(manifest.schema.time_series_specs) == 2
     # files listed in the manifest all exist
@@ -92,14 +98,17 @@ def test_manifest_has_per_file_checksum_and_size(tmp_path):
 
 def test_manifest_data_files_are_lists_of_parts(tmp_path):
     version_dir = _written(tmp_path)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert len(manifest.files.control) == 1
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
-    assert set(raw_files) == {"control", "time_series"}
-    for key in ("control", "time_series"):
-        assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
-        for entry in raw_files[key]:
-            assert set(entry) == {"path", "checksum", "size"}, f"{key} entries are {{path, checksum, size}}"
+    assert [(group["kind"], group["backend"]) for group in raw_files] == [
+        ("control", "duckdb"),
+        ("time_series", "parquet"),
+    ]
+    assert len(raw_files[0]["parts"]) == 1
+    for group in raw_files:
+        kind = group["kind"]
+        assert isinstance(group["parts"], list), f"{kind} parts should serialize as a JSON array"
+        for entry in group["parts"]:
+            assert set(entry) == {"path", "checksum", "size"}, f"{kind} entries are {{path, checksum, size}}"
 
 
 # ---- shard schema & encodings -----------------------------------------------------------------
@@ -116,12 +125,13 @@ def test_shard_has_time_series_id_column(tmp_path):
 def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.value_encoding, "the manifest should record what each modality was encoded with"
+    encoding = _time_series(manifest.files).encoding
+    assert encoding, "the manifest should record what each modality was encoded with"
     for shard in version_dir.glob("time_series/part-*.parquet"):
         pf = pq.ParquetFile(shard)
         spec_types = set(pf.read(columns=["spec_type"]).column("spec_type").to_pylist())
         assert len(spec_types) == 1, "shards are single-modality so one encoding always fits"
-        selected = ValueEncoding(manifest.value_encoding[spec_types.pop()])
+        selected = ValueEncoding(encoding[spec_types.pop()])
         assert applied_matches(selected, values_encoding_of(str(shard)))
 
 
@@ -162,8 +172,9 @@ def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
     # Tiny shard cap forces a rotation on essentially every row group, including the last one.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64, shard_target_bytes=64)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.files.time_series, "expected at least one shard"
-    for part in manifest.files.time_series:
+    parts = _time_series(manifest.files).parts
+    assert parts, "expected at least one shard"
+    for part in parts:
         assert pq.ParquetFile(version_dir / part.path).metadata.num_rows > 0, f"empty shard {part.path} published"
 
 

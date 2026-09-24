@@ -68,9 +68,9 @@ class ValuesWriteResult:
     placements: dict[tuple[str, int], ChunkPlacement]
     """``(time_series_id, chunk_idx)`` -> its on-disk placement."""
     files: list[str] = field(default_factory=list)
-    """Value files produced, relative to the staging directory, for ``manifest.files.time_series``."""
+    """Value files produced, relative to the staging directory, for the ``time_series`` file group."""
     value_encoding: dict[str, str] = field(default_factory=dict)
-    """``spec_type`` -> the values encoding the backend applied, for ``manifest.value_encoding``.
+    """``spec_type`` -> the values encoding the backend applied, for the ``time_series`` group ``encoding``.
 
     Empty for a backend whose layout has no such choice (Zarr fixes its codec per array instead).
     """
@@ -88,7 +88,7 @@ class BaseValuesBackend(ABC):
     """
 
     name: ClassVar[str]
-    """Manifest ``values_backend`` tag identifying this backend on read-back."""
+    """The ``backend`` of the manifest's ``time_series`` file group. The reader selects this backend from it."""
 
     @abstractmethod
     def write_series(

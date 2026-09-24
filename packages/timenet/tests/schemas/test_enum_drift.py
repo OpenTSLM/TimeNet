@@ -6,8 +6,11 @@ Adding a license/domain/annotation/task in Python without updating the schema fa
 import jsonschema
 import pytest
 
+from timenet.manifest import FileKind
+from timenet.manifest.files import CONTROL_BACKEND
 from timenet.schemas import DATASET_CARD_SCHEMA, MANIFEST_SCHEMA
 from timenet.types import Access, AnnotationType, Domain, License, TaskType
+from timenet.values_backends import ValuesBackend
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -80,6 +83,26 @@ def test_manifest_value_type_enum_matches_the_closed_set():
 
 def test_manifest_value_encoding_enum_matches_python():
     assert _schema_enum(MANIFEST_SCHEMA, "valueEncoding") == _values(ValueEncoding)
+
+
+def test_manifest_file_group_enums_match_python():
+    properties = MANIFEST_SCHEMA["$defs"]["fileGroup"]["properties"]
+    assert sorted(properties["kind"]["enum"]) == _values(FileKind)
+    assert sorted(properties["backend"]["enum"]) == sorted([CONTROL_BACKEND, *_values(ValuesBackend)])
+
+
+def test_manifest_file_group_rules_match_python():
+    once = {
+        rule["contains"]["properties"]["kind"]["const"]: rule["maxContains"]
+        for rule in MANIFEST_SCHEMA["$defs"]["files"]["allOf"]
+    }
+    assert once == dict.fromkeys(_values(FileKind), 1)
+    backends = {
+        rule["if"]["properties"]["kind"]["const"]: rule["then"]["properties"]["backend"]
+        for rule in MANIFEST_SCHEMA["$defs"]["fileGroup"]["allOf"]
+    }
+    assert backends["control"] == {"const": CONTROL_BACKEND}
+    assert sorted(backends["time_series"]["enum"]) == _values(ValuesBackend)
 
 
 def test_card_and_manifest_share_identical_shared_defs():

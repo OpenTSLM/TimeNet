@@ -9,7 +9,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import FileKind, Manifest
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
 
@@ -98,7 +98,9 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     )
 
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
+    group = manifest.files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    assert group.backend == "zarr"
 
 
 def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):

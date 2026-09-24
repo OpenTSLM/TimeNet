@@ -1,7 +1,7 @@
 import jsonschema
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FileGroup, FileKind, FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -63,8 +63,15 @@ def _manifest() -> Manifest:
             signals_by_spec={"ecg": 2},
         ),
         files=ManifestFiles(
-            control=(FilePart("control.duckdb", "sha256:" + "0" * 64, 5),),
-            time_series=(FilePart("time_series/part-00000.parquet", "sha256:" + "e" * 64, 50),),
+            groups=(
+                FileGroup(FileKind.CONTROL, "duckdb", (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),)),
+                FileGroup(
+                    FileKind.TIME_SERIES,
+                    "parquet",
+                    (FilePart("time_series/part-00000.parquet", "sha256:" + "e" * 64, 50),),
+                    encoding={"ecg": "dictionary"},
+                ),
+            )
         ),
     )
 
@@ -84,7 +91,17 @@ def test_to_dict_validates_against_schema():
         lambda d: d.update(timef_format_version=99),  # not the pinned const
         lambda d: d["schema"].update(tasks=[{"task_type": "nope"}]),  # unknown task_type
         lambda d: d["schema"]["annotations"][0].update(annotation_type="sideways"),  # bad annotation_type
-        lambda d: d["files"].update(control="control.duckdb"),  # a bare string, not a list of parts
+        lambda d: d["files"][0].update(parts="control.duckdb"),  # a bare string, not a list of parts
+        lambda d: d["files"].pop(0),  # no control group
+        lambda d: d["files"].append(d["files"][0]),  # two control groups
+        lambda d: d["files"].append(d["files"][1]),  # two time_series groups
+        lambda d: d["files"][0]["parts"].append(d["files"][0]["parts"][0]),  # control with two files
+        lambda d: d["files"][0].update(backend="parquet"),  # control on a values backend
+        lambda d: d["files"][1].update(backend="duckdb"),  # time series on the control backend
+        lambda d: d["files"][1].update(kind="images"),  # unknown kind
+        lambda d: d["files"][1].pop("parts"),  # group without parts
+        lambda d: d["files"][1].update(encoding={"ecg": "gzip"}),  # unknown values encoding
+        lambda d: d.update(timef_format_version=2),  # the previous format version
         lambda d: d["metadata"].update(license="Nope"),  # unknown license
     ],
 )
@@ -97,6 +114,10 @@ def test_invalid_manifests_are_rejected(mutate):
 
 def test_every_serialized_key_is_documented():
     """Every key to_dict() emits must be a documented schema property, so the contract never lags the codec."""
-    emitted = set(_manifest().to_dict())
+    data = _manifest().to_dict()
+    emitted = set(data)
     documented = set(MANIFEST_SCHEMA["properties"])
     assert emitted <= documented, f"manifest keys missing from the schema: {sorted(emitted - documented)}"
+    group_keys = {key for group in data["files"] for key in group}
+    group_documented = set(MANIFEST_SCHEMA["$defs"]["fileGroup"]["properties"])
+    assert group_keys <= group_documented, f"file group keys missing from the schema: {group_keys - group_documented}"

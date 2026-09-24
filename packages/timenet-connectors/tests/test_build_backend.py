@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from timenet.manifest import Manifest
+from timenet.manifest import FileKind, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet_connectors.builder import backend as backend_module
@@ -61,7 +61,9 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path / "registry")
-    assert Manifest.from_json((version_dir / "manifest.json").read_text()).values_backend == "zarr"
+    group = Manifest.from_json((version_dir / "manifest.json").read_text()).files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    assert group.backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         dataset = reader.read()
         assert len(dataset.records) == 3

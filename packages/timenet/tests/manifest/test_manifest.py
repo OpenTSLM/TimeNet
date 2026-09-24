@@ -6,7 +6,7 @@ import pint
 import pytest
 
 from timenet.errors import TimeNetInvalidManifestError
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FileGroup, FileKind, FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -23,7 +23,7 @@ from timenet.types import (
 )
 
 
-_CONTROL = (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),)
+_CONTROL = FileGroup(FileKind.CONTROL, "duckdb", (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),))
 
 
 def _manifest(*, values_backend: str = "parquet") -> Manifest:
@@ -65,23 +65,25 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
             signals_by_spec={"ecg_lead": 2},
         ),
         files=ManifestFiles(
-            control=_CONTROL,
-            time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
+            groups=(
+                _CONTROL,
+                FileGroup(
+                    FileKind.TIME_SERIES,
+                    values_backend,
+                    (FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
+                    encoding={"ecg_lead": "dictionary"},
+                ),
+            )
         ),
-        values_backend=values_backend,
     )
 
 
 def test_files_all_parts_concatenates_in_order():
-    files = _manifest().files
-    assert files.all_parts() == (
-        *(p.path for p in files.control),
-        *(p.path for p in files.time_series),
-    )
+    assert _manifest().files.all_parts() == ("control.duckdb", "time_series/part-00000.parquet")
 
 
 def test_default_format_version():
-    assert _manifest().timef_format_version == 2
+    assert _manifest().timef_format_version == 1
 
 
 @pytest.mark.parametrize(
@@ -110,12 +112,12 @@ def test_manifest_rejects_unknown_domain():
         Manifest.from_dict(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_2():
-    # Nullable schemas retain format version 2. Reading nullable artifacts still requires an SDK
+def test_nullable_schema_roundtrips_at_format_version_1():
+    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(groups=(_CONTROL,)),
     )
     spec = replace(base.schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
@@ -124,7 +126,7 @@ def test_nullable_schema_roundtrips_at_format_version_2():
         files=base.files,
         schema=replace(base.schema, time_series_specs=(spec,)),
     )
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 1
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.from_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
@@ -133,11 +135,11 @@ def test_nullable_schema_roundtrips_at_format_version_2():
 def test_missing_nullable_defaults_to_false():
     data = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(groups=(_CONTROL,)),
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
-    assert restored.timef_format_version == 2
+    assert restored.timef_format_version == 1
     assert restored.schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
@@ -146,7 +148,7 @@ def test_missing_nullable_defaults_to_false():
 def test_manifest_rejects_nonboolean_nullable(nullable):
     data = replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(groups=(_CONTROL,)),
     ).to_dict()
     data["schema"]["time_series_specs"][0]["nullable"] = nullable
     with pytest.raises(TimeNetInvalidManifestError, match="nullable"):
@@ -175,7 +177,7 @@ def test_json_roundtrip():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 2
+    assert d["timef_format_version"] == 1
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
@@ -183,6 +185,21 @@ def test_to_dict_shape():
     assert "data_source" not in d["schema"]["time_series_specs"][0]
     assert d["schema"]["tasks"] == [{"task_type": "classification"}, {"task_type": "answer"}]
     assert d["counts"]["tasks"] == {"classification": 2}
+    assert d["files"] == [
+        {
+            "kind": "control",
+            "backend": "duckdb",
+            "parts": [{"path": "control.duckdb", "checksum": "sha256:" + "0" * 64, "size": 5}],
+        },
+        {
+            "kind": "time_series",
+            "backend": "parquet",
+            "encoding": {"ecg_lead": "dictionary"},
+            "parts": [{"path": "time_series/part-00000.parquet", "checksum": "sha256:ee", "size": 50}],
+        },
+    ]
+    assert "values_backend" not in d
+    assert "value_encoding" not in d
 
 
 def test_from_dict_resolves_tasks_to_real_classes():
@@ -252,10 +269,10 @@ def test_from_dict_requires_core_blocks(missing):
     ],
 )
 def test_from_dict_rejects_a_malformed_file_entry(entry):
-    # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
+    # A file group's parts are {path, checksum, size} descriptors; a non-dict entry or one missing a
     # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
     d = _manifest().to_dict()
-    d["files"]["time_series"] = [entry]
+    d["files"][1]["parts"] = [entry]
     with pytest.raises(TimeNetInvalidManifestError):
         Manifest.from_dict(d)
 
@@ -269,31 +286,76 @@ def test_optional_schema_and_counts_default_empty():
     assert m.counts == ManifestCounts()
 
 
-def test_values_backend_defaults_to_parquet():
-    assert _manifest().values_backend == "parquet"
-    assert _manifest().to_dict()["values_backend"] == "parquet"
+def test_time_series_group_round_trips_backend_and_encoding():
+    m = _manifest(values_backend="zarr")
+    group = Manifest.from_json(m.to_json()).files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    assert group.backend == "zarr"
+    assert group.encoding == {"ecg_lead": "dictionary"}
 
 
-def test_values_backend_absent_reads_as_parquet():
-    d = _manifest().to_dict()
-    del d["values_backend"]  # a pre-backend manifest
-    assert Manifest.from_dict(d).values_backend == "parquet"
+def test_empty_encoding_is_omitted():
+    manifest = replace(_manifest(), files=ManifestFiles(groups=(_CONTROL,)))
+    assert "encoding" not in manifest.to_dict()["files"][0]
 
 
-def test_values_backend_round_trips():
-    m = _manifest(values_backend="parquet")
-    assert Manifest.from_json(m.to_json()).values_backend == "parquet"
+def test_control_only_manifest_has_no_time_series_group():
+    data = replace(_manifest(), files=ManifestFiles(groups=(_CONTROL,))).to_dict()
+    jsonschema.validate(data, MANIFEST_SCHEMA)
+    files = Manifest.from_dict(data).files
+    assert files.group(FileKind.TIME_SERIES) is None
+    assert files.control == _CONTROL.parts[0]
 
 
-def test_unknown_values_backend_rejected_when_parsing():
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
+def test_unknown_values_backend_rejected_when_constructing():
+    with pytest.raises(TimeNetInvalidManifestError, match="backend"):
         _manifest(values_backend="feather")
 
 
 def test_unknown_values_backend_rejected():
     data = _manifest().to_dict()
-    data["values_backend"] = "hdf5"
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
+    data["files"][1]["backend"] = "hdf5"
+    with pytest.raises(TimeNetInvalidManifestError, match="backend"):
+        Manifest.from_dict(data)
+
+
+def test_control_group_must_use_duckdb():
+    with pytest.raises(TimeNetInvalidManifestError, match="duckdb"):
+        FileGroup(FileKind.CONTROL, "parquet", _CONTROL.parts)
+
+
+@pytest.mark.parametrize("n_parts", [0, 2])
+def test_control_group_must_have_exactly_one_file(n_parts):
+    with pytest.raises(TimeNetInvalidManifestError, match="exactly one control file"):
+        FileGroup(FileKind.CONTROL, "duckdb", _CONTROL.parts * n_parts)
+
+
+def test_control_group_is_required():
+    data = _manifest().to_dict()
+    del data["files"][0]
+    with pytest.raises(TimeNetInvalidManifestError, match="control file group"):
+        Manifest.from_dict(data)
+
+
+def test_duplicate_kind_rejected():
+    data = _manifest().to_dict()
+    data["files"].append(data["files"][1])
+    with pytest.raises(TimeNetInvalidManifestError, match="duplicate file group kind: time_series"):
+        Manifest.from_dict(data)
+
+
+def test_unknown_kind_rejected():
+    data = _manifest().to_dict()
+    data["files"][1]["kind"] = "images"
+    with pytest.raises(TimeNetInvalidManifestError, match="'files' block"):
+        Manifest.from_dict(data)
+
+
+def test_format_version_2_manifest_rejected_by_version():
+    data = _manifest().to_dict()
+    data["timef_format_version"] = 2
+    data["files"] = {"control": data["files"][0]["parts"], "time_series": data["files"][1]["parts"]}
+    with pytest.raises(TimeNetInvalidManifestError, match="unsupported timef_format_version 2"):
         Manifest.from_dict(data)
 
 
@@ -349,14 +411,14 @@ def test_codec_roundtrip_property(version, records, task_counts):
             license=License.MIT,
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(groups=(_CONTROL,)),
     )
     assert Manifest.from_json(manifest.to_json()) == manifest
 
 
 @pytest.mark.parametrize(
     ("block", "key"),
-    [("metadata", "tags"), ("metadata", "domains"), ("files", "control"), ("files", "time_series")],
+    [("metadata", "tags"), ("metadata", "domains")],
 )
 def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters
@@ -366,7 +428,22 @@ def test_string_for_list_field_rejected(block, key):
         Manifest.from_dict(d)
 
 
-@pytest.mark.parametrize("block", ["value_encoding", "build_env"])
+@pytest.mark.parametrize("index", [0, 1])
+def test_string_for_parts_rejected(index):
+    d = _manifest().to_dict()
+    d["files"][index]["parts"] = "oops"
+    with pytest.raises(TimeNetInvalidManifestError, match="must be a list of file entries"):
+        Manifest.from_dict(d)
+
+
+def test_bad_encoding_names_the_files_block():
+    d = _manifest().to_dict()
+    d["files"][1]["encoding"] = "oops"
+    with pytest.raises(TimeNetInvalidManifestError, match="'files' block"):
+        Manifest.from_dict(d)
+
+
+@pytest.mark.parametrize("block", ["build_env"])
 def test_bad_dict_block_names_itself(block):
     # each block names itself in the error, rather than a shared message
     d = _manifest().to_dict()

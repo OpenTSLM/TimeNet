@@ -15,7 +15,9 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.manifest import FileKind
 from timenet.types import DatasetMetadata, DatasetSchema, Task, TimeSeriesSpec
+from timenet.values_backends import ValuesBackend
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -200,8 +202,9 @@ class TimeFReader:
 
     @property
     def values_backend(self) -> str:
-        """Return the values-plane backend named by the manifest."""
-        return self._manifest.values_backend
+        """Return the values-plane backend named by the manifest, or ``parquet`` if it has no values."""
+        group = self._manifest.files.group(FileKind.TIME_SERIES)
+        return group.backend if group is not None else ValuesBackend.PARQUET
 
     def read(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
@@ -269,7 +272,7 @@ class TimeFReader:
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""
         if self._values is None:
-            self._values = make_values_reader(self._manifest.values_backend)
+            self._values = make_values_reader(self.values_backend)
         return self._values
 
     def _load_signal(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
