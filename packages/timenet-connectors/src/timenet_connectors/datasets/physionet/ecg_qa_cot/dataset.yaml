@@ -10,7 +10,7 @@
 # z-normalize) at load time.
 yaml_schema_version: 1
 dataset_id: physionet/ecg-qa-cot
-dataset_version: 1.0.0
+dataset_version: 2.0.0
 name: ECG-QA CoT
 description: >-
   12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought
