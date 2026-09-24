@@ -7,7 +7,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from timenet.manifest import Manifest
+from timenet.manifest import FileKind, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet_connectors.builder import cli as cli_module
@@ -224,7 +224,9 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backe
     stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert stdout_lines[-1] == str(version_dir)
     assert (version_dir / "manifest.json").is_file()
-    assert Manifest.from_json((version_dir / "manifest.json").read_text()).values_backend == (backend or "parquet")
+    group = Manifest.from_json((version_dir / "manifest.json").read_text()).files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    assert group.backend == (backend or "parquet")
     if backend != "zarr" or find_spec("zarr") is not None:
         with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
             dataset = reader.read()

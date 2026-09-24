@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 from timenet.errors import TimeNetInvalidManifestError
 from timenet.format.constants import check_relative_path
 from timenet.manifest.counts import ManifestCounts
-from timenet.manifest.files import FilePart, ManifestFiles
+from timenet.manifest.files import FileGroup, FileKind, FilePart, ManifestFiles
 from timenet.types import (
     TASKS,
     AnnotationDescriptor,
@@ -25,7 +25,6 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 
 @dataclass(frozen=True)
@@ -36,7 +35,7 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -48,59 +47,38 @@ class Manifest:
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    values_backend: str = ValuesBackend.PARQUET
-    """Storage backend for the time-series values plane."""
-    value_encoding: dict[str, str] = field(default_factory=dict)
-    """``spec_type`` -> the values-column encoding that its shards carry.
-
-    This field exists only for provenance. Parquet already records the applied encoding in each
-    file's footer, so a reader does not need this field. The field lets a builder see what a build
-    chose without opening a shard. The field is empty for a backend with no such choice.
-    """
     build_env: dict[str, Any] = field(default_factory=dict)
     """The Python version and package set that produced this version.
 
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int = 2
+    timef_format_version: int = 1
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
-        """Validate the format version, the values backend, and the denormalized ``dataset_id``.
+        """Validate the format version and the denormalized ``dataset_id``.
 
         ``dataset_id`` is a top-level copy of ``metadata.dataset_id``, so a consumer can read the id
         without parsing the metadata block. The two values must match.
 
         Raises:
-            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, ``dataset_id`` does
-                not match ``metadata.dataset_id``, or the required control database is missing.
+            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, or ``dataset_id``
+                does not match ``metadata.dataset_id``.
         """
-        if (
-            type(self.timef_format_version) is not int
-            or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
-        ):
-            raise TimeNetInvalidManifestError(
-                f"unsupported timef_format_version {self.timef_format_version!r}; "
-                f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
-            )
-        if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
-            raise TimeNetInvalidManifestError(
-                f"unsupported values_backend {self.values_backend!r}; "
-                f"supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
-            )
+        _check_format_version(self.timef_format_version, self.SUPPORTED_FORMAT_VERSIONS)
         if self.dataset_id != self.metadata.dataset_id:
             raise TimeNetInvalidManifestError(
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
-        if len(self.files.control) != 1:
-            raise TimeNetInvalidManifestError("TimeF manifest must declare exactly one files.control entry")
 
     # ---- serialization -------------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the manifest to a JSON-compatible dict with all keys present.
+
+        A file group without an encoding omits ``encoding``.
 
         Returns:
             The canonical dict form.
@@ -112,8 +90,6 @@ class Manifest:
             "schema": _schema_to_dict(self.schema),
             "counts": _counts_to_dict(self.counts),
             "files": _files_to_dict(self.files),
-            "values_backend": self.values_backend,
-            "value_encoding": dict(self.value_encoding),
             "build_env": dict(self.build_env),
         }
 
@@ -143,14 +119,13 @@ class Manifest:
                 raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
         if type(data["timef_format_version"]) is not int:
             raise TimeNetInvalidManifestError("manifest timef_format_version must be an integer")
+        _check_format_version(data["timef_format_version"], cls.SUPPORTED_FORMAT_VERSIONS)
         return cls(
             dataset_id=data["dataset_id"],
             metadata=_metadata_from_dict(data["metadata"]),
             files=_files_from_dict(data["files"]),
             schema=_schema_from_dict(data.get("schema", {})),
             counts=_counts_from_dict(data.get("counts", {})),
-            values_backend=data.get("values_backend", ValuesBackend.PARQUET),
-            value_encoding=_dict_block(data, "value_encoding"),
             build_env=_dict_block(data, "build_env"),
             timef_format_version=data["timef_format_version"],
         )
@@ -173,6 +148,13 @@ class Manifest:
         except json.JSONDecodeError as exc:
             raise TimeNetInvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
         return cls.from_dict(data)
+
+
+def _check_format_version(version: Any, supported: frozenset[int]) -> None:
+    if type(version) is not int or version not in supported:
+        raise TimeNetInvalidManifestError(
+            f"unsupported timef_format_version {version!r}; supported: {sorted(supported)}"
+        )
 
 
 def _dict_block(data: dict[str, Any], key: str) -> dict:
@@ -321,55 +303,71 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
         raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
 
 
-def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
-    return {
-        "control": [_part_to_dict(part) for part in files.control],
-        "time_series": [_part_to_dict(part) for part in files.time_series],
-    }
+def _files_to_dict(files: ManifestFiles) -> list[dict[str, Any]]:
+    return [_group_to_dict(group) for group in files.groups]
+
+
+def _group_to_dict(group: FileGroup) -> dict[str, Any]:
+    entry: dict[str, Any] = {"kind": str(group.kind), "backend": str(group.backend)}
+    if group.encoding:
+        entry["encoding"] = dict(group.encoding)
+    entry["parts"] = [_part_to_dict(part) for part in group.parts]
+    return entry
 
 
 def _part_to_dict(part: FilePart) -> dict[str, Any]:
     return {"path": part.path, "checksum": part.checksum, "size": part.size}
 
 
-def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
+def _files_from_dict(data: Any) -> ManifestFiles:
     try:
-        return ManifestFiles(
-            control=_parts(data["control"], "control"),
-            time_series=_parts(data.get("time_series", ()), "time_series"),
-        )
+        if not isinstance(data, list):
+            raise TypeError(f"'files' must be a list of file groups, got {type(data).__name__}")
+        return ManifestFiles(groups=tuple(_group_from_dict(entry) for entry in data))
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
 
 
+def _group_from_dict(entry: Any) -> FileGroup:
+    if not isinstance(entry, dict):
+        raise TypeError(f"'files' entries must be objects, got {type(entry).__name__}")
+    kind = FileKind(entry["kind"])
+    return FileGroup(
+        kind=kind,
+        backend=entry["backend"],
+        parts=_parts(entry["parts"], f"files[{kind}].parts"),
+        encoding=dict(entry.get("encoding", {})),
+    )
+
+
 def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
-    """Read one ``files`` field. The field is a list of ``{path, checksum, size}`` objects. Reject a bare string.
+    """Read the ``parts`` of one file group. Each part is a ``{path, checksum, size}`` object. Reject a bare string.
 
     Args:
-        value: The field's value from the manifest ``files`` block.
-        key: The field's name. The name appears in error messages.
+        value: The ``parts`` value of one group in the manifest ``files`` block.
+        key: The location of the value. The location appears in error messages.
 
     Returns:
-        The field's parts as a tuple of :class:`FilePart`. A missing ``path``, ``checksum``, or
-        ``size`` raises ``KeyError``. The caller re-raises this error as ``TimeNetInvalidManifestError``.
+        The parts as a tuple of :class:`FilePart`. A missing ``path``, ``checksum``, or ``size``
+        raises ``KeyError``. The caller re-raises this error as ``TimeNetInvalidManifestError``.
 
     Raises:
-        TypeError: If the field is a string, or an entry is not an object.
+        TypeError: If the value is a string, or an entry is not an object.
     """
     if isinstance(value, str):
-        raise TypeError(f"'files.{key}' must be a list of file entries, not a string")
+        raise TypeError(f"'{key}' must be a list of file entries, not a string")
     return tuple(_part_from_dict(entry, key) for entry in value)
 
 
 def _part_from_dict(entry: Any, key: str) -> FilePart:
     if not isinstance(entry, dict):
-        raise TypeError(f"'files.{key}' entries must be objects, got {type(entry).__name__}")
+        raise TypeError(f"'{key}' entries must be objects, got {type(entry).__name__}")
     path, checksum, size = entry["path"], entry["checksum"], entry["size"]
     if not isinstance(path, str) or not path:
-        raise TypeError(f"'files.{key}' path must be a non-empty string, got {path!r}")
-    check_relative_path(f"'files.{key}' path", path)
+        raise TypeError(f"'{key}' path must be a non-empty string, got {path!r}")
+    check_relative_path(f"'{key}' path", path)
     if not isinstance(checksum, str) or not checksum.startswith("sha256:"):
-        raise ValueError(f"'files.{key}' checksum must be 'sha256:<hex>', got {checksum!r}")
+        raise ValueError(f"'{key}' checksum must be 'sha256:<hex>', got {checksum!r}")
     if not isinstance(size, int) or isinstance(size, bool) or size < 0:
-        raise TypeError(f"'files.{key}' size must be a non-negative integer, got {size!r}")
+        raise TypeError(f"'{key}' size must be a non-negative integer, got {size!r}")
     return FilePart(path=path, checksum=checksum, size=size)

@@ -257,7 +257,7 @@ def test_missing_root_or_manifest_raises(tmp_path):
         DatasetVersion.open_local(empty)
 
 
-@pytest.mark.parametrize("format_version", [1, 3, 99])
+@pytest.mark.parametrize("format_version", [0, 2, 99])
 def test_unsupported_format_version_raises(tmp_path, format_version):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"
@@ -266,6 +266,26 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(TimeFFormatError):
         DatasetVersion.open_local(version_dir)
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_values_backend_comes_from_the_time_series_group(tmp_path, backend):
+    if backend == "zarr":
+        pytest.importorskip("zarr")
+    version_dir = _write(tmp_path, values_backend=backend)
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader.values_backend == backend
+
+
+def test_values_backend_is_parquet_without_a_time_series_group(tmp_path):
+    pytest.importorskip("zarr")
+    version_dir = _write(tmp_path, values_backend="zarr")
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"] = [group for group in manifest["files"] if group["kind"] != "time_series"]
+    manifest_path.write_text(json.dumps(manifest))
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert reader.values_backend == "parquet"
 
 
 def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_path):

@@ -3,7 +3,7 @@ import pyarrow.fs as pafs
 from timenet.format.checksums import file_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_writer import DuckDBControlWriter
-from timenet.manifest import FilePart, Manifest, ManifestFiles
+from timenet.manifest import FileGroup, FileKind, FilePart, Manifest, ManifestFiles
 from timenet.registry.version import DatasetVersion
 
 from .test_control_writer import _dataset
@@ -17,7 +17,9 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         dataset_id=dataset.metadata.dataset_id,
         metadata=dataset.metadata,
         files=ManifestFiles(
-            control=(FilePart(path.name, file_checksum(path), path.stat().st_size),),
+            groups=(
+                FileGroup(FileKind.CONTROL, "duckdb", (FilePart(path.name, file_checksum(path), path.stat().st_size),)),
+            )
         ),
     )
     version = DatasetVersion(

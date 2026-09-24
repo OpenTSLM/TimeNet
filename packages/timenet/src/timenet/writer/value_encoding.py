@@ -32,7 +32,8 @@ The ``value_encoding`` override covers two known gaps instead of more machinery:
 
 The choice needs no reader support. Parquet records the applied encoding per column chunk in its
 footer, so a decoder resolves it without consulting the manifest. The manifest records it anyway,
-under ``value_encoding``, so a builder can see what happened without opening a shard footer.
+as the ``encoding`` of the ``time_series`` file group, so a builder can see what happened without opening
+a shard footer.
 """
 
 from collections.abc import Sequence

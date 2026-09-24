@@ -6,22 +6,12 @@
   "type": "object",
   "required": ["timef_format_version", "dataset_id", "metadata", "files"],
   "properties": {
-    "timef_format_version": { "type": "integer", "const": 2 },
+    "timef_format_version": { "type": "integer", "const": 1 },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "metadata": { "$ref": "#/$defs/metadata" },
     "schema": { "$ref": "#/$defs/schema" },
     "counts": { "$ref": "#/$defs/counts" },
     "files": { "$ref": "#/$defs/files" },
-    "values_backend": {
-      "type": "string",
-      "enum": ["parquet", "zarr"],
-      "description": "Storage backend for the time-series values plane. Determines how files.time_series and the index's chunk locator are interpreted. Defaults to 'parquet' when absent."
-    },
-    "value_encoding": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
-      "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Empty or absent for a backend with no such choice."
-    },
     "build_env": {
       "type": "object",
       "description": "Provenance for the environment that produced the version. No reader consults it to interpret the data. Empty when a build records no provenance.",
@@ -198,18 +188,59 @@
       }
     },
     "files": {
-      "type": "object",
-      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["control", "time_series"],
-      "properties": {
-        "control": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 1,
-          "items": { "$ref": "#/$defs/filePart" }
+      "type": "array",
+      "description": "File groups. Each group lists the files of one kind, written by one backend. The control group is required, and each kind occurs at most once.",
+      "items": { "$ref": "#/$defs/fileGroup" },
+      "allOf": [
+        {
+          "contains": { "required": ["kind"], "properties": { "kind": { "const": "control" } } },
+          "minContains": 1,
+          "maxContains": 1
         },
-        "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
-      }
+        {
+          "contains": { "required": ["kind"], "properties": { "kind": { "const": "time_series" } } },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      ]
+    },
+    "fileGroup": {
+      "type": "object",
+      "description": "The files of one kind, written by one backend.",
+      "required": ["kind", "backend", "parts"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["control", "time_series"],
+          "description": "What the files hold: the DuckDB control database, or the time-series values plane."
+        },
+        "backend": {
+          "type": "string",
+          "enum": ["duckdb", "parquet", "zarr"],
+          "description": "The storage backend that wrote the files. The reader selects its values reader from the time_series backend."
+        },
+        "encoding": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
+          "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Absent for a backend with no such choice."
+        },
+        "parts": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "control" } } },
+          "then": {
+            "properties": {
+              "backend": { "const": "duckdb" },
+              "parts": { "minItems": 1, "maxItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "time_series" } } },
+          "then": { "properties": { "backend": { "enum": ["parquet", "zarr"] } } }
+        }
+      ]
     },
     "filePart": {
       "type": "object",

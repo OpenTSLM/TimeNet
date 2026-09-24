@@ -30,7 +30,8 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FileGroup, FileKind, FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest.files import CONTROL_BACKEND
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -434,11 +435,20 @@ class TimeFWriter:
             schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                control=(self._file_part(self._control_file),),
-                time_series=self._file_parts(self._value_files),
+                groups=(
+                    FileGroup(
+                        kind=FileKind.CONTROL,
+                        backend=CONTROL_BACKEND,
+                        parts=(self._file_part(self._control_file),),
+                    ),
+                    FileGroup(
+                        kind=FileKind.TIME_SERIES,
+                        backend=self._values_backend_name,
+                        parts=self._file_parts(self._value_files),
+                        encoding=self._value_encoding,
+                    ),
+                )
             ),
-            values_backend=self._values_backend_name,
-            value_encoding=self._value_encoding,
             build_env=build_env(),
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

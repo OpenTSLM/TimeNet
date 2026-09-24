@@ -6,7 +6,7 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.manifest import Manifest
+from timenet.manifest import FileGroup, FileKind, Manifest, ManifestFiles
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal
@@ -21,6 +21,12 @@ from timenet.types import (
 )
 import timenet.values_backends.parquet.reader as values_reader
 from timenet.writer import TimeFWriter
+
+
+def _time_series(files: ManifestFiles) -> FileGroup:
+    group = files.group(FileKind.TIME_SERIES)
+    assert group is not None
+    return group
 
 
 # Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.
@@ -96,8 +102,8 @@ def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_le
     original = _sharded_dataset(n_records, series_len)
     version_dir = _write(tmp_path, _sharded_dataset(n_records, series_len), **_SMALL_TARGETS)
     files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
-    assert len(files.control) == 1
-    assert len(files.time_series) >= 3  # values-plane shards
+    assert files.control.path == "control.duckdb"
+    assert len(_time_series(files).parts) >= 3  # values-plane shards
     for rel in files.all_parts():
         assert (version_dir / rel).exists()
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -111,7 +117,7 @@ def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_le
 def test_index_metadata_locates_every_series_in_the_shards(tmp_path):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    shards = {part.path for part in manifest.files.time_series}
+    shards = {part.path for part in _time_series(manifest.files).parts}
     row_group_counts = {rel: pq.ParquetFile(version_dir / rel).metadata.num_row_groups for rel in shards}
     rows = _index_rows(version_dir)
     for row in rows:
@@ -140,8 +146,9 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
     expected_shards = {row["chunk_file"] for row in _index_rows(version_dir) if row["signal_id"] == series_id}
-    assert expected_shards <= {part.path for part in manifest.files.time_series}
-    assert len(expected_shards) < len(manifest.files.time_series)  # the series lives in only some shards
+    shards = _time_series(manifest.files).parts
+    assert expected_shards <= {part.path for part in shards}
+    assert len(expected_shards) < len(shards)  # the series lives in only some shards
 
     opened: list[str] = []
     original = pq.ParquetFile
