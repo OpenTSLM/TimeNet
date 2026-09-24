@@ -163,6 +163,14 @@ def test_parsed_manifest_requires_integer_version(version):
         Manifest.from_dict(data)
 
 
+def test_format_version_1_error_points_at_the_0_1_package():
+    # A directory written by timenet 0.1.x is not readable here; the error says which package can read it.
+    data = _manifest().to_dict()
+    data["timef_format_version"] = 1
+    with pytest.raises(TimeNetInvalidManifestError, match=r"timenet==0\.1\.0"):
+        Manifest.from_dict(data)
+
+
 def test_dict_roundtrip():
     m = _manifest()
     assert Manifest.from_dict(m.to_dict()) == m

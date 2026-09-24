@@ -3407,7 +3407,7 @@ wheels = [
 
 [[package]]
 name = "timenet"
-version = "0.11.0"
+version = "0.2.0"
 source = { editable = "packages/timenet" }
 dependencies = [
     { name = "duckdb" },
@@ -3477,7 +3477,7 @@ provides-extras = ["cli", "torch", "build", "zarr", "s3", "all"]
 
 [[package]]
 name = "timenet-connectors"
-version = "0.11.0"
+version = "0.2.0"
 source = { editable = "packages/timenet-connectors" }
 dependencies = [
     { name = "aiofiles" },

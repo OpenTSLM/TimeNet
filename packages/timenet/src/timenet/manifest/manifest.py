@@ -37,6 +37,8 @@ class Manifest:
     """
 
     SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({2})
+    LEGACY_FORMAT_VERSION: ClassVar[int] = 1
+    """The Parquet control-table format of timenet 0.1.x, named in the error that points readers at it."""
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -76,10 +78,18 @@ class Manifest:
             TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, ``dataset_id`` does
                 not match ``metadata.dataset_id``, or the required control database is missing.
         """
-        if (
-            type(self.timef_format_version) is not int
-            or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
-        ):
+        if type(self.timef_format_version) is not int:
+            raise TimeNetInvalidManifestError(
+                f"unsupported timef_format_version {self.timef_format_version!r}; "
+                f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
+            )
+        if self.timef_format_version == self.LEGACY_FORMAT_VERSION:
+            raise TimeNetInvalidManifestError(
+                "this TimeF version uses format version 1, written by timenet 0.1.x; this timenet reads "
+                "format version 2 only. Install timenet 0.1.0 to read it (uv add 'timenet==0.1.0'), or "
+                "rebuild the dataset with timenet-connectors 0.2.0 or later."
+            )
+        if self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS:
             raise TimeNetInvalidManifestError(
                 f"unsupported timef_format_version {self.timef_format_version!r}; "
                 f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
