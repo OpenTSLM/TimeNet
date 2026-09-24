@@ -147,9 +147,12 @@ while the arrays and `meta.json` both hold 24,000 / 4,000 / 4,000, which is what
 
 One record is one window of one split of one component.
 
-**Series.** One `TimeSeries` per signal of the window, in the order the array stores them. Every
-series of a window holds the same number of steps, because the release stores each split as one
-`(n_windows, n_steps, n_signals)` array. Values are the shipped float64, unchanged.
+**Source and signals.** One `Source` per record, named `VerbalTS {component}`, with one `Signal`
+per column of the window, in the order the array stores them. The source has no child sources: the
+release states nothing about how a window was recorded beyond its component. Every signal of a
+window holds the same number of steps, because the release stores each split as one
+`(n_windows, n_steps, n_signals)` array. Values are the shipped float64, unchanged, behind a lazy
+loader (`Signal.from_loader`) that slices the memory-mapped array.
 
 Every series is `dimensionless`. VerbalTS z-scored the four real-world components per variable
 against their own train split and never published the mean and the standard deviation vectors, so
@@ -199,8 +202,9 @@ neither; see the two entries below.
 
 **Record ids are positional**: `verbalts-{component}-{split}-{row:05d}`, for example
 `verbalts-Weather-train-00000`. The release ships no id of its own. Two builds of this release give
-the same ids. A new release of the dataset invalidates every one of them. A series id is the record
-id and the signal name: `verbalts-Weather-train-00000-p (mbar)`.
+the same ids. A new release of the dataset invalidates every one of them. A signal id is the record
+id and the signal name: `verbalts-Weather-train-00000-p (mbar)`. The source id is the record id
+and `-source`.
 
 ## The tasks this connector builds
 
@@ -208,10 +212,12 @@ id and the signal name: `verbalts-Weather-train-00000-p (mbar)`.
 | --- | --- | --- | --- |
 | given this caption, generate this window | `TSGenerationTask` | **130,828** | the whole record |
 
-The caption is the `prompt` and the window is the answer, reached through `target_record_id`. Each
-task lists its component's `_options` annotations in `input_annotation_ids`: they describe the
+The caption is the `prompt` and the window is the answer: the task's only target is the window's
+`Record`, and the task has no input record, because a text-to-series model sees the caption alone.
+Each task lists its component's `_options` annotations in `input_annotations`: they describe the
 attribute space the caption was drawn from, which is context about the input and not part of the
-answer.
+answer. Those occurrences are attached to the dataset itself, not to any record, and their content
+is also registered so the `_options` keys reach the schema.
 
 A Weather window gets three tasks over one target, one per caption. Every other component gets one.
 So 104,628 records answer 130,828 tasks. The tasks stream rather than being materialized, so a
@@ -419,34 +425,36 @@ in the artifact makes a caption queryable, so a reader who wants one has to read
 task with three phrasings.
 
 **Decision.** Three tasks. Under generation each caption is a separate specification of what to
-synthesize. Nothing in TimeF requires `target_record_id` to be unique across tasks.
+synthesize. Nothing in TimeF requires a target record to be unique across tasks.
 
 **Consequence.** 130,828 tasks rather than 104,628. Collapsing them would lose two of the three
 specifications of every Weather window.
 
 ### The tasks stream out of the caption planes — **Handled**
 
-**Problem.** The build has 130,828 tasks over 104,628 records. `add_tasks` attaches one batch to one
-record, so a caption-per-window release makes one call per window and the dataset ends up holding
-every task, every `record_ids` tuple and every `task_ids` tuple in memory. The house rule is to
-stream wherever the tasks outnumber the records.
+**Problem.** The build has 130,828 tasks over 104,628 records. `add_task` registers one task at a
+time, so a caption-per-window release makes one call per caption and the dataset ends up holding
+every task and every `task_ids` tuple in memory. The house rule is to stream wherever the tasks
+outnumber the records.
 
-**Decision.** `set_task_stream`. `convert` builds the records and registers the codebook
+**Decision.** `set_task_stream`. `convert` builds the records and attaches the codebook
 annotations, then hands over a callable that re-opens the caption planes and yields one
-`TSGenerationTask` per caption. Each streamed task carries its own `record_ids`, and the callable
-gives a fresh iterator on every call, so that reading it again gives the same tasks. The writer
-drains it once, but `iter_tasks` is public and any consumer may read it after that.
+`TSGenerationTask` per caption. Each streamed task targets its window's `Record` object, which the
+dataset already holds, so the stream keeps one dict of record references and no second copy of any
+record. The callable gives a fresh iterator on every call, so that reading it again gives the same
+tasks. The writer drains it once, but `iter_tasks` is public and any consumer may read it after
+that.
 
 **Consequence.** Three things change. A record row stores no `task_ids`, because no task is ever
-held in memory to fill them in; `TimeFReader.read()` rebuilds that reverse link from the task rows,
-so a full read still resolves a record's tasks, while a records-only read sees the column empty. The
-dataset no longer runs the checks that need every task at once, which here is the duplicate-id
-check: task ids are the UUIDv7 TimeF generates, and a test pins that they are distinct.
-`from_tasks` is unused in this connector, so no derivation check is lost. And the caption planes are
-read by the stream rather than by `convert`, so a caption plane whose row count disagrees with its
-values file raises when the stream reads it and not while the records are being built. The task
-count in the table above is unchanged: streaming decides where the tasks live, not how many there
-are.
+held in memory to fill them in. `TimeFReader.read()` rebuilds the reverse link only through a task's
+`inputs`, and a generation task has none, so `tasks_for(record)` stays empty after a read as well;
+a consumer finds a window's tasks by filtering the tasks on their target record. The dataset no
+longer runs the checks that need every task at once, which here is the duplicate-id check: task ids
+are the UUIDv7 TimeF generates, and a test pins that they are distinct. `from_tasks` is unused in
+this connector, so no derivation check is lost. And the caption planes are read by the stream rather
+than by `convert`, so a caption plane whose row count disagrees with its values file raises when the
+stream reads it and not while the records are being built. The task count in the table above is
+unchanged: streaming decides where the tasks live, not how many there are.
 
 ### The task direction is text in, series out — **Handled**
 
@@ -540,15 +548,15 @@ uncertainty covers a large share of the values and a small share of the records.
 ### Annotation and task ids are generated, not stated — **Handled**
 
 **Problem.** Nothing resolves an attribute annotation, a context annotation or a generation task by
-id. Only the corpus-level `_options` annotations are resolved, by every task's
-`input_annotation_ids`.
+id. Only the corpus-level `_options` annotations are resolved, by every task's `input_annotations`.
 
 **Decision.** State an id only for those. Let every other annotation and every task take the
 UUIDv7 that TimeF generates, as the other connectors in this repo do.
 
-**Consequence.** Two builds of this release give the same record ids and series ids, and different
-annotation and task ids. A task is addressable by its `target_record_id` and its `prompt`, which are
-both stable. Anyone who needs a citable task id has to record the id from the build they used.
+**Consequence.** Two builds of this release give the same record, source and signal ids, and
+different annotation occurrence and task ids. A task is addressable by its target record id and its
+`prompt`, which are both stable. Anyone who needs a citable task id has to record the id from the
+build they used.
 
 ### `download_async` gives back one handle per component — **Handled**
 

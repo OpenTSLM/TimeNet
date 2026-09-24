@@ -5,7 +5,7 @@
 # scaling and every other decision this card has no field for.
 yaml_schema_version: 1
 dataset_id: seqml/verbalts
-dataset_version: 1.0.0
+dataset_version: 2.0.0
 name: VerbalTS
 description: >-
   Six caption-paired time-series corpora released with VerbalTS (ICML 2025): two synthetic sets,

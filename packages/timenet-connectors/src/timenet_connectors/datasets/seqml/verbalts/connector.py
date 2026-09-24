@@ -5,17 +5,19 @@ and every split ships three arrays. ``{split}_ts.npy`` holds ``(n_windows, n_ste
 float64 windows. ``{split}_text_caps.npy`` holds one or three fixed-width UTF-32 captions per
 window. ``{split}_attrs_idx.npy`` holds one int64 code per attribute that ``meta.json`` names.
 
-One record is one window. Every signal of a window becomes a :class:`~timenet.dataset.TimeSeries`
-with a lazy loader that slices a memory-mapped array. So ``convert`` reads the NPY headers and the
-attribute codes, and not one byte of the 560 MB values plane.
+One record is one window, holding one :class:`~timenet.dataset.Source` whose signals are the
+window's columns in array order. Every signal is a :class:`~timenet.dataset.Signal` with a lazy
+loader that slices a memory-mapped array. So ``convert`` reads the NPY headers and the attribute
+codes, and not one byte of the 560 MB values plane.
 
-Every caption becomes the prompt of a :class:`~timenet.types.TSGenerationTask` whose
-``target_record_id`` is the window. That is the text-to-series direction the release supervises.
-Weather ships three captions per window, so a Weather window gets three tasks. The tasks outnumber
-the records, so they stream out of the caption planes and the dataset holds none of them.
+Every caption becomes the prompt of a :class:`~timenet.types.TSGenerationTask` whose only target is
+the window's record and which has no input records. That is the text-to-series direction the
+release supervises. Weather ships three captions per window, so a Weather window gets three tasks.
+The tasks outnumber the records, so they stream out of the caption planes and the dataset holds
+none of them.
 """
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 import functools
 import json
@@ -27,7 +29,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.types import Annotation, TSGenerationTask
 from timenet_connectors.datasets.seqml.verbalts.files import (
@@ -185,9 +187,12 @@ class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
     def convert(self, raw_refs: list[VerbalTsComponent]) -> TimeFDataset:
         """Build one record per window, and hand the generation tasks over as a stream.
 
-        Each component's codebook annotations are registered before its records, because every task
-        of that component names them. The captions outnumber the windows, so the tasks stream from
-        :func:`_iter_tasks` and no list of them is built.
+        Each component's codebook annotations are attached to the dataset before its records, because
+        every task of that component names them. They are also registered, so their keys reach the
+        schema: a dataset-level occurrence alone does not. The captions outnumber the windows, so the
+        tasks stream from :func:`_iter_tasks` and no list of them is built. The stream needs the
+        :class:`~timenet.dataset.Record` objects and the codebook occurrences, so ``convert`` keeps
+        one dict of each; the dataset already holds every record, so the dict adds no second copy.
 
         Args:
             raw_refs: The component handles from :meth:`download_async`.
@@ -196,11 +201,15 @@ class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
             The populated dataset: one record per window, plus the task stream.
         """
         dataset = TimeFDataset(metadata=self.metadata())
+        records: dict[str, Record] = {}
+        codebooks: dict[str, Annotation] = {}
         for component in raw_refs:
             names, counts = _read_meta(component)
-            dataset.register_annotations(_codebook_annotations(component.name, names, counts))
-            _add_component(dataset, component, names, counts)
-        dataset.set_task_stream([TSGenerationTask], lambda: _iter_tasks(raw_refs))
+            annotations = _codebook_annotations(component.name, names, counts)
+            dataset.register_annotations(annotations)
+            codebooks.update((annotation.id, dataset.annotate(annotation)) for annotation in annotations)
+            records.update(_add_component(dataset, component, names, counts))
+        dataset.set_task_stream([TSGenerationTask], lambda: _iter_tasks(raw_refs, records, codebooks))
         return dataset
 
 
@@ -209,7 +218,7 @@ def _add_component(
     component: VerbalTsComponent,
     attribute_names: tuple[str, ...],
     option_counts: tuple[int, ...],
-) -> None:
+) -> dict[str, Record]:
     """Add every window of one component's three splits.
 
     Args:
@@ -217,6 +226,9 @@ def _add_component(
         component: The component handle.
         attribute_names: The attribute names ``meta.json`` states for this component.
         option_counts: The number of codes each of those attributes declares.
+
+    Returns:
+        The records added, keyed by record id, for the task stream to target.
 
     Raises:
         TimeFFormatError: If a values file does not hold a three-dimensional array of float64, or
@@ -226,6 +238,7 @@ def _add_component(
     spec = SPEC_BY_COMPONENT[component.name]
     axis = AXIS_BY_COMPONENT[component.name]
     _check_var_id_is_first(component.name, attribute_names)
+    records: dict[str, Record] = {}
     for split in SPLITS:
         values_path = component.npy(split, "ts")
         values = _open_npy(str(values_path))
@@ -243,21 +256,24 @@ def _add_component(
             identifier = record_id(component.name, split, row)
             codes = tuple(int(code) for code in attributes[row])
             names = signal_names(component.name, codes, n_signals)
-            record = dataset.add_record(
-                record_id=identifier,
-                time_series=tuple(
-                    TimeSeries(
-                        spec=spec,
-                        signal=name,
-                        time_axis=axis,
-                        loader=_values_loader(str(values_path), row, signal),
-                        source_id=identifier,
-                        time_series_id=f"{identifier}-{name}",
-                        n_values=n_steps,
-                    )
-                    for signal, name in enumerate(names)
-                ),
+            signals = tuple(
+                Signal.from_loader(
+                    spec=spec,
+                    name=name,
+                    time_axis=axis,
+                    loader=_values_loader(str(values_path), row, signal),
+                    source_id=identifier,
+                    id=f"{identifier}-{name}",
+                    n_values=n_steps,
+                )
+                for signal, name in enumerate(names)
             )
+            record = Record(
+                record_id=identifier,
+                sources=(Source(id=f"{identifier}-source", name=f"VerbalTS {component.name}", signals=signals),),
+            )
+            dataset.add_record(record=record)
+            records[identifier] = record
             record.add_annotations(
                 (
                     Annotation(key=VerbalTsKey.COMPONENT, value=component.name),
@@ -268,6 +284,7 @@ def _add_component(
                     ),
                 )
             )
+    return records
 
 
 def _check_var_id_is_first(component: str, attribute_names: tuple[str, ...]) -> None:
@@ -371,6 +388,8 @@ def _codebook_annotations(component: str, names: Sequence[str], counts: Sequence
 
     Each attribute gets one annotation that carries the number of codes it takes. ``meta.json``
     states that count and states no label for any code, so the count is what the artifact knows.
+    The content id is derived from the component and attribute names, so :func:`_iter_tasks` can
+    find the dataset occurrence of each one from ``meta.json`` alone.
 
     Args:
         component: The component name.
@@ -394,25 +413,31 @@ def _codebook_annotations(component: str, names: Sequence[str], counts: Sequence
     ]
 
 
-def _iter_tasks(components: Sequence[VerbalTsComponent]) -> Iterator[TSGenerationTask]:
+def _iter_tasks(
+    components: Sequence[VerbalTsComponent],
+    records: Mapping[str, Record],
+    codebooks: Mapping[str, Annotation],
+) -> Iterator[TSGenerationTask]:
     """Yield one generation task per caption, in the order the records were built.
 
     The caption is the prompt and the window is the answer, so each caption is one specification of
-    the series to synthesize. A window with three captions gets three tasks over one target. The
-    stream keeps no task: it re-opens the caption planes on every call, so that every call gives the
-    same tasks. :meth:`timenet.dataset.TimeFDataset.iter_tasks` is public and any consumer may read
-    it again.
+    the series to synthesize, and the task has no input record: the model sees the text only. A
+    window with three captions gets three tasks over one target. The stream keeps no task: it
+    re-opens the caption planes on every call, so that every call gives the same tasks.
+    :meth:`timenet.dataset.TimeFDataset.iter_tasks` is public and any consumer may read it again.
 
     Args:
         components: The component handles :meth:`VerbalTsConnector.convert` walked, in the release's
             own order.
+        records: The dataset's records, keyed by record id.
+        codebooks: The dataset's codebook occurrences, keyed by content id.
 
     Yields:
         One task per caption of every window.
     """
     for component in components:
         attribute_names, _counts = _read_meta(component)
-        input_ids = tuple(codebook_id(component.name, name) for name in attribute_names)
+        inputs = tuple(codebooks[codebook_id(component.name, name)] for name in attribute_names)
         for split in SPLITS:
             n_rows = _open_npy(str(component.npy(split, "ts"))).shape[0]
             captions = _plane(component.npy(split, "text_caps"), n_rows)
@@ -421,9 +446,8 @@ def _iter_tasks(components: Sequence[VerbalTsComponent]) -> Iterator[TSGeneratio
                 for caption in captions[row]:
                     yield TSGenerationTask(
                         prompt=str(caption),
-                        target_record_id=identifier,
-                        record_ids=(identifier,),
-                        input_annotation_ids=input_ids,
+                        targets=(records[identifier],),
+                        input_annotations=inputs,
                     )
 
 
