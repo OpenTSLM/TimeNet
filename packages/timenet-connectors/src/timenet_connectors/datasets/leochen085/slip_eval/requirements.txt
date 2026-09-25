@@ -1,0 +1,4 @@
+# huggingface_hub downloads the release from the HuggingFace Hub.
+huggingface_hub>=0.24
+# pyarrow reads the evaluation folders.
+pyarrow>=21
