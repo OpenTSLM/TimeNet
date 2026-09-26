@@ -411,6 +411,7 @@ class DuckDBControlWriter:
                         "task_id": task.id,
                         "task_type": task_type,
                         "prompt": task.prompt,
+                        "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         **self._scope_columns(task, signal_keys),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
@@ -710,6 +711,7 @@ class DuckDBControlWriter:
                 "nullable": spec.nullable,
                 "n_values": signal.n_values,
                 "metadata": _json(signal.metadata),
+                "modality": spec.modality.value,
             }
         )
         return signal_key

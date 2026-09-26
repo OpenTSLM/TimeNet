@@ -1,16 +1,56 @@
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record
+from timenet.dataset import OrdinalAxis, Record, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import Annotation, TimePoint
+from timenet.types import Annotation, AnswerTask, InputModality, TimePoint, TimeSeriesSpec, TSGenerationTask, ureg
 
 from .test_control_writer import _dataset
+
+
+def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
+    dataset = _dataset()
+    signal = Signal(
+        name="image",
+        spec=TimeSeriesSpec(
+            spec_type="image",
+            name="Image",
+            unit_value=ureg.dimensionless,
+            dtype="uint8",
+            value_shape=(2, 2, 3),
+            modality=InputModality.IMAGE,
+        ),
+        time_axis=OrdinalAxis(),
+        data=pa.FixedSizeListArray.from_arrays(pa.array(range(12), type=pa.uint8()), 12),
+    )
+    image_record = Record(record_id="image", sources=(Source(name="image", signals=(signal,)),))
+    dataset.add_record(record=image_record)
+    dataset.add_task(
+        task=AnswerTask(id="image-task", inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",))
+    )
+    dataset.add_task(task=TSGenerationTask(id="generation", prompt="Make an ECG.", targets=(dataset.records[0],)))
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        assert reader.task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == ["task-1"]
+        assert reader.task_table(required_modalities=[InputModality.IMAGE])["task_id"].to_pylist() == ["image-task"]
+        assert reader.task_table(supported_modalities=[InputModality.TEXT, InputModality.NO_INPUT])[
+            "task_id"
+        ].to_pylist() == ["generation"]
+        records = reader.read_records()
+        tasks = {task.id: task for task in reader.read_tasks(records)}
+
+    assert tasks["image-task"].inputs[0].signals[0].spec.modality is InputModality.IMAGE
+    assert tasks["task-1"].inputs[0].signals[0].spec.modality is InputModality.TIME_SERIES
+    assert tasks["image-task"].input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
+    tasks["image-task"].input_modalities = None
+    assert tasks["image-task"].resolved_input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
 
 
 def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):

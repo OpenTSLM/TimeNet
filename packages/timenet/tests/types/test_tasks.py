@@ -10,6 +10,7 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     ForecastingTask,
+    InputModality,
     LocalizationMode,
     ScalarPredictionTask,
     Task,
@@ -23,6 +24,9 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.tasks import _build_task_registry
+
+
+NO_INPUT = frozenset({InputModality.NO_INPUT})
 
 
 def test_task_is_an_abstract_base_class():

@@ -170,7 +170,11 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 artifact,
             ]
         )
-        classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+        classification = ClassificationTask(
+            inputs=(record0,),
+            targets=("normal",),
+            id="task-cls-0",
+        )
         dataset.add_tasks(
             tasks=[
                 classification,

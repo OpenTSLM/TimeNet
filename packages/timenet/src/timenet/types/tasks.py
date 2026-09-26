@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
 import pint
 
 from timenet.errors import TimeFValidationError
-from timenet.types.annotations import Annotation, SupportsAnnotate
+from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import new_id
-from timenet.types.spans import Span
+from timenet.types.modalities import InputModality
+from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.units import normalize_unit
 
 
@@ -37,6 +38,45 @@ class TaskType(StrEnum):
     TS_EDITING = "ts_editing"
     TS_GENERATION = "ts_generation"
     TS_CORRESPONDENCE = "ts_correspondence"
+
+
+def validate_input_modalities(
+    modalities: Iterable[InputModality] | None,
+    *,
+    task_id: str,
+    prompt: str | None,
+    has_record_inputs: bool,
+) -> frozenset[InputModality]:
+    """Normalize and validate the input kinds declared by a task.
+
+    Args:
+        modalities: The task's declared input kinds.
+        task_id: The task identifier used in validation errors.
+        prompt: The task's optional text prompt.
+        has_record_inputs: Whether the task supplies input Records.
+
+    Returns:
+        The validated input kinds as a frozen set.
+
+    Raises:
+        TimeFValidationError: If the declaration is missing, invalid, or inconsistent with the inputs.
+    """
+    if modalities is None or isinstance(modalities, (str, bytes)):
+        raise TimeFValidationError("input_modalities must be a non-empty collection of InputModality values")
+    try:
+        declared = frozenset(InputModality(value) for value in modalities)
+    except (TypeError, ValueError) as exc:
+        raise TimeFValidationError(f"invalid input_modalities for task {task_id!r}") from exc
+    if not declared:
+        raise TimeFValidationError(f"task {task_id!r} must declare an input modality")
+    if prompt and InputModality.TEXT not in declared:
+        raise TimeFValidationError(f"task {task_id!r} has a prompt but does not declare text input")
+    if InputModality.NO_INPUT in declared:
+        if has_record_inputs or declared - {InputModality.NO_INPUT, InputModality.TEXT}:
+            raise TimeFValidationError(f"task {task_id!r} cannot combine no_input with record or media inputs")
+    elif not has_record_inputs and declared <= {InputModality.TEXT}:
+        raise TimeFValidationError(f"task {task_id!r} needs no_input when it has only a text prompt")
+    return declared
 
 
 @unique
@@ -70,6 +110,8 @@ class Task(SupportsAnnotate, ABC):
     """Ordered native values and stored objects that form the expected output."""
     prompt: str | None = None
     """What the model is asked, or None for an unprompted task."""
+    input_modalities: frozenset[InputModality] | None = None
+    """Optional override. None infers the input kinds when resolved or written."""
     scope: Span | None = None
     """Optional region of the inputs to which the task applies."""
     input_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
@@ -97,9 +139,50 @@ class Task(SupportsAnnotate, ABC):
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
         self.annotations = tuple(self.annotations)
+        if self.input_modalities is not None:
+            self.input_modalities = self.resolved_input_modalities
         for target in self.targets or ():
             if not _is_target_item(target):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")
+
+    @property
+    def resolved_input_modalities(self) -> frozenset[InputModality]:
+        """Return the validated override, or infer kinds from the current inputs.
+
+        Inference reads Signal specs within the scope, the prompt, and text input annotations.
+        It does not load values or inspect targets. NO_INPUT means there are no input Records.
+        The result is not cached: connectors can assign inputs after construction.
+        """
+        modalities = self.input_modalities
+        if modalities is None:
+            modalities = self._infer_input_modalities()
+        return validate_input_modalities(
+            modalities, task_id=self.id, prompt=self.prompt, has_record_inputs=bool(self.inputs)
+        )
+
+    def _infer_input_modalities(self) -> frozenset[InputModality]:
+        signal_ids = None
+        if isinstance(self.scope, StepSpan):
+            signal_ids = {self.scope.time_series_id}
+        elif isinstance(self.scope, TimeSpan) and self.scope.time_series_ids is not None:
+            signal_ids = set(self.scope.time_series_ids)
+        signals = {signal.id: signal for record in self.inputs for signal in record.walk_signals()}
+        if signal_ids is not None and signal_ids - signals.keys():
+            raise TimeFValidationError(
+                f"task {self.id!r} scope names unknown input Signals: {signal_ids - signals.keys()}"
+            )
+        kinds = {
+            signal.spec.modality
+            for signal_id, signal in signals.items()
+            if signal_ids is None or signal_id in signal_ids
+        }
+        if self.prompt or any(
+            value_type_of(annotation.value) in {"str", "list"} for annotation in self.input_annotations
+        ):
+            kinds.add(InputModality.TEXT)
+        if not self.inputs:
+            kinds.add(InputModality.NO_INPUT)
+        return frozenset(kinds)
 
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation occurrence and return it.

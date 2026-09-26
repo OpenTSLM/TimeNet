@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["timef_format_version", "dataset_id", "metadata", "files"],
   "properties": {
-    "timef_format_version": { "type": "integer", "const": 2 },
+    "timef_format_version": { "type": "integer", "const": 1 },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "metadata": { "$ref": "#/$defs/metadata" },
     "schema": { "$ref": "#/$defs/schema" },
@@ -164,6 +164,7 @@
         "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered codebook for dtype='enum'. Empty for every other dtype." },
         "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
         "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps can be missing. Arrow validity marks present timesteps. Zarr stores this validity in parallel arrays." },
+        "modality": { "type": "string", "enum": ["text", "time_series", "image", "audio"], "default": "time_series" },
         "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
       }
     },
