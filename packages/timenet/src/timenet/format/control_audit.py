@@ -11,6 +11,7 @@ import duckdb
 
 from timenet.errors import TimeFFormatError
 from timenet.format.control_schema import CONTROL_TABLES, Table
+from timenet.format.duckdb import check_control_schema
 
 
 _DOMAIN_CHECKS = """
@@ -112,6 +113,24 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     invalid = connection.execute(_DOMAIN_CHECKS).fetchone()
     if invalid is not None:
         raise TimeFFormatError(f"control database contains an invalid {invalid[0]} value")
+
+    check_control_schema(connection)
+    invalid_modality = connection.execute(
+        """SELECT task_id FROM tasks
+           WHERE len(input_modalities) = 0
+              OR EXISTS (SELECT 1 FROM unnest(input_modalities) AS m(value)
+                         WHERE value NOT IN ('text', 'time_series', 'image', 'audio', 'no_input'))
+              OR len(input_modalities) <> len(list_distinct(input_modalities))
+              OR (prompt IS NOT NULL AND prompt <> ''
+                  AND NOT list_contains(input_modalities, 'text'))
+              OR (list_contains(input_modalities, 'no_input')
+                  AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
+                       OR EXISTS (SELECT 1 FROM task_record_refs r
+                                  WHERE r.task_key = tasks.task_key AND r.field = 'inputs')))
+           LIMIT 1"""
+    ).fetchone()
+    if invalid_modality is not None:
+        raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
 
     wrong_parent = connection.execute(_CROSS_RECORD_PARENT).fetchone()
     if wrong_parent is not None:
