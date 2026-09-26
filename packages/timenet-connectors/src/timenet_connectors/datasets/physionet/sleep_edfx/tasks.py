@@ -20,6 +20,7 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
+    InputModality,
     LocalizationMode,
     ScalarPredictionTask,
     Task,
@@ -159,6 +160,7 @@ def build_epoch_tasks(
 
         for onset in range(start, stage.span.exclusive_end, EPOCH_MICROSECONDS):
             yield ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
                 targets=(stage.value,),
@@ -203,6 +205,7 @@ def build_record_tasks(
         stated[one.key] = one.value
 
     yield ScalarPredictionTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}),
         # A float with a unit keeps the type a regression metric needs. As a string, a
         # one-year error reads as two unequal labels.
         targets=(_whole_years(record_id, stated),),
@@ -211,6 +214,7 @@ def build_record_tasks(
     )
 
     yield ClassificationTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}),
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
         targets=(_one_of(record_id, stated, AnnotationKey.SEX, SEX_LABELS),),
@@ -220,6 +224,7 @@ def build_record_tasks(
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=(_one_of(record_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
             target_schema=name_vocabulary(id_prefix, AnnotationKey.CONDITION),
         )
@@ -227,6 +232,7 @@ def build_record_tasks(
     night = find_sleep_period(span_annotations)
     if night is not None:
         yield TemporalLocalizationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=(night,),
             # The interval does not tile the recording. A cassette recording is mostly wake on
             # either side of one night, and that time is unmarked rather than something else.
@@ -380,6 +386,7 @@ def build_lights_off_task(
         return None
 
     return TemporalLocalizationTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}),
         targets=(at,),
         mode=LocalizationMode.SPARSE,
     )
