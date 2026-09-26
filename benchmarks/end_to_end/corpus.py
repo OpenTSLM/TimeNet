@@ -19,6 +19,7 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     ForecastingTask,
+    InputModality,
     License,
     TimeInterval,
     TimePoint,
@@ -205,6 +206,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=ClassificationTask(
             inputs=(vibration,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=("outer-race-fault",),
             target_schema="condition",
             id="task-vibration-class",
@@ -213,6 +215,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=ClassificationTask(
             inputs=(ecg,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=("atrial-fibrillation",),
             target_schema="rhythm",
             id="task-ecg-class",
@@ -221,6 +224,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=ClassificationTask(
             inputs=(sleep,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=("N2",),
             target_schema="sleep-stage",
             scope=TimeInterval.seconds(30.0, 60.0),
@@ -230,6 +234,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=AnswerTask(
             inputs=(accelerometer,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             targets=("A trace with rising amplitude and a periodic impact after five seconds.",),
             id="task-accelerometer-caption",
         ),
@@ -237,6 +242,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=AnswerTask(
             inputs=(finance,),
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             prompt="Summarize the session.",
             targets=("Choppy open, midday rally, positive close.",),
             id="task-finance-qa",
@@ -245,6 +251,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=AnswerTask(
             inputs=(workout,),
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             prompt="Assess this workout.",
             targets=("Aerobic base session",),
             rationale="Heart-rate drift appears late while pace remains stable.",
@@ -257,6 +264,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=ForecastingTask(
             inputs=(energy,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             scope=TimeInterval.seconds(0.0, 16000.0),
             targets=(TimeInterval.seconds(16000.0, 16380.0),),
             id="task-energy-forecast",
@@ -265,6 +273,7 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=AnswerTask(
             inputs=(automotive,),
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             prompt="Estimate remaining useful life.",
             targets=("74 cycles",),
             rationale="Vibration rises while torque efficiency falls.",
@@ -304,6 +313,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                 prompt=f"Is rhythm abnormal in view {index}?",
                 targets=("atrial-fibrillation",),
                 rationale="The synthetic rhythm has repeatable irregular intervals.",
@@ -337,6 +347,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                 prompt=f"What pattern appears in series {index}?",
                 targets=("A deterministic trend with periodic variation.",),
                 id=f"task-tsqa-{index:04d}",
@@ -366,6 +377,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record,),
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
                 targets=("above-zero" if offset > 0 else "below-zero",),
                 target_schema="mean-sign",
                 id=f"task-mean-{index:04d}",

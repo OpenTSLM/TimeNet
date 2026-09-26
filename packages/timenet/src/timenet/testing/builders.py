@@ -13,6 +13,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    InputModality,
     License,
     LocalizationMode,
     ScalarPredictionTask,
@@ -142,11 +143,14 @@ def make_dataset() -> TimeFDataset:
             ),
         ]
     )
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+    classification = ClassificationTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record0,), targets=("normal",), id="task-cls-0"
+    )
     dataset.add_tasks(
         tasks=[
             classification,
             AnswerTask(
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                 inputs=(record0,),
                 prompt="What rhythm?",
                 targets=("Normal.",),
@@ -156,6 +160,7 @@ def make_dataset() -> TimeFDataset:
                 id="task-answer-0",
             ),
             ScalarPredictionTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
                 inputs=(record0,),
                 targets=(62.0,),
                 unit="bpm",
@@ -163,6 +168,7 @@ def make_dataset() -> TimeFDataset:
                 id="task-scalar-0",
             ),
             TemporalLocalizationTask(
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                 inputs=(record0,),
                 prompt="Locate the stimulus and the artifact.",
                 mode=LocalizationMode.SPARSE,
@@ -201,6 +207,7 @@ def make_dataset() -> TimeFDataset:
     )
     dataset.add_task(
         task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             inputs=(record2,),
             targets=("onset",),
             id="task-cls-2",
