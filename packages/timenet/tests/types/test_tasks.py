@@ -1,28 +1,36 @@
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Any, ClassVar, cast
 
 import pytest
 
-from timenet.dataset import Record
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFValidationError
 from timenet.types import (
     TASKS,
+    Annotation,
     AnswerTask,
     ClassificationTask,
     ForecastingTask,
+    InputModality,
     LocalizationMode,
     ScalarPredictionTask,
+    StepInterval,
     Task,
     TaskType,
     TemporalLocalizationTask,
     TimeInterval,
     TimePoint,
+    TimeSeriesSpec,
     TSCorrespondenceTask,
     TSEditingTask,
     TSGenerationTask,
     ureg,
 )
 from timenet.types.tasks import _build_task_registry
+
+
+NO_INPUT = frozenset({InputModality.NO_INPUT})
 
 
 def test_task_is_an_abstract_base_class():

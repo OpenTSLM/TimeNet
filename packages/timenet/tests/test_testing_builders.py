@@ -8,7 +8,7 @@ from timenet.testing import (
     make_dataset,
     sine_loader,
 )
-from timenet.types import Annotation
+from timenet.types import Annotation, InputModality
 
 
 def test_counting_loader_counts_and_returns():
@@ -32,8 +32,15 @@ def test_make_dataset_builds_a_valid_dataset():
     assert len(ds.records) >= 1
 
 
-def test_assert_datasets_equal_reflexive():
-    assert_datasets_equal(make_dataset(), make_dataset())
+def test_assert_datasets_equal_compares_resolved_modalities():
+    expected = make_dataset()
+    actual = make_dataset()
+    actual.tasks[0].input_modalities = frozenset({InputModality.TIME_SERIES})
+    assert_datasets_equal(expected, actual)
+
+    actual.tasks[0].input_modalities = frozenset({InputModality.IMAGE})
+    with pytest.raises(AssertionError, match="task task-cls-0 differs"):
+        assert_datasets_equal(expected, actual)
 
 
 def test_assert_datasets_equal_detects_difference():

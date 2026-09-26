@@ -35,6 +35,7 @@ Every Task supports these fields:
 | `inputs` | Ordered input Records. |
 | `targets` | Ordered inline values or stored objects. |
 | `prompt` | Optional instruction or question. |
+| `input_modalities` | Optional override for the input kinds. `None` enables inference. |
 | `scope` | Optional input region. |
 | `input_annotations` | Attached Annotation occurrences supplied as context. |
 | `target_annotations` | Attached Annotation occurrences used as the answer. |
@@ -47,6 +48,29 @@ Every Task supports these fields:
 `target_annotations` supplies the answer. An empty tuple is an explicit empty answer.
 
 A Task cannot set both `targets` and `target_annotations`.
+
+## Input modalities
+
+`None` by default, in this case the value is inferred.
+Inference uses each input Signal's `spec.modality`, restricted to Signals named in `scope`, if any.
+It also adds `TEXT` for a non-empty prompt or text input annotations. It ignores targets, target
+annotations, rationale, and metadata. It does not load Signal values.
+
+To override inference, pass a non-empty set:
+
+```python
+from timenet.types import AnswerTask, InputModality
+
+task = AnswerTask(
+    inputs=(record,),
+    prompt="Describe this image.",
+    input_modalities=frozenset({InputModality.IMAGE, InputModality.TEXT}),
+)
+```
+
+The override remains subject to validation. For example, a Task with a prompt must declare `TEXT`.
+The writer stores the resolved set in DuckDB, so SQL filters need no inference or Signal reads.
+Read-back Tasks carry that stored set as an explicit declaration.
 
 ## Register Tasks
 

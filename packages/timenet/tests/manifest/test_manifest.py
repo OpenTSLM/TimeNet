@@ -16,6 +16,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     Domain,
+    InputModality,
     License,
     TimeSeriesSpec,
     Version,
@@ -81,7 +82,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_default_format_version():
-    assert _manifest().timef_format_version == 2
+    assert _manifest().timef_format_version == 1
 
 
 @pytest.mark.parametrize(
@@ -110,8 +111,8 @@ def test_manifest_rejects_unknown_domain():
         Manifest.from_dict(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_2():
-    # Nullable schemas retain format version 2. Reading nullable artifacts still requires an SDK
+def test_nullable_schema_roundtrips_at_format_version_1():
+    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = replace(
         _manifest(),
@@ -124,7 +125,7 @@ def test_nullable_schema_roundtrips_at_format_version_2():
         files=base.files,
         schema=replace(base.schema, time_series_specs=(spec,)),
     )
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 1
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.from_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
@@ -137,7 +138,7 @@ def test_missing_nullable_defaults_to_false():
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
-    assert restored.timef_format_version == 2
+    assert restored.timef_format_version == 1
     assert restored.schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
@@ -163,8 +164,13 @@ def test_parsed_manifest_requires_integer_version(version):
         Manifest.from_dict(data)
 
 
-def test_dict_roundtrip():
+@pytest.mark.parametrize("modality", [InputModality.TIME_SERIES, InputModality.IMAGE, InputModality.AUDIO])
+def test_dict_roundtrip(modality):
     m = _manifest()
+    m = replace(
+        m, schema=replace(m.schema, time_series_specs=(replace(m.schema.time_series_specs[0], modality=modality),))
+    )
+    jsonschema.validate(m.to_dict()["schema"]["time_series_specs"][0], MANIFEST_SCHEMA["$defs"]["timeSeriesSpec"])
     assert Manifest.from_dict(m.to_dict()) == m
 
 
@@ -175,7 +181,7 @@ def test_json_roundtrip():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 2
+    assert d["timef_format_version"] == 1
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
