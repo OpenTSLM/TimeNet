@@ -40,6 +40,17 @@ class TaskType(StrEnum):
 
 
 @unique
+class InputModality(StrEnum):
+    """A kind of input supplied to a task."""
+
+    TEXT = "text"
+    TIME_SERIES = "time_series"
+    IMAGE = "image"
+    AUDIO = "audio"
+    NO_INPUT = "no_input"
+
+
+@unique
 class LocalizationMode(StrEnum):
     """Whether a localization target is sparse or exhaustive."""
 
@@ -70,6 +81,8 @@ class Task(SupportsAnnotate, ABC):
     """Ordered native values and stored objects that form the expected output."""
     prompt: str | None = None
     """What the model is asked, or None for an unprompted task."""
+    input_modalities: frozenset[InputModality]
+    """Explicit kinds supplied to the model. NO_INPUT marks prompt-only tasks."""
     scope: Span | None = None
     """Optional region of the inputs to which the task applies."""
     input_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
@@ -97,6 +110,21 @@ class Task(SupportsAnnotate, ABC):
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
         self.annotations = tuple(self.annotations)
+        if self.input_modalities is None or isinstance(self.input_modalities, (str, bytes)):
+            raise TimeFValidationError("input_modalities must be a non-empty collection of InputModality values")
+        try:
+            self.input_modalities = frozenset(InputModality(value) for value in self.input_modalities)
+        except (TypeError, ValueError) as exc:
+            raise TimeFValidationError(f"invalid input_modalities for task {self.id!r}") from exc
+        if not self.input_modalities:
+            raise TimeFValidationError(f"task {self.id!r} must declare an input modality")
+        if self.prompt and InputModality.TEXT not in self.input_modalities:
+            raise TimeFValidationError(f"task {self.id!r} has a prompt but does not declare text input")
+        if InputModality.NO_INPUT in self.input_modalities:
+            if self.inputs or self.input_modalities - {InputModality.NO_INPUT, InputModality.TEXT}:
+                raise TimeFValidationError(f"task {self.id!r} cannot combine no_input with record or media inputs")
+        elif not self.inputs and self.input_modalities <= {InputModality.TEXT}:
+            raise TimeFValidationError(f"task {self.id!r} needs no_input when it has only a text prompt")
         for target in self.targets or ():
             if not _is_target_item(target):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")
