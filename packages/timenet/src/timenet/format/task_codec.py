@@ -13,6 +13,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
 from timenet.types import (
     ClassificationTask,
+    InputModality,
     LocalizationMode,
     ScalarPredictionTask,
     Span,
@@ -41,6 +42,26 @@ TARGET_VALUE_COLUMNS = (
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
 """The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
+
+
+def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
+    """Decode a required stored input modality set.
+
+    Returns:
+        The declared input kinds.
+
+    Raises:
+        TimeFFormatError: If a stored input kind is unknown or repeated.
+    """
+    if not values:
+        raise TimeFFormatError("task has no stored input modalities")
+    try:
+        result = frozenset(InputModality(value) for value in values)
+    except ValueError as exc:
+        raise TimeFFormatError(f"task has an unknown stored input modality: {values!r}") from exc
+    if len(result) != len(values):
+        raise TimeFFormatError(f"task has repeated stored input modalities: {values!r}")
+    return result
 
 
 def encode_span(span: Span | None) -> dict[str, Any] | None:

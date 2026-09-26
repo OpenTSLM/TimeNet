@@ -8,7 +8,7 @@ from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import Annotation, TimePoint
+from timenet.types import Annotation, AnswerTask, InputModality, TimePoint
 
 from .test_control_writer import _dataset
 
@@ -41,6 +41,77 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert task.prompt == "Alive?"
     assert task.targets == ("Yes",)
     assert task.annotations[0].name == "task_kind"
+
+
+def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    dataset.tasks[0].input_modalities = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (task,) = reader.read_tasks(reader.read_records())
+        rows = reader.task_table().to_pylist()
+
+    assert task.input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    assert rows[0]["input_modalities"] == ["text", "time_series"]
+
+
+def test_version_one_tasks_are_rejected(tmp_path):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    with connect_control(path) as connection:
+        connection.execute("ALTER TABLE tasks DROP COLUMN input_modalities")
+        connection.execute("UPDATE control_metadata SET value = '1' WHERE key = 'schema_version'")
+
+    with pytest.raises(TimeFFormatError, match="unsupported control schema version"):
+        DuckDBControlReader(path)
+
+
+def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path):
+    dataset = _dataset()
+    record = dataset.records[0]
+    dataset.tasks[0].input_modalities = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    dataset.add_tasks(
+        tasks=(
+            AnswerTask(
+                id="task-image",
+                inputs=(record,),
+                prompt="Read chart",
+                targets=("image answer",),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.IMAGE}),
+            ),
+            AnswerTask(
+                id="task-mixed",
+                inputs=(record,),
+                prompt="Read chart and series",
+                targets=("mixed answer",),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES, InputModality.IMAGE}),
+            ),
+            AnswerTask(
+                input_modalities=frozenset({InputModality.NO_INPUT}),
+                id="task-unknown",
+                targets=("unknown",),
+            ),
+        )
+    )
+    expected = ["task-1"]
+    required = frozenset({InputModality.TIME_SERIES})
+    supported = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
+        task_rows = reader.task_table(required_modalities=required, supported_modalities=supported).to_pylist()
+        target_rows = reader.target_table(required_modalities=required, supported_modalities=supported).to_pylist()
+
+    assert [task.id for task in tasks] == expected
+    assert [row["task_id"] for row in task_rows] == expected
+    assert [row["task_id"] for row in target_rows] == expected
+    assert [
+        task.id for task in dataset.iter_tasks(required_modalities=required, supported_modalities=supported)
+    ] == expected
 
 
 def test_control_reader_hydrates_each_target_storage_type(tmp_path):

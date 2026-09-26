@@ -6,6 +6,7 @@ from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
 from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
+    InputModality,
     License,
     TimeSeriesSpec,
     Version,
@@ -43,7 +44,11 @@ def _namespaced_dataset() -> TimeFDataset:
             record_id="ns-record-0",
         )
     )
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id="ns-task-0"))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("x",), id="ns-task-0"
+        )
+    )
     return dataset
 
 
