@@ -23,6 +23,7 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
+    InputModality,
     LocalizationMode,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -170,11 +171,17 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 artifact,
             ]
         )
-        classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+        classification = ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(record0,),
+            targets=("normal",),
+            id="task-cls-0",
+        )
         dataset.add_tasks(
             tasks=[
                 classification,
                 AnswerTask(
+                    input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                     inputs=(record0,),
                     prompt="What rhythm?",
                     targets=("Normal.",),
@@ -188,6 +195,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     id="task-answer-0",
                 ),
                 ScalarPredictionTask(
+                    input_modalities=frozenset({InputModality.TIME_SERIES}),
                     inputs=(record0,),
                     targets=(60.0,),
                     unit="bpm",
@@ -198,6 +206,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 # regions are the output. Here, the task stores the answer by reference, so the target
                 # is the two temporal annotations above.
                 TemporalLocalizationTask(
+                    input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                     inputs=(record0,),
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
@@ -274,6 +283,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         # this task's span sits inside the window's span.
         dataset.add_task(
             task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
                 inputs=(record2,),
                 targets=("onset",),
                 id="task-cls-2",

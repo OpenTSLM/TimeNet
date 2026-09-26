@@ -28,6 +28,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.types import (
     Annotation,
     AnswerTask,
+    InputModality,
     TimeSeriesSpec,
     ureg,
 )
@@ -324,6 +325,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                     input_ids.append(_options_id(template_id))
                 input_ids.append(_context_id(_clinical_context(row)))
                 yield AnswerTask(
+                    input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                     inputs=(records[ecg_id],),
                     prompt=str(row["question"]),
                     targets=(str(row["answer"]),),

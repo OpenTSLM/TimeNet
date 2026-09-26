@@ -13,7 +13,7 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 1
+CONTROL_SCHEMA_VERSION = 3
 """Schema version written into :data:`CONTROL_FILE`."""
 
 
@@ -44,8 +44,8 @@ def create_control_schema(connection: duckdb.DuckDBPyConnection) -> None:
         )
 
 
-def check_control_schema(connection: duckdb.DuckDBPyConnection) -> None:
-    """Reject a control database with an unsupported schema version.
+def check_control_schema(connection: duckdb.DuckDBPyConnection) -> int:
+    """Return the version of a supported control database.
 
     Args:
         connection: An open TimeF control database.
@@ -60,6 +60,7 @@ def check_control_schema(connection: duckdb.DuckDBPyConnection) -> None:
     if row is None or row[0] != str(CONTROL_SCHEMA_VERSION):
         found = None if row is None else row[0]
         raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
+    return int(row[0])
 
 
 @contextmanager

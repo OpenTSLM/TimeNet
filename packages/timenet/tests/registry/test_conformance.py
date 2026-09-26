@@ -23,6 +23,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    InputModality,
     License,
     TimeSeriesSpec,
     Version,
@@ -55,7 +56,14 @@ def _second_dataset() -> TimeFDataset:
         record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="other-record-0")
     )
     record.annotate(Annotation(key="age", value=70, unit="years", id="other-age-0"))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id="other-task-0"))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(record,),
+            targets=("afib",),
+            id="other-task-0",
+        )
+    )
     return dataset
 
 

@@ -13,6 +13,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
+    InputModality,
     License,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -77,7 +78,11 @@ def test_records_property_is_read_only_copy(make_series):
 def test_add_task_links_record_and_task(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
+    task = ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("afib",)
+        )
+    )
     assert task.inputs == (record,)
     assert record.task_ids == (task.id,)
     assert ds.tasks == (task,)
@@ -86,7 +91,12 @@ def test_add_task_links_record_and_task(make_series):
 def test_add_task_uses_object_inputs(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",))
+    task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="Alive?",
+        targets=("Yes",),
+    )
 
     assert dataset.add_task(task=task) is task
     assert task.inputs == (record,)
@@ -96,7 +106,11 @@ def test_add_task_multiple_records(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(s1, s2), targets=("x",)))
+    task = ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s1, s2), targets=("x",)
+        )
+    )
     assert task.inputs == (s1, s2)
 
 
@@ -106,6 +120,7 @@ def test_scope_series_id_resolution(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     ds.add_task(
         task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
             inputs=(record,),
             targets=("beat",),
             scope=TimePoint.seconds(0.0, time_series_ids=(ts.id,)),
@@ -114,6 +129,7 @@ def test_scope_series_id_resolution(make_series):
     with pytest.raises(ValueError, match="unknown time_series_id"):
         ds.add_task(
             task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
                 inputs=(record,),
                 targets=("beat",),
                 scope=TimePoint.seconds(0.0, time_series_ids=("nope",)),
@@ -124,16 +140,36 @@ def test_scope_series_id_resolution(make_series):
 def test_from_tasks_on_constructor_registers(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    base = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
-    derived = ds.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,)))
+    base = ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",)
+        )
+    )
+    derived = ds.add_task(
+        task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            inputs=(record,),
+            prompt="q",
+            targets=("a",),
+            from_tasks=(base,),
+        )
+    )
     assert derived.from_tasks == (base,)
 
 
 def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    orphan = ClassificationTask(targets=("a",))  # never added to the dataset
-    qa = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(orphan,))
+    orphan = ClassificationTask(
+        input_modalities=frozenset({InputModality.NO_INPUT}), targets=("a",)
+    )  # never added to the dataset
+    qa = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="q",
+        targets=("a",),
+        from_tasks=(orphan,),
+    )
     with pytest.raises(TimeFValidationError, match="derives from task"):
         ds.add_task(task=qa)
 
@@ -144,7 +180,11 @@ def test_derive_schema(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     record.annotate(Annotation(key="age", value=64, unit="years"))
     record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.004)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("afib",)
+        )
+    )
 
     schema = ds.derive_schema()
     assert schema.time_series_specs == (ts.spec,)
@@ -219,7 +259,11 @@ def test_no_loader_calls_during_build():
     )
     ts = Signal.from_loader(spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",)
+        )
+    )
     ds.derive_schema()
     assert calls["n"] == 0  # building/deriving never reads values
 
@@ -281,7 +325,12 @@ def test_add_task_warns_for_a_scope_outside_record_span(make_series):
     )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         dataset.add_task(
-            task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(5.0, 20.0))
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(record,),
+                targets=("walking",),
+                scope=TimeInterval.seconds(5.0, 20.0),
+            )
         )
 
 
@@ -292,7 +341,14 @@ def test_add_task_warns_for_a_point_at_the_exclusive_window_end(make_series):
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimePoint.seconds(10.0)))
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(record,),
+                targets=("walking",),
+                scope=TimePoint.seconds(10.0),
+            )
+        )
 
 
 def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series):
@@ -302,7 +358,12 @@ def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     task = dataset.add_task(
-        task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(2.0, 10.0))
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(record,),
+            targets=("walking",),
+            scope=TimeInterval.seconds(2.0, 10.0),
+        )
     )
     assert task.scope == TimeInterval.seconds(2.0, 10.0)
 
@@ -313,7 +374,11 @@ def test_add_task_accepts_scope_inside_record_span(make_series):
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     scope = TimeInterval.seconds(2.0, 8.0)
-    task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), scope=scope))
+    task = dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("walking",), scope=scope
+        )
+    )
     assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
 
 
@@ -326,6 +391,7 @@ def test_add_task_checks_every_span_a_task_carries(make_series):
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         dataset.add_task(
             task=TemporalLocalizationTask(
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                 inputs=(record,),
                 prompt="Locate the onsets.",
                 targets=(TimePoint.seconds(2.0), TimePoint.seconds(42.0)),
@@ -337,7 +403,9 @@ def test_add_task_requires_an_answer(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     with pytest.raises(TimeFValidationError, match="needs an answer"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,)))
+        dataset.add_task(
+            task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,))
+        )
 
 
 def test_add_task_rejects_an_answer_given_twice(make_series):
@@ -345,7 +413,14 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     annotation = record.annotate(Annotation(key="stage", value="N2"))
     with pytest.raises(TimeFValidationError, match="one answer representation"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("N2",), target_annotations=(annotation,)))
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(record,),
+                targets=("N2",),
+                target_annotations=(annotation,),
+            )
+        )
 
 
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
@@ -353,7 +428,12 @@ def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     annotation = record.annotate(Annotation(key="stage", value="N2", span=TimeInterval.seconds(0.0, 0.004)))
     task = dataset.add_task(
-        task=TemporalLocalizationTask(inputs=(record,), prompt="Segment it.", target_annotations=(annotation,))
+        task=TemporalLocalizationTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            inputs=(record,),
+            prompt="Segment it.",
+            target_annotations=(annotation,),
+        )
     )
     assert task.targets is None and task.target_annotations == (annotation,)
 
@@ -363,7 +443,14 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     detached = Annotation(key="context", value="missing")
     with pytest.raises(TimeFValidationError, match="not attached"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(record,),
+                targets=("a",),
+                input_annotations=(detached,),
+            )
+        )
 
 
 def test_register_annotations_rejects_an_inconsistent_duplicate_id():
@@ -376,7 +463,11 @@ def test_register_annotations_rejects_an_inconsistent_duplicate_id():
 def test_set_task_stream_rejects_after_add_task(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",)
+        )
+    )
     with pytest.raises(TimeFValidationError, match="either streams its tasks or"):
         dataset.set_task_stream([ClassificationTask], lambda: iter(()))
 
@@ -386,7 +477,14 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     dataset.set_task_stream([AnswerTask], lambda: iter(()))
     with pytest.raises(TimeFValidationError, match="streamed dataset"):
-        dataset.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",)))
+        dataset.add_task(
+            task=AnswerTask(
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+                inputs=(record,),
+                prompt="q",
+                targets=("a",),
+            )
+        )
 
 
 def test_streamed_task_validation_rejects_an_unknown_record(make_series):
@@ -396,7 +494,12 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
         record_id="missing",
         sources=(Source(id="missing-source", name="Missing", signals=(make_series(time_series_id="missing"),)),),
     )
-    task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
+    task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        prompt="q",
+        targets=("a",),
+        inputs=(unknown,),
+    )
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
         list(dataset.iter_streamed_tasks_validated())
@@ -407,7 +510,7 @@ def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
     record = dataset.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="s-0")
     )
-    task = ClassificationTask(targets=("a",), inputs=(record,))
+    task = ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), targets=("a",), inputs=(record,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
     with pytest.raises(TimeFValidationError, match="not one of the declared"):
         list(dataset.iter_streamed_tasks_validated())
@@ -421,7 +524,12 @@ def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series
     dataset.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="unrelated-record")
     )
-    task = AnswerTask(prompt="q", targets=("a",), inputs=(record,))
+    task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        prompt="q",
+        targets=("a",),
+        inputs=(record,),
+    )
     calls = 0
     original = Record.signals
 
@@ -442,7 +550,9 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     context = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     target = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = dataset.add_task(
-        task=ForecastingTask(inputs=(context,), targets=(target,)),
+        task=ForecastingTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(context,), targets=(target,)
+        ),
     )
     assert task.targets == (target,)
 
@@ -450,8 +560,17 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
 def test_tasks_of_filters_by_type(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    classification = ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
-    qa = ds.add_task(task=AnswerTask(inputs=(s,), prompt="q", targets=("b",)))
+    classification = ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=("a",))
+    )
+    qa = ds.add_task(
+        task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            inputs=(s,),
+            prompt="q",
+            targets=("b",),
+        )
+    )
     assert ds.tasks_of(ClassificationTask) == (classification,)
     assert ds.tasks_of(AnswerTask) == (qa,)
 
@@ -460,9 +579,20 @@ def test_tasks_for_resolves_and_filters_record_tasks(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    classification = ds.add_task(task=ClassificationTask(inputs=(s1,), targets=("a",)))
-    qa = ds.add_task(task=AnswerTask(inputs=(s1,), prompt="q", targets=("b",)))
-    ds.add_task(task=ClassificationTask(inputs=(s2,), targets=("c",)))
+    classification = ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s1,), targets=("a",))
+    )
+    qa = ds.add_task(
+        task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            inputs=(s1,),
+            prompt="q",
+            targets=("b",),
+        )
+    )
+    ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s2,), targets=("c",))
+    )
     assert ds.tasks_for(s1) == (classification, qa)
     assert ds.tasks_for(s1, ClassificationTask) == (classification,)
     assert ds.tasks_for(s2, AnswerTask) == ()
@@ -479,7 +609,9 @@ def test_tasks_for_non_reciprocal_link_raises(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(s1,), targets=("a",)))
+    task = ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s1,), targets=("a",))
+    )
     s2.task_ids = (*s2.task_ids, task.id)  # s2 claims the task, but the task does not link back
     with pytest.raises(TimeFValidationError, match="does not link back"):
         ds.tasks_for(s2)
@@ -495,7 +627,11 @@ def test_to_features_and_targets_returns_arrow_matrix_and_targets(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=(label,)
+            )
+        )
     x, y = ds.to_features_and_targets(task=ClassificationTask)
     assert isinstance(x, pa.Array) and pa.types.is_fixed_size_list(x.type)
     assert isinstance(y, pa.Array)
@@ -509,7 +645,11 @@ def test_to_features_and_targets_numpy_output(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=(label,)
+            )
+        )
     x, y = ds.to_features_and_targets(task=ClassificationTask, output="numpy")
     assert isinstance(x, np.ndarray) and x.shape == (2, 3) and x.dtype == np.float32
     assert isinstance(y, np.ndarray) and y.tolist() == ["a", "b"]
@@ -521,8 +661,16 @@ def _ragged_dataset(make_series):
     second = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )
-    ds.add_task(task=ClassificationTask(inputs=(first,), targets=("a",)))
-    ds.add_task(task=ClassificationTask(inputs=(second,), targets=("b",)))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(first,), targets=("a",)
+        )
+    )
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(second,), targets=("b",)
+        )
+    )
     return ds
 
 
@@ -560,7 +708,11 @@ def test_to_features_and_targets_unlabeled_record_raises(make_series):
     labeled = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )
-    ds.add_task(task=ClassificationTask(inputs=(labeled,), targets=("a",)))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(labeled,), targets=("a",)
+        )
+    )
     ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )  # no task on this one
@@ -571,8 +723,12 @@ def test_to_features_and_targets_unlabeled_record_raises(make_series):
 def test_to_features_and_targets_multiple_matching_tasks_raises(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("b",)))
+    ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=("a",))
+    )
+    ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=("b",))
+    )
     with pytest.raises(TimeFValidationError, match="needs exactly one per record"):
         ds.to_features_and_targets(task=ClassificationTask)
 
@@ -583,7 +739,11 @@ def test_to_features_and_targets_infers_sole_task_type(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=(label,)
+            )
+        )
     x, y = ds.to_features_and_targets()  # task inferred: only ClassificationTask present
     assert len(x) == 2
     assert y.to_pylist() == ["a", "b"]
@@ -592,8 +752,17 @@ def test_to_features_and_targets_infers_sole_task_type(make_series):
 def test_to_features_and_targets_ambiguous_task_type_raises(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
-    ds.add_task(task=AnswerTask(inputs=(s,), prompt="q", targets=("b",)))
+    ds.add_task(
+        task=ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), targets=("a",))
+    )
+    ds.add_task(
+        task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            inputs=(s,),
+            prompt="q",
+            targets=("b",),
+        )
+    )
     with pytest.raises(ValueError, match="pass task="):
         ds.to_features_and_targets()
 
@@ -604,7 +773,15 @@ def test_to_features_and_targets_keeps_a_scalar_target_numeric(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ScalarPredictionTask(inputs=(s,), targets=(value,), unit="bpm", target_name="rate"))
+        ds.add_task(
+            task=ScalarPredictionTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(s,),
+                targets=(value,),
+                unit="bpm",
+                target_name="rate",
+            )
+        )
     _, y = ds.to_features_and_targets(task=ScalarPredictionTask)
     assert pa.types.is_floating(y.type)  # a regression target keeps its type instead of stringifying
     assert y.to_pylist() == pytest.approx([1.5, 2.5])
@@ -614,7 +791,11 @@ def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_serie
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     annotation = s.annotate(Annotation(key="stage", value="N2"))
-    ds.add_task(task=ClassificationTask(inputs=(s,), target_annotations=(annotation,)))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(s,), target_annotations=(annotation,)
+        )
+    )
     with pytest.raises(ValueError, match="exactly one scalar target"):
         ds.to_features_and_targets(task=ClassificationTask)
 
@@ -624,9 +805,23 @@ def test_add_task_bounds_checks_a_point_span(make_series):
     record = dataset.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("beat",), scope=TimePoint.seconds(9.5)))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(record,),
+            targets=("beat",),
+            scope=TimePoint.seconds(9.5),
+        )
+    )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("beat",), scope=TimePoint.seconds(10.5)))
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(record,),
+                targets=("beat",),
+                scope=TimePoint.seconds(10.5),
+            )
+        )
 
 
 def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
@@ -640,7 +835,11 @@ def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         record.annotate(Annotation(key="mark", span=outside))
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=outside))
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("x",), scope=outside
+            )
+        )
 
 
 def test_add_annotations_attaches_all_and_returns_them(make_series):
@@ -664,8 +863,12 @@ def test_add_tasks_registers_all_in_order_and_links(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     tasks = ds.add_tasks(
         tasks=[
-            ClassificationTask(inputs=(record,), targets=("a",)),
-            ClassificationTask(inputs=(record,), targets=("b",)),
+            ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",)
+            ),
+            ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("b",)
+            ),
         ]
     )
     assert tuple(t.targets for t in tasks) == (("a",), ("b",))
@@ -678,8 +881,9 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     record = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
-    good = ClassificationTask(inputs=(record,), targets=("a",))
+    good = ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",))
     bad = ClassificationTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}),
         inputs=(record,),
         targets=("b",),
         scope=TimePoint.seconds(1.0, time_series_ids=("nope",)),
@@ -695,8 +899,14 @@ def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_seri
     # as a unit rather than task by task.
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    base = ClassificationTask(inputs=(record,), targets=("a",))
-    derived = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,))
+    base = ClassificationTask(input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",))
+    derived = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="q",
+        targets=("a",),
+        from_tasks=(base,),
+    )
     registered = ds.add_tasks(tasks=[derived, base])
     assert registered == (derived, base)
     assert derived.from_tasks == (base,)
@@ -708,8 +918,12 @@ def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
     with pytest.raises(TimeFValidationError, match="share an id"):
         ds.add_tasks(
             tasks=[
-                ClassificationTask(inputs=(record,), targets=("a",), id="dup"),
-                ClassificationTask(inputs=(record,), targets=("b",), id="dup"),
+                ClassificationTask(
+                    input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",), id="dup"
+                ),
+                ClassificationTask(
+                    input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("b",), id="dup"
+                ),
             ]
         )
     assert ds.tasks == ()
@@ -718,15 +932,33 @@ def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
 def test_add_tasks_rejects_an_id_already_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), id="task-0"))
+    ds.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("a",), id="task-0"
+        )
+    )
     with pytest.raises(TimeFValidationError, match="already registered"):
-        ds.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("b",), id="task-0")])
+        ds.add_tasks(
+            tasks=[
+                ClassificationTask(
+                    input_modalities=frozenset({InputModality.TIME_SERIES}),
+                    inputs=(record,),
+                    targets=("b",),
+                    id="task-0",
+                )
+            ]
+        )
 
 
 def test_add_tasks_rejects_a_self_dependency(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = AnswerTask(inputs=(record,), prompt="q", targets=("a",))
+    task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="q",
+        targets=("a",),
+    )
     task.from_tasks = (task,)  # derives from itself
     with pytest.raises(TimeFValidationError, match="lists itself"):
         ds.add_tasks(tasks=[task])
@@ -735,8 +967,19 @@ def test_add_tasks_rejects_a_self_dependency(make_series):
 def test_add_tasks_rejects_a_derivation_cycle(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    first = AnswerTask(inputs=(record,), prompt="q", targets=("a",))
-    second = AnswerTask(inputs=(record,), prompt="q", targets=("b",), from_tasks=(first,))
+    first = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="q",
+        targets=("a",),
+    )
+    second = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+        inputs=(record,),
+        prompt="q",
+        targets=("b",),
+        from_tasks=(first,),
+    )
     first.from_tasks = (second,)  # first <- second <- first
     with pytest.raises(TimeFValidationError, match="cyclic"):
         ds.add_tasks(tasks=[first, second])
@@ -750,7 +993,12 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 
     def gen():
         ann = record.annotate(Annotation(key="peak", span=TimePoint.seconds(0.0)))
-        yield ClassificationTask(inputs=(record,), targets=("x",), input_annotations=(ann,))
+        yield ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(record,),
+            targets=("x",),
+            input_annotations=(ann,),
+        )
 
     (task,) = ds.add_tasks(tasks=gen())
     assert task.input_annotations == (record.annotations[0],)
@@ -761,14 +1009,22 @@ def test_add_task_rejects_a_time_series_ref_not_on_the_record(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     unknown = make_series(time_series_id="no-such-series")
     with pytest.raises(TimeFValidationError, match="not registered"):
-        ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(unknown,)))
+        ds.add_task(
+            task=TSCorrespondenceTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=(unknown,)
+            )
+        )
 
 
 def test_add_task_accepts_a_time_series_ref_on_the_record(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
-    task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(signal,)))
+    task = ds.add_task(
+        task=TSCorrespondenceTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=(signal,)
+        )
+    )
     assert task.targets == (signal,)
 
 
@@ -776,5 +1032,9 @@ def test_add_task_accepts_mixed_targets(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
-    task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(record, signal, "match")))
+    task = ds.add_task(
+        task=TSCorrespondenceTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=(record, signal, "match")
+        )
+    )
     assert task.targets == (record, signal, "match")

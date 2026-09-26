@@ -3,7 +3,7 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
+Version 3 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
 stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
 be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
@@ -283,6 +283,7 @@ TASKS = Table(
         _required("task_id"),
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
+        _required("input_modalities", ColumnType.VARCHAR_LIST),
         Column("scope_type", ColumnType.VARCHAR),
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),

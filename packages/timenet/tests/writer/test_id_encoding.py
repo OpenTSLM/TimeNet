@@ -15,6 +15,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
+    InputModality,
     License,
     StepInterval,
     TimeInterval,
@@ -62,7 +63,11 @@ def _uuid_dataset(*, record_id=None):
     record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
     dataset.add_record(record=record)
     record.annotate(Annotation(key="k", value=1))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("x",)
+        )
+    )
     dataset.derive_schema()
     return dataset
 
@@ -112,7 +117,11 @@ def test_forecasting_target_span_round_trips(tmp_path):
     series_id = record.signals[0].id
     span = TimeInterval.seconds(1.0, 3.0, time_series_ids=(series_id,))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
-    dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
+    dataset.add_task(
+        task=ForecastingTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=(span,), scope=scope
+        )
+    )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -138,7 +147,11 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     series_id = record.signals[0].id
     span = StepInterval(time_series_id=series_id, start=4, stop=6)
     scope = StepInterval(time_series_id=series_id, start=0, stop=4)
-    dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
+    dataset.add_task(
+        task=ForecastingTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=(span,), scope=scope
+        )
+    )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -162,7 +175,11 @@ def test_span_series_ids_round_trip(tmp_path):
     series = _series()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.id,))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("x",), scope=scope
+        )
+    )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
@@ -187,6 +204,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     other = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
     dataset.add_task(
         task=TSCorrespondenceTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             inputs=(query,),
             prompt="Which trace is most similar?",
             candidate_records=(match, other),
@@ -217,12 +235,19 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     edited = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
     dataset.add_task(
         task=TSEditingTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             inputs=(source,),
             prompt="Remove the baseline wander.",
             targets=(edited,),
         )
     )
-    dataset.add_task(task=TSGenerationTask(prompt="10 s of sinus rhythm.", targets=(edited,)))
+    dataset.add_task(
+        task=TSGenerationTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.NO_INPUT}),
+            prompt="10 s of sinus rhythm.",
+            targets=(edited,),
+        )
+    )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:

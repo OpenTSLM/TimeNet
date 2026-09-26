@@ -16,10 +16,11 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_span, decode_target, decode_task_payload
+from timenet.format.task_codec import decode_input_modalities, decode_span, decode_target, decode_task_payload
 from timenet.types import (
     TASKS,
     Annotation,
+    InputModality,
     Task,
     TaskType,
     TimeInterval,
@@ -125,6 +126,7 @@ class _TaskRow(NamedTuple):
     task_id: str
     task_type: str
     prompt: str | None
+    input_modalities: list[str] | None
     scope_type: str | None
     scope_start: int | None
     scope_end: int | None
@@ -695,7 +697,13 @@ class DuckDBControlReader:
         hydration = _TaskHydration(self, tuple(records))
         return tuple(hydration.read_all())
 
-    def iter_tasks(self, records: Iterable[Record]) -> Iterator[Task]:
+    def iter_tasks(
+        self,
+        records: Iterable[Record] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> Iterator[Task]:
         """Yield the tasks whose inputs include one of ``records``, a bounded batch at a time.
 
         Each batch runs a handful of keyed queries and builds only that batch's tasks, so a caller
@@ -715,7 +723,13 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
         """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(self, tuple(records))
+        hydration = _TaskHydration(
+            self,
+            () if records is None else tuple(records),
+            all_records=records is None,
+            required_modalities=required_modalities,
+            supported_modalities=supported_modalities,
+        )
         yield from hydration.iter_tasks()
 
     def task_facts(self) -> _TaskFacts:
@@ -737,7 +751,13 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(record_count, frozenset(parent_keys), annotated > 0)
         return self._task_facts
 
-    def task_table(self, record_ids: Iterable[str] | None = None) -> pa.Table:
+    def task_table(
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> pa.Table:
         """Return the task table as Arrow, with object references as public IDs, without building Tasks.
 
         One row per task with its type, prompt, rationale, the four scope columns (Signal keys
@@ -750,7 +770,7 @@ class DuckDBControlReader:
         Returns:
             The tasks in task ID order.
         """
-        where, parameters = self._record_filter(record_ids)
+        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities)
         return self.connection.execute(
             f"""WITH {_signal_ids_cte("scope_ids", "tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")},
                 inputs AS (
@@ -767,6 +787,7 @@ class DuckDBControlReader:
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, scope_ids.scope_signal_ids,
                        t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
+                       t.input_modalities,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
                        t.metadata
@@ -779,7 +800,13 @@ class DuckDBControlReader:
             parameters,
         ).to_arrow_table()
 
-    def target_table(self, record_ids: Iterable[str] | None = None) -> pa.Table:
+    def target_table(
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> pa.Table:
         """Return every inline target as Arrow, one typed row each, with references as public IDs.
 
         Args:
@@ -788,7 +815,7 @@ class DuckDBControlReader:
         Returns:
             Targets in task ID and position order.
         """
-        where, parameters = self._record_filter(record_ids)
+        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities)
         return self.connection.execute(
             f"""WITH {_signal_ids_cte("span_ids", "task_targets", "signal_keys", ("task_key", "position"), "span_signal_ids")}
                 SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
@@ -857,7 +884,68 @@ class DuckDBControlReader:
             [list(record_ids)],
         )
 
-    def _task_keys(self, record_keys: list[int] | None) -> list[int]:
+    def _selection_filter(
+        self,
+        record_ids: Iterable[str] | None,
+        required_modalities: Iterable[InputModality] | None,
+        supported_modalities: Iterable[InputModality] | None,
+    ) -> tuple[str, list[object]]:
+        """Build the task selection predicate for Arrow table reads.
+
+        Returns:
+            The SQL WHERE clause and its bound values.
+        """
+        record_where, record_params = self._record_filter(record_ids)
+        modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
+        predicates = [record_where.removeprefix("WHERE ")] if record_where else []
+        if modality_where:
+            predicates.append(modality_where)
+        return ("WHERE " + " AND ".join(predicates) if predicates else "", [*record_params, *modality_params])
+
+    @staticmethod
+    def _modality_filter(
+        required_modalities: Iterable[InputModality] | None,
+        supported_modalities: Iterable[InputModality] | None,
+    ) -> tuple[str, list[object]]:
+        """Build a SQL predicate that keeps compatible declared inputs.
+
+        Returns:
+            The predicate and its bound modality lists.
+
+        Raises:
+            TimeFValidationError: If a requested modality is unknown.
+        """
+        try:
+            required = (
+                None
+                if required_modalities is None
+                else sorted({InputModality(item).value for item in required_modalities})
+            )
+            supported = (
+                None
+                if supported_modalities is None
+                else sorted({InputModality(item).value for item in supported_modalities})
+            )
+        except ValueError as exc:
+            raise TimeFValidationError("unknown input modality in task filter") from exc
+        if not required and supported is None:
+            return "", []
+        predicates = ["t.input_modalities IS NOT NULL"]
+        parameters: list[object] = []
+        if required:
+            predicates.append("list_has_all(t.input_modalities, ?)")
+            parameters.append(required)
+        if supported is not None:
+            predicates.append("list_has_all(?, t.input_modalities)")
+            parameters.append(supported)
+        return " AND ".join(predicates), parameters
+
+    def _task_keys(
+        self,
+        record_keys: list[int] | None,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> list[int]:
         """Return the keys of the tasks to hydrate, in task ID order.
 
         Args:
@@ -866,18 +954,25 @@ class DuckDBControlReader:
         Returns:
             The ordered task keys.
         """
-        if record_keys is None:
-            rows = self.connection.execute("SELECT task_key FROM tasks ORDER BY task_id").fetchall()
-        else:
-            rows = self.connection.execute(
-                """SELECT task_key FROM tasks
-                   WHERE task_key IN (
-                       SELECT task_key FROM task_record_refs
-                       WHERE field = 'inputs' AND record_key IN (SELECT unnest(?))
-                   )
-                   ORDER BY task_id""",
-                [record_keys],
-            ).fetchall()
+        modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
+        predicates = []
+        params: list[object] = []
+        if record_keys is not None:
+            predicates.append(
+                """t.task_key IN (
+                    SELECT task_key FROM task_record_refs
+                    WHERE field = 'inputs' AND record_key IN (SELECT unnest(?))
+                )"""
+            )
+            params.append(record_keys)
+        if modality_where:
+            predicates.append(modality_where)
+            params.extend(modality_params)
+        where = "WHERE " + " AND ".join(predicates) if predicates else ""
+        rows = self.connection.execute(
+            f"SELECT t.task_key FROM tasks t {where} ORDER BY t.task_id",  # noqa: S608 - fixed predicates
+            params,
+        ).fetchall()
         return [row[0] for row in rows]
 
     @staticmethod
@@ -1244,13 +1339,23 @@ class _TaskHydration:
     from until its dependants are built.
     """
 
-    def __init__(self, reader: DuckDBControlReader, records: tuple[Record, ...]) -> None:
+    def __init__(
+        self,
+        reader: DuckDBControlReader,
+        records: tuple[Record, ...],
+        *,
+        all_records: bool = False,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> None:
         """Index the caller's Records and decide whether the task table needs filtering.
 
         Raises:
             TimeFValidationError: If one of ``records`` is not stored in the control database.
         """
         self.reader = reader
+        self.required_modalities = required_modalities
+        self.supported_modalities = supported_modalities
         self.connection = reader.connection
         self.records_by_id: dict[str, Record] = {record.id: record for record in records}
         self.records_by_key: dict[int, Record] = {}
@@ -1277,7 +1382,7 @@ class _TaskHydration:
         for record_id, record in list(self.records_by_id.items()):
             self._index_record(reader._record_keys[record_id], record)
         self.record_keys: list[int] | None = (
-            None if len(self.records_by_id) == facts.record_count else list(self.records_by_key)
+            None if all_records or len(self.records_by_id) == facts.record_count else list(self.records_by_key)
         )
 
     def iter_tasks(self) -> Iterator[Task]:
@@ -1286,7 +1391,11 @@ class _TaskHydration:
         Yields:
             Each hydrated task.
         """
-        task_keys = self.reader._task_keys(self.record_keys)
+        task_keys = self.reader._task_keys(
+            self.record_keys,
+            self.required_modalities,
+            self.supported_modalities,
+        )
         for start in range(0, len(task_keys), _TASK_BATCH_SIZE):
             yield from self._hydrate(task_keys[start : start + _TASK_BATCH_SIZE])
 
@@ -1296,9 +1405,11 @@ class _TaskHydration:
         Returns:
             The tasks in task ID order.
         """
-        if self.record_keys is None:
+        if self.record_keys is None and self.required_modalities is None and self.supported_modalities is None:
             return self._hydrate(None)
-        return self._hydrate(self.reader._task_keys(self.record_keys))
+        return self._hydrate(
+            self.reader._task_keys(self.record_keys, self.required_modalities, self.supported_modalities)
+        )
 
     def _hydrate(self, task_keys: list[int] | None) -> list[Task]:
         """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.
@@ -1422,6 +1533,7 @@ class _TaskHydration:
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
                 "prompt": row.prompt,
+                "input_modalities": decode_input_modalities(row.input_modalities),
                 "scope": decode_span(
                     row.scope_type,
                     row.scope_start,

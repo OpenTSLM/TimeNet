@@ -19,6 +19,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    InputModality,
     License,
     TimeSeriesSpec,
     Version,
@@ -74,6 +75,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
     dataset.add_task(
         task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             prompt="Rhythm?",
             targets=("yes",),
             inputs=(record,),
@@ -101,6 +103,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     options = record.annotations[0]
     tasks = [
         AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             prompt=f"Question {index}?",
             targets=("yes",),
             rationale=f"reason {index}",

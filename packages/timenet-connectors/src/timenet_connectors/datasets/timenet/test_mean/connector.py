@@ -15,7 +15,7 @@ import numpy as np
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.types import ClassificationTask, TimeSeriesSpec, ureg
+from timenet.types import ClassificationTask, InputModality, TimeSeriesSpec, ureg
 
 
 _N_RECORDS = 1000
@@ -82,7 +82,14 @@ class TestMeanConnector(BaseConnector[None]):
             )
             dataset.add_record(record=record)
             label = "above_zero" if offset > 0 else "below_zero"
-            dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(label,), id=f"task-{index}"))
+            dataset.add_task(
+                task=ClassificationTask(
+                    input_modalities=frozenset({InputModality.TIME_SERIES}),
+                    inputs=(record,),
+                    targets=(label,),
+                    id=f"task-{index}",
+                )
+            )
         return dataset
 
 

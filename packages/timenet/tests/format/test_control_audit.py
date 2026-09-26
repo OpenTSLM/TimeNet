@@ -8,7 +8,7 @@ from timenet.errors import TimeFFormatError
 from timenet.format.control_audit import audit_control_database
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import Annotation, AnswerTask, DatasetMetadata, InputModality, License, TimeSeriesSpec, Version, ureg
 
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt, dtype="float32")
@@ -38,7 +38,15 @@ def _dataset() -> TimeFDataset:
         )
     )
     dataset.add_record(record=record)
-    dataset.add_task(task=AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", targets=("Yes",)))
+    dataset.add_task(
+        task=AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+            id="task-1",
+            inputs=(record,),
+            prompt="Alive?",
+            targets=("Yes",),
+        )
+    )
     return dataset
 
 

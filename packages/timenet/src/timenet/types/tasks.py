@@ -40,6 +40,56 @@ class TaskType(StrEnum):
 
 
 @unique
+class InputModality(StrEnum):
+    """A kind of input supplied to a task."""
+
+    TEXT = "text"
+    TIME_SERIES = "time_series"
+    IMAGE = "image"
+    AUDIO = "audio"
+    NO_INPUT = "no_input"
+
+
+def validate_input_modalities(
+    modalities: Iterable[InputModality] | None,
+    *,
+    task_id: str,
+    prompt: str | None,
+    has_record_inputs: bool,
+) -> frozenset[InputModality]:
+    """Normalize and validate the input kinds declared by a task.
+
+    Args:
+        modalities: The task's declared input kinds.
+        task_id: The task identifier used in validation errors.
+        prompt: The task's optional text prompt.
+        has_record_inputs: Whether the task supplies input Records.
+
+    Returns:
+        The validated input kinds as a frozen set.
+
+    Raises:
+        TimeFValidationError: If the declaration is missing, invalid, or inconsistent with the inputs.
+    """
+    if modalities is None or isinstance(modalities, (str, bytes)):
+        raise TimeFValidationError("input_modalities must be a non-empty collection of InputModality values")
+    try:
+        declared = frozenset(InputModality(value) for value in modalities)
+    except (TypeError, ValueError) as exc:
+        raise TimeFValidationError(f"invalid input_modalities for task {task_id!r}") from exc
+    if not declared:
+        raise TimeFValidationError(f"task {task_id!r} must declare an input modality")
+    if prompt and InputModality.TEXT not in declared:
+        raise TimeFValidationError(f"task {task_id!r} has a prompt but does not declare text input")
+    if InputModality.NO_INPUT in declared:
+        if has_record_inputs or declared - {InputModality.NO_INPUT, InputModality.TEXT}:
+            raise TimeFValidationError(f"task {task_id!r} cannot combine no_input with record or media inputs")
+    elif not has_record_inputs and declared <= {InputModality.TEXT}:
+        raise TimeFValidationError(f"task {task_id!r} needs no_input when it has only a text prompt")
+    return declared
+
+
+@unique
 class LocalizationMode(StrEnum):
     """Whether a localization target is sparse or exhaustive."""
 
@@ -70,6 +120,8 @@ class Task(SupportsAnnotate, ABC):
     """Ordered native values and stored objects that form the expected output."""
     prompt: str | None = None
     """What the model is asked, or None for an unprompted task."""
+    input_modalities: frozenset[InputModality]
+    """Explicit kinds supplied to the model. NO_INPUT marks prompt-only tasks."""
     scope: Span | None = None
     """Optional region of the inputs to which the task applies."""
     input_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
@@ -97,6 +149,12 @@ class Task(SupportsAnnotate, ABC):
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
         self.annotations = tuple(self.annotations)
+        self.input_modalities = validate_input_modalities(
+            self.input_modalities,
+            task_id=self.id,
+            prompt=self.prompt,
+            has_record_inputs=bool(self.inputs),
+        )
         for target in self.targets or ():
             if not _is_target_item(target):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")

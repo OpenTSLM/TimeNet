@@ -11,7 +11,7 @@ from typing import Any
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
-from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
+from timenet.types import Annotation, AnswerTask, InputModality, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 
 
@@ -60,6 +60,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 record.annotate(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
             dataset.add_task(
                 task=AnswerTask(
+                    input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
                     inputs=(record,),
                     prompt=row["Question"],
                     targets=(row["Answer"],),
