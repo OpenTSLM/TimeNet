@@ -9,7 +9,7 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
-from timenet.types import Annotation, TSCorrespondenceTask, TSEditingTask, Version
+from timenet.types import Annotation, InputModality, TSCorrespondenceTask, TSEditingTask, Version
 from timenet.writer import TimeFWriter
 
 
@@ -166,6 +166,7 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
     edited_record = dataset.records[1]
     dataset.add_task(
         task=TSEditingTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             inputs=(dataset.records[0],),
             prompt="Denoise it.",
             targets=(edited_record,),
@@ -174,6 +175,7 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
     )
     dataset.add_task(
         task=TSCorrespondenceTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             inputs=(dataset.records[0],),
             prompt="Which trace matches?",
             candidate_records=(dataset.records[1], dataset.records[2]),
