@@ -14,6 +14,7 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
+    InputModality,
     License,
     TimeSeriesSpec,
     Version,
@@ -245,7 +246,11 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         )
     )
     record.annotate(Annotation(key="k", value=1))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
+    dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}), inputs=(record,), targets=("x",)
+        )
+    )
     dataset.derive_schema()
 
     with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset) as writer:
