@@ -411,6 +411,7 @@ class DuckDBControlWriter:
                         "task_id": task.id,
                         "task_type": task_type,
                         "prompt": task.prompt,
+                        "input_modalities": sorted(item.value for item in task.input_modalities),
                         **self._scope_columns(task, signal_keys),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),

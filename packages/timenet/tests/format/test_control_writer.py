@@ -10,7 +10,7 @@ from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import Annotation, AnswerTask, DatasetMetadata, InputModality, License, TimeSeriesSpec, Version, ureg
 
 
 SPEC = TimeSeriesSpec(
@@ -54,6 +54,7 @@ def _dataset() -> TimeFDataset:
     )
     dataset.add_record(record=record)
     task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
         id="task-1",
         inputs=(record,),
         prompt="Alive?",
@@ -141,6 +142,7 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
     parent = dataset.tasks[0]
     for index in range(2, 7):
         task = AnswerTask(
+            input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
             id=f"task-{index}",
             inputs=(record,),
             prompt=f"Question {index}?",

@@ -1,9 +1,11 @@
 from timenet.format.task_codec import decode_span, encode_span, encode_target, encode_task_payload
-from timenet.types import AnswerTask, StepInterval, TemporalLocalizationTask, TimePoint
+from timenet.types import AnswerTask, InputModality, StepInterval, TemporalLocalizationTask, TimePoint
 
 
 def test_task_payload_keeps_targets_out_of_configuration_columns():
-    task = AnswerTask(prompt="Alive?", targets=("Yes", 1))
+    task = AnswerTask(
+        input_modalities=frozenset({InputModality.TEXT, InputModality.NO_INPUT}), prompt="Alive?", targets=("Yes", 1)
+    )
 
     assert encode_task_payload(task) == {"target_schema": None, "unit": None, "target_name": None, "mode": None}
 
@@ -13,7 +15,7 @@ def test_task_span_codec_preserves_frame_shape_and_scope():
         TimePoint.seconds(2, time_series_ids=("ecg",)),
         StepInterval(time_series_id="tokens", start=3, stop=8),
     )
-    task = TemporalLocalizationTask(targets=(spans[0],))
+    task = TemporalLocalizationTask(input_modalities=frozenset({InputModality.NO_INPUT}), targets=(spans[0],))
 
     encoded = [encode_span(span) for span in spans]
     assert [item["span_type"] for item in encoded if item] == ["time_point", "step_interval"]
