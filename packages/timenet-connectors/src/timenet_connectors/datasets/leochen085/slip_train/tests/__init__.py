@@ -1,0 +1,1 @@
+"""SLIP training connector tests."""
