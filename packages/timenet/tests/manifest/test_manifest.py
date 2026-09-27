@@ -84,6 +84,19 @@ def test_default_format_version():
     assert _manifest().timef_format_version == 3
 
 
+def test_unknown_spec_unit_is_null_in_manifest():
+    base = _manifest()
+    unknown = replace(base.schema.time_series_specs[0], unit_value=None)
+    manifest = replace(
+        base, schema=replace(base.schema, time_series_specs=(unknown,)), files=ManifestFiles(control=_CONTROL)
+    )
+    data = manifest.to_dict()
+
+    assert data["schema"]["time_series_specs"][0]["unit_value"] is None
+    jsonschema.validate(data, MANIFEST_SCHEMA)
+    assert Manifest.from_dict(data).schema.time_series_specs[0].unit_value is None
+
+
 @pytest.mark.parametrize(
     "domain",
     [
