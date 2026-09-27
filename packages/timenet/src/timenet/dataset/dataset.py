@@ -20,8 +20,10 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    StepSpan,
     SupportsAnnotate,
     Task,
+    TimeSpan,
     annotation_type_of,
     value_type_of,
 )
@@ -380,15 +382,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         task.check_against_scope()
         self._check_task_answer(task)
         self._check_signal_refs(task, index)
-        for record in task.inputs:
-            for span in task.spans():
-                check_span_within_window(
-                    f"{type(task).__name__} span",
-                    span,
-                    index.signals_by_record_id[record.id],
-                    record.record_id,
-                    record.time_span,
-                )
+        self._validate_task_spans(task, index)
         self._check_annotation_refs(task, task.inputs, index)
 
     def _register_batch(self, batch: tuple[Task, ...]) -> tuple[Task, ...]:
@@ -469,16 +463,54 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             task.check_against_scope()
             self._check_task_answer(task)
             self._check_signal_refs(task, index)
-            for record in task.inputs:
-                for span in task.spans():
+            self._validate_task_spans(task, index)
+            self._check_annotation_refs(task, task.inputs, index)
+
+    @classmethod
+    def _validate_task_spans(cls, task: Task, index: _TaskValidationIndex) -> None:
+        """Check scoped spans across all inputs and unscoped spans against each record."""
+        cls._check_task_clock_scope(task)
+        spans = tuple(task.spans())
+        scoped = (
+            tuple(signal for record in task.inputs for signal in index.signals_by_record_id[record.id]),
+            {signal_id: origin for record in task.inputs for signal_id, origin in record.signal_origins.items()},
+        )
+        for span in spans:
+            label = f"{type(task).__name__} span"
+            if isinstance(span, StepSpan) or (isinstance(span, TimeSpan) and span.time_series_ids is not None):
+                check_span_within_window(label, span, scoped[0], task.id, origins=scoped[1])
+            else:
+                for record in task.inputs:
                     check_span_within_window(
-                        f"{type(task).__name__} span",
+                        label,
                         span,
                         index.signals_by_record_id[record.id],
                         record.record_id,
                         record.time_span,
+                        origins=record.signal_origins,
                     )
-            self._check_annotation_refs(task, task.inputs, index)
+
+    @staticmethod
+    def _check_task_clock_scope(task: Task) -> None:
+        """Reject one task time span that crosses independent input clocks.
+
+        Raises:
+            TimeFValidationError: If a time span covers independent clocks.
+        """
+        origins = {signal_id: origin for record in task.inputs for signal_id, origin in record.signal_origins.items()}
+        timed = {
+            signal.id
+            for record in task.inputs
+            for source in record.walk_sources()
+            for signal in source.signals
+            if signal.span_us is not None
+        }
+        for span in task.spans():
+            if not isinstance(span, TimeSpan):
+                continue
+            selected = timed if span.time_series_ids is None else timed.intersection(span.time_series_ids)
+            if len({id(origins[signal_id]) for signal_id in selected}) > 1:
+                raise TimeFValidationError(f"task {task.id!r} spans signals on different source clocks")
 
     @staticmethod
     def _check_no_derivation_cycle(batch: tuple[Task, ...]) -> None:

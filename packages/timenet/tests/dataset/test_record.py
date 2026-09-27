@@ -7,12 +7,14 @@ from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.dataset.record import check_span_within_window
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimePoint
+from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimeOrigin, TimePoint
 
 
 def _record(signals, **kwargs):
     """Build a Record whose one Source owns ``signals``."""
-    return Record(sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
+    start_time = kwargs.pop("start_time", None)
+    origin = TimeOrigin(start_time)
+    return Record(sources=(Source(id="src", name="src", start_time=origin, signals=tuple(signals)),), **kwargs)
 
 
 def test_add_static_annotation(make_series):
@@ -156,6 +158,39 @@ def test_start_time_rejects_a_naive_datetime(make_series):
 def test_has_absolute_time(make_series):
     assert not _record((make_series(),)).has_absolute_time
     assert _record((make_series(),), start_time=0).has_absolute_time
+
+
+def test_record_summary_and_spans_use_shared_source_clock(make_series):
+    origin = TimeOrigin(1_700_000_000_000_000)
+    first = make_series(signal="I", time_axis=RegularAxis(period_us=Fraction(2_000), start_index=10))
+    second = make_series(signal="II", time_axis=RegularAxis(period_us=Fraction(1_000), start_index=5))
+    record = Record(
+        sources=(
+            Source(name="first", start_time=origin, signals=(first,)),
+            Source(name="second", start_time=origin, signals=(second,)),
+        )
+    )
+
+    assert record.start_time == 1_700_000_000_005_000
+    assert record.time_point(datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)).start_us == 0
+    record.annotate(Annotation(key="event", span=TimePoint(start_us=5_000)))
+
+
+def test_time_span_rejects_independent_source_clocks_with_equal_timestamps(make_series):
+    first = make_series(signal="I")
+    second = make_series(signal="II")
+    record = Record(
+        sources=(
+            Source(name="first", start_time=TimeOrigin(0), signals=(first,)),
+            Source(name="second", start_time=TimeOrigin(0), signals=(second,)),
+        )
+    )
+
+    with pytest.raises(TimeFValidationError, match="different source clocks"):
+        record.annotate(Annotation(key="event", span=TimePoint(start_us=0)))
+    with pytest.raises(TimeFValidationError, match="exactly one source clock"):
+        record.time_point(datetime(1970, 1, 1, tzinfo=UTC))
+    assert record.time_point(datetime(1970, 1, 1, tzinfo=UTC), time_series_ids=(first.id,)).start_us == 0
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):

@@ -45,8 +45,9 @@ TimeNet provides three axis types:
 | `IrregularAxis` | The source stores one time offset per value. | Stored microseconds. |
 | `OrdinalAxis` | Values have an order but no clock. | Integer steps. |
 
-A time offset is relative to the Record timeline. It does not identify a calendar date. The optional
-`Record.start_time` supplies that wall-clock anchor.
+A time offset is relative to the clock of the Signal's direct Source. It does not identify a
+calendar date. `Source.start_time.timestamp` supplies the absolute origin when it is known.
+`Record.start_time` is a derived summary, not the origin for every Signal.
 
 Do not invent timestamps for an ordinal sequence or a recording with no wall-clock source.
 

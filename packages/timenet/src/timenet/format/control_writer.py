@@ -179,6 +179,7 @@ class _HierarchyBatches:
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self.records = _TableBatch(connection, TABLES["records"])
+        self.clocks = _TableBatch(connection, TABLES["clocks"])
         self.sources = _TableBatch(connection, TABLES["sources"])
         self.axes = _TableBatch(connection, TABLES["axes"])
         self.axis_offsets = _TableBatch(connection, TABLES["axis_offsets"])
@@ -187,6 +188,7 @@ class _HierarchyBatches:
     def flush(self) -> None:
         """Write all remaining hierarchy rows."""
         self.records.flush()
+        self.clocks.flush()
         self.sources.flush()
         self.axes.flush()
         self.axis_offsets.flush()
@@ -253,7 +255,7 @@ class DuckDBControlWriter:
             raise
         return task_counts
 
-    def _write_objects(
+    def _write_objects(  # noqa: PLR0914 - clock keys are part of the hierarchy state
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,
@@ -272,6 +274,7 @@ class DuckDBControlWriter:
         batches = _HierarchyBatches(connection)
         axes: dict[str, tuple[object, int, pa.Array | None]] = {}
         source_keys: dict[str, int] = {}
+        clock_keys: dict[int, int] = {}
         signal_keys: dict[str, int] = {}
         dataset_key = _returned_key(
             connection.execute(
@@ -309,6 +312,7 @@ class DuckDBControlWriter:
                 object_keys,
                 axis_keys,
                 batches,
+                clock_keys,
             )
         batches.flush()
         annotation_refs, task_counts = self._write_tasks(
@@ -607,6 +611,7 @@ class DuckDBControlWriter:
         object_keys: Iterator[int],
         axis_keys: Iterator[int],
         batches: _HierarchyBatches,
+        clock_keys: dict[int, int],
     ) -> None:
         """Insert one record's source tree and signals.
 
@@ -623,6 +628,10 @@ class DuckDBControlWriter:
             if source.id in keys.sources:
                 raise TimeFValidationError(f"source id {source.id!r} is not unique")
             source_key = next(object_keys)
+            identity = id(source.start_time)
+            if identity not in clock_keys:
+                clock_keys[identity] = len(clock_keys) + 1
+                batches.clocks.add({"clock_id": clock_keys[identity], "start_time_us": source.start_time.timestamp})
             keys.sources[source.id] = source_key
             batches.sources.add(
                 {
@@ -630,6 +639,7 @@ class DuckDBControlWriter:
                     "source_id": source.id,
                     "record_key": record_key,
                     "parent_source_key": parent_key,
+                    "clock_id": clock_keys[identity],
                     "name": source.name,
                     "metadata": _json(source.metadata),
                 }

@@ -9,7 +9,7 @@ from timenet.types.annotations import (
     annotation_type_of,
     value_type_of,
 )
-from timenet.types.clock import US_PER_S, offset_us, seconds_to_us, unix_us, us_to_seconds
+from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
@@ -74,6 +74,7 @@ __all__ = [
     "TaskType",
     "TemporalLocalizationTask",
     "TimeInterval",
+    "TimeOrigin",
     "TimePoint",
     "TimeSeriesSpec",
     "TimeSpan",

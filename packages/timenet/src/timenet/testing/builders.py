@@ -19,6 +19,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     Version,
@@ -125,10 +126,10 @@ def make_dataset() -> TimeFDataset:
                 Source(
                     id="source-record-0",
                     name="Synthetic monitor",
+                    start_time=TimeOrigin(9_007_199_254_740_993),
                     signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
                 ),
             ),
-            start_time=9_007_199_254_740_993,
         )
     )
     _, record0_cohort, _, _ = record0.add_annotations(

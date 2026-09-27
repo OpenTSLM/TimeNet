@@ -92,6 +92,31 @@ _CHUNK_COVERAGE = """
     LIMIT 1
 """
 
+_TASK_CLOCK_SCOPE = """
+    WITH spans AS (
+        SELECT row_number() OVER () AS span_key, task_key, signal_keys
+        FROM (
+            SELECT task_key, scope_signal_keys AS signal_keys FROM tasks
+            WHERE scope_type IN ('time_point', 'time_interval')
+            UNION ALL
+            SELECT task_key, signal_keys FROM task_targets
+            WHERE target_kind IN ('time_point', 'time_interval')
+        )
+    )
+    SELECT tasks.task_id
+    FROM spans
+    JOIN tasks USING (task_key)
+    JOIN task_record_refs refs ON refs.task_key = spans.task_key AND refs.field = 'inputs'
+    JOIN sources ON sources.record_key = refs.record_key
+    JOIN signals USING (source_key)
+    JOIN axes USING (axis_key)
+    WHERE axes.axis_type <> 'ordinal'
+      AND (spans.signal_keys IS NULL OR list_contains(spans.signal_keys, signals.signal_key))
+    GROUP BY spans.span_key, tasks.task_id
+    HAVING count(DISTINCT sources.clock_id) > 1
+    LIMIT 1
+"""
+
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
     """Scan every control table and raise on the first violated invariant.
@@ -131,6 +156,10 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
+
+    invalid_clock_scope = connection.execute(_TASK_CLOCK_SCOPE).fetchone()
+    if invalid_clock_scope is not None:
+        raise TimeFFormatError(f"task {invalid_clock_scope[0]!r} spans signals on different source clocks")
 
     wrong_parent = connection.execute(_CROSS_RECORD_PARENT).fetchone()
     if wrong_parent is not None:

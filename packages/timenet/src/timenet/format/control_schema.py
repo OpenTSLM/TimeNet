@@ -154,6 +154,12 @@ RECORDS = Table(
     key_sequence=OBJECT_KEYS,
 )
 
+CLOCKS = Table(
+    "clocks",
+    (_key("clock_id"), Column("start_time_us", ColumnType.BIGINT)),
+    unique=(("clock_id",),),
+)
+
 SOURCES = Table(
     "sources",
     (
@@ -161,6 +167,7 @@ SOURCES = Table(
         _required("source_id"),
         _key("record_key"),
         Column("parent_source_key", ColumnType.BIGINT),
+        _key("clock_id"),
         _required("name"),
         _required("metadata", ColumnType.JSON),
     ),
@@ -168,6 +175,7 @@ SOURCES = Table(
     foreign_keys=(
         ForeignKey("record_key", "records", "record_key"),
         ForeignKey("parent_source_key", "sources", "source_key"),
+        ForeignKey("clock_id", "clocks", "clock_id"),
     ),
     key_sequence=OBJECT_KEYS,
 )
@@ -358,6 +366,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     DATASETS,
     RECORDS,
+    CLOCKS,
     SOURCES,
     AXES,
     AXIS_OFFSETS,
