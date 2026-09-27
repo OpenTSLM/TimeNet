@@ -54,6 +54,8 @@ Do not invent timestamps for an ordinal sequence or a recording with no wall-clo
 ## Describe one timestep
 
 `TimeSeriesSpec` declares the value dtype, unit, nullability, and optional per-timestep shape.
+Set its required `unit_value` to `None` for an unknown unit. Dimensionless values use
+`ureg.dimensionless`.
 
 Scalar Signals use `value_shape=()`. An image sequence can use a shape such as
 `(height, width, channels)`.
