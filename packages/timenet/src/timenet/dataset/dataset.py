@@ -10,8 +10,9 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
-from timenet.dataset.record import Record, check_span_within_window
+from timenet.dataset.record import Record
 from timenet.dataset.source import Source
+from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import (
