@@ -85,6 +85,7 @@ imu = Source(
 | --- | --- | --- |
 | `id` | `str` | Stable identity. The default is a UUIDv7. |
 | `name` | `str` | Human-readable Source name. |
+| `start_time` | `TimeOrigin` | Clock shared by reference with Sources on the same timeline. |
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
@@ -92,6 +93,10 @@ imu = Source(
 
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
 with two parents, and a Signal with two owners.
+
+Each Source gets a separate unknown clock by default. Pass the same `TimeOrigin` object to Sources
+whose signal offsets use one timeline. A known origin accepts a timezone-aware `datetime` or Unix
+microseconds. Two equal timestamps do not make clocks shared.
 
 Call `source.annotate(annotation)` for a Source annotation. A selection attaches annotation content
 to several Signals in one operation:
@@ -126,15 +131,15 @@ record = Record(
 | `subject_ids` | `tuple[str, ...]` | Optional subject identifiers. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |
-| `start_time` | `datetime \| int \| None` | Optional wall-clock anchor in Unix microseconds. |
+| `start_time` | `int \| None` | Read-only earliest absolute timed sample, if all timed clocks are known. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
 
 `record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
 the same deterministic traversal used by the writer.
 
-Call `record.annotate(annotation)` to attach an occurrence. Temporal annotations are validated
-against the relevant Signal windows. `time_point()` and `time_interval()` convert wall-clock values
-against an anchored Record.
+Call `record.annotate(annotation)` to attach an occurrence. A time span can cover several Signals
+only when their Sources share a clock. `time_point()` and `time_interval()` convert wall-clock
+values against the selected Source clock. Supply `time_series_ids` when a Record has several clocks.
 
 ## Task
 

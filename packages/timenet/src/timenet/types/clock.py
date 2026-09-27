@@ -5,6 +5,7 @@ resolution with the magnitude, and two equal offsets can compare as different. T
 convert a caller's value onto that timeline. They hold the only rounding rule.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from timenet.errors import TimeFValidationError
@@ -14,6 +15,25 @@ from timenet.errors import TimeFValidationError
 US_PER_S = 1_000_000
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+@dataclass(frozen=True, eq=False)
+class TimeOrigin:
+    """One source clock, shared by reference when sources use the same timeline.
+
+    Equal timestamps do not make two origins interchangeable. ``None`` means that
+    the clock has no known absolute timestamp.
+    """
+
+    timestamp: datetime | int | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize a known timestamp to Unix microseconds."""
+        if self.timestamp is not None:
+            value = unix_us(self.timestamp)
+            check_int64("TimeOrigin.timestamp", value)
+            object.__setattr__(self, "timestamp", value)
+
 
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
@@ -108,23 +128,21 @@ def unix_us(moment: datetime | int) -> int:
 
 
 def offset_us(moment: datetime, start_time: datetime | int | None) -> int:
-    """Convert a wall-clock moment to an offset on a record's recording timeline.
+    """Convert a wall-clock moment to an offset on a source clock.
 
     Args:
         moment: The wall-clock moment, timezone-aware.
-        start_time: The target record's ``start_time``.
+        start_time: The source clock's absolute origin.
 
     Returns:
-        Microseconds from the record's relative zero.
+        Microseconds from the source clock's relative zero.
 
     Raises:
-        TimeFValidationError: If ``start_time`` is ``None``. A record with no wall-clock anchor has
-            no calendar time to measure a moment against.
+        TimeFValidationError: If the source clock has no known absolute origin.
     """
     if start_time is None:
         raise TimeFValidationError(
-            "a wall-clock moment needs the target record's start_time, and that record has none. A "
-            "record with no wall-clock anchor has no calendar time to measure against; use an offset "
-            "into the recording instead"
+            "a wall-clock moment needs a known source clock start_time. This source has none; "
+            "use an offset into the recording instead"
         )
     return unix_us(moment) - unix_us(start_time)

@@ -4,10 +4,10 @@ import warnings
 
 from timenet.dataset.time_series import Signal
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Span, StepSpan, TimeInterval, TimeSpan
+from timenet.types import Span, StepSpan, TimeInterval, TimeOrigin, TimeSpan
 
 
-def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is keyword-only)
+def check_span_within_window(  # noqa: PLR0912, PLR0913 (span rules have several branches)
     label: str,
     span: Span,
     time_series: tuple[Signal, ...],
@@ -15,6 +15,7 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
     time_span: TimeInterval | None = None,
     *,
     warn_when_outside: bool = True,
+    origins: dict[str, TimeOrigin] | None = None,
 ) -> None:
     """Reject a span its targeted series cannot place, by the three-part scoping rule.
 
@@ -69,6 +70,10 @@ def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is
         raise TimeFValidationError(f"{label} is not a concrete span: {span!r}")
     scope = span.time_series_ids
     covered = {ts.id: ts.span_us for ts in time_series if scope is None or ts.id in scope}
+    if origins is not None:
+        clocks = {id(origins[series_id]) for series_id, window in covered.items() if window is not None}
+        if len(clocks) > 1:
+            raise TimeFValidationError(f"{label} spans signals on different source clocks in record {record_id!r}")
     for series_id in scope or ():
         if series_id not in covered:
             raise TimeFValidationError(

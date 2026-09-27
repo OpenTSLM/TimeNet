@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import cast
 
 import numpy as np
 import pyarrow as pa
@@ -11,8 +12,8 @@ from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimePoint, new_id
-from timenet.types.clock import check_int64, offset_us, unix_us
+from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
+from timenet.types.clock import check_int64, offset_us
 
 
 @dataclass(kw_only=True)
@@ -39,19 +40,6 @@ class Record(SupportsAnnotate):
     """Annotations attached to the record."""
     metadata: dict[str, object] = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
-    start_time: datetime | int | None = None
-    """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
-    and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
-    microseconds. Construction normalizes either one to microseconds, so a constructed record holds an
-    ``int``. ``None`` means no wall-clock reference exists. Never fabricate one.
-
-    A bare float is refused, because seconds and microseconds are both plausible readings of it. If the
-    source hands over seconds, convert at the call site so the unit is visible::
-
-        start_time=datetime(2026, 8, 5, tzinfo=timezone.utc)   # 1_785_888_000_000_000
-        start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
-        start_time=1_000_000                                   # the same moment, written directly
-    """
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
@@ -65,11 +53,7 @@ class Record(SupportsAnnotate):
         return self.record_id
 
     def __post_init__(self) -> None:
-        """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
-
-        ``start_time`` delegates its contract: ``unix_us`` rejects a naive datetime or a bare float, and
-        ``check_int64`` rejects an anchor past the int64 microsecond column. ``time_span``, when set,
-        must be a whole-record :class:`~timenet.types.TimeInterval` that contains every series' window.
+        """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
             TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
@@ -80,10 +64,6 @@ class Record(SupportsAnnotate):
             signal_ids = [signal.id for signal in self.walk_signals()]
             if len(signal_ids) != len(set(signal_ids)):
                 raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
-        if self.start_time is not None:
-            anchor = unix_us(self.start_time)
-            check_int64("Record.start_time", anchor)
-            self.start_time = anchor
         if self.time_span is not None:
             if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
@@ -93,6 +73,7 @@ class Record(SupportsAnnotate):
                 raise TimeFValidationError(
                     "Record.time_span covers the whole record, so its time_series_ids must be None"
                 )
+            self._single_origin(None)
             for ts in self.signals:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
@@ -105,6 +86,47 @@ class Record(SupportsAnnotate):
     def signals(self) -> tuple[Signal, ...]:
         """Return every signal in this record's hierarchy."""
         return tuple(self.walk_signals())
+
+    @property
+    def signal_origins(self) -> dict[str, TimeOrigin]:
+        """Map each signal ID to the clock of its direct source."""
+        return {signal.id: source.start_time for source in self.walk_sources() for signal in source.signals}
+
+    @property
+    def start_time(self) -> int | None:
+        """Return the earliest absolute timed sample, if every timed clock is known."""
+        starts = []
+        for source in self.walk_sources():
+            for signal in source.signals:
+                window = signal.span_us
+                if window is not None:
+                    if source.start_time.timestamp is None:
+                        return None
+                    starts.append(cast("int", source.start_time.timestamp) + window[0])
+        if not starts:
+            return None
+        earliest = min(starts)
+        check_int64("Record.start_time", earliest)
+        return earliest
+
+    def _single_origin(self, signal_ids: tuple[str, ...] | None) -> TimeOrigin:
+        """Find the one timed source clock selected by signal IDs.
+
+        Returns:
+            The selected clock origin.
+
+        Raises:
+            TimeFValidationError: If the scope has no timed signal or more than one clock.
+        """
+        timed_ids = {signal.id for signal in self.signals if signal.span_us is not None}
+        selected = timed_ids if signal_ids is None else timed_ids.intersection(signal_ids)
+        if signal_ids is not None and set(signal_ids) != selected:
+            raise TimeFValidationError("time scope must name timed signals on this record")
+        origins = self.signal_origins
+        clocks = {id(origins[signal_id]): origins[signal_id] for signal_id in selected}
+        if len(clocks) != 1:
+            raise TimeFValidationError("time scope requires exactly one source clock")
+        return next(iter(clocks.values()))
 
     def walk_sources(self) -> Iterable[Source]:
         """Yield all sources in deterministic depth-first order.
@@ -147,9 +169,9 @@ class Record(SupportsAnnotate):
     def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
-        Places ``at`` on the recording timeline against this record's own ``start_time``, so the caller
-        never repeats the anchor. A span's bounds are offsets on that timeline, so this needs an
-        anchored record. ``offset_us`` raises if the record has no ``start_time``.
+        Places ``at`` on the selected source clock. A span's bounds are offsets on that clock, so
+        the clock must have a known absolute origin. With no scope, all timed signals must share
+        one clock.
 
         Args:
             at: The wall-clock moment, timezone-aware.
@@ -158,15 +180,17 @@ class Record(SupportsAnnotate):
         Returns:
             The point, in microseconds from this record's relative zero.
         """
-        return TimePoint(start_us=offset_us(at, self.start_time), time_series_ids=time_series_ids)
+        return TimePoint(
+            start_us=offset_us(at, self._single_origin(time_series_ids).timestamp), time_series_ids=time_series_ids
+        )
 
     def time_interval(
         self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
-        Places ``start`` and ``end`` on the recording timeline against this record's own ``start_time``.
-        ``offset_us`` raises if the record has no ``start_time`` to measure against.
+        Places ``start`` and ``end`` on the selected source clock. The clock must have a known
+        absolute origin. With no scope, all timed signals must share one clock.
 
         Args:
             start: Wall-clock start, timezone-aware.
@@ -177,8 +201,8 @@ class Record(SupportsAnnotate):
             The half-open interval, in microseconds from this record's relative zero.
         """
         return TimeInterval(
-            start_us=offset_us(start, self.start_time),
-            end_us=offset_us(end, self.start_time),
+            start_us=offset_us(start, self._single_origin(time_series_ids).timestamp),
+            end_us=offset_us(end, self._single_origin(time_series_ids).timestamp),
             time_series_ids=time_series_ids,
         )
 
@@ -250,6 +274,7 @@ class Record(SupportsAnnotate):
                 self.record_id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
+                origins=self.signal_origins,
             )
 
     def to_arrow(self) -> pa.Array:

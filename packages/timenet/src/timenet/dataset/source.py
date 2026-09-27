@@ -4,9 +4,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, SupportsAnnotate, new_id
+from timenet.types import Annotation, SupportsAnnotate, TimeOrigin, new_id
 
 
 if TYPE_CHECKING:
@@ -19,6 +20,8 @@ class Source(SupportsAnnotate):
 
     name: str
     """Human-readable source name."""
+    start_time: TimeOrigin = field(default_factory=TimeOrigin)
+    """Clock origin shared by reference with other sources on the same timeline."""
     id: str = field(default_factory=new_id)
     """Stable source identifier."""
     sources: tuple["Source", ...] = ()
@@ -38,6 +41,8 @@ class Source(SupportsAnnotate):
         """
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
+        if not isinstance(self.start_time, TimeOrigin):
+            raise TimeFValidationError("Source.start_time must be a TimeOrigin")
         source_ids = [source.id for source in self.sources]
         signal_ids = [signal.id for signal in self.signals]
         if len(source_ids) != len(set(source_ids)):
@@ -87,6 +92,12 @@ class Source(SupportsAnnotate):
         Returns:
             The attached annotation.
         """
+        if annotation.span is not None:
+            signals = tuple(self.walk_signals())
+            origins = {signal.id: child.start_time for child in self.walk_sources() for signal in child.signals}
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, signals, self.id, origins=origins
+            )
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached

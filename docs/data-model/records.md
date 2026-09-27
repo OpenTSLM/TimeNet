@@ -79,23 +79,30 @@ Sources and Signals also support `metadata` and `annotate()`.
 
 ## Add time information
 
-`start_time` anchors the relative recording timeline to Unix time. Pass a timezone-aware `datetime`
-or whole Unix microseconds.
+Each Source has a `TimeOrigin`. Its timestamp anchors that Source's signal offsets to Unix time.
+Pass a timezone-aware `datetime` or whole Unix microseconds. Share one object when Sources use
+the same clock.
 
 ```python
 from datetime import datetime, timezone
+from timenet.dataset import Record, Source
+from timenet.types import TimeOrigin
 
+clock = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
+sensor_a = Source(name="sensor A", start_time=clock, signals=(signal_a,))
+sensor_b = Source(name="sensor B", start_time=clock, signals=(signal_b,))
 record = Record(
     record_id="run-001",
-    sources=(imu,),
-    start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    sources=(sensor_a, sensor_b),
 )
 ```
 
-Leave `start_time=None` when the source has no reliable wall-clock time.
+Use `TimeOrigin()` when the absolute timestamp is unknown. Different instances represent
+independent clocks, even if both timestamps are unknown. `Record.start_time` reports the earliest
+absolute timed sample. It is `None` if any timed Source has no known absolute origin.
 
 `time_span` can declare a session interval that contains all Signal windows. This field is useful
-when every sensor is off during part of a session.
+when every sensor is off during part of a session. It requires one shared clock.
 
 ## Connect tasks
 

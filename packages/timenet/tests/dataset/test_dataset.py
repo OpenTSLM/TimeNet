@@ -18,6 +18,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
@@ -112,6 +113,47 @@ def test_add_task_multiple_records(make_series):
         )
     )
     assert task.inputs == (s1, s2)
+
+
+def test_scoped_task_span_can_cross_records_that_share_one_clock(make_series):
+    dataset = _dataset()
+    origin = TimeOrigin(1_700_000_000_000_000)
+    first = make_series(signal="first")
+    second = make_series(signal="second")
+    left = dataset.add_record(record=Record(sources=(Source(name="left", start_time=origin, signals=(first,)),)))
+    right = dataset.add_record(record=Record(sources=(Source(name="right", start_time=origin, signals=(second,)),)))
+    scope = TimeInterval.seconds(0, 0.004, time_series_ids=(first.id, second.id))
+
+    task = dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(left, right),
+            targets=("event",),
+            scope=scope,
+        )
+    )
+
+    assert task.scope == scope
+
+
+def test_scoped_task_span_rejects_equal_timestamps_on_distinct_clocks(make_series):
+    dataset = _dataset()
+    first = make_series(signal="first")
+    second = make_series(signal="second")
+    left = dataset.add_record(record=Record(sources=(Source(name="left", start_time=TimeOrigin(0), signals=(first,)),)))
+    right = dataset.add_record(
+        record=Record(sources=(Source(name="right", start_time=TimeOrigin(0), signals=(second,)),))
+    )
+
+    with pytest.raises(TimeFValidationError, match="different source clocks"):
+        dataset.add_task(
+            task=ClassificationTask(
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+                inputs=(left, right),
+                targets=("event",),
+                scope=TimeInterval.seconds(0, 0.004, time_series_ids=(first.id, second.id)),
+            )
+        )
 
 
 def test_scope_series_id_resolution(make_series):
