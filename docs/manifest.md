@@ -40,7 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
-    timef_format_version=2,     # validated against the supported set {2}
+    timef_format_version=3,     # validated against the supported set {3}
 )
 ```
 
@@ -80,8 +80,8 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 
 ### Serialization notes
 
-- Units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). The shared
-  registry converts them back.
+- Known units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). An
+  unknown unit serializes as `null`. The field remains required.
 - Device and origin information belongs to the hierarchy's `Source`, not to `TimeSeriesSpec`.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
   `TASKS` registry. An unknown `task_type` raises `TimeNetInvalidManifestError`. The annotation
