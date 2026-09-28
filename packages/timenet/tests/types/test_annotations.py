@@ -96,7 +96,7 @@ def test_frozen():
 
 
 def test_picklable():
-    ann = Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=("s1",)))
+    ann = Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0))
     assert pickle.loads(pickle.dumps(ann)) == ann
 
 
