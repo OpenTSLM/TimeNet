@@ -225,7 +225,7 @@ def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
             {
                 "spec_type": spec.spec_type,
                 "name": spec.name,
-                "unit_value": str(spec.unit_value),
+                "unit_value": None if spec.unit_value is None else str(spec.unit_value),
                 "dtype": spec.dtype,
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
@@ -254,7 +254,7 @@ def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
             TimeSeriesSpec(
                 spec_type=entry["spec_type"],
                 name=entry["name"],
-                unit_value=ureg.Unit(entry["unit_value"]),
+                unit_value=None if entry["unit_value"] is None else ureg.Unit(entry["unit_value"]),
                 dtype=entry.get("dtype", "float32"),
                 categories=tuple(entry.get("categories", ())),
                 value_shape=tuple(entry.get("value_shape", ())),

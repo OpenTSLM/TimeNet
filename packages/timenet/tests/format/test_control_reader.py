@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pyarrow as pa
 import pytest
 
@@ -9,7 +11,7 @@ from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, InputModality, TimeOrigin, TimePoint
+from timenet.types import Annotation, AnswerTask, InputModality, TimeOrigin, TimePoint, TimeSeriesSpec, ureg
 
 from .test_control_writer import _dataset
 
@@ -130,6 +132,36 @@ def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
             audit_control_database(connection, require_chunks=False)
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match="Record"):
         reader.read_tasks(reader.read_records())
+
+
+def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
+    dataset = _dataset()
+    source = dataset.records[0].sources[0].sources[0]
+    unknown = TimeSeriesSpec(spec_type="unknown", name="Unknown", unit_value=None)
+    old_signals = source.signals
+    source.signals = tuple(
+        Signal.from_loader(
+            id=signal.id,
+            name=signal.name,
+            spec=spec,
+            time_axis=signal.time_axis,
+            n_values=signal.n_values,
+            loader=signal.loader,
+        )
+        for signal, spec in zip(
+            old_signals,
+            (unknown, replace(unknown, spec_type="ratio", unit_value=ureg.dimensionless)),
+            strict=True,
+        )
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (record,) = reader.read_records()
+
+    assert record.signals[0].spec.unit_value is None
+    assert record.signals[1].spec.unit_value == ureg.dimensionless
 
 
 def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
