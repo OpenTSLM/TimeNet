@@ -61,7 +61,7 @@ class AxisType(StrEnum):
 
 @dataclass(frozen=True, kw_only=True)
 class RegularAxis:
-    """A constant cadence: value ``k`` sits at ``(start_index + k) * period_us`` microseconds.
+    """A constant cadence with an offset from the record's relative zero.
 
     The origin is an index into the cadence, not a time, because a window rarely starts on a whole
     microsecond. At 44.1 kHz only 3 of 1000 window starts do, so a microsecond origin is inexact for
@@ -78,6 +78,8 @@ class RegularAxis:
     start_index: int = 0
     """Index of this series' first value on the cadence. It is non-zero for a window cut from a longer
     recording, which keeps a span written against the recording meaningful on the window."""
+    offset_us: int = 0
+    """Whole microseconds from the record origin to the cadence's zero."""
     axis_id: str = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
@@ -107,9 +109,14 @@ class RegularAxis:
         if self.start_index < 0:
             raise TimeFValidationError(f"RegularAxis.start_index must be >= 0, got {self.start_index}")
         check_int64("RegularAxis.start_index", self.start_index)
+        if isinstance(self.offset_us, bool) or not isinstance(self.offset_us, int):
+            raise TimeFValidationError("RegularAxis.offset_us must be whole microseconds")
+        if self.offset_us < 0:
+            raise TimeFValidationError("RegularAxis.offset_us must be non-negative")
+        check_int64("RegularAxis.offset_us", self.offset_us)
 
     @classmethod
-    def from_rate_hz(cls, rate_hz: int | Fraction) -> Self:
+    def from_rate_hz(cls, rate_hz: int | Fraction, *, offset_us: int = 0) -> Self:
         """Build the axis of a regularly sampled series from its exact rate.
 
         This method does not accept a float. Every real sampling rate is a whole number of values per
@@ -121,6 +128,7 @@ class RegularAxis:
 
         Args:
             rate_hz: Values per second.
+            offset_us: Whole microseconds from the record origin to the cadence's zero.
 
         Returns:
             The axis whose period is one sampling period of ``rate_hz``.
@@ -137,7 +145,7 @@ class RegularAxis:
             )
         if rate_hz <= 0:
             raise TimeFValidationError(f"RegularAxis.from_rate_hz needs a positive rate, got {rate_hz!r}")
-        return cls(period_us=Fraction(US_PER_S) / Fraction(rate_hz))
+        return cls(period_us=Fraction(US_PER_S) / Fraction(rate_hz), offset_us=offset_us)
 
     def at_index(self, index: int) -> Self:
         """Return the axis of a window that starts ``index`` values into this one.
@@ -164,7 +172,7 @@ class RegularAxis:
         Returns:
             Microseconds from the record's relative zero.
         """
-        return math.floor((self.start_index + index) * self.period_us)
+        return self.offset_us + math.floor((self.start_index + index) * self.period_us)
 
     def index_at_or_after(self, time_offset_us: int) -> int:
         """Return the first value at or after a time offset.
@@ -175,7 +183,7 @@ class RegularAxis:
         Returns:
             The index within this series, which is negative if the time offset precedes its first value.
         """
-        return math.ceil(time_offset_us / self.period_us) - self.start_index
+        return math.ceil((time_offset_us - self.offset_us) / self.period_us) - self.start_index
 
 
 def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarray:
