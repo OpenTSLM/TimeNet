@@ -88,7 +88,7 @@ def _stage(label, onset_s, end_s):
     return Annotation(
         key=AnnotationKey.SLEEP_STAGE,
         value=label,
-        span=TimeInterval.micros(onset_s * US_PER_S, end_s * US_PER_S, time_series_ids=("a-signal",)),
+        span=TimeInterval.micros(onset_s * US_PER_S, end_s * US_PER_S),
         id=f"{_RECORD_ID}-stage-{onset_s}",
     )
 
