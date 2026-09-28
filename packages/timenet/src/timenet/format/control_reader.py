@@ -12,7 +12,7 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source
+from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
@@ -24,6 +24,7 @@ from timenet.types import (
     Task,
     TaskType,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     ureg,
@@ -40,7 +41,7 @@ class _RecordRow(NamedTuple):
 
     record_key: int
     record_id: str
-    start_time_us: int | None
+    clock_id: int
     time_span_start_us: int | None
     time_span_end_us: int | None
     metadata: str
@@ -387,11 +388,13 @@ class DuckDBControlReader:
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
         self._record_keys: dict[str, int] = {}
+        self._clock_cache: dict[int, TimeOrigin] = {}
         self._task_facts: _TaskFacts | None = None
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
         self.connection.close()
+        self._clock_cache.clear()
 
     def __enter__(self) -> "DuckDBControlReader":
         """Return this open reader.
@@ -415,7 +418,7 @@ class DuckDBControlReader:
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
 
-    def read_records(  # noqa: PLR0914, PLR0915 - related row sets stay together
+    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -502,6 +505,18 @@ class DuckDBControlReader:
                 )
             )
 
+        missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
+        if missing_clocks:
+            for clock_id, timestamp in self.connection.execute(
+                "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
+                [list(missing_clocks)],
+            ).fetchall():
+                self._clock_cache[clock_id] = TimeOrigin(timestamp)
+        if missing_clocks - self._clock_cache.keys():
+            raise TimeFFormatError(
+                f"records reference missing clocks {sorted(missing_clocks - self._clock_cache.keys())}"
+            )
+
         children, roots_by_record = self._group_sources(source_rows)
         hydrated_sources: set[int] = set()
 
@@ -532,16 +547,15 @@ class DuckDBControlReader:
                 hydrate_source(source_key, record_row.record_key)
                 for source_key in roots_by_record[record_row.record_key]
             )
-            records.append(
-                Record(
-                    record_id=record_id,
-                    sources=root_sources,
-                    annotations=annotations.get(("Record", record_id), ()),
-                    start_time=record_row.start_time_us,
-                    time_span=span,
-                    metadata=_decode_json(record_row.metadata, default={}),
-                )
+            record = Record(
+                record_id=record_id,
+                sources=root_sources,
+                start_time=self._clock_cache[record_row.clock_id],
+                annotations=annotations.get(("Record", record_id), ()),
+                time_span=span,
+                metadata=_decode_json(record_row.metadata, default={}),
             )
+            records.append(record)
         unreachable = source_data.keys() - hydrated_sources
         if unreachable:
             raise TimeFFormatError(
@@ -1565,7 +1579,12 @@ class _TaskHydration:
                 annotations_by_occurrence,
                 "annotation occurrence",
             )
-            tasks[row.task_key] = cls(**kwargs)
+            task = cls(**kwargs)
+            try:
+                TimeFDataset._check_task_record_scope(task)
+            except TimeFValidationError as exc:
+                raise TimeFFormatError(f"stored task {task.id!r} has an invalid Record scope: {exc}") from exc
+            tasks[row.task_key] = task
         return tasks
 
     def _index_record(self, record_key: int, record: Record) -> None:

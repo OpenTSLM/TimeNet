@@ -234,7 +234,7 @@ def test_the_age_comes_from_the_table(release, monkeypatch):
 def test_the_header_clock_is_carried_and_no_start_time_is_set(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     record = next(one for one in dataset.records if one.record_id == "sleep-edfx-SC4901E0")
-    assert record.start_time is None
+    assert record.start_time.timestamp is None
     clock = _annotations(dataset, record.record_id, "recording_start_local")
     assert [one.value for one in clock] == ["1992-03-11T22:00:00"]
 
