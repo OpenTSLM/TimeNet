@@ -102,7 +102,6 @@ class _OccurrenceRow(NamedTuple):
     span_type: str
     start_us: int | None
     end_us: int | None
-    signal_keys: list[int] | None
     provenance: str | None
     confidence: float | None
     metadata: str
@@ -240,7 +239,7 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
     return f"""WITH requested AS (SELECT unnest(?) AS object_key),
         object_ids AS ({object_ids})
         SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
-               o.start_us, o.end_us, o.signal_keys, o.provenance, o.confidence,
+               o.start_us, o.end_us, o.provenance, o.confidence,
                o.metadata, c.content_id, c.name, c.value_kind, c.text_value, c.integer_value,
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.metadata,
                o.content_key, objects.object_key
@@ -327,7 +326,7 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
         raise TimeFFormatError(f"control.duckdb contains invalid JSON: {value!r}") from exc
 
 
-def _occurrence_span(row: _OccurrenceRow, scope: tuple[str, ...] | None) -> TimePoint | TimeInterval | None:
+def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
     """Rebuild the span of one annotation occurrence.
 
     Returns:
@@ -340,10 +339,10 @@ def _occurrence_span(row: _OccurrenceRow, scope: tuple[str, ...] | None) -> Time
         return None
     start_us = _required(row.start_us, f"the start of annotation occurrence {row.occurrence_id!r}")
     if row.span_type == "point":
-        return TimePoint(start_us=start_us, time_series_ids=scope)
+        return TimePoint(start_us=start_us)
     if row.span_type == "interval":
         end_us = _required(row.end_us, f"the end of annotation occurrence {row.occurrence_id!r}")
-        return TimeInterval(start_us=start_us, end_us=end_us, time_series_ids=scope)
+        return TimeInterval(start_us=start_us, end_us=end_us)
     raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
 
 
@@ -853,7 +852,7 @@ class DuckDBControlReader:
 
         Returns:
             One row per occurrence with the annotated object's type and ID, the content's key,
-            typed value columns, unit, span columns with Signal IDs, confidence, and JSON metadata.
+            typed value columns, unit, span columns, confidence, and JSON metadata.
 
         Raises:
             TimeFFormatError: If ``object_type`` is not an annotated object type.
@@ -863,17 +862,15 @@ class DuckDBControlReader:
         object_ids = " UNION ALL ".join(_OBJECT_ID_SELECTS.values())
         where = "" if object_type is None else "WHERE o.object_type = ?"
         return self.connection.execute(
-            f"""WITH object_ids AS ({object_ids}),
-                {_signal_ids_cte("span_ids", "annotation_occurrences", "signal_keys", ("occurrence_key",), "signal_ids")}
+            f"""WITH object_ids AS ({object_ids})
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
-                       c.text_list_value, c.unit, o.span_type, o.start_us, o.end_us, span_ids.signal_ids,
+                       c.text_list_value, c.unit, o.span_type, o.start_us, o.end_us,
                        o.confidence, o.provenance, c.metadata AS content_metadata, o.metadata
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_key)
                 LEFT JOIN object_ids objects
                   ON objects.object_key = o.object_key AND objects.object_type = o.object_type
-                LEFT JOIN span_ids USING (occurrence_key)
                 {where}
                 ORDER BY o.object_type, objects.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
             [] if object_type is None else [object_type],
@@ -1290,30 +1287,8 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing {row.object_type} key"
                 )
-        referenced_signal_keys = sorted({signal_key for row in rows for signal_key in (row.signal_keys or ())})
-        signal_ids_by_key = (
-            dict(
-                self.connection.execute(
-                    """SELECT signal_key, signal_id FROM signals
-                       WHERE signal_key IN (SELECT unnest(?))""",
-                    [referenced_signal_keys],
-                ).fetchall()
-            )
-            if referenced_signal_keys
-            else {}
-        )
         for row in rows:
-            try:
-                scope = (
-                    None
-                    if row.signal_keys is None
-                    else tuple(signal_ids_by_key[signal_key] for signal_key in row.signal_keys)
-                )
-            except KeyError as exc:
-                raise TimeFFormatError(
-                    f"annotation occurrence {row.occurrence_id!r} refers to missing signal key {exc.args[0]!r}"
-                ) from exc
-            span = _occurrence_span(row, scope)
+            span = _occurrence_span(row)
             content_metadata = _decode_json(row.content_metadata, default={})
             description = content_metadata.pop("description", None)
             # The first pass over ``rows`` already rejected NULL content and object columns.
