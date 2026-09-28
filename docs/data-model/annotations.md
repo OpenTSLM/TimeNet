@@ -55,33 +55,34 @@ A `TimePoint` marks one offset. A `TimeInterval` covers a half-open range, `[sta
 ```python
 from timenet.types import Annotation, TimeInterval, TimePoint
 
-record.annotate(
+vibration.annotate(
     Annotation(
         key="impact",
         span=TimePoint.seconds(
             4.2,
-            time_series_ids=("vibration",),
         ),
     )
 )
 
-record.annotate(
+vibration.annotate(
     Annotation(
         key="fault",
         value="bearing fault",
         span=TimeInterval.seconds(
             5.0,
             8.0,
-            time_series_ids=("vibration",),
         ),
     )
 )
 ```
 
-Leave `time_series_ids=None` when the span covers the complete owner. Supply Signal IDs to restrict
-the span to specific Signals.
+The owner determines scope. A Signal annotation covers that Signal. A Source annotation covers its
+subtree. A Record annotation covers the Record. Annotation spans cannot specify Signal IDs.
 
-Time spans use whole microseconds on the source recording timeline. Step spans are reserved for
+Use `source.select(signals=(ecg, spo2)).annotate(annotation)` for a subset. Each selected Signal gets
+a separate occurrence with shared content. Other Signals remain unchanged.
+
+Time spans use whole microseconds on the Record timeline. Step spans are reserved for
 Tasks on ordinal Signals.
 
 ## Valid values

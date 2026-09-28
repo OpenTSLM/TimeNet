@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
 
@@ -209,6 +210,8 @@ class Signal(SupportsAnnotate):
         Returns:
             The attached annotation.
         """
+        if annotation.span is not None:
+            check_span_within_window(f"annotation {annotation.key!r}", annotation.span, (self,), self.id)
         attached = annotation._new_occurrence()
         object.__setattr__(self, "annotations", (*self.annotations, attached))  # noqa: PLC2801
         return attached
@@ -236,6 +239,10 @@ class Signal(SupportsAnnotate):
                 f"time_offsets_loader is only for an IrregularAxis series, but this one has "
                 f"{type(self.time_axis).__name__}, which already determines every time offset"
             )
+
+        for annotation in self.annotations:
+            if annotation.span is not None:
+                check_span_within_window(f"annotation {annotation.key!r}", annotation.span, (self,), self.id)
 
     @property
     def span_us(self) -> tuple[int, int] | None:
