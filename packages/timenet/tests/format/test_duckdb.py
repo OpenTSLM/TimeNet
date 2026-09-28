@@ -20,8 +20,8 @@ def test_control_schema_is_version_three_and_has_no_stored_relationship_constrai
             "SELECT constraint_type FROM duckdb_constraints() WHERE constraint_type <> 'NOT NULL'"
         ).fetchall()
 
-    assert CONTROL_SCHEMA_VERSION == 3
-    assert version == ("3",)
+    assert CONTROL_SCHEMA_VERSION == 6
+    assert version == ("6",)
     assert stored_constraints == []
 
 
