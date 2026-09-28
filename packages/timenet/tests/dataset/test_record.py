@@ -7,12 +7,14 @@ from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimePoint
+from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimeOrigin, TimePoint
 
 
 def _record(signals, **kwargs):
     """Build a Record whose one Source owns ``signals``."""
-    return Record(sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
+    start_time = kwargs.pop("start_time", None)
+    origin = TimeOrigin(start_time)
+    return Record(start_time=origin, sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
 
 
 def test_add_static_annotation(make_series):
@@ -96,19 +98,19 @@ def test_to_numpy_rejects_multi_signal(make_series):
 
 def test_start_time_defaults_to_none(make_series):
     record = _record((make_series(),))
-    assert record.start_time is None
+    assert record.start_time.timestamp is None
 
 
 def test_start_time_takes_whole_microseconds(make_series):
     anchor = 1_700_000_000_000_001
     record = _record((make_series(),), start_time=anchor)
-    assert record.start_time == anchor
+    assert record.start_time.timestamp == anchor
 
 
 def test_start_time_takes_an_aware_datetime_and_normalizes_it(make_series):
     moment = datetime(2026, 8, 5, 0, 0, 0, 123456, tzinfo=UTC)
     record = _record((make_series(),), start_time=moment)
-    assert record.start_time == 1_785_888_000_123_456
+    assert record.start_time.timestamp == 1_785_888_000_123_456
 
 
 @pytest.mark.parametrize("anchor", [2**63, -(2**63) - 1])
@@ -156,6 +158,39 @@ def test_start_time_rejects_a_naive_datetime(make_series):
 def test_has_absolute_time(make_series):
     assert not _record((make_series(),)).has_absolute_time
     assert _record((make_series(),), start_time=0).has_absolute_time
+
+
+def test_record_origin_does_not_move_to_earliest_signal(make_series):
+    origin = TimeOrigin(1_700_000_000_000_000)
+    first = make_series(signal="I", time_axis=RegularAxis(period_us=Fraction(2_000), start_index=10))
+    second = make_series(signal="II", time_axis=RegularAxis(period_us=Fraction(1_000), start_index=5))
+    record = Record(
+        start_time=origin,
+        sources=(
+            Source(name="first", signals=(first,)),
+            Source(name="second", signals=(second,)),
+        ),
+    )
+
+    assert record.start_time.timestamp == 1_700_000_000_000_000
+    assert record.time_point(datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)).start_us == 0
+    record.annotate(Annotation(key="event", span=TimePoint(start_us=5_000)))
+
+
+def test_aligned_sources_accept_relative_annotations_without_absolute_time(make_series):
+    first = make_series(signal="I")
+    second = make_series(signal="II")
+    record = Record(
+        sources=(
+            Source(name="first", signals=(first,)),
+            Source(name="second", signals=(second,)),
+        )
+    )
+    annotation = record.annotate(Annotation(key="event", span=TimePoint(start_us=0)))
+    assert annotation.span == TimePoint(start_us=0)
+    assert record.start_time.timestamp is None
+    with pytest.raises(TimeFValidationError, match="start_time"):
+        record.time_point(datetime(1970, 1, 1, tzinfo=UTC))
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):
