@@ -1,0 +1,21 @@
+yaml_schema_version: 1
+dataset_id: leochen085/slip-eval
+dataset_version: 1.0.0
+name: SLIP Evaluation Sets
+description: >-
+  Eleven evaluation datasets released with SLIP. Each published train or test window is a
+  sensor record with its native label and a classification task.
+license: other
+license_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+source_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+access: open
+domains:
+  - general
+  - health
+  - activity
+  - environment
+  - transport
+tags:
+  - classification
+  - evaluation
+  - sensor
