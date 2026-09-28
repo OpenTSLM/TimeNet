@@ -1,9 +1,10 @@
 from dataclasses import replace
+from fractions import Fraction
 
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, Signal, Source
+from timenet.dataset import Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_reader as control_reader_module
@@ -11,7 +12,17 @@ from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, InputModality, TimeOrigin, TimePoint, TimeSeriesSpec, ureg
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    InputModality,
+    TemporalLocalizationTask,
+    TimeInterval,
+    TimeOrigin,
+    TimePoint,
+    TimeSeriesSpec,
+    ureg,
+)
 
 from .test_control_writer import _dataset
 
@@ -52,6 +63,7 @@ def test_source_clock_identity_survives_separate_record_reads(tmp_path):
     shared = TimeOrigin(1_700_000_000_000_000)
     first.sources[0].start_time = shared
     first.sources[0].sources[0].start_time = shared
+    first.time_span = TimeInterval.micros(0, 4_000, time_origin=shared)
     original = first.signals[0]
     second = Record(
         record_id="record-2",
@@ -89,8 +101,50 @@ def test_source_clock_identity_survives_separate_record_reads(tmp_path):
 
     assert read_first.sources[0].start_time is read_first.sources[0].sources[0].start_time
     assert read_first.sources[0].start_time is read_second.sources[0].start_time
+    assert read_first.time_span is not None and read_first.time_span.time_origin is read_second.sources[0].start_time
     assert read_first.sources[0].start_time is not read_third.sources[0].start_time
     assert read_first.start_time == read_second.start_time == shared.timestamp
+
+
+def test_explicit_span_clock_round_trips_with_annotations_and_tasks(tmp_path):
+    dataset = _dataset()
+    record = dataset.records[0]
+    monitor = record.sources[0]
+    clock = monitor.sources[0].start_time
+    monitor.signals = (
+        Signal.from_loader(
+            id="other-clock",
+            name="other",
+            spec=record.signals[0].spec,
+            time_axis=RegularAxis(period_us=Fraction(2_000), start_index=10_000),
+            n_values=2,
+            loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+        ),
+    )
+    marker = record.annotate(Annotation(key="event", span=TimePoint.micros(0, time_origin=clock)))
+    span = TimePoint.micros(0, time_origin=clock)
+    dataset.add_task(
+        task=TemporalLocalizationTask(
+            id="localize-clock",
+            inputs=(record,),
+            scope=span,
+            targets=(span,),
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+        )
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (restored,) = reader.read_records()
+        task = next(task for task in reader.read_tasks((restored,)) if task.id == "localize-clock")
+
+    restored_clock = restored.sources[0].sources[0].start_time
+    restored_marker = next(item for item in restored.annotations if item.content_id == marker.content_id)
+    assert restored_marker.span is not None and restored_marker.span.time_origin is restored_clock
+    assert isinstance(task.scope, TimePoint) and task.scope.time_origin is restored_clock
+    assert task.targets is not None and isinstance(task.targets[0], TimePoint)
+    assert task.targets[0].time_origin is restored_clock
 
 
 def test_reader_and_audit_reject_a_task_spanning_distinct_stored_clocks(tmp_path):

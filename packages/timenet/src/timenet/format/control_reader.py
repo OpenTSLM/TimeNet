@@ -44,6 +44,7 @@ class _RecordRow(NamedTuple):
     start_time_us: int | None
     time_span_start_us: int | None
     time_span_end_us: int | None
+    time_span_clock_id: int | None
     metadata: str
 
 
@@ -104,6 +105,7 @@ class _OccurrenceRow(NamedTuple):
     start_us: int | None
     end_us: int | None
     signal_keys: list[int] | None
+    clock_id: int | None
     provenance: str | None
     confidence: float | None
     metadata: str
@@ -133,6 +135,7 @@ class _TaskRow(NamedTuple):
     scope_start: int | None
     scope_end: int | None
     scope_signal_keys: list[int] | None
+    scope_clock_id: int | None
     has_inline_targets: bool
     target_schema: str | None
     unit: str | None
@@ -166,6 +169,7 @@ class _TargetRow(NamedTuple):
     span_start: int | None
     span_end: int | None
     signal_keys: list[int] | None
+    clock_id: int | None
 
 
 _TASK_BATCH_SIZE = 5_000
@@ -241,7 +245,7 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
     return f"""WITH requested AS (SELECT unnest(?) AS object_key),
         object_ids AS ({object_ids})
         SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
-               o.start_us, o.end_us, o.signal_keys, o.provenance, o.confidence,
+               o.start_us, o.end_us, o.signal_keys, o.clock_id, o.provenance, o.confidence,
                o.metadata, c.content_id, c.name, c.value_kind, c.text_value, c.integer_value,
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.metadata,
                o.content_key, objects.object_key
@@ -328,7 +332,9 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
         raise TimeFFormatError(f"control.duckdb contains invalid JSON: {value!r}") from exc
 
 
-def _occurrence_span(row: _OccurrenceRow, scope: tuple[str, ...] | None) -> TimePoint | TimeInterval | None:
+def _occurrence_span(
+    row: _OccurrenceRow, scope: tuple[str, ...] | None, time_origin: TimeOrigin | None
+) -> TimePoint | TimeInterval | None:
     """Rebuild the span of one annotation occurrence.
 
     Returns:
@@ -341,10 +347,10 @@ def _occurrence_span(row: _OccurrenceRow, scope: tuple[str, ...] | None) -> Time
         return None
     start_us = _required(row.start_us, f"the start of annotation occurrence {row.occurrence_id!r}")
     if row.span_type == "point":
-        return TimePoint(start_us=start_us, time_series_ids=scope)
+        return TimePoint(start_us=start_us, time_series_ids=scope, time_origin=time_origin)
     if row.span_type == "interval":
         end_us = _required(row.end_us, f"the end of annotation occurrence {row.occurrence_id!r}")
-        return TimeInterval(start_us=start_us, end_us=end_us, time_series_ids=scope)
+        return TimeInterval(start_us=start_us, end_us=end_us, time_series_ids=scope, time_origin=time_origin)
     raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
 
 
@@ -396,6 +402,21 @@ class DuckDBControlReader:
         """Close the reader's DuckDB connection."""
         self.connection.close()
         self._clock_cache.clear()
+
+    def _clock_for(self, clock_id: int | None) -> TimeOrigin | None:
+        """Return one shared source clock.
+
+        Raises:
+            TimeFFormatError: If the stored clock does not exist.
+        """
+        if clock_id is None:
+            return None
+        if clock_id not in self._clock_cache:
+            row = self.connection.execute("SELECT start_time_us FROM clocks WHERE clock_id = ?", [clock_id]).fetchone()
+            if row is None:
+                raise TimeFFormatError(f"span references missing clock {clock_id!r}")
+            self._clock_cache[clock_id] = TimeOrigin(row[0])
+        return self._clock_cache[clock_id]
 
     def __enter__(self) -> "DuckDBControlReader":
         """Return this open reader.
@@ -544,6 +565,7 @@ class DuckDBControlReader:
                 span = TimeInterval(
                     start_us=record_row.time_span_start_us,
                     end_us=_required(record_row.time_span_end_us, f"the time span end of record {record_id!r}"),
+                    time_origin=self._clock_for(record_row.time_span_clock_id),
                 )
             root_sources = tuple(
                 hydrate_source(source_key, record_row.record_key)
@@ -777,7 +799,7 @@ class DuckDBControlReader:
     ) -> pa.Table:
         """Return the task table as Arrow, with object references as public IDs, without building Tasks.
 
-        One row per task with its type, prompt, rationale, the four scope columns (Signal keys
+        One row per task with its type, prompt, rationale, scope columns (Signal keys
         resolved to IDs), the configuration columns, ordered ``input_record_ids``, ordered
         ``from_task_ids``, and the metadata JSON string. Targets are in :meth:`target_table`.
 
@@ -803,6 +825,7 @@ class DuckDBControlReader:
                 )
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, scope_ids.scope_signal_ids,
+                       t.scope_clock_id,
                        t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
                        t.input_modalities,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
@@ -837,7 +860,7 @@ class DuckDBControlReader:
             f"""WITH {_signal_ids_cte("span_ids", "task_targets", "signal_keys", ("task_key", "position"), "span_signal_ids")}
                 SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
                        x.boolean_value, records.record_id, signals.signal_id,
-                       x.span_start, x.span_end, span_ids.span_signal_ids
+                       x.span_start, x.span_end, span_ids.span_signal_ids, x.clock_id
                 FROM task_targets x
                 JOIN tasks t USING (task_key)
                 LEFT JOIN records ON records.record_key = x.record_key
@@ -871,6 +894,7 @@ class DuckDBControlReader:
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
                        c.text_list_value, c.unit, o.span_type, o.start_us, o.end_us, span_ids.signal_ids,
+                       o.clock_id,
                        o.confidence, o.provenance, c.metadata AS content_metadata, o.metadata
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_key)
@@ -1315,7 +1339,7 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing signal key {exc.args[0]!r}"
                 ) from exc
-            span = _occurrence_span(row, scope)
+            span = _occurrence_span(row, scope, self._clock_for(row.clock_id))
             content_metadata = _decode_json(row.content_metadata, default={})
             description = content_metadata.pop("description", None)
             # The first pass over ``rows`` already rejected NULL content and object columns.
@@ -1532,6 +1556,7 @@ class _TaskHydration:
                 "span_start": target.span_start,
                 "span_end": target.span_end,
                 "span_signal_ids": span_signal_ids,
+                "time_origin": reader._clock_for(target.clock_id),
             }
             targets_by_task[target.task_key].append(
                 decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
@@ -1556,6 +1581,7 @@ class _TaskHydration:
                     row.scope_start,
                     row.scope_end,
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
+                    reader._clock_for(row.scope_clock_id),
                 ),
                 "rationale": row.rationale,
                 "annotations": task_annotations.get(("Task", row.task_id), ()),

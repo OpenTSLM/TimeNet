@@ -73,7 +73,9 @@ class Record(SupportsAnnotate):
                 raise TimeFValidationError(
                     "Record.time_span covers the whole record, so its time_series_ids must be None"
                 )
-            self._single_origin(None)
+            origin = self._single_origin(None)
+            if self.time_span.time_origin is not None and self.time_span.time_origin is not origin:
+                raise TimeFValidationError("Record.time_span names a different source clock")
             for ts in self.signals:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
@@ -128,6 +130,27 @@ class Record(SupportsAnnotate):
             raise TimeFValidationError("time scope requires exactly one source clock")
         return next(iter(clocks.values()))
 
+    def _selected_origin(self, signal_ids: tuple[str, ...] | None, time_origin: TimeOrigin | None) -> TimeOrigin:
+        """Resolve a clock from an explicit origin or the selected timed signals.
+
+        Returns:
+            The selected source clock.
+
+        Raises:
+            TimeFValidationError: If the explicit clock does not belong to the selected signals.
+        """
+        if time_origin is None:
+            return self._single_origin(signal_ids)
+        origins = self.signal_origins
+        timed_ids = {signal.id for signal in self.signals if signal.span_us is not None}
+        if not any(origin is time_origin for signal_id, origin in origins.items() if signal_id in timed_ids):
+            raise TimeFValidationError("time_origin has no timed signals on this record")
+        if signal_ids is not None and any(
+            signal_id not in timed_ids or origins.get(signal_id) is not time_origin for signal_id in signal_ids
+        ):
+            raise TimeFValidationError("time scope must name timed signals on the selected source clock")
+        return time_origin
+
     def walk_sources(self) -> Iterable[Source]:
         """Yield all sources in deterministic depth-first order.
 
@@ -166,44 +189,59 @@ class Record(SupportsAnnotate):
         """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time is not None
 
-    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+    def time_point(
+        self,
+        at: datetime,
+        *,
+        time_series_ids: tuple[str, ...] | None = None,
+        time_origin: TimeOrigin | None = None,
+    ) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
         Places ``at`` on the selected source clock. A span's bounds are offsets on that clock, so
-        the clock must have a known absolute origin. With no scope, all timed signals must share
-        one clock.
+        the clock must have a known absolute origin. Name ``time_origin`` when the record has
+        independent clocks and the point has no signal scope.
 
         Args:
             at: The wall-clock moment, timezone-aware.
             time_series_ids: Series the point is scoped to. ``None`` covers every series.
+            time_origin: Source clock to use when this record has independent clocks.
 
         Returns:
             The point, in microseconds from this record's relative zero.
         """
-        return TimePoint(
-            start_us=offset_us(at, self._single_origin(time_series_ids).timestamp), time_series_ids=time_series_ids
-        )
+        origin = self._selected_origin(time_series_ids, time_origin)
+        return TimePoint(start_us=offset_us(at, origin.timestamp), time_series_ids=time_series_ids, time_origin=origin)
 
     def time_interval(
-        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        time_series_ids: tuple[str, ...] | None = None,
+        time_origin: TimeOrigin | None = None,
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
         Places ``start`` and ``end`` on the selected source clock. The clock must have a known
-        absolute origin. With no scope, all timed signals must share one clock.
+        absolute origin. Name ``time_origin`` when the record has independent clocks and the
+        interval has no signal scope.
 
         Args:
             start: Wall-clock start, timezone-aware.
             end: Wall-clock end, exclusive and timezone-aware.
             time_series_ids: Series the interval is scoped to. ``None`` covers every series.
+            time_origin: Source clock to use when this record has independent clocks.
 
         Returns:
             The half-open interval, in microseconds from this record's relative zero.
         """
+        origin = self._selected_origin(time_series_ids, time_origin)
         return TimeInterval(
-            start_us=offset_us(start, self._single_origin(time_series_ids).timestamp),
-            end_us=offset_us(end, self._single_origin(time_series_ids).timestamp),
+            start_us=offset_us(start, origin.timestamp),
+            end_us=offset_us(end, origin.timestamp),
             time_series_ids=time_series_ids,
+            time_origin=origin,
         )
 
     def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:

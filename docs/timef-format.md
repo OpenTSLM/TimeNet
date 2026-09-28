@@ -49,6 +49,7 @@ Signals can reference the same immutable `TimeAxis`.
 | --- | --- |
 | `records` | Recording sessions and session-level timing metadata. |
 | `sources` | Recursive sources, linked to their record and parent source by internal keys. |
+| `clocks` | Shared source clocks, linked by `BIGINT` IDs. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `axis_offsets` | Shared offsets for irregular axes. |
@@ -96,7 +97,7 @@ content once: its key (`name`), unit, and value. The value sits in one typed col
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
 span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and
-occurrence metadata.
+occurrence metadata. A time span can also store `clock_id`. This ID identifies its source clock.
 
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
 apply to many objects without copying a long value. Each attachment still has its own
@@ -105,8 +106,8 @@ apply to many objects without copying a long value. Each attachment still has it
 ## Tasks
 
 `Task` is abstract. Each concrete task gets one row in `tasks`; `task_type` selects the Python
-subclass. The scope is stored as four typed columns (`scope_type`, `scope_start`, `scope_end`,
-`scope_signal_keys`), and subclass configuration as one nullable column per field
+subclass. The scope is stored as typed columns (`scope_type`, `scope_start`, `scope_end`,
+`scope_signal_keys`, `scope_clock_id`), and subclass configuration as one nullable column per field
 (`target_schema`, `unit`, `target_name`, `mode`), so tasks can be filtered in SQL without parsing
 JSON. Inline targets are one row each in `task_targets`, with `target_kind` naming which typed value
 column is set. References to Records, Signals, annotation occurrences, and parent Tasks live in the

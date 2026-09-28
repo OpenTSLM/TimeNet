@@ -140,6 +140,7 @@ the same deterministic traversal used by the writer.
 Call `record.annotate(annotation)` to attach an occurrence. A time span can cover several Signals
 only when their Sources share a clock. `time_point()` and `time_interval()` convert wall-clock
 values against the selected Source clock. Supply `time_series_ids` when a Record has several clocks.
+You can also supply `time_origin` to name a clock without restricting the Signal scope.
 
 ## Task
 

@@ -111,26 +111,30 @@ coordinate frame.
 | `StepPoint` | One ordinal position in a Signal without a clock. |
 | `StepInterval` | One half-open ordinal range, `[start, stop)`. |
 
-Time spans can cover a complete Record or selected Signals. Set `time_series_ids` to the selected
-Signal IDs. Leave it as `None` to cover the complete owner. Every timed Signal covered by one
-span must use the same `TimeOrigin` object.
+A time span can name its source clock with `time_origin`. Set `time_series_ids` to restrict the span to
+selected Signals on that clock. If `time_series_ids` is `None`, the span covers all timed Signals
+on the selected clock. If the owner has one clock, you can omit `time_origin`. If the owner has
+independent clocks, you must name one clock.
 
 Step spans always name exactly one Signal through `time_series_id`.
 
 ```python
-from timenet.types import StepInterval, TimeInterval, TimePoint
+from timenet.types import StepInterval, TimeInterval, TimeOrigin, TimePoint
 
-event = TimePoint.seconds(1.2)
+clock = TimeOrigin()
+event = TimePoint.seconds(1.2, time_origin=clock)
 window = TimeInterval.seconds(
     5.0,
     8.0,
     time_series_ids=("vibration",),
+    time_origin=clock,
 )
 tokens = StepInterval(time_series_id="text-series", start=132, stop=144)
 ```
 
 Use `record.time_point()` or `record.time_interval()` to convert wall-clock values through a
-Source's known origin. Pass `time_series_ids` when the Record has several clocks.
+Source's known origin. Pass `time_origin` when the Record has several clocks. You can also pass
+`time_series_ids` to select specific Signals.
 
 ## DatasetMetadata
 

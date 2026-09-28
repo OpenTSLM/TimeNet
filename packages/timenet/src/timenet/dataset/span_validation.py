@@ -33,6 +33,9 @@ def check_span_within_window(  # noqa: PLR0912, PLR0913 (span rules have several
       convex hull of the series never masks a hole in the data. Timeless (ordinal) series carry no
       window and drop out.
 
+    ``time_origin`` selects the source clock independently of signal scope. Without it, all timed
+    signals in the scope must share one source clock.
+
     Shared by a task's ``scope`` and an annotation so the two never disagree about what a span may cover.
 
     Args:
@@ -42,6 +45,7 @@ def check_span_within_window(  # noqa: PLR0912, PLR0913 (span rules have several
         record_id: The owning record's id, for the error message.
         time_span: The record's declared session span, if any, consulted only for an unscoped span.
         warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
+        origins: The source clock of each signal ID.
 
     Raises:
         TimeFValidationError: If a series id is unknown. If a scoped span names a timeless series
@@ -72,6 +76,20 @@ def check_span_within_window(  # noqa: PLR0912, PLR0913 (span rules have several
     covered = {ts.id: ts.span_us for ts in time_series if scope is None or ts.id in scope}
     if origins is not None:
         clocks = {id(origins[series_id]) for series_id, window in covered.items() if window is not None}
+        if span.time_origin is not None:
+            if scope is not None and clocks != {id(span.time_origin)}:
+                raise TimeFValidationError(f"{label} names signals on a different source clock in record {record_id!r}")
+            if scope is None:
+                if id(span.time_origin) not in clocks:
+                    raise TimeFValidationError(
+                        f"{label} names a source clock with no timed signals in record {record_id!r}"
+                    )
+                covered = {
+                    series_id: window
+                    for series_id, window in covered.items()
+                    if window is not None and origins[series_id] is span.time_origin
+                }
+                clocks = {id(span.time_origin)}
         if len(clocks) > 1:
             raise TimeFValidationError(f"{label} spans signals on different source clocks in record {record_id!r}")
     for series_id in scope or ():

@@ -23,6 +23,7 @@ from timenet.types import (
     TaskType,
     TemporalLocalizationTask,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
 )
 
@@ -37,6 +38,7 @@ TARGET_VALUE_COLUMNS = (
     "span_start",
     "span_end",
     "span_signal_ids",
+    "time_origin",
 )
 """Value columns of one target row, with object references as public IDs."""
 
@@ -113,6 +115,7 @@ def decode_span(
     span_start: int | None,
     span_end: int | None,
     signal_ids: Iterable[str] | None,
+    time_origin: TimeOrigin | None = None,
 ) -> Span | None:
     """Decode the four span columns.
 
@@ -128,11 +131,11 @@ def decode_span(
         raise TimeFFormatError(f"stored {span_type} span has no start")
     ids = _tuple_or_none(signal_ids)
     if span_type == "time_point":
-        return TimePoint(start_us=span_start, time_series_ids=ids)
+        return TimePoint(start_us=span_start, time_series_ids=ids, time_origin=time_origin)
     if span_type == "time_interval":
         if span_end is None:
             raise TimeFFormatError("stored time_interval span has no end")
-        return TimeInterval(start_us=span_start, end_us=span_end, time_series_ids=ids)
+        return TimeInterval(start_us=span_start, end_us=span_end, time_series_ids=ids, time_origin=time_origin)
     if not ids:
         raise TimeFFormatError(f"stored {span_type} span names no series")
     if span_type == "step_point":
@@ -203,6 +206,7 @@ def encode_target(target: object) -> dict[str, object | None]:
             target_kind="time_point",
             span_start=target.start_us,
             span_signal_ids=target.time_series_ids,
+            time_origin=target.time_origin,
         )
     elif isinstance(target, TimeInterval):
         row.update(
@@ -210,6 +214,7 @@ def encode_target(target: object) -> dict[str, object | None]:
             span_start=target.start_us,
             span_end=target.end_us,
             span_signal_ids=target.time_series_ids,
+            time_origin=target.time_origin,
         )
     elif isinstance(target, StepPoint):
         row.update(target_kind="step_point", span_start=target.start, signal_id=target.time_series_id)
@@ -255,9 +260,16 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     start = _required(row, "span_start")
     signal_ids = _tuple_or_none(row["span_signal_ids"])
     if kind == "time_point":
-        return TimePoint(start_us=start, time_series_ids=signal_ids)
+        return TimePoint(
+            start_us=start, time_series_ids=signal_ids, time_origin=cast("TimeOrigin | None", row["time_origin"])
+        )
     if kind == "time_interval":
-        return TimeInterval(start_us=start, end_us=_required(row, "span_end"), time_series_ids=signal_ids)
+        return TimeInterval(
+            start_us=start,
+            end_us=_required(row, "span_end"),
+            time_series_ids=signal_ids,
+            time_origin=cast("TimeOrigin | None", row["time_origin"]),
+        )
     signal_id = _required(row, "signal_id")
     if kind == "step_point":
         return StepPoint(start=start, time_series_id=signal_id)

@@ -20,6 +20,8 @@ from timenet.format.task_codec import encode_span, encode_target, encode_task_pa
 from timenet.types import (
     Annotation,
     Task,
+    TimeOrigin,
+    TimeSpan,
     TSCorrespondenceTask,
     annotation_type_of,
 )
@@ -43,6 +45,20 @@ def _json(value: object) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise TimeFValidationError(f"value is not JSON-compatible: {value!r}") from exc
+
+
+def _clock_key(origin: TimeOrigin | None, clock_keys: dict[int, int]) -> int | None:
+    """Return the stored key of an explicit source clock.
+
+    Raises:
+        TimeFValidationError: If the clock does not belong to this dataset.
+    """
+    if origin is None:
+        return None
+    try:
+        return clock_keys[id(origin)]
+    except KeyError as exc:
+        raise TimeFValidationError("time span names a source clock outside this dataset") from exc
 
 
 def _returned_key(cursor: duckdb.DuckDBPyConnection) -> int:
@@ -291,16 +307,6 @@ class DuckDBControlWriter:
                 raise TimeFValidationError(f"record id {record.id!r} is not unique")
             span = record.time_span
             record_key = next(object_keys)
-            batches.records.add(
-                {
-                    "record_key": record_key,
-                    "record_id": record.record_id,
-                    "start_time_us": record.start_time,
-                    "time_span_start_us": None if span is None else span.start_us,
-                    "time_span_end_us": None if span is None else span.end_us,
-                    "metadata": _json(record.metadata),
-                }
-            )
             record_keys[record.id] = record_key
             annotations.extend(("Record", record_key, annotation) for annotation in record.annotations)
             self._write_record_sources(
@@ -314,15 +320,27 @@ class DuckDBControlWriter:
                 batches,
                 clock_keys,
             )
+            batches.records.add(
+                {
+                    "record_key": record_key,
+                    "record_id": record.record_id,
+                    "start_time_us": record.start_time,
+                    "time_span_start_us": None if span is None else span.start_us,
+                    "time_span_end_us": None if span is None else span.end_us,
+                    "time_span_clock_id": _clock_key(None if span is None else span.time_origin, clock_keys),
+                    "metadata": _json(record.metadata),
+                }
+            )
         batches.flush()
         annotation_refs, task_counts = self._write_tasks(
             connection,
             record_keys,
             signal_keys,
+            clock_keys,
             annotations,
             tasks,
         )
-        occurrence_keys = self._write_annotations(connection, annotations, signal_keys)
+        occurrence_keys = self._write_annotations(connection, annotations, signal_keys, clock_keys)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
         return task_counts
 
@@ -376,11 +394,12 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
-    def _write_tasks(
+    def _write_tasks(  # noqa: PLR0913, PLR0917 - relationship maps stay explicit
         self,
         connection: duckdb.DuckDBPyConnection,
         record_keys: dict[str, int],
         signal_keys: dict[str, int],
+        clock_keys: dict[int, int],
         annotations: list[tuple[str, int, Annotation]],
         tasks_source: Iterable[Task],
     ) -> tuple[list[tuple[int, str, int, str]], dict[str, int]]:
@@ -416,7 +435,7 @@ class DuckDBControlWriter:
                         "task_type": task_type,
                         "prompt": task.prompt,
                         "input_modalities": sorted(item.value for item in task.input_modalities),
-                        **self._scope_columns(task, signal_keys),
+                        **self._scope_columns(task, signal_keys, clock_keys),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
                         "rationale": task.rationale,
@@ -431,6 +450,7 @@ class DuckDBControlWriter:
                         target=target,
                         record_keys=record_keys,
                         signal_keys=signal_keys,
+                        clock_keys=clock_keys,
                     )
                     for position, target in enumerate(task.targets or ())
                 )
@@ -484,7 +504,7 @@ class DuckDBControlWriter:
         return annotation_refs, task_counts
 
     @staticmethod
-    def _scope_columns(task: Task, signal_keys: dict[str, int]) -> dict[str, object]:
+    def _scope_columns(task: Task, signal_keys: dict[str, int], clock_keys: dict[int, int]) -> dict[str, object]:
         """Project a task's scope onto the four scope columns.
 
         Returns:
@@ -495,7 +515,13 @@ class DuckDBControlWriter:
         """
         encoded = encode_span(task.scope)
         if encoded is None:
-            return {"scope_type": None, "scope_start": None, "scope_end": None, "scope_signal_keys": None}
+            return {
+                "scope_type": None,
+                "scope_start": None,
+                "scope_end": None,
+                "scope_signal_keys": None,
+                "scope_clock_id": None,
+            }
         signal_ids = encoded["signal_ids"]
         missing = [] if signal_ids is None else [item for item in signal_ids if item not in signal_keys]
         if missing:
@@ -505,6 +531,9 @@ class DuckDBControlWriter:
             "scope_start": encoded["span_start"],
             "scope_end": encoded["span_end"],
             "scope_signal_keys": None if signal_ids is None else [signal_keys[item] for item in signal_ids],
+            "scope_clock_id": _clock_key(
+                task.scope.time_origin if isinstance(task.scope, TimeSpan) else None, clock_keys
+            ),
         }
 
     @staticmethod
@@ -516,6 +545,7 @@ class DuckDBControlWriter:
         target: object,
         record_keys: dict[str, int],
         signal_keys: dict[str, int],
+        clock_keys: dict[int, int],
     ) -> dict[str, object]:
         """Validate one target and project it onto a ``task_targets`` row.
 
@@ -558,6 +588,7 @@ class DuckDBControlWriter:
             "span_start": row["span_start"],
             "span_end": row["span_end"],
             "signal_keys": stored_signal_keys,
+            "clock_id": _clock_key(cast("TimeOrigin | None", row["time_origin"]), clock_keys),
         }
 
     @staticmethod
@@ -790,6 +821,7 @@ class DuckDBControlWriter:
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
         signal_keys: dict[str, int],
+        clock_keys: dict[int, int],
     ) -> dict[str, int]:
         """Insert reusable content once and every occurrence separately, in Arrow batches.
 
@@ -871,6 +903,7 @@ class DuckDBControlWriter:
                         if span is None or span.time_series_ids is None
                         else [signal_keys[s] for s in span_signal_ids]
                     ),
+                    "clock_id": _clock_key(None if span is None else span.time_origin, clock_keys),
                     "provenance": None if annotation.source is None else _json(annotation.source),
                     "confidence": annotation.confidence,
                     "metadata": _json(annotation.occurrence_metadata),

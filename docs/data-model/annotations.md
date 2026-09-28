@@ -78,8 +78,12 @@ record.annotate(
 )
 ```
 
-Leave `time_series_ids=None` when the span covers the complete owner. Supply Signal IDs to restrict
+Leave `time_series_ids=None` to cover all timed Signals on one clock. Supply Signal IDs to restrict
 the span to specific Signals.
+
+If the owner has independent source clocks, set `time_origin` to the `TimeOrigin` of the correct
+Source. The clock and the Signal scope are separate. If you omit `time_origin`, the scope must use
+one clock.
 
 Time spans use whole microseconds on the source recording timeline. Step spans are reserved for
 Tasks on ordinal Signals.
