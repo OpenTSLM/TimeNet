@@ -19,6 +19,7 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
+    InputModality,
     SupportsAnnotate,
     Task,
     annotation_type_of,
@@ -296,16 +297,34 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._streamed_task_types = tuple(task_types)
         self._task_stream = source
 
-    def iter_tasks(self) -> Iterator[Task]:
+    def iter_tasks(
+        self,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> Iterator[Task]:
         """Yield the dataset's tasks, from the stream when one is set, else the materialized list.
 
         Yields:
             Each task. A streamed dataset re-reads its source on every call.
+
+        Raises:
+            TimeFValidationError: If a task has no input declaration.
         """
-        if self._task_stream is not None:
-            yield from self._task_stream()
-        else:
-            yield from self._tasks
+        required = frozenset(required_modalities or ())
+        supported = None if supported_modalities is None else frozenset(supported_modalities)
+        source = self._task_stream() if self._task_stream is not None else self._tasks
+        for task in source:
+            declared = task.input_modalities
+            if not declared:
+                raise TimeFValidationError(f"task {task.id!r} must declare input modalities")
+            if not required and supported is None:
+                yield task
+                continue
+            if not required <= declared:
+                continue
+            if supported is None or declared <= supported:
+                yield task
 
     def iter_streamed_tasks_validated(self) -> Iterator[Task]:
         """Yield the streamed tasks, validating each against the dataset before it is written.
