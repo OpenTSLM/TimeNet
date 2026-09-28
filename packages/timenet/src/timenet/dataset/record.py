@@ -53,7 +53,7 @@ class Record(SupportsAnnotate):
         """Return the record's stable public identifier."""
         return self.record_id
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
@@ -72,7 +72,9 @@ class Record(SupportsAnnotate):
                 for endpoint in window:
                     check_int64(f"signal {signal.id!r} time offset", endpoint)
                     if self.start_time.timestamp is not None:
-                        check_int64(f"signal {signal.id!r} absolute time", unix_us(self.start_time.timestamp) + endpoint)
+                        check_int64(
+                            f"signal {signal.id!r} absolute time", unix_us(self.start_time.timestamp) + endpoint
+                        )
         if self.time_span is not None:
             if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
@@ -89,6 +91,9 @@ class Record(SupportsAnnotate):
                         f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
                         f"every series' window, but {ts.id!r} covers {window} us"
                     )
+
+        for annotation in self.annotations:
+            self._validate_annotation(annotation)
 
     @property
     def signals(self) -> tuple[Signal, ...]:
@@ -127,6 +132,14 @@ class Record(SupportsAnnotate):
         """Yield every signal in deterministic source and signal order."""
         for source in self.walk_sources():
             yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+
+    def walk_annotations(self) -> Iterable[Annotation]:
+        """Yield annotation occurrences from this Record, its Sources, and its Signals."""
+        yield from self.annotations
+        for source in self.walk_sources():
+            yield from source.annotations
+            for signal in source.signals:
+                yield from signal.annotations
 
     @property
     def has_absolute_time(self) -> bool:

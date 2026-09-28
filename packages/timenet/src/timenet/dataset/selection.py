@@ -1,6 +1,6 @@
 """Declarative selections over a source hierarchy."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from timenet.dataset.source import Source
 from timenet.dataset.time_series import Signal
@@ -13,7 +13,7 @@ class SignalSelection:
     """A validated set of signals selected from one source subtree."""
 
     source: Source
-    """Source on which a timed selection annotation is stored."""
+    """Source whose descendant Signals can be selected."""
     signals: tuple[Signal, ...]
     """Selected descendant signals in caller order."""
 
@@ -66,20 +66,10 @@ class SignalSelection:
     def annotate(self, annotation: Annotation) -> tuple[Annotation, ...]:
         """Attach one annotation content item to the selected signals.
 
-        A timed annotation is stored once on the source and scoped to the selected signal IDs. A
-        static annotation gets one occurrence on each selected signal because a static span cannot
-        carry signal scope.
+        Timed and static annotations create one occurrence per selected Signal.
+        Each occurrence shares the original content.
 
         Returns:
-            The attached occurrence or occurrences.
-
-        Raises:
-            TimeFValidationError: If a timed annotation already names a different signal scope.
+            The attached occurrences in selection order.
         """
-        if annotation.span is None:
-            return tuple(signal.annotate(annotation) for signal in self.signals)
-        signal_ids = tuple(signal.id for signal in self.signals)
-        if annotation.span.time_series_ids is not None and annotation.span.time_series_ids != signal_ids:
-            raise TimeFValidationError("annotation span scope disagrees with the selected signals")
-        span = replace(annotation.span, time_series_ids=signal_ids)
-        return (self.source.annotate(replace(annotation, span=span)),)
+        return tuple(signal.annotate(annotation) for signal in self.signals)

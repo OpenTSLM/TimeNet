@@ -229,7 +229,7 @@ class TimeFWriter:
                 values["time_series_id"].append(ts.id)
                 if ts.source_id is not None:
                     values["source_id"].append(ts.source_id)
-            for ann in record.annotations:
+            for ann in record.walk_annotations():
                 values["annotation_id"].append(ann.id)
         for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
             values["annotation_id"].append(ann.id)
@@ -454,7 +454,7 @@ class TimeFWriter:
                 empty ``record_ids``, so an id that is also record-carried writes non-empty and is lost on
                 read; reject it here instead of silently dropping it.
         """
-        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.annotations}
+        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.walk_annotations()}
         overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
         if overlap:
             raise TimeFValidationError(
@@ -462,7 +462,7 @@ class TimeFWriter:
                 f"annotation must be one no record carries"
             )
         seen: dict[str, object] = {}
-        record_annotations = (ann for record in self._dataset.records for ann in record.annotations)
+        record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in (*record_annotations, *self._dataset.registered_annotations):
             if ann.id in seen and seen[ann.id] != ann:
                 raise TimeFValidationError(
