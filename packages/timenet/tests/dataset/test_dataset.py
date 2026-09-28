@@ -423,6 +423,17 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
         )
 
 
+def test_iter_tasks_rejects_a_missing_input_declaration():
+    dataset = _dataset()
+    task = dataset.add_task(task=AnswerTask(input_modalities=frozenset({InputModality.NO_INPUT}), targets=("yes",)))
+    task.input_modalities = None
+
+    with pytest.raises(TimeFValidationError, match="must declare input modalities"):
+        tuple(dataset.iter_tasks())
+    with pytest.raises(TimeFValidationError, match="must declare input modalities"):
+        tuple(dataset.iter_tasks(required_modalities={InputModality.TIME_SERIES}))
+
+
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))

@@ -930,7 +930,7 @@ class DuckDBControlReader:
             raise TimeFValidationError("unknown input modality in task filter") from exc
         if not required and supported is None:
             return "", []
-        predicates = ["t.input_modalities IS NOT NULL"]
+        predicates: list[str] = []
         parameters: list[object] = []
         if required:
             predicates.append("list_has_all(t.input_modalities, ?)")
