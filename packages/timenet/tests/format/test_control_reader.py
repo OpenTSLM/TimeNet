@@ -83,6 +83,75 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert task.annotations[0].name == "task_kind"
 
 
+def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    dataset.tasks[0].input_modalities = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (task,) = reader.read_tasks(reader.read_records())
+        rows = reader.task_table().to_pylist()
+
+    assert task.input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    assert rows[0]["input_modalities"] == ["text", "time_series"]
+
+
+def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+    dataset = _dataset()
+    record = dataset.records[0]
+    dataset.add_tasks(
+        tasks=(
+            AnswerTask(
+                id="task-image",
+                inputs=(record,),
+                prompt="Read chart",
+                targets=("image answer",),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.IMAGE}),
+            ),
+            AnswerTask(
+                id="task-mixed",
+                inputs=(record,),
+                prompt="Read chart and series",
+                targets=("mixed answer",),
+                input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES, InputModality.IMAGE}),
+            ),
+            AnswerTask(
+                id="task-unknown",
+                targets=("unknown",),
+            ),
+        )
+    )
+    dataset.add_tasks(
+        tasks=(
+            AnswerTask(
+                id=f"task-series-{index}",
+                inputs=(record,),
+                targets=("series answer",),
+            )
+            for index in range(4)
+        )
+    )
+    expected = ["task-1", "task-series-0", "task-series-1", "task-series-2", "task-series-3"]
+    required = frozenset({InputModality.TIME_SERIES})
+    supported = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
+        task_rows = reader.task_table(required_modalities=required, supported_modalities=supported).to_pylist()
+        target_rows = reader.target_table(required_modalities=required, supported_modalities=supported).to_pylist()
+
+    assert [task.id for task in tasks] == expected
+    assert [row["task_id"] for row in task_rows] == expected
+    assert [row["task_id"] for row in target_rows] == expected
+    assert [
+        task.id for task in dataset.iter_tasks(required_modalities=required, supported_modalities=supported)
+    ] == expected
+
+
 def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
@@ -212,16 +281,18 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     assert answer.from_tasks[0] is tasks[1]
 
 
-def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch):
+@pytest.mark.parametrize("materialize", [False, True])
+def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(make_dataset())
 
     with DuckDBControlReader(path) as reader:
-        records = reader.read_records()
-        tasks = list(reader.iter_tasks(records))
+        record = next(record for record in reader.read_records() if record.id == "record-0")
+        tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
 
     by_id = {task.id: task for task in tasks}
+    assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
     assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 

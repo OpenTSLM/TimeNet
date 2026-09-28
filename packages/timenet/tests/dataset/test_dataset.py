@@ -13,6 +13,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
+    InputModality,
     License,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -346,6 +347,15 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
     annotation = record.annotate(Annotation(key="stage", value="N2"))
     with pytest.raises(TimeFValidationError, match="one answer representation"):
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("N2",), target_annotations=(annotation,)))
+
+
+def test_iter_tasks_infers_prompt_only_inputs():
+    dataset = _dataset()
+    task = dataset.add_task(task=AnswerTask(prompt="Ready?", targets=("yes",)))
+    assert tuple(dataset.iter_tasks()) == (task,)
+    assert tuple(dataset.iter_tasks(required_modalities={InputModality.NO_INPUT})) == (task,)
+    assert tuple(dataset.iter_tasks(supported_modalities={InputModality.TEXT, InputModality.NO_INPUT})) == (task,)
+    assert tuple(dataset.iter_tasks(required_modalities={InputModality.TIME_SERIES})) == ()
 
 
 def test_add_task_accepts_an_answer_stored_by_reference(make_series):
