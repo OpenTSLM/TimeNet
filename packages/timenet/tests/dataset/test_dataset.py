@@ -686,9 +686,9 @@ def test_add_annotations_attaches_all_and_returns_them(make_series):
 def test_add_annotations_rejects_the_whole_batch_when_one_is_invalid(make_series):
     record = _dataset().add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     good = Annotation(key="a", value=1)
-    bad = Annotation(key="b", span=TimePoint.seconds(0.0, time_series_ids=("nope",)))
+    bad = Annotation(key="b", span=TimePoint.seconds(1000.0))
     with pytest.raises(TimeFValidationError):
-        record.add_annotations([good, bad])
+        record.add_annotations([good, bad], warn_when_outside=False)
     assert record.annotations == ()  # all-or-nothing: the valid one is not left attached
 
 
