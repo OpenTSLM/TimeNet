@@ -10,17 +10,22 @@ from timenet.errors import TimeFValidationError
 from timenet.types.units import normalize_unit, ureg
 
 
-def _to_unit(value: str | pint.Unit) -> pint.Unit:
+def _to_unit(value: str | pint.Unit | None) -> pint.Unit | None:
     """Return ``value`` as a :data:`ureg`-bound :class:`pint.Unit`, coercing strings and foreign registries.
 
     Returns:
         The resolved unit bound to :data:`ureg`.
+
+    Raises:
+        TimeFValidationError: If the value is neither a unit nor ``None``.
     """
+    if value is None:
+        return None
     if isinstance(value, str):
         return ureg.Unit(cast("str", normalize_unit(value)))
-    if isinstance(value, pint.Unit) and value._REGISTRY is not ureg:
-        return ureg.Unit(str(value))
-    return value
+    if isinstance(value, pint.Unit):
+        return ureg.Unit(str(value)) if value._REGISTRY is not ureg else value
+    raise TimeFValidationError(f"TimeSeriesSpec.unit_value must be a unit or None, got {value!r}")
 
 
 #: Spec types the Zarr backend cannot encode as its own array path segment.
@@ -82,8 +87,8 @@ class TimeSeriesSpec:
     """Type tag identifying the modality. Callers use it to filter datasets by spec type."""
     name: str
     """Human-readable display name of the modality."""
-    unit_value: pint.Unit
-    """Unit of the measured values."""
+    unit_value: pint.Unit | None
+    """Unit of the measured values. ``None`` means unknown, not dimensionless."""
     dtype: str = "float32"
     """Value dtype: a NumPy scalar dtype, ``"str"`` for text, or ``"enum"`` for a categorical value."""
     categories: tuple[str, ...] = ()
