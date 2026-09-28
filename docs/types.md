@@ -109,7 +109,7 @@ coordinate frame.
 | `StepInterval` | One half-open ordinal range, `[start, stop)`. |
 
 Time spans can cover a complete Record or selected Signals. Set `time_series_ids` to the selected
-Signal IDs. Leave it as `None` to cover the complete owner.
+Signal IDs. Leave it as `None` to cover the complete owner. A task time span must identify exactly one input Record.
 
 Step spans always name exactly one Signal through `time_series_id`.
 
@@ -126,7 +126,7 @@ tokens = StepInterval(time_series_id="text-series", start=132, stop=144)
 ```
 
 Use `record.time_point()` or `record.time_interval()` to convert wall-clock values through a
-Record's `start_time`.
+Record's known origin. Relative spans also work when its absolute timestamp is unknown.
 
 ## DatasetMetadata
 
