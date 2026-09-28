@@ -325,7 +325,7 @@ class DuckDBControlWriter:
             annotations,
             tasks,
         )
-        occurrence_keys = self._write_annotations(connection, annotations, signal_keys)
+        occurrence_keys = self._write_annotations(connection, annotations)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
         return task_counts
 
@@ -789,7 +789,6 @@ class DuckDBControlWriter:
     def _write_annotations(
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
-        signal_keys: dict[str, int],
     ) -> dict[str, int]:
         """Insert reusable content once and every occurrence separately, in Arrow batches.
 
@@ -848,12 +847,6 @@ class DuckDBControlWriter:
                     }
                 )
             span = annotation.span
-            span_signal_ids = () if span is None else span.time_series_ids or ()
-            missing_signals = [signal_id for signal_id in span_signal_ids if signal_id not in signal_keys]
-            if missing_signals:
-                raise TimeFValidationError(
-                    f"annotation occurrence {annotation.occurrence_id!r} refers to unknown Signals {missing_signals}"
-                )
             occurrence_key = occurrence_key_source.next()
             occurrence_keys[annotation.occurrence_id] = occurrence_key
             occurrence_batch.add(
@@ -866,11 +859,6 @@ class DuckDBControlWriter:
                     "span_type": str(annotation_type_of(annotation)),
                     "start_us": None if span is None else span.start_us,
                     "end_us": None if span is None else span.exclusive_end,
-                    "signal_keys": (
-                        None
-                        if span is None or span.time_series_ids is None
-                        else [signal_keys[s] for s in span_signal_ids]
-                    ),
                     "provenance": None if annotation.source is None else _json(annotation.source),
                     "confidence": annotation.confidence,
                     "metadata": _json(annotation.occurrence_metadata),
