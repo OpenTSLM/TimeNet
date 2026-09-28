@@ -5,7 +5,7 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
-from timenet.dataset.record import check_span_within_window
+from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Annotation, StepInterval, StepPoint, TimeInterval, TimePoint
 
