@@ -69,6 +69,16 @@ def test_windows_compose():
     assert base.at_index(10).at_index(5).start_index == 15
 
 
+def test_shifted_fractional_cadence_keeps_slice_phase_and_lookup():
+    base = RegularAxis.from_rate_hz(44100, offset_us=250_003)
+    window = base.at_index(1009).at_index(17)
+    for index in range(100):
+        expected = 250_003 + ((1026 + index) * 10000 // 441)
+        assert window.time_offset_us(index) == expected
+        assert window.index_at_or_after(expected) == index
+        assert window.index_at_or_after(expected + 1) == index + 1
+
+
 def test_the_period_reduces_itself():
     assert RegularAxis(period_us=Fraction(2000, 2)) == RegularAxis(period_us=Fraction(1000))
 
