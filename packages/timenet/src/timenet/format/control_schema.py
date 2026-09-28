@@ -274,7 +274,6 @@ ANNOTATION_OCCURRENCES = Table(
         _required("span_type"),
         Column("start_us", ColumnType.BIGINT),
         Column("end_us", ColumnType.BIGINT),
-        Column("signal_keys", ColumnType.BIGINT_LIST),
         Column("provenance", ColumnType.JSON),
         Column("confidence", ColumnType.DOUBLE),
         _required("metadata", ColumnType.JSON),

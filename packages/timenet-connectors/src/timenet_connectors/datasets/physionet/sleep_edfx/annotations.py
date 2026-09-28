@@ -86,7 +86,7 @@ def build(
     Raises:
         TimeFFormatError: If the recording does not hold all four scoring signals.
     """  # noqa: DOC502 (raised by _signal_ids_of_annotation, not directly here)
-    signal_ids = _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
+    _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
     return [
         Annotation(
             key=AnnotationKey.SLEEP_STAGE,
@@ -94,8 +94,16 @@ def build(
             span=TimeInterval.micros(
                 entry.onset_microseconds,
                 entry.onset_microseconds + entry.duration_microseconds,
-                time_series_ids=signal_ids,
             ),
         )
         for entry in entries
     ]
+
+
+def attach(record_id: str, series: tuple[Signal, ...], stages: list[Annotation]) -> None:
+    """Attach each scoring entry to its four scoring Signals with shared content."""
+    ids = _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
+    for signal in series:
+        if signal.id in ids:
+            for stage in stages:
+                signal.annotate(stage)
