@@ -1,3 +1,6 @@
+from collections.abc import Generator
+
+import duckdb
 import pyarrow as pa
 import pytest
 
@@ -57,7 +60,8 @@ def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
     assert rows[0]["input_modalities"] == ["text", "time_series"]
 
 
-def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path):
+def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     dataset = _dataset()
     record = dataset.records[0]
     dataset.tasks[0].input_modalities = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
@@ -84,7 +88,18 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path):
             ),
         )
     )
-    expected = ["task-1"]
+    dataset.add_tasks(
+        tasks=(
+            AnswerTask(
+                id=f"task-series-{index}",
+                inputs=(record,),
+                targets=("series answer",),
+                input_modalities=frozenset({InputModality.TIME_SERIES}),
+            )
+            for index in range(4)
+        )
+    )
+    expected = ["task-1", "task-series-0", "task-series-1", "task-series-2", "task-series-3"]
     required = frozenset({InputModality.TIME_SERIES})
     supported = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
     path = tmp_path / "control.duckdb"
@@ -232,18 +247,58 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     assert answer.from_tasks[0] is tasks[1]
 
 
-def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch):
+@pytest.mark.parametrize("materialize", [False, True])
+def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(make_dataset())
 
     with DuckDBControlReader(path) as reader:
-        records = reader.read_records()
-        tasks = list(reader.iter_tasks(records))
+        record = next(record for record in reader.read_records() if record.id == "record-0")
+        tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
 
     by_id = {task.id: task for task in tasks}
+    assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
     assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
+
+
+@pytest.mark.parametrize("corrupt_task", [False, True])
+def test_task_iteration_closes_selection_cursor_on_stop_or_error(tmp_path, monkeypatch, corrupt_task):
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    if corrupt_task:
+        with connect_control(path) as connection:
+            connection.execute("UPDATE tasks SET task_type = 'invalid' WHERE task_id = 'task-answer-0'")
+
+    with DuckDBControlReader(path) as reader:
+        connection = reader.connection
+        cursors = []
+
+        class TrackingConnection:
+            def cursor(self):
+                cursor = connection.cursor()
+                cursors.append(cursor)
+                return cursor
+
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+        monkeypatch.setattr(reader, "connection", TrackingConnection())
+        tasks = reader.iter_tasks()
+        if corrupt_task:
+            with pytest.raises(TimeFFormatError, match="unknown type"):
+                next(tasks)
+        else:
+            assert next(tasks).id == "task-answer-0"
+            assert isinstance(tasks, Generator)
+            tasks.close()
+
+        assert len(cursors) == 1
+        with pytest.raises(duckdb.ConnectionException, match="closed"):
+            cursors[0].execute("SELECT 1")
+        assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (5,)
 
 
 def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
