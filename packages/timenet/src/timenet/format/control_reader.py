@@ -1151,7 +1151,7 @@ class DuckDBControlReader:
             return {}
         axes: dict[int, RegularAxis | IrregularAxis | OrdinalAxis] = {}
         query = """SELECT axis_key, axis_id, axis_type, period_numerator_us, period_denominator,
-                          origin_us, first_us, last_us FROM axes"""
+                          start_index, offset_us, first_us, last_us FROM axes"""
         rows = (
             self.connection.execute(query).fetchall()
             if requested is None
@@ -1160,12 +1160,13 @@ class DuckDBControlReader:
                 [list(requested)],
             ).fetchall()
         )
-        for axis_key, axis_id, axis_type, numerator, denominator, origin, first, last in rows:
+        for axis_key, axis_id, axis_type, numerator, denominator, start_index, offset, first, last in rows:
             if axis_type == "regular":
                 axes[axis_key] = RegularAxis(
                     axis_id=axis_id,
                     period_us=Fraction(numerator, denominator),
-                    start_index=origin,
+                    start_index=start_index,
+                    offset_us=offset,
                 )
             elif axis_type == "irregular":
                 axes[axis_key] = IrregularAxis(axis_id=axis_id, first_us=first, last_us=last)
