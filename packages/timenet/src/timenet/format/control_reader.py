@@ -1236,7 +1236,7 @@ class DuckDBControlReader:
         return TimeSeriesSpec(
             spec_type=row.spec_type,
             name=row.spec_name,
-            unit_value=ureg.Unit(_required(row.unit, f"the unit of signal {row.signal_id!r}")),
+            unit_value=None if row.unit is None else ureg.Unit(row.unit),
             dtype=row.dtype,
             categories=tuple(row.categories),
             value_shape=tuple(row.value_shape),
