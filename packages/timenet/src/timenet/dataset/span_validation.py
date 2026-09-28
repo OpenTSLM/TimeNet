@@ -7,7 +7,7 @@ from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Span, StepSpan, TimeInterval, TimeSpan
 
 
-def check_span_within_window(  # noqa: PLR0913 (a public signature; the sixth is keyword-only)
+def check_span_within_window(  # noqa: PLR0913 (span rules have several branches)
     label: str,
     span: Span,
     time_series: tuple[Signal, ...],
