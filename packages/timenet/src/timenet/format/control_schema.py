@@ -145,13 +145,20 @@ RECORDS = Table(
     (
         _key("record_key"),
         _required("record_id"),
-        Column("start_time_us", ColumnType.BIGINT),
+        _key("clock_id"),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("record_key",), ("record_id",)),
+    foreign_keys=(ForeignKey("clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
+)
+
+CLOCKS = Table(
+    "clocks",
+    (_key("clock_id"), Column("start_time_us", ColumnType.BIGINT)),
+    unique=(("clock_id",),),
 )
 
 SOURCES = Table(
@@ -359,6 +366,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     DATASETS,
     RECORDS,
+    CLOCKS,
     SOURCES,
     AXES,
     AXIS_OFFSETS,

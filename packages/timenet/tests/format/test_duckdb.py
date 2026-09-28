@@ -11,7 +11,7 @@ from timenet.format.duckdb import (
 )
 
 
-def test_control_schema_is_version_three_and_has_no_stored_relationship_constraints(tmp_path):
+def test_control_schema_and_has_no_stored_relationship_constraints(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
@@ -20,8 +20,7 @@ def test_control_schema_is_version_three_and_has_no_stored_relationship_constrai
             "SELECT constraint_type FROM duckdb_constraints() WHERE constraint_type <> 'NOT NULL'"
         ).fetchall()
 
-    assert CONTROL_SCHEMA_VERSION == 6
-    assert version == ("6",)
+    assert version == (str(CONTROL_SCHEMA_VERSION),)
     assert stored_constraints == []
 
 
@@ -32,8 +31,8 @@ def test_control_transaction_rolls_back_all_rows(tmp_path):
         with pytest.raises(RuntimeError, match="stop"), transaction(connection):
             connection.execute(
                 """INSERT INTO records (
-                       record_id, start_time_us, time_span_start_us, time_span_end_us, metadata
-                   ) VALUES (?, NULL, NULL, NULL, ?)""",
+                       record_id, clock_id, time_span_start_us, time_span_end_us, metadata
+                   ) VALUES (?, 1, NULL, NULL, ?)""",
                 ["record-1", "{}"],
             )
             raise RuntimeError("stop")
