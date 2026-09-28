@@ -482,6 +482,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 check_span_within_window(label, span, scoped[0], task.id, origins=scoped[1])
             else:
                 for record in task.inputs:
+                    if (
+                        isinstance(span, TimeSpan)
+                        and span.time_origin is not None
+                        and not any(
+                            source.start_time is span.time_origin
+                            and any(signal.span_us is not None for signal in source.signals)
+                            for source in record.walk_sources()
+                        )
+                    ):
+                        continue
                     check_span_within_window(
                         label,
                         span,
@@ -510,6 +520,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             if not isinstance(span, TimeSpan):
                 continue
             selected = timed if span.time_series_ids is None else timed.intersection(span.time_series_ids)
+            if span.time_origin is not None:
+                selected = {signal_id for signal_id in selected if origins[signal_id] is span.time_origin}
+                if not selected:
+                    raise TimeFValidationError(f"task {task.id!r} span names a source clock outside its inputs")
             if len({id(origins[signal_id]) for signal_id in selected}) > 1:
                 raise TimeFValidationError(f"task {task.id!r} spans signals on different source clocks")
 

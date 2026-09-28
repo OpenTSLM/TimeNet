@@ -3,7 +3,7 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 3 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
+Version 5 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
 stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
 be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
@@ -148,9 +148,11 @@ RECORDS = Table(
         Column("start_time_us", ColumnType.BIGINT),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
+        Column("time_span_clock_id", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("record_key",), ("record_id",)),
+    foreign_keys=(ForeignKey("time_span_clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
 )
 
@@ -275,12 +277,16 @@ ANNOTATION_OCCURRENCES = Table(
         Column("start_us", ColumnType.BIGINT),
         Column("end_us", ColumnType.BIGINT),
         Column("signal_keys", ColumnType.BIGINT_LIST),
+        Column("clock_id", ColumnType.BIGINT),
         Column("provenance", ColumnType.JSON),
         Column("confidence", ColumnType.DOUBLE),
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("occurrence_key",), ("occurrence_id",)),
-    foreign_keys=(ForeignKey("content_key", "annotation_contents", "content_key"),),
+    foreign_keys=(
+        ForeignKey("content_key", "annotation_contents", "content_key"),
+        ForeignKey("clock_id", "clocks", "clock_id"),
+    ),
     key_sequence=OCCURRENCE_KEYS,
 )
 
@@ -296,6 +302,7 @@ TASKS = Table(
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),
         Column("scope_signal_keys", ColumnType.BIGINT_LIST),
+        Column("scope_clock_id", ColumnType.BIGINT),
         _required("has_inline_targets", ColumnType.BOOLEAN),
         Column("target_schema", ColumnType.VARCHAR),
         Column("unit", ColumnType.VARCHAR),
@@ -305,6 +312,7 @@ TASKS = Table(
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("task_key",), ("task_id",)),
+    foreign_keys=(ForeignKey("scope_clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
 )
 
@@ -323,12 +331,14 @@ TASK_TARGETS = Table(
         Column("span_start", ColumnType.BIGINT),
         Column("span_end", ColumnType.BIGINT),
         Column("signal_keys", ColumnType.BIGINT_LIST),
+        Column("clock_id", ColumnType.BIGINT),
     ),
     unique=(("task_key", "position"),),
     foreign_keys=(
         ForeignKey("task_key", "tasks", "task_key"),
         ForeignKey("record_key", "records", "record_key"),
         ForeignKey("signal_key", "signals", "signal_key"),
+        ForeignKey("clock_id", "clocks", "clock_id"),
     ),
 )
 

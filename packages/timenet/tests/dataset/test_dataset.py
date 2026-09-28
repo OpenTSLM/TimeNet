@@ -136,6 +136,30 @@ def test_scoped_task_span_can_cross_records_that_share_one_clock(make_series):
     assert task.scope == scope
 
 
+def test_unscoped_task_span_selects_one_clock_across_independent_inputs(make_series):
+    dataset = _dataset()
+    first_clock = TimeOrigin(0)
+    second_clock = TimeOrigin(0)
+    first = dataset.add_record(
+        record=Record(sources=(Source(name="first", start_time=first_clock, signals=(make_series(),)),))
+    )
+    second = dataset.add_record(
+        record=Record(sources=(Source(name="second", start_time=second_clock, signals=(make_series(),)),))
+    )
+    scope = TimeInterval.seconds(0, 0.004, time_origin=first_clock)
+
+    task = dataset.add_task(
+        task=ClassificationTask(
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            inputs=(first, second),
+            targets=("event",),
+            scope=scope,
+        )
+    )
+
+    assert task.scope is scope
+
+
 def test_scoped_task_span_rejects_equal_timestamps_on_distinct_clocks(make_series):
     dataset = _dataset()
     first = make_series(signal="first")

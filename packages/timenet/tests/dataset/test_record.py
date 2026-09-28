@@ -134,7 +134,7 @@ def test_time_interval_measures_wall_clock_against_the_record_anchor(make_series
         datetime(2026, 8, 5, 9, 0, 5, tzinfo=UTC),
         datetime(2026, 8, 5, 9, 0, 8, tzinfo=UTC),
     )
-    assert span == TimeInterval.seconds(5.0, 8.0)
+    assert span == TimeInterval.seconds(5.0, 8.0, time_origin=record.sources[0].start_time)
 
 
 def test_time_point_needs_an_anchored_record(make_series):
@@ -191,6 +191,38 @@ def test_time_span_rejects_independent_source_clocks_with_equal_timestamps(make_
     with pytest.raises(TimeFValidationError, match="exactly one source clock"):
         record.time_point(datetime(1970, 1, 1, tzinfo=UTC))
     assert record.time_point(datetime(1970, 1, 1, tzinfo=UTC), time_series_ids=(first.id,)).start_us == 0
+
+
+def test_unscoped_span_can_name_one_of_two_independent_clocks(make_series):
+    first_clock = TimeOrigin(0)
+    second_clock = TimeOrigin(0)
+    first = make_series(signal="I", values=(0.0,) * 5000)
+    second = make_series(
+        signal="II",
+        values=(0.0,) * 5000,
+        time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000),
+    )
+    record = Record(
+        sources=(
+            Source(name="first", start_time=first_clock, signals=(first,)),
+            Source(name="second", start_time=second_clock, signals=(second,)),
+        )
+    )
+
+    annotation = record.annotate(
+        Annotation(key="event", span=TimePoint.seconds(5, time_origin=first_clock)),
+        warn_when_outside=False,
+    )
+    assert annotation.span is not None and annotation.span.time_origin is first_clock
+    wall_time = datetime(1970, 1, 1, 0, 0, 5, tzinfo=UTC)
+    assert record.time_point(wall_time, time_origin=first_clock).start_us == 5_000_000
+    with pytest.raises(TimeFValidationError, match="different source clock"):
+        record.annotate(
+            Annotation(
+                key="bad",
+                span=TimePoint.seconds(5, time_series_ids=(first.id,), time_origin=second_clock),
+            )
+        )
 
 
 def test_a_trial_interval_is_refused_on_a_timeless_record(make_series):

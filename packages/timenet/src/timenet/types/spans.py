@@ -4,9 +4,8 @@ A region has two independent traits: its shape (a point or a half-open interval)
 steps). The frame changes what the numbers mean, so the frame is the type. Shape is the same trait run
 twice, so it is a subtype within each frame.
 
-A time span reads its bounds as microseconds on the **source recording timeline**, the frame a series'
-axis places its values in. This keeps it meaningful on a windowed record that starts partway into the
-recording. It covers the whole record, or a subset of series named by ``time_series_ids``.
+A time span reads its bounds as microseconds on a source clock. Its ``time_origin`` can name that
+clock directly. Its ``time_series_ids`` separately restrict which signals the span covers.
 
 A step span reads its bounds as ordinal indices into one series' own array. A step index means nothing
 without a series to count on, so a step span names exactly one ``time_series_id``. Steps exist for a
@@ -28,7 +27,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from timenet.errors import TimeFValidationError
-from timenet.types.clock import check_int64, seconds_to_us
+from timenet.types.clock import TimeOrigin, check_int64, seconds_to_us
 
 
 def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
@@ -88,10 +87,11 @@ class Span:
 
 @dataclass(frozen=True, kw_only=True)
 class TimeSpan(Span):
-    """Abstract base for a region on the recording timeline. Bounds are microseconds.
+    """Abstract base for a region on a source clock. Bounds are microseconds.
 
-    Covers the whole record when ``time_series_ids`` is ``None``, or a subset of series when it names
-    them. Valid only on a series whose axis is a timeline (regular or irregular).
+    With no signal IDs, a named ``time_origin`` covers the timed signals on that clock. If the
+    origin is absent, the owner must have one timed clock. Signal IDs restrict the scope but do not
+    identify the clock. A time span requires a timeline axis (regular or irregular).
     """
 
     frame: ClassVar[str] = "seconds"
@@ -100,7 +100,9 @@ class TimeSpan(Span):
     start_us: int
     """The position, or the start of the interval, in microseconds on the source recording timeline."""
     time_series_ids: tuple[str, ...] | None = None
-    """Series the span is scoped to. ``None`` covers every series in the record."""
+    """Signals in the scope. ``None`` covers all timed signals on the selected clock."""
+    time_origin: TimeOrigin | None = None
+    """Source clock for these bounds. Use it when a record has independent clocks."""
 
     def __post_init__(self) -> None:
         """Validate the base, then the start bound and the series scope.
@@ -118,6 +120,8 @@ class TimeSpan(Span):
         )
         if self.time_series_ids is not None and not self.time_series_ids:
             raise TimeFValidationError("TimeSpan time_series_ids must be None (whole record) or non-empty, got ()")
+        if self.time_origin is not None and not isinstance(self.time_origin, TimeOrigin):
+            raise TimeFValidationError("TimeSpan time_origin must be a TimeOrigin or None")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -132,30 +136,36 @@ class TimePoint(TimeSpan):
         return self.start_us + 1
 
     @classmethod
-    def seconds(cls, at: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
+    def seconds(
+        cls, at: float, *, time_series_ids: tuple[str, ...] | None = None, time_origin: TimeOrigin | None = None
+    ) -> "TimePoint":
         """Construct a point from recording seconds, rounded to the nearest microsecond.
 
         Args:
             at: The position, in recording seconds.
-            time_series_ids: Series the point is scoped to. ``None`` covers every series.
+            time_series_ids: Signals in the scope. ``None`` covers all timed signals on the clock.
+            time_origin: Clock for this point. Required when the owner has independent clocks.
 
         Returns:
             The point.
         """
-        return cls(start_us=seconds_to_us(at), time_series_ids=time_series_ids)
+        return cls(start_us=seconds_to_us(at), time_series_ids=time_series_ids, time_origin=time_origin)
 
     @classmethod
-    def micros(cls, at: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
+    def micros(
+        cls, at: int, *, time_series_ids: tuple[str, ...] | None = None, time_origin: TimeOrigin | None = None
+    ) -> "TimePoint":
         """Construct a point from whole microseconds, for a source that already has them.
 
         Args:
             at: The position, in microseconds.
-            time_series_ids: Series the point is scoped to. ``None`` covers every series.
+            time_series_ids: Signals in the scope. ``None`` covers all timed signals on the clock.
+            time_origin: Clock for this point. Required when the owner has independent clocks.
 
         Returns:
             The point.
         """
-        return cls(start_us=at, time_series_ids=time_series_ids)
+        return cls(start_us=at, time_series_ids=time_series_ids, time_origin=time_origin)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -188,32 +198,53 @@ class TimeInterval(TimeSpan):
         return self.end_us
 
     @classmethod
-    def seconds(cls, start: float, end: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
+    def seconds(
+        cls,
+        start: float,
+        end: float,
+        *,
+        time_series_ids: tuple[str, ...] | None = None,
+        time_origin: TimeOrigin | None = None,
+    ) -> "TimeInterval":
         """Construct an interval from recording seconds, each bound rounded to the nearest microsecond.
 
         Args:
             start: Start of the interval, in recording seconds.
             end: End of the interval, exclusive, in recording seconds.
-            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
+            time_series_ids: Signals in the scope. ``None`` covers all timed signals on the clock.
+            time_origin: Clock for this interval. Required when the owner has independent clocks.
 
         Returns:
             The interval.
         """
-        return cls(start_us=seconds_to_us(start), end_us=seconds_to_us(end), time_series_ids=time_series_ids)
+        return cls(
+            start_us=seconds_to_us(start),
+            end_us=seconds_to_us(end),
+            time_series_ids=time_series_ids,
+            time_origin=time_origin,
+        )
 
     @classmethod
-    def micros(cls, start: int, end: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
+    def micros(
+        cls,
+        start: int,
+        end: int,
+        *,
+        time_series_ids: tuple[str, ...] | None = None,
+        time_origin: TimeOrigin | None = None,
+    ) -> "TimeInterval":
         """Construct an interval from whole microseconds, for a source that already has them.
 
         Args:
             start: Start of the interval, in microseconds.
             end: End of the interval, exclusive, in microseconds.
-            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
+            time_series_ids: Signals in the scope. ``None`` covers all timed signals on the clock.
+            time_origin: Clock for this interval. Required when the owner has independent clocks.
 
         Returns:
             The interval.
         """
-        return cls(start_us=start, end_us=end, time_series_ids=time_series_ids)
+        return cls(start_us=start, end_us=end, time_series_ids=time_series_ids, time_origin=time_origin)
 
 
 @dataclass(frozen=True, kw_only=True)
