@@ -45,6 +45,9 @@ volts = millivolts.to(ureg.volt)
 TimeNet serializes unit names and restores them through `ureg`. It does not replace pint's global
 application registry during import.
 
+`TimeSeriesSpec.unit_value` is required. Set it to `None` when the source does not establish a
+unit. Use `ureg.dimensionless` only when the values have a known dimensionless meaning.
+
 Call `use_as_application_registry()` only when your application pickles bare pint units or
 quantities. This call changes process-wide pint state.
 
@@ -74,7 +77,7 @@ vibration = TimeSeriesSpec(
 | --- | --- |
 | `spec_type` | Dataset-unique modality tag. |
 | `name` | Human-readable modality name. |
-| `unit_value` | Physical unit of each value. |
+| `unit_value` | Physical unit of each value, or `None` when unknown. |
 | `dtype` | NumPy scalar dtype, `"str"`, or `"enum"`. |
 | `categories` | Allowed labels for an enum specification. |
 | `value_shape` | Shape of one timestep, without the time dimension. |
