@@ -256,7 +256,6 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
 class _TaskFacts(NamedTuple):
     """Facts about one control database that every task hydration reuses."""
 
-    record_count: int
     parent_task_keys: frozenset[int]
     tasks_annotated: bool
 
@@ -695,12 +694,14 @@ class DuckDBControlReader:
             for row in rows
         ]
 
-    def read_tasks(self, records: Iterable[Record]) -> tuple[Task, ...]:
+    def read_tasks(
+        self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
+    ) -> tuple[Task, ...]:
         """Hydrate every task attached to ``records`` and restore all in-memory object references.
 
         Args:
-            records: Records hydrated by this reader. Tasks reference these objects, so the same
-                ``Record`` instance a caller holds is the one its tasks point at.
+            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
+            cached_records: Hydrated Records to reuse without restricting the selection.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -708,7 +709,7 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
         """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(self, tuple(records))
+        hydration = _TaskHydration(self, None if records is None else tuple(records), cached_records=cached_records)
         return tuple(hydration.read_all())
 
     def iter_tasks(
@@ -717,19 +718,21 @@ class DuckDBControlReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        cached_records: Iterable[Record] = (),
     ) -> Iterator[Task]:
         """Yield the tasks whose inputs include one of ``records``, a bounded batch at a time.
 
         Each batch runs a handful of keyed queries and builds only that batch's tasks, so a caller
-        that walks one Record at a time never holds the whole task table in memory. Passing every
-        Record of the dataset skips the input filter and streams the full table.
+        that walks one Record at a time never holds the whole task table in memory. Only ``None``
+        skips the input Record filter; an empty collection selects no tasks.
 
         Tasks a batch derives from through ``from_tasks`` are hydrated first when they have not
         been yielded yet, and kept until their dependants are built. Records a task refers to
         outside ``records`` are hydrated on demand.
 
         Args:
-            records: Records hydrated by this reader.
+            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
+            cached_records: Hydrated Records to reuse without restricting the selection.
 
         Yields:
             Concrete tasks in stable ID order.
@@ -739,8 +742,8 @@ class DuckDBControlReader:
         """  # noqa: DOC502 - raised by _TaskHydration
         hydration = _TaskHydration(
             self,
-            () if records is None else tuple(records),
-            all_records=records is None,
+            None if records is None else tuple(records),
+            cached_records=cached_records,
             required_modalities=required_modalities,
             supported_modalities=supported_modalities,
         )
@@ -750,11 +753,9 @@ class DuckDBControlReader:
         """Return the per-database facts task hydration needs, read once per reader.
 
         Returns:
-            The record count, the keys of tasks other tasks derive from, and whether any task
-            carries annotations.
+            The keys of tasks other tasks derive from, and whether any task carries annotations.
         """
         if self._task_facts is None:
-            (record_count,) = self.connection.execute("SELECT count(*) FROM records").fetchone() or (0,)
             parent_keys = {
                 row[0]
                 for row in self.connection.execute("SELECT DISTINCT parent_task_key FROM task_dependencies").fetchall()
@@ -762,7 +763,7 @@ class DuckDBControlReader:
             (annotated,) = self.connection.execute(
                 "SELECT count(*) FROM annotation_occurrences WHERE object_type = 'Task'"
             ).fetchone() or (0,)
-            self._task_facts = _TaskFacts(record_count, frozenset(parent_keys), annotated > 0)
+            self._task_facts = _TaskFacts(frozenset(parent_keys), annotated > 0)
         return self._task_facts
 
     def task_table(
@@ -953,19 +954,19 @@ class DuckDBControlReader:
         return " AND ".join(predicates), parameters
 
     @contextmanager
-    def _task_key_cursor(
+    def _task_row_cursor(
         self,
         record_keys: list[int] | None,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
     ) -> Iterator[duckdb.DuckDBPyConnection]:
-        """Stream selected task keys in task ID order through a separate query cursor.
+        """Stream selected task rows in task ID order through a separate query cursor.
 
         Args:
             record_keys: Keys of the Records whose input tasks to select, or ``None`` for every task.
 
         Yields:
-            A cursor for fetching selected keys in batches.
+            A cursor for fetching selected rows in batches.
         """
         modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
         predicates = []
@@ -982,7 +983,8 @@ class DuckDBControlReader:
             predicates.append(modality_where)
             params.extend(modality_params)
         where = "WHERE " + " AND ".join(predicates) if predicates else ""
-        sql = f"SELECT t.task_key FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed predicates
+        columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
+        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed identifiers and predicates
         # Hydration runs other queries while this result is open, so it needs its own cursor.
         with self.connection.cursor() as selection:
             selection.execute(sql, params)
@@ -1334,9 +1336,9 @@ class _TaskHydration:
     def __init__(
         self,
         reader: DuckDBControlReader,
-        records: tuple[Record, ...],
+        records: tuple[Record, ...] | None,
         *,
-        all_records: bool = False,
+        cached_records: Iterable[Record] = (),
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
     ) -> None:
@@ -1349,7 +1351,8 @@ class _TaskHydration:
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
         self.connection = reader.connection
-        self.records_by_id: dict[str, Record] = {record.id: record for record in records}
+        self.records_by_id: dict[str, Record] = {record.id: record for record in cached_records}
+        self.records_by_id.update((record.id, record) for record in records or ())
         self.records_by_key: dict[int, Record] = {}
         self.signals_by_id: dict[str, Signal] = {}
         self._records_without_signal_index: list[Record] = []
@@ -1374,7 +1377,7 @@ class _TaskHydration:
         for record_id, record in list(self.records_by_id.items()):
             self._index_record(reader._record_keys[record_id], record)
         self.record_keys: list[int] | None = (
-            None if all_records or len(self.records_by_id) == facts.record_count else list(self.records_by_key)
+            None if records is None else [reader._record_keys[record.id] for record in records]
         )
 
     def iter_tasks(self) -> Iterator[Task]:
@@ -1383,13 +1386,14 @@ class _TaskHydration:
         Yields:
             Each hydrated task.
         """
-        with self.reader._task_key_cursor(
+        with self.reader._task_row_cursor(
             self.record_keys,
             self.required_modalities,
             self.supported_modalities,
         ) as selection:
             while rows := selection.fetchmany(_TASK_BATCH_SIZE):
-                yield from self._hydrate([row[0] for row in rows])
+                task_rows = [_TaskRow._make(row) for row in rows]
+                yield from self._hydrate([row.task_key for row in task_rows], task_rows=task_rows)
 
     def read_all(self) -> list[Task]:
         """Build all selected tasks, using batches for filtered reads.
@@ -1401,8 +1405,10 @@ class _TaskHydration:
             return self._hydrate(None)
         return list(self.iter_tasks())
 
-    def _hydrate(self, task_keys: list[int] | None) -> list[Task]:
+    def _hydrate(self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
         """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.
+
+        Rows from the selection cursor avoid a second task-table scan.
 
         Returns:
             The tasks in the order of ``task_keys``, or in task ID order for the whole table.
@@ -1411,6 +1417,8 @@ class _TaskHydration:
             TimeFFormatError: If the stored derivations contain a cycle.
         """
         pending = None if task_keys is None else [key for key in task_keys if key not in self.retained]
+        if task_rows is not None:
+            task_rows = [row for row in task_rows if row.task_key not in self.retained]
         dependencies = self.reader._task_dependencies(pending) if self.parent_keys else {}
         in_batch = None if pending is None else set(pending)
         missing_parents = (
@@ -1434,7 +1442,7 @@ class _TaskHydration:
                 self._hydrate(missing_parents)
             finally:
                 self._hydrating.difference_update(pending or ())
-        built = self._build(pending)
+        built = self._build(pending, task_rows=task_rows)
         for task_key, parent_keys in dependencies.items():
             built[task_key].from_tasks = tuple(self._task(parent_key, built) for parent_key in parent_keys)
         if task_keys is None:
@@ -1455,7 +1463,9 @@ class _TaskHydration:
             raise TimeFFormatError(f"task dependency refers to missing task key {task_key!r}")
         return task
 
-    def _build(self, task_keys: list[int] | None) -> dict[int, Task]:  # noqa: PLR0914 - one batch joins several tables
+    def _build(  # noqa: PLR0914 - one batch joins several tables
+        self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None
+    ) -> dict[int, Task]:
         """Read every table for one batch of task keys and construct the tasks.
 
         Returns:
@@ -1467,7 +1477,8 @@ class _TaskHydration:
         if task_keys is not None and not task_keys:
             return {}
         reader = self.reader
-        task_rows = reader._task_rows(task_keys)
+        if task_rows is None:
+            task_rows = reader._task_rows(task_keys)
         record_refs = reader._task_relationships("task_record_refs", "record_key", task_keys)
         annotation_refs = reader._task_relationships("task_annotation_refs", "occurrence_key", task_keys)
         target_rows = reader._target_rows(task_keys)

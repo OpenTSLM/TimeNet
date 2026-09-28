@@ -123,7 +123,7 @@ class TimeFReader:
         """Return all tasks with their object references restored."""
         if self._tasks is None:
             with self._as_format_error():
-                self._tasks = self._control_reader().read_tasks(self._all_records())
+                self._tasks = self._control_reader().read_tasks(cached_records=self._all_records())
         return self._tasks
 
     def record_ids(self) -> tuple[str, ...]:
@@ -135,17 +135,19 @@ class TimeFReader:
         with self._as_format_error():
             return self._control_reader().record_ids()
 
-    def read_tasks(self, records: Iterable[Record]) -> tuple[Task, ...]:
+    def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:
         """Hydrate the tasks attached to ``records`` in one pass.
 
         Args:
-            records: Records from :meth:`iter_records`. Tasks reference these ``Record`` objects directly.
+            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
 
         Returns:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(tuple(records))
+            return self._control_reader().read_tasks(
+                records, cached_records=self._all_records() if records is None else ()
+            )
 
     def iter_tasks(
         self,
@@ -164,12 +166,13 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         filtered = required_modalities is not None or supported_modalities is not None
-        selected = self._all_records() if records is None and not filtered else records
+        cached_records = self._all_records() if records is None and not filtered else ()
         with self._as_format_error(preserve_validation=True):
             yield from self._control_reader().iter_tasks(
-                selected,
+                records,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
+                cached_records=cached_records,
             )
 
     def task_table(
