@@ -1,0 +1,38 @@
+Domain,Dataset,Time Points,File Size,Freq,ADF,Forecast.,Source,Description,patch_size
+Energy,London Smart Meters,166.50M,4120M,Hourly,-13.158,0.173,https://arxiv.org/abs/2105.06643,"Household electricity use from London smart meters sampled hourly in London homes, useful for load and demand pattern analysis.  ￼",64
+Energy,Wind Farms,7.40M,179M,4 sec,-29.174,0.811,https://arxiv.org/abs/2105.06643,Wind power output and turbine status sampled every 4 seconds to capture fast changes in wind farm operation.  ￼,128
+Energy,Aus. Electricity Demand,1.16M,35M,30 min,-27.554,0.73,https://arxiv.org/abs/2105.06643,Regional electricity demand across Australian states sampled every 30 minutes for system load forecasting.  ￼,128
+Environment,AustraliaRainfall,11.54M,54M,Hourly,-150.1,0.458,https://link.springer.com/article/10.1007/s10618-021-00745-9,Hourly rainfall totals from Australian weather stations for precipitation monitoring and short term forecasting.,32
+Environment,BeijingPM25Quality,3.66M,26M,Hourly,-31.415,0.404,https://link.springer.com/article/10.1007/s10618-021-00745-9,Hourly PM2.5 concentration and related air quality variables in Beijing for air pollution analysis.,32
+Environment,BenzeneConcentration,16.34M,206M,Hourly,-65.187,0.526,https://link.springer.com/article/10.1007/s10618-021-00745-9,Hourly ambient benzene concentration from monitoring stations for air quality assessment.,32
+Health,MotorImagery,72.58M,514M,0.001 sec,-3.132,0.449,https://arxiv.org/abs/1810.07758,Electroencephalography recordings during motor imagery tasks sampled every 0.001 second to study task related brain activity.  ￼,64
+Health,SelfRegulationSCP1,3.02M,18M,0.004 sec,-3.191,0.504,https://arxiv.org/abs/1810.07758,Slow cortical potential electroencephalography recorded during self regulation sessions sampled every 0.004 second.  ￼,64
+Health,SelfRegulationSCP2,3.06M,18M,0.004 sec,-2.715,0.481,https://arxiv.org/abs/1810.07758,Follow up slow cortical potential electroencephalography from a similar self regulation experiment sampled every 0.004 second.  ￼,8
+Health,AtrialFibrillation,0.04M,1M,0.008 sec,-7.061,0.167,https://arxiv.org/abs/1810.07758,Electrocardiography recordings for atrial fibrillation detection sampled every 0.008 second.  ￼,8
+Health,PigArtPressure,0.62M,7M,-,-7.649,0.739,https://arxiv.org/abs/1810.07758,Invasive arterial blood pressure signals from pigs for cardiovascular physiology research.,32
+Health,PigCVP,0.62M,7M,-,-4.855,0.577,https://arxiv.org/abs/1810.07758,Central venous pressure signals from pigs for cardiovascular function analysis.,16
+Health,IEEEPPG,15.48M,136M,0.008 sec,-7.725,0.38,https://link.springer.com/article/10.1007/s10618-021-00745-9,"Photoplethysmography signals of blood volume pulse sampled every 0.008 second, including motion conditions for robust pulse analysis.  ￼",32
+Health,BIDMC32HR,63.59M,651M,-,-14.135,0.523,https://link.springer.com/article/10.1007/s10618-021-00745-9,Continuous physiological waveforms including heart rate and respiration recorded over extended hours for monitoring and modeling in clinical settings.,64
+Health,TDBrain,72.30M,1333M,0.002 sec,-3.167,0.967,https://arxiv.org/abs/2310.14017,Clinical and cognitive electroencephalography sampled every 0.002 second for studies of neural activity and biomarkers.  ￼,16
+IoT,SensorData,165.4M,2067M,0.02 sec,-15.892,0.917,Real-world machine logs,Multivariate IoT sensor logs from real machines sampled every 0.02 second capturing operational variables for condition monitoring.,64
+Nature,Phoneme,2.16M,25M,-,-8.506,0.243,https://arxiv.org/abs/1810.07758,Audio time series of spoken phonemes for speech pattern analysis and recognition.  ￼,32
+Nature,EigenWorms,27.95M,252M,-,-12.201,0.393,https://arxiv.org/abs/1810.07758,Worm locomotion time series represented as eigenworm posture components for behavior and genetics studies.  ￼,32
+Nature,ERA5 Surface,58.44M,574M,3 h,-28.263,0.493,https://essd.copernicus.org/articles/13/4349/2021/,Surface atmospheric variables such as temperature humidity and wind from ERA5 reanalysis sampled every 3 hours in this collection.  ￼,32
+Nature,ERA5 Pressure,116.88M,1083M,3h,-22.001,0.853,https://essd.copernicus.org/articles/13/4349/2021/,Pressure level atmospheric variables such as geopotential and temperature from ERA5 reanalysis sampled every 3 hours in this collection.  ￼,16
+Nature,Temperature Rain,23.25M,109M,Daily,-10.952,0.133,https://arxiv.org/abs/2105.06643,Daily temperature and rainfall series for weather modeling and baseline forecasting.,32
+Nature,StarLightCurves,9.46M,109M,-,-1.891,0.555,https://arxiv.org/abs/1810.07758,Stellar brightness time series for variable star analysis and classification.,32
+Nature,Saugen River Flow,0.02M,1M,Daily,-19.305,0.3,https://arxiv.org/abs/2105.06643,Daily river flow at Walkerton Ontario in cubic meters per second for hydrological modeling.  ￼,32
+Nature,KDD Cup 2018,2.94M,67M,Hourly,-10.107,0.362,https://arxiv.org/abs/2105.06643,Hourly multivariate time series of air quality temperature and related weather variables for Chinese cities from the KDD Cup 2018 task.  ￼,32
+Nature,US Births,0.00M,1M,Daily,-3.352,0.675,https://arxiv.org/abs/2105.06643,Daily counts of births in the United States for demographic pattern analysis.  ￼,16
+Nature,Sunspot,0.07M,2M,Daily,-7.866,0.287,https://arxiv.org/abs/2105.06643,Daily sunspot counts as a proxy for solar activity for long term solar cycle study.  ￼,16
+Nature,Worms,0.23M,4M,0.033 sec,-3.851,0.395,https://arxiv.org/abs/1810.07758,Worm motion sensor signals sampled every 0.033 second capturing movement patterns for organism behavior analysis.  ￼,64
+Transport,Pedestrian Counts,3.13M,72M,Hourly,-23.462,0.297,https://arxiv.org/abs/2105.06643,Hourly counts of pedestrians from city sensors for urban activity and mobility analysis.  ￼,32
+Web,Web Traffic,116.49M,388M,Daily,-8.272,0.299,https://arxiv.org/abs/2105.06643,Daily page view counts for Wikipedia articles for web traffic modeling and forecasting.  ￼,16
+IoT,Capture24,23.4M,-,30 Hz, -,-,-,-,15
+IoT,auditory,-,-,65 Hz, -,-,-,-,16
+IoT,dalia,-,-,65 Hz, -,-,-,-,16
+IoT,maus,-,-,65 Hz, -,-,-,-,16
+IoT,mendeley,-,-,65 Hz, -,-,-,-,16
+IoT,Phyatt,-,-,65 Hz, -,-,-,-,16
+IoT,ppg_ecg,-,-,65 Hz, -,-,-,-,16
+Synthetic,ChatTS,-,-,-, -,-,-,-,16

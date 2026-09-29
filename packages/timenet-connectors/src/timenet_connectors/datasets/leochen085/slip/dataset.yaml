@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the leochen085/slip connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: the whole release, pinned at one revision. Its `data/` shards are the pretraining corpus:
+# series drawn from 37 other publishers' corpora, each with captions a language model wrote. Its
+# eleven other folders (wisdm, uci_har, PPG_CVA, PPG_DM, PPG_HTN, sleepEDF, ptbxl, wesad,
+# studentlife, AsphaltObstacles and Beijing_AQI) are the evaluation collections: other publishers'
+# datasets cut into fixed labelled windows, in the train and test subsets the release published.
+#
+# Licence: MIT covers what SLIP added, the packaging and the captions. The corpora the pretraining
+# rows were drawn from and the datasets the collections repackage (WISDM, UCI-HAR, PPG-BP,
+# Sleep-EDF, PTB-XL, WESAD, StudentLife and others) keep their own terms, so no single licence
+# covers the dataset.
+#
+# Domains: `meta.csv` names Energy, Environment, Health, IoT, Nature, Synthetic, Transport and Web
+# for the 37 corpora, and the collections are health, activity, transport and environment data.
+# Those map onto this card's values as energy, environment, health, transport, activity (Capture24,
+# dalia, wisdm and uci_har) and general (IoT, Nature, Synthetic and Web have no closer value).
+#
+# What a record carries: one signal per inner list of the row, named s00, s01, ..., on ordinal
+# axes. `source_dataset` names the dataset the row was cut from, as the release names it: a corpus
+# of `meta.csv` for a pretraining row, and the folder for a window. The release ships no
+# timestamps. `meta.csv` states a rate per corpus, but that column is prose copied from UTSD's
+# published table, and it lists London Smart Meters as hourly where the rows are half-hourly; the
+# rates the README states for the collections do not all fit the windows either. No rate is
+# therefore made a time axis. A pretraining row keeps its rate as the `source_rate` annotation,
+# with `domain` and `source_url` from the same table. The values are unitless: UTSD rows keep their
+# source scale, NormWear rows arrive standardized, and a window is as its collection published it.
+# A pretraining row is float32 and a window float64, as released.
+#
+# Tasks and splits: a pretraining row carries its four caption columns as annotations and one
+# unprompted AnswerTask per distinct caption text, in the train split. The captions were written by
+# a language model, not by a rater: caption0 is the generated caption and caption1 to caption3 are
+# Qwen2 paraphrases of it, some of which keep a "Paraphrase N:" prefix or stop mid-sentence. The
+# ChatTS rows hold one text in all four columns, so they get one task. A window carries one
+# ClassificationTask whose class is its text label, which is what SLIP's zero-shot evaluation takes
+# as the classes: in the train split for a window of a train subset, which SLIP fits its linear
+# probes to and never pretrains on, and in the eval split for one of a test subset. `label` keeps
+# the numeric class index where the release gives one, `label_template` the sentence SLIP fills
+# with a class name for retrieval, and `participant_id` the subject where the folder states one.
+#
+# Quirks preserved as released: a few dalia rows hold one channel of NaN; most PPG windows are
+# left-padded with 136 zeros; the 13 WESAD channels hold only three distinct series; the
+# AsphaltObstacles template is the air-quality sentence; the wisdm subsets share their
+# participants; ptbxl's text labels are ECG report sentences rather than class names.
+yaml_schema_version: 1
+dataset_id: leochen085/slip
+dataset_version: 1.0.0
+name: SLIP
+description: >-
+  The SLIP release: sensor series paired with captions a language model wrote, one caption of each
+  series and three rewrites of it, and eleven evaluation collections of labelled windows in their
+  published train and test subsets.
+license: other
+license_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+source_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+citation: >-
+  Chen, Y., Pillai, A., Wu, Y. Y., Griffin, T. Z., Marsch, L., Heinz, M. V., Jacobson, N. C., and
+  Campbell, A. (2026). Learning Transferable Sensor Models via Language-Informed Pretraining.
+  arXiv:2603.11950. https://arxiv.org/abs/2603.11950
+access: open
+domains:
+  - general
+  - health
+  - activity
+  - environment
+  - energy
+  - transport
+tags:
+  - captioning
+  - classification
+  - contrastive-learning
+  - multimodal
+  - sensor
+  - huggingface

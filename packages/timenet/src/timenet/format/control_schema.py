@@ -292,6 +292,7 @@ TASKS = Table(
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
         _required("input_modalities", ColumnType.VARCHAR_LIST),
+        Column("split", ColumnType.VARCHAR),
         Column("scope_type", ColumnType.VARCHAR),
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),

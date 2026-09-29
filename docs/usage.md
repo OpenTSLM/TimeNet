@@ -138,6 +138,9 @@ print(model.score(x_test, y_test))
 
 The helper infers the task type because this dataset has one scalar target type. Pass `task=` when a
 dataset contains several eligible task types.
+When a dataset ships its own partition, pass `split=` instead of splitting at random:
+`to_features_and_targets(split="train")` and `to_features_and_targets(split="eval")` build the two
+pairs from the Tasks the dataset marks as such.
 
 The runnable version is
 [`examples/test_mean_classifier.py`](https://github.com/OpenTSLM/TimeNet/blob/main/examples/test_mean_classifier.py).
