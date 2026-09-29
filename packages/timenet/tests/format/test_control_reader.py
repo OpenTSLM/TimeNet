@@ -13,7 +13,6 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     InputModality,
-    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
