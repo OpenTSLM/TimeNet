@@ -19,7 +19,7 @@ This module uses two words that are not interchangeable, because the format name
     :attr:`~timenet.dataset.Record.start_time`. It is what a record's relative zero refers to.
 
 The wall clock enters once and composes by addition. A value's timestamp is the record's
-``start_time`` plus the value's time offset. The recording's own zero anchors the time offset.
+``start_time.timestamp`` plus the value's time offset. The recording's own zero anchors the time offset.
 The Unix epoch anchors the timestamp.
 
 The period is a :class:`~fractions.Fraction` of microseconds, not a float rate. Not every real
@@ -252,7 +252,7 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 
     Args:
         moments: The wall-clock moments, each timezone-aware.
-        start_time: The target record's ``start_time``.
+        start_time: The target Record's ``start_time.timestamp``.
 
     Returns:
         A C-contiguous int64 array of microseconds from the record's relative zero.

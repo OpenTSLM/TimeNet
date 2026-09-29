@@ -66,7 +66,7 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
     ("statement", "message"),
     [
         (
-            "INSERT INTO records (record_key, record_id, metadata) SELECT record_key, record_id, metadata FROM records",
+            "INSERT INTO records (record_key, record_id, clock_id, metadata) SELECT record_key, record_id, clock_id, metadata FROM records",
             "records contains duplicate values for record_key",
         ),
         (
@@ -82,7 +82,7 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_key, record_id, metadata) VALUES (-1, 'ghost', '{}'); "
+            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}'); "
             "UPDATE sources SET record_key = -1 WHERE source_id = 'ecg'",
             "belong to different records",
         ),

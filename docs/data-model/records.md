@@ -79,23 +79,36 @@ Sources and Signals also support `metadata` and `annotate()`.
 
 ## Add time information
 
-`start_time` anchors the relative recording timeline to Unix time. Pass a timezone-aware `datetime`
-or whole Unix microseconds.
+Each Record has one `TimeOrigin`. All Signal offsets and time annotations use this common
+relative zero. The connector aligns the data before it constructs the Record.
 
 ```python
 from datetime import datetime, timezone
+from timenet.dataset import Record, Source
+from timenet.types import TimeOrigin
 
+origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
     record_id="run-001",
-    sources=(imu,),
-    start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    start_time=origin,
+    sources=(
+        Source(name="sensor A", signals=(signal_a,)),
+        Source(name="sensor B", signals=(signal_b,)),
+    ),
 )
 ```
 
-Leave `start_time=None` when the source has no reliable wall-clock time.
+`record.start_time.timestamp` is whole Unix microseconds or `None`. A missing absolute timestamp
+does not prevent relative alignment. The default is a fresh `TimeOrigin(None)` for each Record.
 
-`time_span` can declare a session interval that contains all Signal windows. This field is useful
-when every sensor is off during part of a session.
+Related Records can explicitly share one origin, including an unknown origin. Separate unknown
+origins do not imply alignment. A converter must not invent a date, timezone, or synchronization.
+
+A regular axis stores a cadence and an offset from the Record origin. An irregular axis stores
+each offset. An ordinal axis records order only, with no assumed elapsed time.
+
+`time_span` can declare a session interval that contains all Signal windows. This field permits
+events during gaps when every sensor is off.
 
 ## Connect tasks
 
