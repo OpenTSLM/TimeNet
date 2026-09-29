@@ -17,6 +17,7 @@ from timenet.types import (
     LocalizationMode,
     ScalarPredictionTask,
     Span,
+    Split,
     StepInterval,
     StepPoint,
     Task,
@@ -62,6 +63,23 @@ def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality
     if len(result) != len(values):
         raise TimeFFormatError(f"task has repeated stored input modalities: {values!r}")
     return result
+
+
+def decode_split(value: str | None) -> Split | None:
+    """Decode a stored split.
+
+    Returns:
+        The task's partition, or ``None`` for a task its dataset does not partition.
+
+    Raises:
+        TimeFFormatError: If the stored split is unknown.
+    """
+    if value is None:
+        return None
+    try:
+        return Split(value)
+    except ValueError as exc:
+        raise TimeFFormatError(f"task has an unknown stored split: {value!r}") from exc
 
 
 def encode_span(span: Span | None) -> dict[str, Any] | None:

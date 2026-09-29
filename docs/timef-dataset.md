@@ -162,6 +162,10 @@ Tasks can also hold input or target Annotation references, references to parent 
 annotations, and optional metadata. The DuckDB storage layer turns these object references into
 normalized ID relationships and restores the objects when it reads the dataset.
 
+A Task may name its `split`: `train`, `validation`, or `test`. `get_train()`, `get_validation()`,
+and `get_test()` return the Tasks of one split, `get_all()` every Task, and `iter_tasks(split=...)`
+filters a stream. See [Tasks](data-model/tasks.md#splits).
+
 ## Building a dataset
 
 Register complete Records independently of Tasks. This supports datasets with or without labels:

@@ -28,6 +28,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.splits import Split, parse_split
 from timenet.values_backends import ValuesBackend
 
 
@@ -301,17 +302,26 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> Iterator[Task]:
         """Yield the dataset's tasks, from the stream when one is set, else the materialized list.
+
+        Args:
+            split: Keep only tasks of this split, or ``None`` for every task.
 
         Yields:
             Each task. A streamed dataset re-reads its source on every call.
 
-        """
+        Raises:
+            TimeFValidationError: If ``split`` is unknown.
+        """  # noqa: DOC502 - raised by parse_split
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
+        wanted = None if split is None else parse_split(split)
         source = self._task_stream() if self._task_stream is not None else self._tasks
         for task in source:
+            if wanted is not None and task.split is not wanted:
+                continue
             if not required and supported is None:
                 yield task
                 continue
@@ -779,6 +789,57 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         return tuple(task for task in self._tasks if isinstance(task, task_type))
 
+    def get_split(self, split: Split | str) -> tuple[Task, ...]:
+        """Return the tasks of one split, in insertion order.
+
+        A dataset partitions its tasks by setting :attr:`~timenet.types.Task.split` on each one.
+        Records carry no split of their own: a record may serve tasks of several splits. A streamed
+        dataset drains its stream and materializes the selection.
+
+        Args:
+            split: The partition to select, as a :class:`~timenet.types.Split` or its value.
+
+        Returns:
+            The matching tasks. Empty when the dataset partitions its tasks but none is in ``split``.
+
+        Raises:
+            TimeFValidationError: If ``split`` is unknown, or if no task of the dataset belongs to any
+                split. Asking a partition of a dataset that has none is a mistake rather than an
+                empty selection, so it fails rather than returning nothing.
+        """
+        wanted = parse_split(split)
+        selected: list[Task] = []
+        partitioned = False
+        for task in self.iter_tasks():
+            partitioned = partitioned or task.split is not None
+            if task.split is wanted:
+                selected.append(task)
+        if not partitioned:
+            raise TimeFValidationError(
+                f"dataset {self._metadata.dataset_id!r} assigns no split to any task; use get_all()"
+            )
+        return tuple(selected)
+
+    def get_train(self) -> tuple[Task, ...]:
+        """Return the tasks of the training split. See :meth:`get_split`."""
+        return self.get_split(Split.TRAIN)
+
+    def get_validation(self) -> tuple[Task, ...]:
+        """Return the tasks of the validation split. See :meth:`get_split`."""
+        return self.get_split(Split.VALIDATION)
+
+    def get_test(self) -> tuple[Task, ...]:
+        """Return the tasks of the test split. See :meth:`get_split`."""
+        return self.get_split(Split.TEST)
+
+    def get_all(self) -> tuple[Task, ...]:
+        """Return every task whatever its split, in insertion order.
+
+        Returns:
+            The tasks. A streamed dataset drains its stream and materializes them.
+        """
+        return tuple(self.iter_tasks())
+
     @overload
     def tasks_for(self, record: Record) -> tuple[Task, ...]: ...
     @overload
@@ -824,6 +885,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         task: type[Task] | None = ...,
         output: Literal["arrow"] = ...,
         features: Literal["timestep", "series"] = ...,
+        split: Split | str | None = ...,
     ) -> tuple[pa.Array, pa.Array]: ...
     @overload
     def to_features_and_targets(
@@ -832,6 +894,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         task: type[Task] | None = ...,
         output: Literal["numpy"],
         features: Literal["timestep", "series"] = ...,
+        split: Split | str | None = ...,
     ) -> tuple[np.ndarray, np.ndarray]: ...
     def to_features_and_targets(
         self,
@@ -839,12 +902,15 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         task: type[Task] | None = None,
         output: Literal["arrow", "numpy"] = "arrow",
         features: Literal["timestep", "series"] = "timestep",
+        split: Split | str | None = None,
     ) -> tuple[pa.Array, pa.Array] | tuple[np.ndarray, np.ndarray]:
         """Build an ``(X, y)`` training pair. By default, this method defers materialization.
 
         This method requires every record to carry exactly one task of ``task``. It pairs the
-        values of that task's sole signal with the task's only scalar target. The ``features`` argument
-        chooses the shape of ``X``:
+        values of that task's sole signal with the task's only scalar target. With ``split``, only
+        the tasks of that split count, and a record that has none of them is left out rather than
+        rejected, so one call builds ``(X_train, y_train)`` and another ``(X_test, y_test)``. The
+        ``features`` argument chooses the shape of ``X``:
 
         - ``"timestep"`` (the default): one feature per point, in a rectangular matrix. This needs
           equal-length records. The result is an Arrow ``FixedSizeListArray[T]``, or a NumPy
@@ -865,6 +931,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 materialize them.
             features: Use ``"timestep"`` for a rectangular per-point matrix, or ``"series"`` for
                 one variable-length sequence per record.
+            split: Keep only the tasks of this split, or ``None`` for every task.
 
         Returns:
             ``(X, y)`` as two Arrow arrays when ``output="arrow"``, or two NumPy arrays when
@@ -885,7 +952,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         if features not in {"timestep", "series"}:
             raise TimeFValidationError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
-        rows, targets = self._rows_and_targets(resolved)
+        rows, targets = self._rows_and_targets(resolved, None if split is None else parse_split(split))
         # Build only the representation that the caller asked for. This skips the Arrow list
         # array on the NumPy path, and skips the concat of every point on the series+NumPy path.
         try:
@@ -915,28 +982,35 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             return values.to_numpy(zero_copy_only=False).reshape(len(rows), length), y.to_numpy(zero_copy_only=False)
         return pa.FixedSizeListArray.from_arrays(values, length), y
 
-    def _rows_and_targets(self, resolved: type[Task]) -> tuple[list[pa.Array], list[object]]:
+    def _rows_and_targets(
+        self, resolved: type[Task], split: Split | None = None
+    ) -> tuple[list[pa.Array], list[object]]:
         """Pair each matched record's values with its task's target, for :meth:`to_features_and_targets`.
 
         Args:
             resolved: The task type to read targets from.
+            split: Count only the tasks of this split, and skip a record that has none of them.
 
         Returns:
             The per-record Arrow value arrays and their targets, in record order.
 
         Raises:
             TimeFValidationError: This error occurs if a matched task carries no inline target. It
-                also occurs if the dataset has no records, or if any record does not carry exactly
-                one task of ``resolved``.
+                also occurs if no record is matched, or if any record does not carry exactly one
+                task of ``resolved``, in ``split`` when one is given.
         """
         matched_by_record: dict[str, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
+            if split is not None and candidate.split is not split:
+                continue
             for record in candidate.inputs:
                 matched_by_record.setdefault(record.id, []).append(candidate)
         rows: list[pa.Array] = []
         targets: list[object] = []
         for record in self._records:
             matched = matched_by_record.get(record.record_id) or []
+            if not matched and split is not None:
+                continue
             if len(matched) != 1:
                 raise TimeFValidationError(
                     f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
@@ -950,7 +1024,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             rows.append(record.to_arrow())  # Arrow straight from the loader, no NumPy copy
             targets.append(inline[0])
         if not rows:
-            raise TimeFValidationError(f"dataset has no records to build {resolved.__name__} features from")
+            what = (
+                f"{resolved.__name__} features"
+                if split is None
+                else f"{resolved.__name__} features of the {split.value} split"
+            )
+            raise TimeFValidationError(f"dataset has no records to build {what} from")
         return rows, targets
 
     def _infer_target_task(self) -> type[Task]:
