@@ -18,6 +18,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
@@ -99,6 +100,28 @@ def test_add_task_multiple_records(make_series):
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = ds.add_task(task=ClassificationTask(inputs=(s1, s2), targets=("x",)))
     assert task.inputs == (s1, s2)
+
+
+@pytest.mark.parametrize("scope_ids", [None, "both", "first"])
+def test_task_time_span_requires_one_input_record(make_series, scope_ids):
+    dataset = _dataset()
+    origin = TimeOrigin()
+    first = make_series(signal="first")
+    second = make_series(signal="second")
+    left = dataset.add_record(record=Record(start_time=origin, sources=(Source(name="left", signals=(first,)),)))
+    right = dataset.add_record(record=Record(start_time=origin, sources=(Source(name="right", signals=(second,)),)))
+    ids = None if scope_ids is None else (first.id, second.id) if scope_ids == "both" else (first.id,)
+    task = ClassificationTask(
+        input_modalities=frozenset({InputModality.TIME_SERIES}),
+        inputs=(left, right),
+        targets=("event",),
+        scope=TimeInterval.seconds(0, 0.004, time_series_ids=ids),
+    )
+    if scope_ids == "first":
+        assert dataset.add_task(task=task) is task
+    else:
+        with pytest.raises(TimeFValidationError, match="exactly one input Record"):
+            dataset.add_task(task=task)
 
 
 def test_scope_series_id_resolution(make_series):

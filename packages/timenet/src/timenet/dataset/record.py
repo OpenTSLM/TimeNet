@@ -11,7 +11,7 @@ from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimePoint, new_id
+from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
 
 
@@ -29,6 +29,8 @@ class Record(SupportsAnnotate):
 
     sources: tuple[Source, ...] = ()
     """The root sources that belong to this recording."""
+    start_time: TimeOrigin = field(default_factory=TimeOrigin)
+    """The common relative zero, with an optional absolute timestamp."""
     record_id: str = field(default_factory=new_id)
     """Unique id for the record (default: an auto-generated uuid7)."""
     subject_ids: tuple[str, ...] = ()
@@ -39,19 +41,6 @@ class Record(SupportsAnnotate):
     """Annotations attached to the record."""
     metadata: dict[str, object] = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
-    start_time: datetime | int | None = None
-    """Wall-clock timestamp that this record's relative time zero refers to. It applies to every series
-    and annotation on the record. Pass a timezone-aware :class:`~datetime.datetime` or whole Unix
-    microseconds. Construction normalizes either one to microseconds, so a constructed record holds an
-    ``int``. ``None`` means no wall-clock reference exists. Never fabricate one.
-
-    A bare float is refused, because seconds and microseconds are both plausible readings of it. If the
-    source hands over seconds, convert at the call site so the unit is visible::
-
-        start_time=datetime(2026, 8, 5, tzinfo=timezone.utc)   # 1_785_888_000_000_000
-        start_time=seconds_to_us(1)                            # 1_000_000, one second past the epoch
-        start_time=1_000_000                                   # the same moment, written directly
-    """
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
@@ -65,25 +54,27 @@ class Record(SupportsAnnotate):
         return self.record_id
 
     def __post_init__(self) -> None:
-        """Normalize ``start_time`` to whole Unix microseconds and validate ``time_span``.
-
-        ``start_time`` delegates its contract: ``unix_us`` rejects a naive datetime or a bare float, and
-        ``check_int64`` rejects an anchor past the int64 microsecond column. ``time_span``, when set,
-        must be a whole-record :class:`~timenet.types.TimeInterval` that contains every series' window.
+        """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
             TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
                 contain some series' window.
         """
+        if not isinstance(self.start_time, TimeOrigin):
+            raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         if self.sources:
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
             if len(signal_ids) != len(set(signal_ids)):
                 raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
-        if self.start_time is not None:
-            anchor = unix_us(self.start_time)
-            check_int64("Record.start_time", anchor)
-            self.start_time = anchor
+        for signal in self.signals:
+            if (window := signal.span_us) is not None:
+                for endpoint in window:
+                    check_int64(f"signal {signal.id!r} time offset", endpoint)
+                    if self.start_time.timestamp is not None:
+                        check_int64(
+                            f"signal {signal.id!r} absolute time", unix_us(self.start_time.timestamp) + endpoint
+                        )
         if self.time_span is not None:
             if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
@@ -142,14 +133,12 @@ class Record(SupportsAnnotate):
     @property
     def has_absolute_time(self) -> bool:
         """Whether this record's relative timeline has a Unix-time anchor."""
-        return self.start_time is not None
+        return self.start_time.timestamp is not None
 
     def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
-        Places ``at`` on the recording timeline against this record's own ``start_time``, so the caller
-        never repeats the anchor. A span's bounds are offsets on that timeline, so this needs an
-        anchored record. ``offset_us`` raises if the record has no ``start_time``.
+        The Record must have a known absolute timestamp.
 
         Args:
             at: The wall-clock moment, timezone-aware.
@@ -158,15 +147,14 @@ class Record(SupportsAnnotate):
         Returns:
             The point, in microseconds from this record's relative zero.
         """
-        return TimePoint(start_us=offset_us(at, self.start_time), time_series_ids=time_series_ids)
+        return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series_ids=time_series_ids)
 
     def time_interval(
         self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
-        Places ``start`` and ``end`` on the recording timeline against this record's own ``start_time``.
-        ``offset_us`` raises if the record has no ``start_time`` to measure against.
+        The Record must have a known absolute timestamp.
 
         Args:
             start: Wall-clock start, timezone-aware.
@@ -177,8 +165,8 @@ class Record(SupportsAnnotate):
             The half-open interval, in microseconds from this record's relative zero.
         """
         return TimeInterval(
-            start_us=offset_us(start, self.start_time),
-            end_us=offset_us(end, self.start_time),
+            start_us=offset_us(start, self.start_time.timestamp),
+            end_us=offset_us(end, self.start_time.timestamp),
             time_series_ids=time_series_ids,
         )
 

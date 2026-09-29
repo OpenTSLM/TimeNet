@@ -3,12 +3,22 @@ import pytest
 
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.control_audit import audit_control_database
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, InputModality, TimePoint, TimeSeriesSpec, TSGenerationTask, ureg
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    InputModality,
+    TimeOrigin,
+    TimePoint,
+    TimeSeriesSpec,
+    TSGenerationTask,
+    ureg,
+)
 
 from .test_control_writer import _dataset
 
@@ -106,6 +116,22 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert task.prompt == "Alive?"
     assert task.targets == ("Yes",)
     assert task.annotations[0].name == "task_kind"
+
+
+def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    second = dataset.add_record(record=Record(record_id="other", sources=(Source(name="other"),)))
+    dataset.tasks[0].inputs = (*dataset.tasks[0].inputs, second)
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute(
+            "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000 WHERE task_id = 'task-1'"
+        )
+        with pytest.raises(TimeFFormatError, match="Record"):
+            audit_control_database(connection, require_chunks=False)
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match="Record"):
+        reader.read_tasks(reader.read_records())
 
 
 def test_input_modalities_round_trip_as_typed_task_data(tmp_path):

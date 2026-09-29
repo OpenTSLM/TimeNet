@@ -19,6 +19,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeInterval,
+    TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     Version,
@@ -121,6 +122,7 @@ def make_dataset() -> TimeFDataset:
     record0 = dataset.add_record(
         record=Record(
             record_id="record-0",
+            start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
                     id="source-record-0",
@@ -128,7 +130,6 @@ def make_dataset() -> TimeFDataset:
                     signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
                 ),
             ),
-            start_time=9_007_199_254_740_993,
         )
     )
     _, record0_cohort, _, _ = record0.add_annotations(
@@ -233,7 +234,7 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_records.keys() == act_records.keys(), "record ids differ"
     for record_id, exp in exp_records.items():
         act = act_records[record_id]
-        assert exp.start_time == act.start_time, f"start_time differs for {record_id}"
+        assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
         assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (

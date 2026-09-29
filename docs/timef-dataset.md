@@ -93,6 +93,8 @@ imu = Source(
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
 with two parents, and a Signal with two owners.
 
+Sources group Signals. All timed Signals in a Record use its common relative origin.
+
 Call `source.annotate(annotation)` for a Source annotation. A selection attaches annotation content
 to several Signals in one operation:
 
@@ -126,15 +128,14 @@ record = Record(
 | `subject_ids` | `tuple[str, ...]` | Optional subject identifiers. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |
-| `start_time` | `datetime \| int \| None` | Optional wall-clock anchor in Unix microseconds. |
+| `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
 
 `record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
 the same deterministic traversal used by the writer.
 
-Call `record.annotate(annotation)` to attach an occurrence. Temporal annotations are validated
-against the relevant Signal windows. `time_point()` and `time_interval()` convert wall-clock values
-against an anchored Record.
+Call `record.annotate(annotation)` to attach an occurrence. `time_point()` and `time_interval()`
+convert wall-clock values against the Record origin. They require a known absolute timestamp.
 
 ## Task
 
