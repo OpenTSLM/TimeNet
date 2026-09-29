@@ -46,6 +46,12 @@ class Source(SupportsAnnotate):
         if len(signal_ids) != len(set(signal_ids)):
             raise TimeFValidationError(f"source {self.id!r} contains duplicate signal IDs")
 
+        for annotation in self.annotations:
+            if annotation.span is not None:
+                check_span_within_window(
+                    f"annotation {annotation.key!r}", annotation.span, tuple(self.walk_signals()), self.id
+                )
+
     def walk_sources(self) -> Iterator["Source"]:
         """Yield this source and all descendants in deterministic depth-first order.
 

@@ -52,11 +52,7 @@ class _TaskValidationIndex:
         known = self._record_annotation_ids.get(record.id)
         if known is not None:
             return known
-        annotations = [*record.annotations]
-        for source in record.walk_sources():
-            annotations.extend(source.annotations)
-            for signal in source.signals:
-                annotations.extend(signal.annotations)
+        annotations = record.walk_annotations()
         known = {annotation.occurrence_id for annotation in annotations if annotation.occurrence_id is not None}
         self._record_annotation_ids[record.id] = known
         return known
@@ -559,7 +555,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
-        record_annotations = (annotation for record in self._records for annotation in record.annotations)
+        record_annotations = (annotation for record in self._records for annotation in record.walk_annotations())
         annotations = self._ordered_unique(
             AnnotationDescriptor(
                 key=annotation.key,
