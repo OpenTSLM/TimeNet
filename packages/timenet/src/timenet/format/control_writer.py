@@ -735,7 +735,8 @@ class DuckDBControlWriter:
                     "axis_type": str(axis.axis_type),
                     "period_numerator_us": axis.period_us.numerator,
                     "period_denominator": axis.period_us.denominator,
-                    "origin_us": axis.start_index,
+                    "start_index": axis.start_index,
+                    "offset_us": axis.offset_us,
                     "first_us": None,
                     "last_us": None,
                 }
@@ -749,7 +750,8 @@ class DuckDBControlWriter:
                     "axis_type": str(axis.axis_type),
                     "period_numerator_us": None,
                     "period_denominator": None,
-                    "origin_us": None,
+                    "start_index": None,
+                    "offset_us": None,
                     "first_us": axis.first_us,
                     "last_us": axis.last_us,
                 }
@@ -768,7 +770,8 @@ class DuckDBControlWriter:
                     "axis_type": str(axis.axis_type),
                     "period_numerator_us": None,
                     "period_denominator": None,
-                    "origin_us": None,
+                    "start_index": None,
+                    "offset_us": None,
                     "first_us": None,
                     "last_us": None,
                 }
