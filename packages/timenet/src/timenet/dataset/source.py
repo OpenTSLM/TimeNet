@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, SupportsAnnotate, new_id
@@ -87,6 +88,9 @@ class Source(SupportsAnnotate):
         Returns:
             The attached annotation.
         """
+        if annotation.span is not None:
+            signals = tuple(self.walk_signals())
+            check_span_within_window(f"annotation {annotation.key!r}", annotation.span, signals, self.id)
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached
