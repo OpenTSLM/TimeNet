@@ -179,6 +179,7 @@ class _HierarchyBatches:
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self.records = _TableBatch(connection, TABLES["records"])
+        self.clocks = _TableBatch(connection, TABLES["clocks"])
         self.sources = _TableBatch(connection, TABLES["sources"])
         self.axes = _TableBatch(connection, TABLES["axes"])
         self.axis_offsets = _TableBatch(connection, TABLES["axis_offsets"])
@@ -187,6 +188,7 @@ class _HierarchyBatches:
     def flush(self) -> None:
         """Write all remaining hierarchy rows."""
         self.records.flush()
+        self.clocks.flush()
         self.sources.flush()
         self.axes.flush()
         self.axis_offsets.flush()
@@ -253,7 +255,7 @@ class DuckDBControlWriter:
             raise
         return task_counts
 
-    def _write_objects(
+    def _write_objects(  # noqa: PLR0914 - clock keys are part of the hierarchy state
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,
@@ -272,6 +274,7 @@ class DuckDBControlWriter:
         batches = _HierarchyBatches(connection)
         axes: dict[str, tuple[object, int, pa.Array | None]] = {}
         source_keys: dict[str, int] = {}
+        clock_keys: dict[int, int] = {}
         signal_keys: dict[str, int] = {}
         dataset_key = _returned_key(
             connection.execute(
@@ -286,13 +289,17 @@ class DuckDBControlWriter:
         for record in records:
             if record.id in record_keys:
                 raise TimeFValidationError(f"record id {record.id!r} is not unique")
+            identity = id(record.start_time)
+            if identity not in clock_keys:
+                clock_keys[identity] = len(clock_keys) + 1
+                batches.clocks.add({"clock_id": clock_keys[identity], "start_time_us": record.start_time.timestamp})
             span = record.time_span
             record_key = next(object_keys)
             batches.records.add(
                 {
                     "record_key": record_key,
                     "record_id": record.record_id,
-                    "start_time_us": record.start_time,
+                    "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
                     "metadata": _json(record.metadata),
