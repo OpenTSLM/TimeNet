@@ -1,6 +1,9 @@
 from fractions import Fraction
 
-from timenet.dataset import RegularAxis, Signal, Source
+import pytest
+
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
+from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, TimePoint, TimeSeriesSpec, ureg
 
 
@@ -17,18 +20,21 @@ def _signal(signal_id: str, name: str) -> Signal:
     )
 
 
-def test_source_selection_scopes_one_timed_annotation_to_signal_objects():
+def test_source_selection_attaches_shared_timed_content_only_to_selected_signals():
     lead_i = _signal("lead-i", "I")
     lead_ii = _signal("lead-ii", "II")
-    source = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
+    temperature = _signal("temperature", "temperature")
+    source = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii, temperature))
 
-    (occurrence,) = source.select(signals=(lead_i, lead_ii)).annotate(
-        Annotation(key="status", value="off", span=TimePoint.seconds(5))
+    occurrences = source.select(signals=(lead_i, lead_ii)).annotate(
+        Annotation(key="status", value="off", span=TimePoint.micros(500))
     )
 
-    assert occurrence.span is not None
-    assert occurrence.span.time_series_ids == ("lead-i", "lead-ii")
-    assert source.annotations == (occurrence,)
+    assert occurrences[0].content_id == occurrences[1].content_id
+    assert occurrences[0].occurrence_id != occurrences[1].occurrence_id
+    assert lead_i.annotations == (occurrences[0],)
+    assert lead_ii.annotations == (occurrences[1],)
+    assert source.annotations == temperature.annotations == ()
 
 
 def test_source_selection_resolves_signal_names():
@@ -42,3 +48,22 @@ def test_source_selection_resolves_signal_names():
     assert [occurrence.content_id for occurrence in occurrences] == [annotation.content_id] * 2
     assert lead_ii.annotations == (occurrences[0],)
     assert lead_i.annotations == (occurrences[1],)
+
+
+@pytest.mark.parametrize("owner", ["signal", "source", "record"])
+def test_constructor_and_attachment_reject_time_annotations_without_a_timeline(owner):
+    annotation = Annotation(key="event", span=TimePoint.micros(500))
+    signal = Signal(name="ordered", data=[1.0], spec=SPEC, time_axis=OrdinalAxis())
+    source = Source(name="ordered", signals=(signal,))
+
+    def build(annotations):
+        if owner == "signal":
+            return Signal(name="ordered", data=[1.0], spec=SPEC, time_axis=OrdinalAxis(), annotations=annotations)
+        if owner == "source":
+            return Source(name="ordered", signals=(signal,), annotations=annotations)
+        return Record(sources=(source,), annotations=annotations)
+
+    with pytest.raises(TimeFValidationError, match="no timeline"):
+        build((annotation,))
+    with pytest.raises(TimeFValidationError, match="no timeline"):
+        build(()).annotate(annotation)
