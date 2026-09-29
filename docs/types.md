@@ -80,6 +80,7 @@ vibration = TimeSeriesSpec(
 | `value_shape` | Shape of one timestep, without the time dimension. |
 | `dimension_names` | Optional names for every dimension in `value_shape`. |
 | `nullable` | Whether a complete timestep can be missing. |
+| `modality` | Input kind used for Task inference. Defaults to `TIME_SERIES`; also accepts `IMAGE`, `AUDIO`, or `TEXT`. |
 
 The full logical shape is `(n_steps, *value_shape)`. Parquet stores scalar values. Use the Zarr
 backend for multidimensional values.

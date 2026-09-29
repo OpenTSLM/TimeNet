@@ -213,6 +213,7 @@ SIGNALS = Table(
         _required("nullable", ColumnType.BOOLEAN),
         _key("n_values"),
         _required("metadata", ColumnType.JSON),
+        _required("modality"),
     ),
     unique=(("signal_key",), ("signal_id",)),
     foreign_keys=(
@@ -283,6 +284,7 @@ TASKS = Table(
         _required("task_id"),
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
+        _required("input_modalities", ColumnType.VARCHAR_LIST),
         Column("scope_type", ColumnType.VARCHAR),
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),

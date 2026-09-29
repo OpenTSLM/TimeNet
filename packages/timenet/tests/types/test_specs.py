@@ -97,6 +97,8 @@ def test_spec_nd_value_contract():
         ({"spec_type": "."}, "spec_type"),
         ({"spec_type": ".."}, "spec_type"),
         ({"dtype": "complex64"}, "dtype"),
+        ({"modality": "no_input"}, "cannot have the no_input"),
+        ({"modality": "unknown"}, "invalid Signal modality"),
         ({"value_shape": (32, 0, 3)}, "positive integers"),
         ({"value_shape": (32, 32, 3), "dimension_names": ("height",)}, "match value_shape"),
         (

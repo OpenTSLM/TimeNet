@@ -1,6 +1,7 @@
 """Deterministic dataset builders, a counting loader, and a logical dataset comparison."""
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 
 import numpy as np
 import pyarrow as pa
@@ -245,7 +246,10 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     act_tasks = {t.id: t for t in actual.tasks}
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
-        assert exp_task == act_tasks[task_id], f"task {task_id} differs"
+        act_task = act_tasks[task_id]
+        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
+            act_task, input_modalities=act_task.resolved_input_modalities
+        ), f"task {task_id} differs"
 
 
 def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:

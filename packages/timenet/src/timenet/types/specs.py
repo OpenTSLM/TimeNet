@@ -7,6 +7,7 @@ import numpy as np
 import pint
 
 from timenet.errors import TimeFValidationError
+from timenet.types.modalities import InputModality
 from timenet.types.units import normalize_unit, ureg
 
 
@@ -94,14 +95,22 @@ class TimeSeriesSpec:
     """Optional names for the dimensions in :attr:`value_shape`."""
     nullable: bool = False
     """Whether a whole timestep can be missing. An Arrow bit marks whether each timestep is present."""
+    modality: InputModality = InputModality.TIME_SERIES
+    """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
 
     def __post_init__(self) -> None:
         """Coerce the unit and validate the spec contract.
 
         Raises:
-            TimeFValidationError: If the unit, spec type, dtype, shape, or dimension names are invalid.
+            TimeFValidationError: If the unit, spec type, dtype, shape, modality, or dimension names are invalid.
         """
         object.__setattr__(self, "unit_value", _to_unit(self.unit_value))
+        try:
+            object.__setattr__(self, "modality", InputModality(self.modality))
+        except (TypeError, ValueError) as exc:
+            raise TimeFValidationError(f"invalid Signal modality {self.modality!r}") from exc
+        if self.modality is InputModality.NO_INPUT:
+            raise TimeFValidationError("a Signal cannot have the no_input modality")
         if not isinstance(self.nullable, bool):
             raise TimeFValidationError("TimeSeriesSpec.nullable must be a bool")
         if not self.spec_type:
