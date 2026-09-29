@@ -91,7 +91,7 @@ def _specs(unique_series: dict[str, Signal]) -> str:
         (
             spec_type,
             series.spec.name,
-            str(series.spec.unit_value),
+            "unknown" if series.spec.unit_value is None else str(series.spec.unit_value),
             str(series.to_arrow().type),  # one bounded load per spec, for the value dtype
         )
         for spec_type, series in sorted(representative.items())
