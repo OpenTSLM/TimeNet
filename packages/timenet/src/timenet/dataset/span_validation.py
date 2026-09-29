@@ -1,16 +1,20 @@
 """Validate annotation and task spans against Signal windows."""
 
+from typing import TYPE_CHECKING
 import warnings
 
-from timenet.dataset.time_series import Signal
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import Span, StepSpan, TimeInterval, TimeSpan
+
+
+if TYPE_CHECKING:
+    from timenet.dataset.time_series import Signal
 
 
 def check_span_within_window(  # noqa: PLR0913 (span rules have several branches)
     label: str,
     span: Span,
-    time_series: tuple[Signal, ...],
+    time_series: tuple["Signal", ...],
     record_id: str,
     time_span: TimeInterval | None = None,
     *,
