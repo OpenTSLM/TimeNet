@@ -47,7 +47,9 @@ Records load with their Sources, Signals, axes, and annotations. Signal values s
 Tasks have three useful read paths:
 
 - `tasks` loads and caches every task.
-- `iter_tasks(records)` yields tasks for selected Records in bounded batches.
+- `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
+  `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
+  built, as they do on `task_table()` and `target_table()`.
 - `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
   Python task objects.
 
@@ -80,7 +82,7 @@ and decoded Zarr chunks until it closes.
 | --- | --- |
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
-| `iter_tasks(records)` | Yield tasks for selected Records in bounded batches. |
+| `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `task_table()` | Return the task table with public IDs. |
 | `target_table()` | Return ordered task targets with public IDs. |
 | `annotation_table()` | Return annotation occurrences with public IDs. |

@@ -25,6 +25,7 @@ from timenet.types.spans import (
     TimeSpan,
 )
 from timenet.types.specs import TimeSeriesSpec
+from timenet.types.splits import Split, parse_split
 from timenet.types.tasks import (
     TASKS,
     AnswerTask,
@@ -62,6 +63,7 @@ __all__ = [
     "LocalizationMode",
     "ScalarPredictionTask",
     "Span",
+    "Split",
     "StepInterval",
     "StepPoint",
     "StepSpan",
@@ -83,6 +85,7 @@ __all__ = [
     "new_id",
     "normalize_unit",
     "offset_us",
+    "parse_split",
     "seconds_to_us",
     "unix_us",
     "ureg",

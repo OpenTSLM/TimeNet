@@ -16,6 +16,7 @@ from timenet.types import (
     InputModality,
     License,
     ScalarPredictionTask,
+    Split,
     TemporalLocalizationTask,
     TimeInterval,
     TimeOrigin,
@@ -811,3 +812,55 @@ def test_add_task_accepts_mixed_targets(make_series):
     signal = record.signals[0]
     task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(record, signal, "match")))
     assert task.targets == (record, signal, "match")
+
+
+def _record(dataset, make_series, record_id=None):
+    sources = (Source(name="Source", signals=(make_series(),)),)
+    record = Record(sources=sources) if record_id is None else Record(record_id=record_id, sources=sources)
+    return dataset.add_record(record=record)
+
+
+def test_get_split_accessors_select_tasks_by_split(make_series):
+    dataset = _dataset()
+    record = _record(dataset, make_series)
+    train = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), split=Split.TRAIN))
+    evaluation = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("b",), split=Split.EVAL))
+    unsplit = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("c",)))
+
+    assert dataset.get_train() == (train,)
+    assert dataset.get_eval() == (evaluation,)
+    assert dataset.get_validation() == ()
+    assert dataset.get_all() == (train, evaluation, unsplit)
+    assert tuple(dataset.iter_tasks(split=Split.EVAL)) == (evaluation,)
+    with pytest.raises(TimeFValidationError, match="unknown split 'test'"):
+        dataset.get_split("test")
+
+
+def test_get_split_rejects_a_dataset_that_assigns_no_splits(make_series):
+    dataset = _dataset()
+    record = _record(dataset, make_series)
+    task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    with pytest.raises(TimeFValidationError, match="assigns no split to any task"):
+        dataset.get_train()
+    assert dataset.get_all() == (task,)
+
+
+def test_to_features_and_targets_can_take_one_split(make_series):
+    dataset = _dataset()
+    records = [_record(dataset, make_series, f"record-{index}") for index in range(3)]
+    dataset.add_tasks(
+        tasks=(
+            ClassificationTask(inputs=(records[0],), targets=("a",), split=Split.TRAIN),
+            ClassificationTask(inputs=(records[1],), targets=("b",), split=Split.TRAIN),
+            ClassificationTask(inputs=(records[2],), targets=("c",), split=Split.EVAL),
+        )
+    )
+
+    x_train, y_train = dataset.to_features_and_targets(task=ClassificationTask, split=Split.TRAIN, output="numpy")
+    _, y_eval = dataset.to_features_and_targets(task=ClassificationTask, split="eval", output="numpy")
+
+    assert x_train.shape == (2, 3)
+    assert y_train.tolist() == ["a", "b"]
+    assert y_eval.tolist() == ["c"]
+    with pytest.raises(TimeFValidationError, match="features of the validation split"):
+        dataset.to_features_and_targets(task=ClassificationTask, split=Split.VALIDATION)

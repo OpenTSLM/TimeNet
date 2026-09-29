@@ -20,6 +20,7 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     License,
+    Split,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -295,3 +296,22 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     answer = next(task for task in tasks if task.id == "task-answer-0")
     cohort = next(annotation for annotation in record0.annotations if annotation.id == "cohort-shared")
     assert answer.input_annotations[0] is cohort
+
+
+def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
+    dataset = make_dataset()
+    tasks = {task.id: task for task in dataset.tasks}
+    tasks["task-cls-0"].split = Split.TRAIN
+    tasks["task-scalar-0"].split = Split.EVAL
+    version_dir = _write(tmp_path, dataset)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert [task.id for task in reader.iter_tasks(split="train")] == ["task-cls-0"]
+        assert reader.task_table(split=Split.EVAL)["task_id"].to_pylist() == ["task-scalar-0"]
+        assert reader.target_table(split=Split.EVAL)["task_id"].to_pylist() == ["task-scalar-0"]
+        loaded = reader.read()
+
+    assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
+        "task-cls-0": Split.TRAIN,
+        "task-scalar-0": Split.EVAL,
+    }

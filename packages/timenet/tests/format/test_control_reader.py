@@ -15,6 +15,7 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     InputModality,
+    Split,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
@@ -456,3 +457,40 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     assert text_targets["task-cls-0"] == "normal"
     age = next(row for row in annotations if row["key"] == "age" and row["object_id"] == "record-0")
     assert (age["value_kind"], age["integer_value"], age["unit"]) == ("integer", 64, "years")
+
+
+def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+    dataset = _dataset()
+    record = dataset.records[0]
+    dataset.add_tasks(
+        tasks=(
+            *(
+                AnswerTask(id=f"task-train-{index}", inputs=(record,), targets=("train answer",), split=Split.TRAIN)
+                for index in range(3)
+            ),
+            AnswerTask(id="task-eval", inputs=(record,), targets=("eval answer",), split=Split.EVAL),
+        )
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        train = list(reader.iter_tasks(split="train"))
+        eval_rows = reader.task_table(split=Split.EVAL).to_pylist()
+        train_targets = reader.target_table(split=Split.TRAIN).to_pylist()
+        every = reader.task_table().to_pylist()
+        with pytest.raises(TimeFValidationError, match="unknown split 'test'"):
+            reader.task_table(split="test")
+
+    assert [task.id for task in train] == ["task-train-0", "task-train-1", "task-train-2"]
+    assert all(task.split is Split.TRAIN for task in train)
+    assert [row["task_id"] for row in eval_rows] == ["task-eval"]
+    assert [row["task_id"] for row in train_targets] == ["task-train-0", "task-train-1", "task-train-2"]
+    assert {row["task_id"]: row["split"] for row in every} == {
+        "task-1": None,
+        "task-eval": "eval",
+        "task-train-0": "train",
+        "task-train-1": "train",
+        "task-train-2": "train",
+    }

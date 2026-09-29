@@ -17,7 +17,13 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.task_codec import decode_input_modalities, decode_span, decode_target, decode_task_payload
+from timenet.format.task_codec import (
+    decode_input_modalities,
+    decode_span,
+    decode_split,
+    decode_target,
+    decode_task_payload,
+)
 from timenet.types import (
     TASKS,
     Annotation,
@@ -30,6 +36,7 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.types.splits import Split, parse_split
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
@@ -130,6 +137,7 @@ class _TaskRow(NamedTuple):
     task_type: str
     prompt: str | None
     input_modalities: list[str] | None
+    split: str | None
     scope_type: str | None
     scope_start: int | None
     scope_end: int | None
@@ -720,6 +728,7 @@ class DuckDBControlReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
         cached_records: Iterable[Record] = (),
     ) -> Iterator[Task]:
         """Yield the tasks whose inputs include one of ``records``, a bounded batch at a time.
@@ -734,6 +743,7 @@ class DuckDBControlReader:
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
+            split: Keep only tasks of this split, or ``None`` for every task.
             cached_records: Hydrated Records to reuse without restricting the selection.
 
         Yields:
@@ -748,6 +758,7 @@ class DuckDBControlReader:
             cached_records=cached_records,
             required_modalities=required_modalities,
             supported_modalities=supported_modalities,
+            split=split,
         )
         yield from hydration.iter_tasks()
 
@@ -774,6 +785,7 @@ class DuckDBControlReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> pa.Table:
         """Return the task table as Arrow, with object references as public IDs, without building Tasks.
 
@@ -783,11 +795,12 @@ class DuckDBControlReader:
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
+            split: Keep only tasks of this split, or ``None`` for all.
 
         Returns:
             The tasks in task ID order.
         """
-        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities)
+        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
         return self.connection.execute(
             f"""WITH {_signal_ids_cte("scope_ids", "tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")},
                 inputs AS (
@@ -804,7 +817,7 @@ class DuckDBControlReader:
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, scope_ids.scope_signal_ids,
                        t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
-                       t.input_modalities,
+                       t.input_modalities, t.split,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
                        t.metadata
@@ -823,16 +836,18 @@ class DuckDBControlReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> pa.Table:
         """Return every inline target as Arrow, one typed row each, with references as public IDs.
 
         Args:
             record_ids: Keep only targets of tasks whose inputs include one of these Records.
+            split: Keep only targets of tasks of this split, or ``None`` for all.
 
         Returns:
             Targets in task ID and position order.
         """
-        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities)
+        where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
         return self.connection.execute(
             f"""WITH {_signal_ids_cte("span_ids", "task_targets", "signal_keys", ("task_key", "position"), "span_signal_ids")}
                 SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
@@ -904,6 +919,7 @@ class DuckDBControlReader:
         record_ids: Iterable[str] | None,
         required_modalities: Iterable[InputModality] | None,
         supported_modalities: Iterable[InputModality] | None,
+        split: Split | str | None = None,
     ) -> tuple[str, list[object]]:
         """Build the task selection predicate for Arrow table reads.
 
@@ -912,10 +928,28 @@ class DuckDBControlReader:
         """
         record_where, record_params = self._record_filter(record_ids)
         modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
+        split_where, split_params = self._split_filter(split)
         predicates = [record_where.removeprefix("WHERE ")] if record_where else []
         if modality_where:
             predicates.append(modality_where)
-        return ("WHERE " + " AND ".join(predicates) if predicates else "", [*record_params, *modality_params])
+        if split_where:
+            predicates.append(split_where)
+        parameters = [*record_params, *modality_params, *split_params]
+        return ("WHERE " + " AND ".join(predicates) if predicates else "", parameters)
+
+    @staticmethod
+    def _split_filter(split: Split | str | None) -> tuple[str, list[object]]:
+        """Build a SQL predicate that keeps the tasks of one split.
+
+        Returns:
+            The predicate and its bound value, both empty when no split is asked for.
+
+        Raises:
+            TimeFValidationError: If the split is unknown.
+        """  # noqa: DOC502 - raised by parse_split
+        if split is None:
+            return "", []
+        return "t.split = ?", [parse_split(split).value]
 
     @staticmethod
     def _modality_filter(
@@ -961,16 +995,19 @@ class DuckDBControlReader:
         record_keys: list[int] | None,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> Iterator[duckdb.DuckDBPyConnection]:
         """Stream selected task rows in task ID order through a separate query cursor.
 
         Args:
             record_keys: Keys of the Records whose input tasks to select, or ``None`` for every task.
+            split: Keep only tasks of this split, or ``None`` for every task.
 
         Yields:
             A cursor for fetching selected rows in batches.
         """
         modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
+        split_where, split_params = self._split_filter(split)
         predicates = []
         params: list[object] = []
         if record_keys is not None:
@@ -984,6 +1021,9 @@ class DuckDBControlReader:
         if modality_where:
             predicates.append(modality_where)
             params.extend(modality_params)
+        if split_where:
+            predicates.append(split_where)
+            params.extend(split_params)
         where = "WHERE " + " AND ".join(predicates) if predicates else ""
         columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
         sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed identifiers and predicates
@@ -1345,7 +1385,7 @@ class _TaskHydration:
     from until its dependants are built.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - one argument per task selection axis
         self,
         reader: DuckDBControlReader,
         records: tuple[Record, ...] | None,
@@ -1353,6 +1393,7 @@ class _TaskHydration:
         cached_records: Iterable[Record] = (),
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> None:
         """Index the caller's Records and decide whether the task table needs filtering.
 
@@ -1362,6 +1403,7 @@ class _TaskHydration:
         self.reader = reader
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
+        self.split = split
         self.connection = reader.connection
         self.records_by_id: dict[str, Record] = {record.id: record for record in cached_records}
         self.records_by_id.update((record.id, record) for record in records or ())
@@ -1402,6 +1444,7 @@ class _TaskHydration:
             self.record_keys,
             self.required_modalities,
             self.supported_modalities,
+            self.split,
         ) as selection:
             while rows := selection.fetchmany(_TASK_BATCH_SIZE):
                 task_rows = [_TaskRow._make(row) for row in rows]
@@ -1413,7 +1456,8 @@ class _TaskHydration:
         Returns:
             The tasks in task ID order.
         """
-        if self.record_keys is None and self.required_modalities is None and self.supported_modalities is None:
+        unfiltered = self.required_modalities is None and self.supported_modalities is None and self.split is None
+        if self.record_keys is None and unfiltered:
             return self._hydrate(None)
         return list(self.iter_tasks())
 
@@ -1547,6 +1591,7 @@ class _TaskHydration:
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
                 "prompt": row.prompt,
                 "input_modalities": decode_input_modalities(row.input_modalities),
+                "split": decode_split(row.split),
                 "scope": decode_span(
                     row.scope_type,
                     row.scope_start,

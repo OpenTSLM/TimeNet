@@ -36,6 +36,7 @@ Every Task supports these fields:
 | `targets` | Ordered inline values or stored objects. |
 | `prompt` | Optional instruction or question. |
 | `input_modalities` | Optional override for the input kinds. `None` enables inference. |
+| `split` | Optional partition: `train`, `validation`, or `eval`. `None` when the dataset does not partition its Tasks. |
 | `scope` | Optional input region. |
 | `input_annotations` | Attached Annotation occurrences supplied as context. |
 | `target_annotations` | Attached Annotation occurrences used as the answer. |
@@ -71,6 +72,23 @@ task = AnswerTask(
 The override remains subject to validation. For example, a Task with a prompt must declare `TEXT`.
 The writer stores the resolved set in DuckDB, so SQL filters need no inference or Signal reads.
 Read-back Tasks carry that stored set as an explicit declaration.
+
+## Splits
+
+A dataset that ships a partition marks each Task with its `split`. Records carry no split of their
+own: one Record may serve Tasks of several splits.
+
+```python
+from timenet.types import ClassificationTask, Split
+
+dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), split=Split.TRAIN))
+```
+
+`TimeFDataset.get_train()`, `get_validation()`, and `get_eval()` return the Tasks of one split, and
+`get_all()` returns every Task. Asking a split of a dataset that assigns none raises, since that is a
+mistake rather than an empty selection. `iter_tasks(split=...)` on a dataset or a `TimeFReader`
+filters the same way; the reader applies the filter in DuckDB, so a Task outside the split is never
+built. `to_features_and_targets(split=...)` builds the `(X, y)` pair of one split.
 
 ## Register Tasks
 

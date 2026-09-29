@@ -16,6 +16,7 @@ from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -155,23 +156,27 @@ class TimeFReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> Iterator[Task]:
         """Yield tasks a bounded batch at a time instead of materializing the whole table.
 
         Args:
             records: Records from :meth:`iter_records` whose input tasks to yield, or ``None`` for
                 every task of the dataset. Tasks reference these ``Record`` objects directly.
+            split: Keep only tasks of this split, or ``None`` for every task. The filter runs in
+                DuckDB, so a task outside the split is never built.
 
         Yields:
             Concrete tasks in stable ID order.
         """
-        filtered = required_modalities is not None or supported_modalities is not None
+        filtered = required_modalities is not None or supported_modalities is not None or split is not None
         cached_records = self._all_records() if records is None and not filtered else ()
         with self._as_format_error(preserve_validation=True):
             yield from self._control_reader().iter_tasks(
                 records,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
+                split=split,
                 cached_records=cached_records,
             )
 
@@ -181,11 +186,13 @@ class TimeFReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> pa.Table:
         """Return the tasks as an Arrow table without building Task objects.
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
+            split: Keep only tasks of this split, or ``None`` for all.
 
         Returns:
             One row per task with public IDs in place of object references. Targets are in
@@ -196,6 +203,7 @@ class TimeFReader:
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
+                split=split,
             )
 
     def target_table(
@@ -204,11 +212,13 @@ class TimeFReader:
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> pa.Table:
         """Return every inline task target as one typed Arrow row.
 
         Args:
             record_ids: Keep only targets of tasks whose inputs include one of these Records.
+            split: Keep only targets of tasks of this split, or ``None`` for all.
 
         Returns:
             Targets in task ID and position order.
@@ -218,6 +228,7 @@ class TimeFReader:
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
+                split=split,
             )
 
     def annotation_table(self, object_type: str | None = None) -> pa.Table:

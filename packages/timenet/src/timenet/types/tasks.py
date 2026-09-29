@@ -13,6 +13,7 @@ from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_o
 from timenet.types.ids import new_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
+from timenet.types.splits import Split, parse_split
 from timenet.types.units import normalize_unit
 
 
@@ -110,6 +111,9 @@ class Task(SupportsAnnotate, ABC):
     """Ordered native values and stored objects that form the expected output."""
     prompt: str | None = None
     """What the model is asked, or None for an unprompted task."""
+    split: Split | None = None
+    """The partition the task belongs to: train, validation, or eval. None when the dataset does not
+    partition its tasks."""
     input_modalities: frozenset[InputModality] | None = None
     """Optional override. None infers the input kinds when resolved or written."""
     scope: Span | None = None
@@ -128,10 +132,10 @@ class Task(SupportsAnnotate, ABC):
     """Optional JSON-compatible task metadata."""
 
     def __post_init__(self) -> None:
-        """Normalize caller-provided sequences and validate target item types.
+        """Normalize caller-provided sequences and validate target item types and the split.
 
         Raises:
-            TimeFValidationError: If one target item has an unsupported type.
+            TimeFValidationError: If one target item has an unsupported type, or the split is unknown.
         """
         self.inputs = tuple(self.inputs)
         self.targets = None if self.targets is None else tuple(self.targets)
@@ -139,6 +143,8 @@ class Task(SupportsAnnotate, ABC):
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
         self.annotations = tuple(self.annotations)
+        if self.split is not None:
+            self.split = parse_split(self.split)
         if self.input_modalities is not None:
             self.input_modalities = self.resolved_input_modalities
         for target in self.targets or ():
