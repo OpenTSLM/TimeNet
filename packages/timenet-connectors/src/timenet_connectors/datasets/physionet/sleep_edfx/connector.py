@@ -317,7 +317,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
                 metadata={"subject_id": recording.subject_id},
             )
             dataset.add_record(record=record)
-            record.add_annotations(sleep_stages)
+            annotations.attach(record_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 
         for vocabulary in tasks.build_vocabularies(_ID_PREFIX):

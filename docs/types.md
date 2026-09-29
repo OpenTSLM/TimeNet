@@ -109,8 +109,8 @@ coordinate frame.
 | `StepPoint` | One ordinal position in a Signal without a clock. |
 | `StepInterval` | One half-open ordinal range, `[start, stop)`. |
 
-Time spans can cover a complete Record or selected Signals. Set `time_series_ids` to the selected
-Signal IDs. Leave it as `None` to cover the complete owner. A task time span must identify exactly one input Record.
+Task time spans can select Signals through `time_series_ids`. Each task span must identify exactly
+one input Record. Annotation spans cannot select Signal IDs. Their owner determines scope.
 
 Step spans always name exactly one Signal through `time_series_id`.
 

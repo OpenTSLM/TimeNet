@@ -293,7 +293,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
-    assert len([one for one in record.annotations if one.key == "sleep_stage"]) == len(_SCORING)
+    assert len({one.content_id for one in record.walk_annotations() if one.key == "sleep_stage"}) == len(_SCORING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
     # fresh pass generates new ones, so compare what each task asks rather than its id.
@@ -355,7 +355,7 @@ def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
         for record in dataset.records
-        for one in record.annotations
+        for one in {a.content_id: a for a in record.walk_annotations()}.values()
         if one.key == "sleep_stage" and one.span is not None
     )
     assert len(epochs) == scored
@@ -372,7 +372,7 @@ def test_a_scoring_that_cannot_be_expanded_fails_the_write(release, monkeypatch,
         span=TimeInterval.micros(0, 45 * US_PER_S),
         id=f"{record.record_id}-stage-ragged",
     )
-    record.add_annotations([ragged])
+    record.signals[0].annotate(ragged)
     dataset.derive_schema()
     with pytest.raises(TimeFFormatError, match=record.record_id):
         store_dataset(dataset, tmp_path / "out")

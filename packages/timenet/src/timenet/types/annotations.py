@@ -37,7 +37,7 @@ class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
     An annotation carries a ``value``, a ``span``, or both. With a span, it says where on the
-    recording timeline it applies and which series it targets. Without a span, it is record-scoped
+    Record timeline it applies. Its owner determines which Signals it covers. Without a span, it is record-scoped
     context that has no place in time, like a subject's age. The span's own shape says whether the
     annotation marks a time offset or covers a stretch. One class covers every shape::
 
@@ -52,7 +52,7 @@ class Annotation:
     """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
     mark something."""
     span: TimePoint | TimeInterval | None = None
-    """Where on the recording timeline this annotation applies, and which series it targets.
+    """Where on the Record timeline this annotation applies. Its owner determines its scope.
     ``None`` means it is record-scoped context with no place in time."""
     unit: str | pint.Unit | None = None
     """Optional physical unit of ``value``. Give a unit string (for example ``"years"``) or a
@@ -94,6 +94,11 @@ class Annotation:
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
             )
+        if self.span is not None and self.span.time_series_ids is not None:
+            raise TimeFValidationError(
+                "annotation scope comes from its owner; attach it to each selected Signal "
+                "instead of setting time_series_ids"
+            )
         if self.value is None and self.span is None:
             raise TimeFValidationError(
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
@@ -104,6 +109,11 @@ class Annotation:
     def content_id(self) -> str:
         """Return the identity of the reusable annotation content."""
         return self.id
+
+    @property
+    def _content_fields(self) -> tuple[object, ...]:
+        """Return the reusable payload, without occurrence-specific fields."""
+        return (self.key, self.value, self.unit, self.description, self.metadata)
 
     @property
     def name(self) -> str:
