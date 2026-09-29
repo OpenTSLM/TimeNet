@@ -1,7 +1,7 @@
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import OrdinalAxis, Record, Signal, Source
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
 from timenet.errors import TimeFFormatError, TimeFValidationError
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
@@ -51,6 +51,31 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
     assert tasks["image-task"].input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
     tasks["image-task"].input_modalities = None
     assert tasks["image-task"].resolved_input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
+
+
+def test_shifted_regular_axis_round_trip(tmp_path):
+    dataset = _dataset()
+    source = dataset.records[0].sources[0].sources[0]
+    axis = RegularAxis.from_rate_hz(44100, offset_us=250_003).at_index(1026)
+    source.signals = tuple(
+        Signal.from_loader(
+            id=signal.id,
+            name=signal.name,
+            spec=signal.spec,
+            time_axis=axis,
+            n_values=signal.n_values,
+            loader=signal.loader,
+        )
+        for signal in source.signals
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with DuckDBControlReader(path) as reader:
+        (record,) = reader.read_records()
+    restored = record.signals[0].time_axis
+    assert restored == axis
+    assert restored is record.signals[1].time_axis
+    assert record.signals[0].span_us == (273268, 273313)
 
 
 def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
