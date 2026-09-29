@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from fractions import Fraction
 from functools import partial
 import json
@@ -932,7 +933,7 @@ class DuckDBControlReader:
             raise TimeFValidationError("unknown input modality in task filter") from exc
         if not required and supported is None:
             return "", []
-        predicates = ["t.input_modalities IS NOT NULL"]
+        predicates: list[str] = []
         parameters: list[object] = []
         if required:
             predicates.append("list_has_all(t.input_modalities, ?)")
@@ -942,19 +943,20 @@ class DuckDBControlReader:
             parameters.append(supported)
         return " AND ".join(predicates), parameters
 
-    def _task_keys(
+    @contextmanager
+    def _task_key_cursor(
         self,
         record_keys: list[int] | None,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
-    ) -> list[int]:
-        """Return the keys of the tasks to hydrate, in task ID order.
+    ) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Stream selected task keys in task ID order through a separate query cursor.
 
         Args:
             record_keys: Keys of the Records whose input tasks to select, or ``None`` for every task.
 
-        Returns:
-            The ordered task keys.
+        Yields:
+            A cursor for fetching selected keys in batches.
         """
         modality_where, modality_params = self._modality_filter(required_modalities, supported_modalities)
         predicates = []
@@ -971,11 +973,11 @@ class DuckDBControlReader:
             predicates.append(modality_where)
             params.extend(modality_params)
         where = "WHERE " + " AND ".join(predicates) if predicates else ""
-        rows = self.connection.execute(
-            f"SELECT t.task_key FROM tasks t {where} ORDER BY t.task_id",  # noqa: S608 - fixed predicates
-            params,
-        ).fetchall()
-        return [row[0] for row in rows]
+        sql = f"SELECT t.task_key FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed predicates
+        # Hydration runs other queries while this result is open, so it needs its own cursor.
+        with self.connection.cursor() as selection:
+            selection.execute(sql, params)
+            yield selection
 
     @staticmethod
     def _task_filter(task_keys: list[int] | None) -> tuple[str, list[object]]:
@@ -1403,25 +1405,23 @@ class _TaskHydration:
         Yields:
             Each hydrated task.
         """
-        task_keys = self.reader._task_keys(
+        with self.reader._task_key_cursor(
             self.record_keys,
             self.required_modalities,
             self.supported_modalities,
-        )
-        for start in range(0, len(task_keys), _TASK_BATCH_SIZE):
-            yield from self._hydrate(task_keys[start : start + _TASK_BATCH_SIZE])
+        ) as selection:
+            while rows := selection.fetchmany(_TASK_BATCH_SIZE):
+                yield from self._hydrate([row[0] for row in rows])
 
     def read_all(self) -> list[Task]:
-        """Build every selected task in one pass of unfiltered or single-batch queries.
+        """Build all selected tasks, using batches for filtered reads.
 
         Returns:
             The tasks in task ID order.
         """
         if self.record_keys is None and self.required_modalities is None and self.supported_modalities is None:
             return self._hydrate(None)
-        return self._hydrate(
-            self.reader._task_keys(self.record_keys, self.required_modalities, self.supported_modalities)
-        )
+        return list(self.iter_tasks())
 
     def _hydrate(self, task_keys: list[int] | None) -> list[Task]:
         """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.

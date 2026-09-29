@@ -15,7 +15,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, Task, TimeSeriesSpec
+from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -147,7 +147,13 @@ class TimeFReader:
         with self._as_format_error(preserve_validation=True):
             return self._control_reader().read_tasks(tuple(records))
 
-    def iter_tasks(self, records: Iterable[Record] | None = None) -> Iterator[Task]:
+    def iter_tasks(
+        self,
+        records: Iterable[Record] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> Iterator[Task]:
         """Yield tasks a bounded batch at a time instead of materializing the whole table.
 
         Args:
@@ -157,11 +163,22 @@ class TimeFReader:
         Yields:
             Concrete tasks in stable ID order.
         """
-        selected = self._all_records() if records is None else tuple(records)
+        filtered = required_modalities is not None or supported_modalities is not None
+        selected = self._all_records() if records is None and not filtered else records
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().iter_tasks(selected)
+            yield from self._control_reader().iter_tasks(
+                selected,
+                required_modalities=required_modalities,
+                supported_modalities=supported_modalities,
+            )
 
-    def task_table(self, record_ids: Iterable[str] | None = None) -> pa.Table:
+    def task_table(
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> pa.Table:
         """Return the tasks as an Arrow table without building Task objects.
 
         Args:
@@ -172,9 +189,19 @@ class TimeFReader:
             :meth:`target_table`.
         """
         with self._as_format_error():
-            return self._control_reader().task_table(record_ids)
+            return self._control_reader().task_table(
+                record_ids,
+                required_modalities=required_modalities,
+                supported_modalities=supported_modalities,
+            )
 
-    def target_table(self, record_ids: Iterable[str] | None = None) -> pa.Table:
+    def target_table(
+        self,
+        record_ids: Iterable[str] | None = None,
+        *,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+    ) -> pa.Table:
         """Return every inline task target as one typed Arrow row.
 
         Args:
@@ -184,7 +211,11 @@ class TimeFReader:
             Targets in task ID and position order.
         """
         with self._as_format_error():
-            return self._control_reader().target_table(record_ids)
+            return self._control_reader().target_table(
+                record_ids,
+                required_modalities=required_modalities,
+                supported_modalities=supported_modalities,
+            )
 
     def annotation_table(self, object_type: str | None = None) -> pa.Table:
         """Return every annotation occurrence with its content as an Arrow table.
