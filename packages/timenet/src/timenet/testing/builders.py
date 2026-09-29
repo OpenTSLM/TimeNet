@@ -132,18 +132,14 @@ def make_dataset() -> TimeFDataset:
             ),
         )
     )
-    _, record0_cohort, _, _ = record0.add_annotations(
+    _, record0_cohort, _ = record0.add_annotations(
         [
             Annotation(key="age", value=64, unit="years", id="age-0"),
             cohort,
             Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
-            Annotation(
-                key="artifact",
-                span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
-                id="art-0",
-            ),
         ]
     )
+    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25), id="art-0"))
     classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
     dataset.add_tasks(
         tasks=[

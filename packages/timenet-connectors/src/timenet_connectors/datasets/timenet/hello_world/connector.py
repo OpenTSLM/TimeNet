@@ -159,17 +159,17 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
         artifact = Annotation(
             key="artifact",
-            span=TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
+            span=TimeInterval.seconds(0.0, 0.25),
             id="art-0",
         )
-        _, record0_cohort, stimulus, artifact = record0.add_annotations(
+        _, record0_cohort, stimulus = record0.add_annotations(
             [
                 Annotation(key="age", value=64, unit="years", id="age-0"),
                 cohort,
                 stimulus,
-                artifact,
             ]
         )
+        artifact = shared.annotate(artifact)
         classification = ClassificationTask(
             inputs=(record0,),
             targets=("normal",),
