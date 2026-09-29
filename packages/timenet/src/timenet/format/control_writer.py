@@ -710,7 +710,7 @@ class DuckDBControlWriter:
                 "axis_key": axis_key,
                 "spec_type": spec.spec_type,
                 "spec_name": spec.name,
-                "unit": str(spec.unit_value),
+                "unit": None if spec.unit_value is None else str(spec.unit_value),
                 "dtype": spec.dtype,
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
