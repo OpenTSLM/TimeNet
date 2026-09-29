@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the leochen085/slip-eval connector: the single source for this dataset's
+# metadata. The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus
+# the schema derived from the data into manifest.json.
+#
+# Scope: the 11 evaluation folders of the SLIP release. The same repository ships a pretraining
+# corpus under `data/`; that is the `leochen085/slip` connector, not this one.
+#
+# What this is: other publishers' recordings cut into fixed windows and split into train and test.
+# It is a benchmark, not a release of the underlying studies. Two of the folders, `sleepEDF/` and
+# `ptbxl/`, cut recordings TimeNet reads from their own publishers; those connectors carry the
+# recordings, and this one carries SLIP's windows of them.
+#
+# Licence: MIT covers what SLIP added — the windowing, the splits and the packaging. The studies
+# the windows come from keep their own terms. The README says so.
+#
+# Training convention: each record is one window and carries one ClassificationTask per folder that
+# holds it — one for most, three for the 650 windows the three PPG folders share. A task's
+# `target_schema` names the label vocabulary of the folder it came from.
+yaml_schema_version: 1
+dataset_id: leochen085/slip-eval
+dataset_version: 1.0.0
+name: SLIP Evaluation Sets
+description: >-
+  Eleven sensor benchmarks cut into fixed windows with a train and test split, covering activity
+  recognition, clinical diagnosis, stress, and urban sensing.
+license: MIT
+domains:
+  - general
+  - health
+  - activity
+  - cardiology
+  - sleep
+tags:
+  - benchmark
+  - classification
+  - sensor
+  - huggingface
+source_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
