@@ -45,12 +45,14 @@ def test_add_multiple_annotations_preserves_order(make_series):
 def test_signal_level_point_resolves_series_id(make_series):
     ts = make_series()
     record = _record((ts,))
-    record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(0.002, time_series_ids=(ts.id,))))
+    occurrence = ts.annotate(Annotation(key="stimulus", span=TimePoint.seconds(0.002)))
+    assert ts.annotations == (occurrence,)
+    assert record.annotations == ()
 
 
 def test_signal_level_annotation_unknown_id_rejected(make_series):
     record = _record((make_series(),))
-    with pytest.raises(ValueError, match="unknown"):
+    with pytest.raises(TimeFValidationError, match="scope comes from its owner"):
         record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
 
 
@@ -251,11 +253,17 @@ def test_a_scoped_span_must_lie_within_the_intersection(make_series):
     )  # [5, 15) s
     record = _record((early, late))
     ids = (early.id, late.id)
-    record.annotate(Annotation(key="ok", span=TimeInterval.seconds(6.0, 8.0, time_series_ids=ids)))  # inside
+    check_span_within_window(
+        "task scope", TimeInterval.seconds(6.0, 8.0, time_series_ids=ids), record.signals, record.id
+    )
     # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
     with pytest.raises(TimeFValidationError, match="falls outside record"):
-        record.annotate(
-            Annotation(key="bad", span=TimePoint.seconds(3.0, time_series_ids=ids)), warn_when_outside=False
+        check_span_within_window(
+            "task scope",
+            TimePoint.seconds(3.0, time_series_ids=ids),
+            record.signals,
+            record.id,
+            warn_when_outside=False,
         )
 
 
@@ -267,8 +275,12 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
     record = _record((early, late))
     ids = (early.id, late.id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
-        record.annotate(
-            Annotation(key="bad", span=TimePoint.seconds(5.0, time_series_ids=ids)), warn_when_outside=False
+        check_span_within_window(
+            "task scope",
+            TimePoint.seconds(5.0, time_series_ids=ids),
+            record.signals,
+            record.id,
+            warn_when_outside=False,
         )
 
 

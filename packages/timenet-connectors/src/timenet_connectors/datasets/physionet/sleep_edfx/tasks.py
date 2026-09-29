@@ -333,7 +333,14 @@ def iter_tasks(records: Sequence[Record], id_prefix: str) -> Iterator[Task]:
         # in one of them rather than in neither. Each builder then takes the part it reads.
         span_annotations = [one for one in record.annotations if one.span is not None]
         non_span_annotations = [one for one in record.annotations if one.span is None]
-        stages = [one for one in span_annotations if one.key == AnnotationKey.SLEEP_STAGE]
+        stages = list(
+            {
+                one.content_id: one
+                for signal in record.signals
+                for one in signal.annotations
+                if one.key == AnnotationKey.SLEEP_STAGE
+            }.values()
+        )
 
         for task in build_epoch_tasks(record.record_id, id_prefix, stages):
             task.inputs = (record,)
