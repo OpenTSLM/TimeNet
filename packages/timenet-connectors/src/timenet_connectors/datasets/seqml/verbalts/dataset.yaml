@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# VerbalTS has six components. Each has train, valid, and test splits.
+# Each split provides float64 windows, int64 attribute codes, and captions
+# in three NPY files. A meta.json file names the attributes and their code counts.
+# files.py pins all 60 files by Google Drive ID and SHA-256.
+#
+# Component         windows train/valid/test   steps x channels   axis
+# synthetic_u       24000 / 4000 / 4000        128 x 1            ordinal
+# synthetic_m       24000 / 4000 / 4000        128 x 2            ordinal
+# Weather           10192 / 1460 / 1448         36 x 21           10 min
+# BlindWays           823 /  103 /  103        600 x 72           ordinal
+# ETTm1             13013 / 1631 / 1631        120 x 1            15 min
+# istanbul_traffic   8178 / 1023 / 1023        144 x 1            10 min
+#
+# Each window becomes one record with one signal per channel and one annotation
+# per attribute. Each caption becomes a text-to-series task for that window.
+# Tasks have no input record and use the split of their files. Weather has three
+# captions per window. The other components have one.
+#
+# release.py maps attribute codes to labels from the paper's appendix. For
+# example, trend_type codes 0 to 3 mean linear, quadratic, exponential, and
+# logistic. Record annotations store these labels. season_cycles and
+# season_code keep integer values instead.
+# Each component has a dataset-level <component>_<key>_labels list. It includes
+# labels that do not occur in a split. The list follows code order, and its
+# values are strings. For zero-based codes, a list index is the code.
+# season_code starts at -1, so its list index differs from its code.
+#
+# ETTm1 and Istanbul use the variable label as the channel name. Weather uses
+# Jena station column names. BlindWays uses joint positions because the release
+# gives no joint order. Synthetic channels are variable 1 and variable 2.
+# The converted signals have no physical unit. The real-world values are
+# normalized, and the synthetic release gives no instrument unit.
+#
+# ETTm1 and Istanbul windows share a timeline within each split. The connector
+# checks their overlap and places them at their source steps. The release gives
+# no absolute time for these windows. Weather days are shuffled within a split.
+# BlindWays has no known sample rate, so its axis uses step numbers only.
+#
+# The source datasets have separate license terms. Check the upstream sources
+# before redistributing converted data.
+yaml_schema_version: 1
+dataset_id: seqml/verbalts
+dataset_version: 1.0.0
+name: VerbalTS
+description: >-
+  VerbalTS (ICML 2025) has six time-series sets with captions: two synthetic sets, Jena weather,
+  Istanbul traffic, ETTm1 electricity, and BlindWays motion capture. Each record is one window.
+  Its annotations hold attribute labels. Its signals use source channel names when known. Each
+  caption is a generation task for its window. The task uses the release's train, valid, or test split.
+license: other
+license_url: https://github.com/seqml/VerbalTS
+domains:
+  - environment
+  - transport
+  - energy
+  - motion
+  - general
+tags:
+  - captions
+  - text-to-time-series
+  - weather
+  - traffic
+  - motion-capture
+  - electricity
+  - synthetic
+  - verbalts
+  - icml-2025
+source_url: https://drive.google.com/drive/folders/1N0zxkLdvpdjkwayKA2OZIJYP4nfzhOeF
+citation: >-
+  Gu, S., Li, C., Jing, B., and Ren, K. (2025). VerbalTS: Generating Time Series from Texts.
+  Proceedings of the 42nd International Conference on Machine Learning, PMLR 267.
+  https://proceedings.mlr.press/v267/gu25a.html
+access: open
