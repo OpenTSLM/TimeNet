@@ -15,6 +15,8 @@ dev = [
     "ruff>=0.15.12",
     "ty>=0.0.34",
     "edfio>=0.4.14",
+    # The hearts connector reads pandas 2.x pickles; pandas 3 cannot rebuild them.
+    "pandas>=2.2,<3",
     "wfdb>=4.1",
     "xlrd>=2.0",
 ]
