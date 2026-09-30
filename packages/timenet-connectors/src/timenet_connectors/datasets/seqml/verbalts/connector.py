@@ -7,7 +7,6 @@ Values use memory-mapped arrays, and tasks stream from the caption arrays.
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from fractions import Fraction
 import functools
 import json
 import operator
@@ -19,11 +18,20 @@ import pyarrow as pa
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis, RegularAxis, TimeAxis
+from timenet.dataset.axis import RegularAxis, TimeAxis
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import Annotation, InputModality, Split, TimeOrigin, TimeSeriesSpec, TSGenerationTask, ureg
-from timenet_connectors.datasets.seqml.verbalts.files import COMPONENTS, FILES, check_drive_body
-from timenet_connectors.datasets.seqml.verbalts.release import CHANNELS, CODEBOOKS, STRIDE, VARIABLE, Attribute
+from timenet.types import Annotation, InputModality, Split, TimeOrigin, TSGenerationTask
+from timenet_connectors.datasets.seqml.verbalts.files import FILES, check_drive_body
+from timenet_connectors.datasets.seqml.verbalts.release import (
+    AXIS_BY_COMPONENT,
+    CHANNEL_FROM,
+    CHANNELS,
+    CODEBOOKS,
+    COMPONENTS,
+    SPEC_BY_COMPONENT,
+    STRIDE,
+    Attribute,
+)
 
 
 _VALUES_DIMS = 3
@@ -31,63 +39,6 @@ _PLANE_DIMS = 2
 
 SPLIT_BY_NAME: dict[str, Split] = {"train": Split.TRAIN, "valid": Split.VALIDATION, "test": Split.TEST}
 """Map release split names to TimeF splits."""
-
-# The release gives no instrument units, so all converted values are dimensionless.
-# See the dataset appendix: https://proceedings.mlr.press/v267/gu25a.html.
-_SYNTHETIC = TimeSeriesSpec(
-    spec_type="synthetic",
-    name="Synthetic generated variable",
-    unit_value=ureg.dimensionless,
-    dtype="float64",
-)
-_WEATHER = TimeSeriesSpec(
-    spec_type="weather",
-    name="Jena weather variable (z-scored)",
-    unit_value=ureg.dimensionless,
-    dtype="float64",
-)
-_POSE = TimeSeriesSpec(
-    spec_type="pose",
-    name="Body-joint coordinate (z-scored)",
-    unit_value=ureg.dimensionless,
-    dtype="float64",
-)
-_POWER = TimeSeriesSpec(
-    spec_type="power",
-    name="ETTm1 variable (z-scored)",
-    unit_value=ureg.dimensionless,
-    dtype="float64",
-)
-_TRAFFIC = TimeSeriesSpec(
-    spec_type="traffic",
-    name="Istanbul traffic index variable (z-scored)",
-    unit_value=ureg.dimensionless,
-    dtype="float64",
-)
-
-SPEC_BY_COMPONENT: dict[str, TimeSeriesSpec] = {
-    "synthetic_u": _SYNTHETIC,
-    "synthetic_m": _SYNTHETIC,
-    "Weather": _WEATHER,
-    "BlindWays": _POSE,
-    "ETTm1": _POWER,
-    "istanbul_traffic": _TRAFFIC,
-}
-"""Map each component to its signal spec."""
-
-AXIS_BY_COMPONENT: dict[str, TimeAxis] = {
-    "synthetic_u": OrdinalAxis(),
-    "synthetic_m": OrdinalAxis(),
-    "Weather": RegularAxis.from_rate_hz(Fraction(1, 600)),
-    "BlindWays": OrdinalAxis(),
-    "ETTm1": RegularAxis.from_rate_hz(Fraction(1, 900)),
-    "istanbul_traffic": RegularAxis.from_rate_hz(Fraction(1, 600)),
-}
-"""Map components to axes without absolute timestamps.
-
-BlindWays and the synthetic sets have no known cadence. ETTm1 uses the
-15-minute cadence of its original CSV.
-"""
 
 _ID_PREFIX = "verbalts"
 
@@ -436,7 +387,8 @@ def _window_starts(
     """
     stride = STRIDE[component.name]
     values = _open_npy(str(arrays.values_path))
-    column = next(column for column, attribute in enumerate(attributes) if attribute.key == VARIABLE)
+    channel_key = CHANNEL_FROM[component.name]
+    column = next(column for column, attribute in enumerate(attributes) if attribute.key == channel_key)
     previous: dict[int, tuple[int, int]] = {}  # variable code -> (last row, start step)
     starts: list[int] = []
     for row, code in enumerate(int(code) for code in arrays.codes[:, column]):
@@ -557,7 +509,8 @@ def _channel_names(
     """
     names = CHANNELS.get(component.name)
     if names is None:
-        column = next(column for column, attribute in enumerate(attributes) if attribute.key == VARIABLE)
+        channel_key = CHANNEL_FROM[component.name]
+        column = next(column for column, attribute in enumerate(attributes) if attribute.key == channel_key)
         names = (str(values[column]),)
         _check_caption_names_variable(component, row, str(arrays.captions[row, 0]), names[0])
     if len(names) != arrays.n_signals:
