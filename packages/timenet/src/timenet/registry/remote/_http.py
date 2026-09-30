@@ -27,6 +27,13 @@ _MAX_RETRIES = 5
 _MAX_RETRY_WAIT_SECONDS = 30.0
 _DEFAULT_BACKOFF_SECONDS = 1.0
 
+# Presigned uploads carry whole values shards, often hundreds of megabytes, so a socket stall that
+# the API's per-request timeout would treat as failure is normal there. Give the upload a long read
+# and write budget and retry a transport failure: the presign binds the object to its checksum, so
+# a repeated PUT writes the same bytes.
+_UPLOAD_TIMEOUT_SECONDS = 300.0
+_UPLOAD_ATTEMPTS = 3
+
 
 def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
     """Return how long to wait before retrying a 429, from ``Retry-After`` or exponential backoff.
@@ -270,13 +277,33 @@ class RegistryHttpClient:
     def put(self, url: str, *, content: bytes, headers: Mapping[str, str]) -> None:
         """PUT bytes to a presigned upload URL (no auth header).
 
+        The upload runs under :data:`_UPLOAD_TIMEOUT_SECONDS` for reads and writes instead of the
+        API timeout, and a transport failure (a stalled socket, a dropped connection) is retried
+        :data:`_UPLOAD_ATTEMPTS` times with backoff.
+
         Args:
             url: The presigned PUT URL.
             content: The request body.
             headers: Headers the presign requires (e.g. the checksum binding).
+
+        Raises:
+            TimeNetRegistryError: If the upload still fails after the retry budget.
         """
-        response = self._client.put(url, content=content, headers=dict(headers))
-        _raise_for_status(response)
+        timeout = httpx.Timeout(self._timeout, read=_UPLOAD_TIMEOUT_SECONDS, write=_UPLOAD_TIMEOUT_SECONDS)
+        for attempt in range(_UPLOAD_ATTEMPTS):
+            try:
+                response = self._client.put(url, content=content, headers=dict(headers), timeout=timeout)
+            except httpx.TransportError as exc:
+                if attempt == _UPLOAD_ATTEMPTS - 1:
+                    # The presigned query carries the signature; name only the object path.
+                    target = httpx.URL(url).copy_with(query=None)
+                    raise TimeNetRegistryError(
+                        f"upload to {target} failed after {_UPLOAD_ATTEMPTS} attempts: {exc}"
+                    ) from exc
+                time.sleep(_DEFAULT_BACKOFF_SECONDS * 2**attempt)
+                continue
+            _raise_for_status(response)
+            return
 
     def new_async_client(self) -> httpx.AsyncClient:
         """Build an async client sharing this client's base URL and transport.

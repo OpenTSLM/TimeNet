@@ -1,4 +1,5 @@
 import io
+import time
 
 import httpx
 import pytest
@@ -135,3 +136,33 @@ def test_stream_to_maps_error_status_on_unread_body():
 
     with pytest.raises(TimeNetRegistryError):
         _client(handler).stream_to("http://blob.local/obj/a", io.BytesIO())
+
+
+def test_upload_retries_a_transport_failure_with_a_long_timeout(monkeypatch):
+    # A shard upload stalls once; the client retries the same bytes and gives the PUT the upload
+    # timeout rather than the 30 s API timeout.
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.WriteTimeout("stalled", request=request)
+        return httpx.Response(200)
+
+    _client(handler).put("http://blob.local/shard?X-Amz-Signature=abc", content=b"bytes", headers={"x-h": "1"})
+
+    assert len(seen) == 2
+    assert seen[1].extensions["timeout"]["write"] > 60  # the upload budget, not the 30 s API timeout
+    assert seen[1].headers["x-h"] == "1"
+
+
+def test_upload_gives_up_after_the_attempt_budget_without_leaking_the_signature(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("gone", request=request)
+
+    with pytest.raises(TimeNetRegistryError, match=r"failed after 3 attempts") as caught:
+        _client(handler).put("http://blob.local/shard?X-Amz-Signature=abc", content=b"bytes", headers={})
+    assert "X-Amz-Signature" not in str(caught.value)
