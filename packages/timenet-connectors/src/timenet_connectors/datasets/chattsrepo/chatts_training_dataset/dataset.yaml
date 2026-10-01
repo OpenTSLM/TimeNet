@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# The release's LICENSE file and README say MIT; its Hub metadata says Apache-2.0.
+yaml_schema_version: 1
+dataset_id: chattsrepo/chatts-training-dataset
+dataset_version: 1.0.0
+name: ChatTS training dataset
+description: >-
+  Synthetic time series paired with questions and answers for ChatTS alignment,
+  supervised fine-tuning, and instruction following. The five source configs are
+  retained, with dev tasks in the validation split. Values have no published
+  sampling times or physical units.
+license: MIT
+license_url: >-
+  https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset/blob/1e2ae56ae0b858d8f7b45ab935ed4346f98df83d/LICENSE
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+citation: >-
+  Xie et al. ChatTS: Aligning Time Series with LLMs via Synthetic Data for Enhanced
+  Understanding and Reasoning. PVLDB 18(8), 2025. doi:10.14778/3742728.3742735.
+domains:
+  - general
+tags:
+  - synthetic
+  - qa
+  - reasoning
+  - time-series
+  - huggingface
