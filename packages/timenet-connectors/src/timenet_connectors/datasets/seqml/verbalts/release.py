@@ -1,18 +1,47 @@
-"""Codebooks, channel names, and window strides for the pinned VerbalTS release.
-
-``meta.json`` gives attribute names and code counts. Labels come from the paper's
-dataset appendix and match the release captions. The connector rejects unknown
-labeled codes. See https://proceedings.mlr.press/v267/gu25a.html.
-
-ETTm1 and Istanbul captions name their single channel. Weather uses Jena station
-column order. BlindWays gives no joint order, so its channels use their positions.
-The synthetic captions name their channels ``variable 1`` and ``variable 2``.
-
-ETTm1 and Istanbul windows share a split timeline. The release gives no absolute
-time for that timeline.
-"""
+"""Load the pinned VerbalTS release facts from ``release.yaml``."""
 
 from dataclasses import dataclass
+from fractions import Fraction
+from pathlib import Path
+from typing import NotRequired, TypedDict, cast
+
+import yaml
+
+from timenet.dataset.axis import OrdinalAxis, RegularAxis, TimeAxis
+from timenet.types import TimeSeriesSpec, ureg
+
+
+class _AttributeConfig(TypedDict):
+    key: str
+    description: str
+    labels: NotRequired[list[str | int]]
+    codes: NotRequired[list[int]]
+
+
+class _SpecConfig(TypedDict):
+    type: str
+    name: str
+    unit: str
+    dtype: str
+
+
+class _AxisConfig(TypedDict):
+    kind: str
+    period_seconds: NotRequired[int]
+
+
+class _ComponentConfig(TypedDict):
+    spec: _SpecConfig
+    axis: _AxisConfig
+    attributes: dict[str, str]
+    channels: NotRequired[list[str]]
+    channel_from: NotRequired[str]
+    stride: NotRequired[int]
+
+
+class _ReleaseConfig(TypedDict):
+    attributes: dict[str, _AttributeConfig]
+    components: dict[str, _ComponentConfig]
 
 
 @dataclass(frozen=True)
@@ -23,13 +52,13 @@ class Attribute:
     """Annotation key shared by components with the same meaning."""
     description: str
     """Description stored in the dataset schema."""
-    labels: tuple[str, ...] | tuple[int, ...] | None = None
+    labels: tuple[str | int, ...] | None = None
     """Labels in code order, or ``None`` to keep integer codes."""
     codes: tuple[int, ...] | None = None
     """Valid integer codes in release order."""
 
     @property
-    def vocabulary(self) -> tuple[str, ...] | tuple[int, ...] | None:
+    def vocabulary(self) -> tuple[str | int, ...] | None:
         """Return labels or integer codes in release order, if known.
 
         Returns:
@@ -38,180 +67,84 @@ class Attribute:
         return self.labels if self.labels is not None else self.codes
 
 
-_TREND_TYPE = Attribute(
-    key="trend_type",
-    description="Shape of the generated trend. The captions abbreviate the labels to linear, quad, exp and log.",
-    labels=("linear", "quadratic", "exponential", "logistic"),
-)
-_TREND_DIRECTION = Attribute(
-    key="trend_direction",
-    description="Direction of the generated trend.",
-    labels=("up", "down"),
-)
-_SEASON_CYCLES = Attribute(
-    key="season_cycles",
-    description="Number of sinusoidal cycles the generator added over the window.",
-    labels=(0, 1, 2, 4),
-)
-_VARIABLE_2_RULE = Attribute(
-    key="variable_2_rule",
-    description="How the generator derived variable 2 from variable 1. The shift distance is stated in the caption only.",
-    labels=("x-axis flip", "y-axis flip", "shift forward", "shift backward"),
-)
+def _load_release() -> _ReleaseConfig:
+    """Load the trusted release configuration shipped with the connector.
 
-_SEASON = Attribute(
-    key="season",
-    description="Calendar season of the window's day, from the month the caption names.",
-    labels=("spring", "summer", "fall", "winter"),
-)
-_TIME_OF_DAY = Attribute(
-    key="time_of_day",
-    description="Which six-hour block of its day the window covers.",
-    labels=("early morning", "morning", "afternoon", "evening"),
-)
-_WEATHER_CONDITION = Attribute(
-    key="weather_condition",
-    description="Weather condition ChatGPT 3.5 extracted from the forecast text, or unknown when the text states none.",
-    labels=("sunny", "cloudy", "rain", "foggy", "snowy", "unknown"),
-)
-_TEMPERATURE_TREND = Attribute(
-    key="temperature_trend",
-    description="Temperature trend ChatGPT 3.5 extracted from the forecast text, or unknown when the text states none.",
-    labels=("increase", "decrease", "steady", "unknown"),
-)
-_WIND_DIRECTION = Attribute(
-    key="wind_direction",
-    description="Wind direction ChatGPT 3.5 extracted from the forecast text, or unknown when the text states none.",
-    labels=("S", "N", "W", "E", "SW", "SE", "NW", "NE", "unknown"),
-)
-_PRESSURE_LEVEL = Attribute(
-    key="pressure_level",
-    description="Atmospheric pressure level ChatGPT 3.5 extracted from the forecast text, or unknown when the text states none.",
-    labels=("low", "average", "high", "unknown"),
-)
-_HUMIDITY_LEVEL = Attribute(
-    key="humidity_level",
-    description="Humidity level ChatGPT 3.5 extracted from the forecast text, or unknown when the text states none.",
-    labels=("low", "average", "high", "unknown"),
-)
+    Returns:
+        The release configuration.
+    """
+    path = Path(__file__).with_name("release.yaml")
+    return cast(_ReleaseConfig, yaml.safe_load(path.read_text(encoding="utf-8")))
 
-_GUIDE_METHOD = Attribute(
-    key="guide_method",
-    description="Mobility aid the pedestrian used, extracted from the BlindWays description by ChatGPT 3.5.",
-    labels=("cane", "guide dog"),
-)
-_HAND = Attribute(
-    key="hand",
-    description="Hand holding the aid, extracted from the BlindWays description by ChatGPT 3.5, or unknown when it states none.",
-    labels=("left", "right", "unknown"),
-)
 
-_VARIABLE_DESCRIPTION = "Source variable the window was cut from, as the release's var_id code and the caption name it."
-_TREND = Attribute(
-    key="trend",
-    description="Sign of the linear-trend slope tsfresh fitted over the window.",
-    labels=("upward", "downward"),
-)
-_SEASON_CODE = Attribute(
-    key="season_code",
-    description=(
-        "Dominant-frequency index tsfresh found over the window, minus one, as the release codes it. The "
-        "caption states it as 'around (code + 1) pi'; a constant window carries -1."
-    ),
-    codes=tuple(range(-1, 9)),
-)
-_SKEWNESS = Attribute(
-    key="skewness",
-    description="Sign of the value distribution's skewness over the window, from tsfresh.",
-    labels=("negative", "positive", "symmetrical"),
-)
-_KURTOSIS = Attribute(
-    key="kurtosis",
-    description="Level of the value distribution's kurtosis over the window, from tsfresh.",
-    labels=("low", "normal", "high"),
-)
+def _attribute(config: _AttributeConfig) -> Attribute:
+    """Convert one attribute definition to the connector's immutable value.
+
+    Returns:
+        The attribute definition.
+    """
+    labels = config.get("labels")
+    codes = config.get("codes")
+    return Attribute(
+        key=config["key"],
+        description=config["description"],
+        labels=None if labels is None else tuple(labels),
+        codes=None if codes is None else tuple(codes),
+    )
+
+
+def _axis(config: _AxisConfig) -> TimeAxis:
+    """Convert one configured axis.
+
+    Returns:
+        The TimeF axis.
+    """
+    if config["kind"] == "ordinal":
+        return OrdinalAxis()
+    return RegularAxis.from_rate_hz(Fraction(1, config["period_seconds"]))
+
+
+_RELEASE = _load_release()
+_ATTRIBUTES = {name: _attribute(config) for name, config in _RELEASE["attributes"].items()}
+
+COMPONENTS: tuple[str, ...] = tuple(_RELEASE["components"])
+"""Component order from the VerbalTS paper."""
 
 CODEBOOKS: dict[str, dict[str, Attribute]] = {
-    "synthetic_u": {
-        "trend_types": _TREND_TYPE,
-        "trend_directions": _TREND_DIRECTION,
-        "season_cycles": _SEASON_CYCLES,
-    },
-    "synthetic_m": {
-        "trend_types_0": _TREND_TYPE,
-        "trend_directions_0": _TREND_DIRECTION,
-        "season_cycles_0": _SEASON_CYCLES,
-        "ops_0": _VARIABLE_2_RULE,
-    },
-    "Weather": {
-        "season": _SEASON,
-        "time": _TIME_OF_DAY,
-        "weather": _WEATHER_CONDITION,
-        "temperature": _TEMPERATURE_TREND,
-        "wind": _WIND_DIRECTION,
-        "atmospher": _PRESSURE_LEVEL,
-        "humidity": _HUMIDITY_LEVEL,
-    },
-    "BlindWays": {
-        "guide": _GUIDE_METHOD,
-        "hand": _HAND,
-    },
-    "ETTm1": {
-        "var_id": Attribute(
-            key="variable",
-            description=_VARIABLE_DESCRIPTION,
-            labels=("HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"),
-        ),
-        "trend": _TREND,
-        "season": _SEASON_CODE,
-        "skewness": _SKEWNESS,
-        "kurtosis": _KURTOSIS,
-    },
-    "istanbul_traffic": {
-        "var_id": Attribute(key="variable", description=_VARIABLE_DESCRIPTION, labels=("TI", "TI_An", "TI_Av")),
-        "trend": _TREND,
-        "season": _SEASON_CODE,
-        "skewness": _SKEWNESS,
-        "kurtosis": _KURTOSIS,
-    },
+    component: {source_name: _ATTRIBUTES[attribute] for source_name, attribute in config["attributes"].items()}
+    for component, config in _RELEASE["components"].items()
 }
 """Attributes by component and ``meta.json`` column order."""
 
-VARIABLE = "variable"
-"""Key for a single-channel window's channel name."""
-
 CHANNELS: dict[str, tuple[str, ...]] = {
-    "synthetic_u": ("variable 1",),
-    "synthetic_m": ("variable 1", "variable 2"),
-    "Weather": (
-        "p",
-        "T",
-        "Tpot",
-        "Tdew",
-        "rh",
-        "VPmax",
-        "VPact",
-        "VPdef",
-        "sh",
-        "H2OC",
-        "rho",
-        "wv",
-        "max. wv",
-        "wd",
-        "rain",
-        "raining",
-        "SWDR",
-        "PAR",
-        "max. PAR",
-        "Tlog",
-        "CO2",
-    ),
-    "BlindWays": tuple(f"joint{joint:02d}_{coordinate}" for joint in range(24) for coordinate in range(3)),
+    component: tuple(config["channels"]) for component, config in _RELEASE["components"].items() if "channels" in config
 }
-"""Fixed channel names in array order.
+"""Fixed channel names in array order."""
 
-Other components use their ``variable`` attribute as the channel name.
-"""
+CHANNEL_FROM: dict[str, str] = {
+    component: config["channel_from"]
+    for component, config in _RELEASE["components"].items()
+    if "channel_from" in config
+}
+"""Annotation key that names each variable-selected component's channel."""
 
-STRIDE: dict[str, int] = {"ETTm1": 30, "istanbul_traffic": 24}
+STRIDE: dict[str, int] = {
+    component: config["stride"] for component, config in _RELEASE["components"].items() if "stride" in config
+}
 """Sliding-window strides in steps."""
+
+SPEC_BY_COMPONENT: dict[str, TimeSeriesSpec] = {
+    component: TimeSeriesSpec(
+        spec_type=config["spec"]["type"],
+        name=config["spec"]["name"],
+        unit_value=ureg.Unit(config["spec"]["unit"]),
+        dtype=config["spec"]["dtype"],
+    )
+    for component, config in _RELEASE["components"].items()
+}
+"""Signal spec for each component."""
+
+AXIS_BY_COMPONENT: dict[str, TimeAxis] = {
+    component: _axis(config["axis"]) for component, config in _RELEASE["components"].items()
+}
+"""Axis for each component, without absolute timestamps."""

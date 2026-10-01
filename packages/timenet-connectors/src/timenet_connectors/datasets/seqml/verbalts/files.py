@@ -10,16 +10,6 @@ from pathlib import Path
 from timenet.errors import TimeFFormatError
 
 
-COMPONENTS: tuple[str, ...] = (
-    "synthetic_u",
-    "synthetic_m",
-    "Weather",
-    "BlindWays",
-    "ETTm1",
-    "istanbul_traffic",
-)
-"""Component order from the VerbalTS paper."""
-
 # (component, filename, drive file id, bytes, sha256)
 FILES: tuple[tuple[str, str, str, int, str], ...] = (
     (
