@@ -44,13 +44,8 @@ class _Shard:
         assert row_group == 0
         # Projected, never the whole row group: a shard also carries ids, spec_type and signal, and
         # decoding those on every value read is what the projection exists to avoid.
-        assert columns == ["values", "time_offsets_us"]
-        return pa.table(
-            {
-                "values": pa.array([[self._value]], type=pa.list_(pa.float32())),
-                "time_offsets_us": pa.nulls(1, type=pa.list_(pa.int64())),
-            }
-        )
+        assert columns == ["values"]
+        return pa.table({"values": pa.array([[self._value]], type=pa.list_(pa.float32()))})
 
 
 def test_row_group_cache_includes_dataset_root(monkeypatch):
@@ -90,8 +85,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 
 
 def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch):
-    # Every series in the fixture is regular, so time_offsets_us is null in every row of the shard.
-    # The footer says so, so the read can leave that column alone.
+    # Time offsets belong to the shared control-plane axis, so every values read projects only values.
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))

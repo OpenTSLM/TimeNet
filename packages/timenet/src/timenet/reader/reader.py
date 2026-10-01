@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
+_AXIS_OFFSETS_CACHE_SIZE = 64
+# 64 MiB, this is the empirically decided default.
+_AXIS_OFFSETS_CACHE_MAX_BYTES = 64 * 2**20
 
 
 class TimeFReader:
@@ -50,6 +54,8 @@ class TimeFReader:
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_key: dict[int, int] = {}
         self._chunk_rows_cache: dict[int, list[dict]] = {}
+        self._axis_offsets_cache: OrderedDict[int, pa.Array] = OrderedDict()
+        self._axis_offsets_cache_bytes = 0
 
     def __getstate__(self) -> dict:
         """Return picklable state without open connections or decoded object caches."""
@@ -59,6 +65,8 @@ class TimeFReader:
         state["_records"] = None
         state["_values"] = None
         state["_chunk_rows_cache"] = {}
+        state["_axis_offsets_cache"] = OrderedDict()
+        state["_axis_offsets_cache_bytes"] = 0
         return state
 
     def __enter__(self) -> TimeFReader:
@@ -85,6 +93,8 @@ class TimeFReader:
         self._records = None
         self._tasks = None
         self._chunk_rows_cache.clear()
+        self._axis_offsets_cache.clear()
+        self._axis_offsets_cache_bytes = 0
 
     def verify(self) -> None:
         """Verify the size and checksum of every artifact in the manifest.
@@ -374,12 +384,27 @@ class TimeFReader:
         return _SignalLoader(self, signal_key, signal_id, spec)
 
     def _load_offsets(self, axis_key: int, axis_id: str) -> pa.Array:
-        """Load the stored offsets for one irregular TimeAxis.
+        """Load stored offsets and keep recently used shared axes in a bounded LRU cache.
 
         Returns:
             The axis offsets in microseconds.
         """
-        return self._control_reader().load_axis_offsets_by_key(axis_key, axis_id)
+        cached = self._axis_offsets_cache.get(axis_key)
+        if cached is not None:
+            self._axis_offsets_cache.move_to_end(axis_key)
+            return cached
+        offsets = self._control_reader().load_axis_offsets_by_key(axis_key, axis_id)
+        if _AXIS_OFFSETS_CACHE_SIZE == 0 or offsets.nbytes > _AXIS_OFFSETS_CACHE_MAX_BYTES:
+            return offsets
+        self._axis_offsets_cache[axis_key] = offsets
+        self._axis_offsets_cache_bytes += offsets.nbytes
+        while (
+            len(self._axis_offsets_cache) > _AXIS_OFFSETS_CACHE_SIZE
+            or self._axis_offsets_cache_bytes > _AXIS_OFFSETS_CACHE_MAX_BYTES
+        ):
+            _, evicted = self._axis_offsets_cache.popitem(last=False)
+            self._axis_offsets_cache_bytes -= evicted.nbytes
+        return offsets
 
     @contextmanager
     def _as_format_error(self, *, preserve_validation: bool = False) -> Iterator[None]:
