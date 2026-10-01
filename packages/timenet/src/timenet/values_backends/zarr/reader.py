@@ -20,7 +20,6 @@ from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
-from timenet.errors import TimeFFormatError
 from timenet.values_backends.reader import BaseValuesReader
 
 
@@ -30,43 +29,16 @@ if TYPE_CHECKING:
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
-#: Mirrors the group names in the writer module. See timenet.values_backends.zarr.writer.
-_IRREGULAR_GROUP = "_irregular"
-_TIME_OFFSETS_GROUP = "_time_offsets"
 #: Group that marks present timesteps in nullable series. It matches the writer's layout.
 _VALIDITY_GROUP = "_validity"
-
-
-def _time_offsets_path(values_rel_path: str) -> str:
-    """Return the time offsets array path that is parallel to a values array path.
-
-    This function replaces the ``_irregular`` path segment only, not any matching substring. A spec
-    type name can contain that text, for example ``foo_irregular_bar``. If the code uses a plain
-    string replace, it can match the wrong array instead of failing.
-
-    Args:
-        values_rel_path: The values array's path relative to the version directory.
-
-    Returns:
-        The parallel time offsets array's path.
-
-    Raises:
-        TimeFFormatError: If the path does not sit under the irregular group.
-    """
-    parts = values_rel_path.split("/")
-    if len(parts) < 3 or parts[1] != _IRREGULAR_GROUP:  # noqa: PLR2004 - store dir, group, array name
-        raise TimeFFormatError(
-            f"expected an irregular series' values under {_IRREGULAR_GROUP!r}, got {values_rel_path!r}; "
-            f"the row is tagged irregular but was written without a parallel time offsets array"
-        )
-    return "/".join([parts[0], _TIME_OFFSETS_GROUP, *parts[2:]])
 
 
 def _validity_path(values_rel_path: str) -> str:
     """Return the path of the validity array for a values array.
 
-    The path keeps the values array's group. Irregular validity arrays use ``_validity/_irregular/``.
-    This keeps regular and irregular arrays separate for the same spec type.
+    The path preserves groups from the values locator. A legacy irregular path under
+    ``_irregular/`` therefore remains under that group below ``_validity/``. Current layouts put
+    every specification's values at the store root.
 
     Args:
         values_rel_path: The values array's path relative to the version directory.
@@ -158,24 +130,6 @@ class ZarrValuesReader(BaseValuesReader):
             validity = validity_parts[0] if len(validity_parts) == 1 else np.concatenate(validity_parts)
             validity = validity.astype(bool, copy=False)
         return _to_arrow(combined, spec, validity)
-
-    def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
-        """Read an irregular series' time offsets from the array parallel to its values.
-
-        Args:
-            version: The opened version handle.
-            rows: The series' index rows, sorted by ``chunk_idx``.
-
-        Returns:
-            One int64 microsecond time offset for each value. :func:`_time_offsets_path` raises an error
-            if a row's values do not sit under the irregular group. This means the writer tagged
-            the row irregular but did not write a parallel time offsets array.
-        """
-        parts = [
-            self._read_range(version, _time_offsets_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
-        ]
-        combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
-        return pa.array(combined.astype(np.int64, copy=False))
 
     def close(self) -> None:
         """Drop cached arrays and decoded chunks. Zarr arrays hold no OS file handles to close."""

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeFDataset
+from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
+from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.control_schema import TABLES, Table
@@ -44,6 +47,35 @@ def _json(value: object) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise TimeFValidationError(f"value is not JSON-compatible: {value!r}") from exc
+
+
+def _validated_irregular_offsets(signal: Signal) -> np.ndarray:
+    """Load and validate the shared offsets declared by one irregular Signal.
+
+    Returns:
+        Canonical contiguous int64 offsets ready for shared storage.
+
+    Raises:
+        TimeFValidationError: If the offsets are absent, malformed, a different length from the
+            Signal, or disagree with the axis endpoints.
+    """
+    loader = signal.time_offsets_loader
+    axis = signal.time_axis
+    if loader is None or not isinstance(axis, IrregularAxis):
+        raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
+    offsets = to_time_offsets_us(loader().to_numpy(zero_copy_only=False))
+    if len(offsets) != signal.n_values:
+        raise TimeFValidationError(
+            f"series {signal.id!r}: its time_offsets_loader returned {len(offsets)} time offsets "
+            f"but it declares n_values={signal.n_values}"
+        )
+    if int(offsets[0]) != axis.first_us or int(offsets[-1]) != axis.last_us:
+        raise TimeFValidationError(
+            f"series {signal.id!r}: its axis claims the stream runs "
+            f"{axis.first_us}..{axis.last_us} us but the stream runs "
+            f"{int(offsets[0])}..{int(offsets[-1])} us"
+        )
+    return offsets
 
 
 def _returned_key(cursor: duckdb.DuckDBPyConnection) -> int:
@@ -175,6 +207,22 @@ class _HierarchyKeys(NamedTuple):
     signals: dict[str, int]
 
 
+class _OffsetSignature(NamedTuple):
+    """Bounded identity for one validated irregular offset stream."""
+
+    n_values: int
+    checksum: bytes
+
+
+class _StoredAxis(NamedTuple):
+    """One axis buffered for the control plane and shared by its Signals."""
+
+    axis: TimeAxis
+    key: int
+    offsets: _OffsetSignature | None
+    offsets_loader: Callable[[], pa.Array] | None
+
+
 class _HierarchyBatches:
     """Own the bounded row buffers for the stored hierarchy."""
 
@@ -273,7 +321,7 @@ class DuckDBControlWriter:
         records = dataset.records
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
-        axes: dict[str, tuple[object, int, pa.Array | None]] = {}
+        axes: dict[str, _StoredAxis] = {}
         source_keys: dict[str, int] = {}
         clock_keys: dict[int, int] = {}
         signal_keys: dict[str, int] = {}
@@ -610,7 +658,7 @@ class DuckDBControlWriter:
         self,
         record: Any,
         record_key: int,
-        axes: dict[str, tuple[object, int, pa.Array | None]],
+        axes: dict[str, _StoredAxis],
         keys: _HierarchyKeys,
         annotations: list[tuple[str, int, Annotation]],
         object_keys: Iterator[int],
@@ -660,7 +708,7 @@ class DuckDBControlWriter:
         self,
         signal: Signal,
         source_key: int,
-        axes: dict[str, tuple[object, int, pa.Array | None]],
+        axes: dict[str, _StoredAxis],
         object_keys: Iterator[int],
         axis_keys: Iterator[int],
         batches: _HierarchyBatches,
@@ -679,26 +727,28 @@ class DuckDBControlWriter:
         if existing is None:
             axis_key = next(axis_keys)
             offsets = self._write_axis(signal, axis_key, batches)
-            if offsets is not None and len(offsets) != signal.n_values:
-                raise TimeFValidationError(
-                    f"signal {signal.id!r} declares {signal.n_values} values but its axis "
-                    f"{axis.axis_id!r} has {len(offsets)} time offsets"
-                )
-            axes[axis.axis_id] = (axis, axis_key, offsets)
-        elif existing[0] != axis:
+            axes[axis.axis_id] = _StoredAxis(axis, axis_key, offsets, signal.time_offsets_loader)
+        elif existing.axis != axis:
             raise TimeFValidationError(f"axis id {axis.axis_id!r} is reused with different definitions")
         else:
-            axis_key = existing[1]
+            axis_key = existing.key
         if existing is not None and isinstance(axis, IrregularAxis):
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-            stored_offsets = existing[2]
-            if stored_offsets is None or not signal.time_offsets_loader().equals(stored_offsets):
-                raise TimeFValidationError(f"axis id {axis.axis_id!r} is shared by signals with different time offsets")
-            if len(stored_offsets) != signal.n_values:
+            stored_offsets = existing.offsets
+            if stored_offsets is None:
+                raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
+            if signal.time_offsets_loader is not existing.offsets_loader:
+                candidate = _validated_irregular_offsets(signal)
+                candidate_signature = _OffsetSignature(len(candidate), sha256(candidate).digest())
+                if candidate_signature != stored_offsets:
+                    raise TimeFValidationError(
+                        f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
+                    )
+            if stored_offsets.n_values != signal.n_values:
                 raise TimeFValidationError(
                     f"signal {signal.id!r} declares {signal.n_values} values but its axis "
-                    f"{axis.axis_id!r} has {len(stored_offsets)} time offsets"
+                    f"{axis.axis_id!r} has {stored_offsets.n_values} time offsets"
                 )
 
         spec = signal.spec
@@ -726,11 +776,11 @@ class DuckDBControlWriter:
         return signal_key
 
     @staticmethod
-    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> pa.Array | None:
+    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
         """Buffer an axis and any irregular offsets.
 
         Returns:
-            The irregular offsets, or ``None`` for other axis types.
+            A bounded signature of the irregular offsets, or ``None`` for other axis types.
 
         Raises:
             TimeFValidationError: If an irregular signal has no offsets loader.
@@ -767,10 +817,10 @@ class DuckDBControlWriter:
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-            offsets = signal.time_offsets_loader()
-            for position, offset in enumerate(offsets.to_pylist()):
-                batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": offset})
-            return offsets
+            offsets = _validated_irregular_offsets(signal)
+            for position, offset in enumerate(offsets):
+                batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": int(offset)})
+            return _OffsetSignature(len(offsets), sha256(offsets).digest())
         if isinstance(axis, OrdinalAxis):
             batches.axes.add(
                 {

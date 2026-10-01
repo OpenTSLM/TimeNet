@@ -96,5 +96,6 @@ every Signal array.
 Each Signal belongs to one Source. Do not attach one Signal instance, or one Signal ID, to several
 Sources or Records.
 
-Several Signals can share the same immutable `TimeAxis` or `TimeSeriesSpec`. This reuse represents a
-shared contract, not shared values.
+Several Signals can share the same immutable `TimeAxis` or `TimeSeriesSpec`. TimeF stores the axis
+definition once. For an irregular axis, this includes its complete offset stream. Signal values
+remain independent.
