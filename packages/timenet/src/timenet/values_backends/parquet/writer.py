@@ -40,7 +40,6 @@ from timenet.writer.value_encoding import (
 
 
 MAX_ELEMENTS_PER_ROW_GROUP = 2**31
-_BYTES_PER_TIME_OFFSET = 8
 _PYARROW_DEFAULT_PAGE_BYTES = 1 << 20
 _LOG = logging.getLogger(__name__)
 
@@ -61,24 +60,6 @@ def _bytes_per_value(spec: TimeSeriesSpec, values: pa.Array) -> int:
     if spec.dtype in {"str", "enum"}:
         return max(1, values.nbytes // max(1, len(values)))
     return np.dtype(spec.dtype).itemsize
-
-
-def _step_bytes(stores_time_offsets: bool, bytes_per_value: int) -> int:
-    """Return the uncompressed bytes that one step of a series costs.
-
-    An irregular series stores an int64 time offset next to each value. So its step costs eight
-    bytes more than a regular step. Chunk sizing, row-group flushing, and shard rotation all
-    use this unit as their budget. If the code charged every series at the float32 rate, an
-    irregular series would overrun each target by three times.
-
-    Args:
-        stores_time_offsets: True if the series stores one time offset for each value.
-        bytes_per_value: The bytes one value costs for this series' dtype.
-
-    Returns:
-        The number of bytes for one step.
-    """
-    return bytes_per_value + (_BYTES_PER_TIME_OFFSET if stores_time_offsets else 0)
 
 
 #: Arrow leaf type for ``"enum"`` values. Each shard carries a self-contained dictionary so it stays
@@ -145,14 +126,12 @@ class ParquetValuesBackend(BaseValuesBackend):
         else:
             self._data_page_size = None
         self._forced_encoding = config.value_encoding
-        self._time_offsets_checked = False
 
     def write_series(
         self,
         unique_series: list[Signal],
         *,
         read_and_validate: Callable[[Signal], pa.Array],
-        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -161,8 +140,6 @@ class ParquetValuesBackend(BaseValuesBackend):
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series' values against its dtype and shape.
-            read_time_offsets: Loads an irregular series' int64 time offsets. Returns ``None`` for
-                other shapes.
             on_series_done: Progress callback. This method calls it with ``(completed, total)``
                 after each series.
             on_file_done: Progress callback. This method calls it with ``(files_finalized)`` after
@@ -185,7 +162,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         total = len(unique_series)
         for completed, ts in enumerate(unique_series, start=1):
             values = read_and_validate(ts)
-            for chunk in _plan_chunks(ts, values, self._chunk_max_bytes, read_time_offsets(ts)):
+            for chunk in _plan_chunks(ts, values, self._chunk_max_bytes):
                 stream.add(chunk)
             on_series_done(completed, total)
         stream.finish()
@@ -268,8 +245,7 @@ class ParquetValuesBackend(BaseValuesBackend):
             value_encoding: The encoding used to open the shard.
 
         Raises:
-            TimeFValidationError: If the values column does not carry the chosen encoding, or a
-                shard that carries time offsets does not encode them as DELTA_BINARY_PACKED.
+            TimeFValidationError: If the values column does not carry the chosen encoding.
         """
         path = self._staging_dir / rel_path
         applied = encodings.values_encoding_of(str(path))
@@ -279,16 +255,6 @@ class ParquetValuesBackend(BaseValuesBackend):
             raise TimeFValidationError(
                 f"expected {value_encoding} on the shard values column of {rel_path}, got {sorted(applied)}"
             )
-        if not self._time_offsets_checked:
-            time_offsets = encodings.values_encoding_of(str(path), encodings.TIME_OFFSETS_COLUMN)
-            # An all-regular shard has only RLE definition levels here. It has no time offsets to
-            # encode. So this case proves nothing, and the check stays active for a later shard.
-            if time_offsets and time_offsets != {"RLE"}:
-                if "DELTA_BINARY_PACKED" not in time_offsets:
-                    raise TimeFValidationError(
-                        f"expected DELTA_BINARY_PACKED on shard time offsets, got {sorted(time_offsets)}"
-                    )
-                self._time_offsets_checked = True
 
 
 @dataclass
@@ -303,13 +269,11 @@ class _Chunk:
     dtype: str
     bytes_per_value: int
     values: pa.Array
-    time_offsets: pa.Array | None = None
-    """This chunk's int64 time offsets, sliced at the same boundary as its values, or ``None``."""
 
     @property
     def n_bytes(self) -> int:
         """Uncompressed bytes this chunk contributes to the row-group and shard budgets."""
-        return self.n_values * _step_bytes(self.time_offsets is not None, self.bytes_per_value)
+        return self.n_values * self.bytes_per_value
 
 
 class _ShardStream:
@@ -444,31 +408,27 @@ def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.
             "chunk_idx": [c.chunk_idx for c in buffer],
             "n_values": [c.n_values for c in buffer],
             "values": _values_column([c.values for c in buffer]),
-            "time_offsets_us": _time_offsets_column([c.time_offsets for c in buffer]),
+            # Kept as a null compatibility column so older v1 readers can read new shards. Irregular
+            # offsets are stored once in control.duckdb and referenced through each Signal's axis.
+            "time_offsets_us": pa.nulls(len(buffer), type=pa.list_(pa.int64())),
         },
         schema=schema,
     )
 
 
-def _plan_chunks(
-    ts: Signal, values: pa.Array, chunk_max_bytes: int, time_offsets: pa.Array | None = None
-) -> list[_Chunk]:
+def _plan_chunks(ts: Signal, values: pa.Array, chunk_max_bytes: int) -> list[_Chunk]:
     """Split a validated series into backend-independent logical chunks.
-
-    The code cuts values and time offsets at the same boundaries. This lets one chunk locator
-    address both. So time offset ``k`` is always in the same chunk as value ``k``.
 
     Args:
         ts: Series metadata used for chunk identity and timing.
         values: Validated values in the spec's canonical Arrow type.
         chunk_max_bytes: Maximum uncompressed bytes in one chunk.
-        time_offsets: Validated int64 time offsets, one per value, or ``None``.
 
     Returns:
         Logical chunks in series order.
     """
     bytes_per_value = _bytes_per_value(ts.spec, values)
-    max_values = max(1, chunk_max_bytes // _step_bytes(time_offsets is not None, bytes_per_value))
+    max_values = max(1, chunk_max_bytes // bytes_per_value)
     chunks: list[_Chunk] = []
     for chunk_idx, start in enumerate(range(0, len(values), max_values)):
         sub = values.slice(start, max_values)
@@ -484,31 +444,9 @@ def _plan_chunks(
                 dtype=ts.spec.dtype,
                 bytes_per_value=bytes_per_value,
                 values=sub,
-                time_offsets=None if time_offsets is None else time_offsets.slice(start, max_values),
             )
         )
     return chunks
-
-
-def _time_offsets_column(chunks: list[pa.Array | None]) -> pa.ListArray:
-    """Pack per-chunk int64 time offsets into one ``list<int64>`` column. Use null where a chunk has none.
-
-    The null cell is deliberate. An empty list looks identical to a zero-length chunk, and it still
-    costs one offset.
-
-    Args:
-        chunks: The per-row time offset arrays. ``None`` marks a chunk whose series stores no offsets.
-
-    Returns:
-        A ``list<int64>`` array with one row per chunk.
-    """
-    present = [c for c in chunks if c is not None]
-    if not present:
-        return pa.nulls(len(chunks), type=pa.list_(pa.int64()))
-    offsets = np.zeros(len(chunks) + 1, dtype=np.int32)
-    offsets[1:] = np.cumsum([0 if c is None else len(c) for c in chunks])
-    mask = pa.array([c is None for c in chunks], type=pa.bool_())
-    return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), pa.concat_arrays(present), mask=mask)
 
 
 def _values_column(chunks: list[pa.Array]) -> pa.ListArray:

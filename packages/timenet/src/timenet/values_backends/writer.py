@@ -96,7 +96,6 @@ class BaseValuesBackend(ABC):
         unique_series: list[Signal],
         *,
         read_and_validate: Callable[[Signal], pa.Array],
-        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -105,9 +104,6 @@ class BaseValuesBackend(ABC):
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series against its spec's values contract.
-            read_time_offsets: Loads and validates the per-value time offsets of an irregular series.
-                Returns ``None`` for a series that stores none. It stays separate from
-                ``read_and_validate`` so the values seam holds one array per series for any axis shape.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(files_finalized)`` after each value file closes.
 

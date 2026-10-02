@@ -52,18 +52,6 @@ class BaseValuesReader(ABC):
         """
 
     @abstractmethod
-    def load_time_offsets(self, version: DatasetVersion, rows: list[dict]) -> pa.Array:
-        """Read and concatenate one irregular series' per-value time offsets.
-
-        Args:
-            version: The opened version handle. Reads flow through its filesystem/store.
-            rows: The series' index rows, sorted by ``chunk_idx``.
-
-        Returns:
-            One int64 microsecond time offset per value.
-        """
-
-    @abstractmethod
     def close(self) -> None:
         """Release any open handles or caches held for the reader's lifetime."""
 
