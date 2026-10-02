@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# A Record is one complete system-day, because the benchmark's official agent calculates
+# component/KPI anomaly thresholds from the whole daily metric file before filtering to the
+# incident window. Tasks therefore share their daily Record and carry the 30-minute incident
+# region as an input annotation; task scope deliberately remains unset.
+yaml_schema_version: 1
+dataset_id: microsoft/openrca
+dataset_version: 1.0.0
+name: OpenRCA
+description: >-
+  335 root-cause-analysis questions over more than 68 GB of daily metrics, traces, and logs from
+  three enterprise software systems.
+license: CC-BY-NC-4.0
+license_url: https://creativecommons.org/licenses/by-nc/4.0/
+source_url: https://github.com/microsoft/OpenRCA
+citation: >-
+  Xu, J., Zhang, Q., Zhong, Z., He, S., Zhang, C., Lin, Q., Pei, D., He, P., Zhang, D., and Zhang,
+  Q. (2025). OpenRCA: Can Large Language Models Locate the Root Cause of Software Failures? ICLR
+  2025. https://proceedings.iclr.cc/paper_files/paper/2025/hash/d29b8d53678015079e1d245c023e49d2-Abstract-Conference.html
+access: open
+domains:
+  - observability
+tags:
+  - observability
+  - root-cause-analysis
+  - aiops
+  - qa
+  - metrics
+  - traces
+  - logs

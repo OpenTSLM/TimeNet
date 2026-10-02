@@ -1,0 +1,243 @@
+# Prompts of the HEARTS test cases, adapted from exp/<source>/<task>.py of the reference harness.
+# The connector treats this checked-in file as trusted package data.
+#
+# The harness wrote each input to a file in the agent's working directory and named the file in
+# the prompt. These prompts name the TimeF signals and annotations instead, ask for the answer in the
+# reply rather than in a file, and otherwise keep the wording. A `$` placeholder takes the value the
+# harness formatted into the prompt of each case: $meal_time, $meal_info, $mask_start, $mask_end,
+# $symptoms, and $speaker.
+#
+# Each prompt is a literal block, one line per line the harness sent, so lines run long.
+
+cgmacros/a1c_classification: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the timestamp of each reading. Your task is to predict the disease status based on CGM data. There are 3 different status: normal, prediabetes, and diabetes. Please analyze the entire CGM time series and output your final prediction of disease status as a JSON object without any other text in the following format:
+  {
+      "disease_status": [string, normal|prediabetes|diabetes]
+  }
+cgmacros/cgm_stat_calculation: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the time of each reading. Calculate percentage of time CGM is below and above normal range (70 - 180 mg/dL). Please calculate and output your final answer as a JSON object without any other text in the following format:
+  {
+      "below": [float, percentage of time CGM < 70 mg/dL],
+      "above": [float, percentage of time CGM > 180 mg/dL]
+  }
+cgmacros/fasting_glu_prediction: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the timestamp of each reading. Your task is to predict the subject's fasting blood glucose value (in mg/dL) based on the entire CGM time series. Please output your final prediction as a JSON object without any other text in the following format:
+  {
+      "fasting_glu": [float, fasting blood glucose value in mg/dL]
+  }
+cgmacros/iauc_calculation: |-
+  The CGM (continuous glucose monitoring) data for 2 hours after a meal is provided as the signal 'CGM (mg/dL)', whose time axis counts the minutes since the meal started.
+  Please calculate the incremental Area Under the Curve (iAUC) for the postprandial glucose response. Use first CGM value as baseline. Please output your calculated iAUC value as a JSON object without any other text in the following format:
+  {
+      "iauc": [number]
+  }
+cgmacros/meal_react_comparison: |-
+  You are given two CGM data windows (A and B), each is a 4-hour window (1 hour before and 3 hours after a meal) from two different subjects. Both subjects ate a meal with similar carbohydrate and calorie content, but one subject is normal (non-diabetes) and the other has prediabetes or diabetes. Each CGM window is a record, 'A' and 'B', holding the signal 'Libre GL' (mg/dL) with the timestamp of each reading.
+
+  Your task: Based on the CGM data, decide which window (A or B) is from the normal subject and which is from the prediabetes or diabetes subject. Output your answer as a JSON object with the following format (no extra text):
+  {
+      "normal_subject": "A"  # or "B"
+  }
+cgmacros/meal_time_localization: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL); its time axis gives the time of each reading in whole minutes from the start of the window. There is exactly one meal event in this 2-hour window. Please analyze the CGM data and output your final answer as a JSON object without any other text in the following format:
+  {
+      "meal_timestamp": [float, timestamp (in minutes) when the meal starts]
+  }
+cgmacros/meal_forecasting: |-
+  The CGM (continuous glucose monitoring) data for this subject's first three days is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'reference_cgm_df', with the timestamp of each reading.
+  All meal events for the first three days are provided as annotations on that timeline: at each meal's time, 'meal_type' names the meal and 'calories', 'carbs', 'protein', 'fat' and 'fiber' give its content. These meal events are for your reference.
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' of source 'window_df'.
+  A meal event occurred at $meal_time.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_meal_info: |-
+  The CGM (continuous glucose monitoring) data for this subject's first three days is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'reference_cgm_df', with the timestamp of each reading.
+  All meal events for the first three days are provided as annotations on that timeline: at each meal's time, 'meal_type' names the meal and 'calories', 'carbs', 'protein', 'fat' and 'fiber' give its content. These meal events are for your reference.
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' of source 'window_df'.
+  A meal event occurred at $meal_time. The information for this meal is: $meal_info.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_no_ref: |-
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  A meal event occurred at $meal_time.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_no_ref_meal_info: |-
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  A meal event occurred at $meal_time. The information for this meal is: $meal_info.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_img_classification: |-
+  The CGM data for the 4 hours around the meal event (1 hour before and 3 hours after) is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'window_df', with the timestamp of each reading. A meal event occurred at $meal_time.
+  The 4 possible meal image options are the image signals a.jpg, b.jpg, c.jpg and d.jpg of source 'image_mapping'.
+  Your task is to choose which image is most likely this meal based on the CGM data. Please output your final choice as a JSON object without any other text in the following format:
+  {
+      "chosen_image": "a.jpg" # or "b.jpg", "c.jpg", "d.jpg"
+  }
+cgmacros/non_meal_imputation_calories: |-
+  The CGM (continuous glucose monitoring) and activity calories consumption data for this subject is provided as the signals 'Libre GL' (CGM, mg/dL) and 'Calories (Activity)' (estimation of calories burned in the past minute by a smartwatch), with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the calories and remaining CGM data. Then return your imputed values in order as a list.
+cgmacros/non_meal_imputation_cgm_only: |-
+  The CGM (continuous glucose monitoring) data for this subject is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the remaining CGM data. Then return your imputed values in order as a list.
+cgmacros/non_meal_imputation_hr: |-
+  The CGM (continuous glucose monitoring) and heart rate (HR, bpm) data for this subject is provided as the signals 'Libre GL' (CGM, mg/dL) and 'HR' (heart rate, beats per minute), with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the heart rate and remaining CGM data. Then return your imputed values in order as a list.
+coswara/audio_classification: |-
+  Analyze the audio in the signal 'audio'.
+
+  Classify the audio as one of the following categories:
+  - speech: spoken words or sounds like counting or vowels
+  - cough: coughing sounds
+  - breathing: breathing sounds (deep or shallow)
+
+  Output your classification in JSON format:
+  {
+      "prediction": "speech" or "cough" or "breathing"
+  }
+coswara/cough_covid_status_classification: |-
+  Analyze the cough audio in the signal 'audio'.
+
+  Based on the sound of the cough, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/cough_covid_status_classification_with_symptoms: |-
+  Analyze the cough audio in the signal 'audio' and the subject's symptoms to classify the subject as either healthy or covid positive.
+
+  Symptoms: $symptoms
+
+  Based on the sound of the cough and the symptoms, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/cough_covid_status_classification_symptoms_only: |-
+  Analyze the subject's symptoms to classify the subject as either healthy or covid positive.
+
+  Symptoms: $symptoms
+
+  Based on the symptoms, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/speech_covid_status_classification: |-
+  Analyze the speech audio in the signal 'audio'.
+
+  Based on the sound of the speech, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coughvid/cough_detection_good_qual: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Analyze the audio and determine if a cough is present in the recording.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "has_cough": true/false
+  }
+coughvid/cough_detection_poor_qual: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Analyze the audio and determine if a cough is present in the recording.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "has_cough": true/false
+  }
+coughvid/covid_status_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine if the subject has COVID-19.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "is_covid": true/false
+  }
+coughvid/diagnosis_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine the most likely diagnosis from the following options:
+  - upper_infection
+  - lower_infection
+  - obstructive_disease
+  - COVID-19
+  - healthy_cough
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "diagnosis": "diagnosis_option"
+  }
+coughvid/health_status_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine if the subject is healthy.
+
+  Healthy is defined as the subject having no underlying health conditions can be recognized from the audio.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "is_healthy": true/false
+  }
+coughvid/mfcc_mean_std: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Calculate the Mel Frequency Cepstral Coefficients (MFCCs) with 13 coefficients, then compute the mean and standard deviation of each MFCC over time. Please output your final answer in the following JSON format without any other text:
+  {
+      "mfcc_mean": [list of 13 floats],
+      "mfcc_std": [list of 13 floats]
+  }
+harespod/altitude_ranking_respiration: |-
+  You are given 5-minute segments of respiration signals as the records A, B and C, each holding the signal 'rsp' with its timestamps. Each segment corresponds to one of the altitude ranges provided below:
+
+  - 1.5k-2k meters
+  - 2k-2.5k meters
+  - 2.5k-3k meters
+  - 3k-3.5k meters
+  - 3.5k-4k meters
+
+  Your task is to analyze the respiration signals and rank the segments from highest altitude to lowest altitude.
+
+  Output your ranking as a list of labels in JSON format:
+  {
+      "ranking": ["label from highest altitude", "label from mid altitude", "label from lowest altitude"]
+  }
+harespod/altitude_ranking_spo2: |-
+  You are given 5-minute segments of SpO2 (oxygen saturation) signals as the records A, B and C, each holding the signal 'spo' with its timestamps. Each segment corresponds to one of the altitude ranges provided below:
+
+  - 1.5k-2k meters
+  - 2k-2.5k meters
+  - 2.5k-3k meters
+  - 3k-3.5k meters
+  - 3.5k-4k meters
+
+  Your task is to analyze the SpO2 signals and rank the segments from highest altitude to lowest altitude.
+
+  Output your ranking as a list of labels in JSON format:
+  {
+      "ranking": ["label from highest altitude", "label from mid altitude", "label from lowest altitude"]
+  }
+harespod/hr_resp_pairing: |-
+  You are given 5-minute segments of respiration and heart rate signals from the same subject at different altitude phases.
+
+  The respiration signals are the records respiration_A and respiration_B, each holding the signal 'rsp' with its timestamps.
+
+  The heart rate signals are the records hr_1 and hr_2, each holding the signal 'hr' with its timestamps.
+
+  Your task is to analyze the signals and pair which heart rate signal corresponds to which respiration signal, based on them being from the same altitude phase. The pairing should reflect which heart rate matches which respiration from the same phase.
+
+  Output your pairing as a dictionary in JSON format without any other text, for example:
+  {
+      "pairing": {"A": "1", "B": "2"} # or {"A": "2", "B": "1"}
+  }
+harespod/spo2_resp_pairing: |-
+  You are given 5-minute segments of respiration and SpO2 (oxygen saturation) signals from the same subject at different altitude phases.
+
+  The respiration signals are the records respiration_A and respiration_B, each holding the signal 'rsp' with its timestamps.
+
+  The SpO2 signals are the records spo_1 and spo_2, each holding the signal 'spo' with its timestamps.
+
+  Your task is to analyze the signals and pair which SpO2 signal corresponds to which respiration signal, based on them being from the same altitude phase. The pairing should reflect which SpO2 matches which respiration from the same phase.
+
+  Output your pairing as a dictionary in JSON format without any other text, for example:
+  {
+      "pairing": {"A": "1", "B": "2"} # or {"A": "2", "B": "1"}
+  }
+vctk/waveform_temporal_direction_detection: |-
+  A raw audio waveform is provided as the signal 'audio'. This is a mono audio signal sampled at 16000 Hz. The waveform may be playing forward (normal) or time-reversed (backward). Speaker: $speaker. Determine whether the waveform is playing in the forward direction or has been time-reversed. Output your final answer as a JSON object without any other text, in the following format:
+  {
+      "direction": "[forward|reversed]",
+      "reason": "[explanation of your choice]"
+  }
