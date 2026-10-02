@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v2.schema.json
 # Dataset Card for the physionet/ecg-qa-cot connector: the single source for this dataset's metadata.
 # The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
 # derived from the data into manifest.json.
@@ -11,6 +11,11 @@
 yaml_schema_version: 2
 dataset_id: physionet/ecg-qa-cot
 dataset_version: 1.0.0
+source_revision: OpenTSLM-ECG-QA-CoT
+parents:
+  - alias: ptbxl
+    dataset_id: physionet/ptb-xl
+    version: 1.0.0
 name: ECG-QA CoT
 description: >-
   12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought
@@ -24,4 +29,3 @@ tags:
   - qa
   - cot
   - physionet
-source_url: https://physionet.org/content/ptb-xl/
