@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Each metric record contains one source per tag group and one signal per available rollup.
+# Rollup intervals are 10, 60, 300, 1800, 3600, or 86400 seconds.
+# ARFBench supplies each rollup through a separate query, not by resampling one series.
+# Coarser rollups can cover more time and include more tag groups.
+# Consumers choose a rollup. The release evaluation uses the finest one that fits the model context.
+# Charts use the finest rollup. `finest_interval_s` names its interval.
+#
+# Each question creates a series task and a chart task in the test split.
+# Series tasks cite metric records; chart tasks use the released PNG images.
+# Values remain float64 with unspecified units. Null marks a missing timestep.
+# Series with missing steps use explicit time offsets.
+yaml_schema_version: 1
+dataset_id: datadog/arfbench
+dataset_version: 1.0.0
+name: ARFBench
+description: >-
+  750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
+  The dataset includes every published metric rollup and the released charts.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Datadog/ARFBench
+citation: >-
+  Xie, S., Cohen, B., Goswami, M., Shen, J., Khwaja, E., Liu, C., Asker, D., Abou-Amal, O., and
+  Talwalkar, A. (2026). ARFBench: Benchmarking Time Series Question Answering Ability for Software
+  Incident Response. arXiv:2604.21199. https://arxiv.org/abs/2604.21199
+access: open
+domains:
+  - observability
+tags:
+  - observability
+  - anomaly-detection
+  - qa
+  - multiple-choice
+  - datadog
+  - huggingface

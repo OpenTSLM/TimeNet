@@ -1,0 +1,2 @@
+# gdown handles Google Drive confirmation pages; checksums pin the released bytes.
+gdown>=5,<7

@@ -1,0 +1,78 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Metadata for the leochen085/slip dataset.
+# The connector reads this file with DatasetMetadata.from_yaml().
+# The builder combines this metadata with the data schema to create manifest.json.
+#
+# This connector uses one pinned release revision.
+# The `data/` shards contain pretraining series from 37 datasets.
+# A language model wrote the captions.
+# Eleven other folders contain labeled evaluation windows in the published train and test subsets:
+# wisdm, uci_har, PPG_CVA, PPG_DM, PPG_HTN, sleepEDF, ptbxl, wesad, studentlife,
+# AsphaltObstacles, and Beijing_AQI.
+#
+# MIT covers the SLIP packaging and captions. Each source dataset keeps its own license.
+# Therefore, no single license covers the full dataset.
+#
+# `meta.csv` assigns the pretraining datasets to eight domains.
+# This card uses energy, environment, health, transport, activity, and general.
+# Activity includes Capture24, dalia, wisdm, and uci_har.
+# General includes IoT, Nature, Synthetic, and Web.
+#
+# Each inner list becomes one signal named `s00`, `s01`, and so on.
+# Evaluation signals use the rates the release states. Pretraining signals use ordinal axes because
+# the `meta.csv` frequency can disagree with the rows; London Smart Meters is one known mismatch.
+# Pretraining records keep `source_rate`, `domain`, and `source_url` as annotations.
+# `source_dataset` identifies the source corpus or evaluation folder.
+# Values have no common unit. UTSD keeps its source scale, while NormWear is standardized.
+# Pretraining records use float32. Evaluation windows use float64.
+#
+# Each pretraining record stores four captions as annotations in the train split.
+# Each distinct caption creates an unprompted AnswerTask.
+# `caption0` is the generated caption. `caption1` through `caption3` are Qwen2 paraphrases.
+# Some paraphrases include a `Paraphrase N:` prefix or end early.
+# ChatTS repeats one caption in all four fields, so each record has one task.
+#
+# Each evaluation window creates one ClassificationTask from its text label.
+# Windows keep the train or test split from the release.
+# SLIP uses train windows for linear probes, not for pretraining.
+# `label` stores the numeric class index when available.
+# `label_template` stores the retrieval sentence.
+# `participant_id` stores the subject when available.
+#
+# The connector preserves these source-data details:
+# - Some dalia rows contain one NaN channel.
+# - Most PPG windows have 136 zeros at the start.
+# - The 13 WESAD channels contain only three distinct series.
+# - AsphaltObstacles uses the air-quality label template.
+# - The wisdm subsets share participants.
+# - The ptbxl labels are ECG report sentences, not class names.
+yaml_schema_version: 1
+dataset_id: leochen085/slip
+dataset_version: 1.0.0
+name: SLIP
+description: >-
+  SLIP pairs sensor time series with captions a language model wrote: one caption for each series and
+  three rewrites. It also includes eleven labelled evaluation collections in their published train
+  and test subsets.
+license: other
+license_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+source_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+citation: >-
+  Chen, Y., Pillai, A., Wu, Y. Y., Griffin, T. Z., Marsch, L., Heinz, M. V., Jacobson, N. C., and
+  Campbell, A. (2026). Learning Transferable Sensor Models via Language-Informed Pretraining.
+  arXiv:2603.11950. https://arxiv.org/abs/2603.11950
+access: open
+domains:
+  - general
+  - health
+  - activity
+  - environment
+  - energy
+  - transport
+tags:
+  - captioning
+  - classification
+  - contrastive-learning
+  - multimodal
+  - sensor
+  - huggingface
