@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
@@ -48,7 +49,11 @@ class TestMeanConnector(BaseConnector[None]):
         """
         return []
 
-    def convert(self, raw_refs: list[None]) -> TimeFDataset:  # noqa: ARG002 (synthetic: nothing to convert)
+    def convert(
+        self,
+        raw_refs: list[None],
+        context: BuildContext | None = None,
+    ) -> TimeFDataset:
         """Generate the balanced set of labeled, single-signal records.
 
         Args:
@@ -57,6 +62,7 @@ class TestMeanConnector(BaseConnector[None]):
         Returns:
             The populated dataset: one single-signal series and one ``ClassificationTask`` per record.
         """
+        _ = raw_refs, context
         dataset = TimeFDataset(metadata=self.metadata())
         rng = np.random.default_rng(_SEED)
         for index in range(_N_RECORDS):

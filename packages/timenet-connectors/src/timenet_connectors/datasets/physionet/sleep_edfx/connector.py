@@ -31,6 +31,7 @@ from pathlib import Path
 import re
 from typing import ClassVar
 
+from timenet.composition import BuildContext
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
@@ -263,7 +264,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
 
     # PLR0914: the loop holds one name for each fact a record is made of, on purpose. A reader
     # of it sees the join and each annotation, and not one call that hides both behind a name.
-    def convert(self, raw_refs: list[SleepEdfxSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[SleepEdfxSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Turn the fetched release into a dataset.
 
         This reads the subject table of each study one time, before the loop. It then joins each

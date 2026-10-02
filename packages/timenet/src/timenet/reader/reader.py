@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+import copy
 from dataclasses import dataclass
 import types as _types
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -34,7 +35,12 @@ _AXIS_OFFSETS_CACHE_TARGET_BYTES = 64 * 2**20
 class TimeFReader:
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
-    def __init__(self, version: DatasetVersion) -> None:
+    def __init__(
+        self,
+        version: DatasetVersion,
+        *,
+        parents: Mapping[str, TimeFReader] | None = None,
+    ) -> None:
         """Configure a lazy reader for an opened dataset version.
 
         Opening a reader does not download or query ``control.duckdb``. The first structural read
@@ -42,11 +48,13 @@ class TimeFReader:
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
+            parents: Direct parent readers keyed by the aliases in the child manifest.
         """
         self._version = version
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
+        self._parents = dict(parents or {})
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
@@ -90,6 +98,8 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for parent in self._parents.values():
+            parent.close()
         self._records = None
         self._tasks = None
         self._chunk_rows_cache.clear()
@@ -296,10 +306,11 @@ class TimeFReader:
             Hydrated records whose Signal values remain lazy.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(
+            records = self._control_reader().read_records(
                 record_ids,
                 with_annotations=with_annotations,
             )
+            yield from self._resolve_record_imports(records)
 
     def _control_reader(self) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
@@ -318,8 +329,43 @@ class TimeFReader:
     def _all_records(self) -> tuple[Record, ...]:
         """Return cached records so task inputs share their object identity."""
         if self._records is None:
-            self._records = self._control_reader().read_records()
+            self._records = tuple(self.iter_records())
         return self._records
+
+    def _resolve_record_imports(self, records: Iterable[Record]) -> tuple[Record, ...]:
+        """Replace local proxy rows with lazy parent Records and child overlays.
+
+        Returns:
+            Records in the input order, with imported proxies resolved.
+
+        Raises:
+            TimeFFormatError: If a required parent reader is absent or names the wrong version.
+        """
+        imports = self._control_reader().record_imports()
+        resolved: list[Record] = []
+        for proxy in records:
+            imported = imports.get(proxy.id)
+            if imported is None:
+                resolved.append(proxy)
+                continue
+            alias, reference = imported
+            parent = self._parents.get(alias)
+            if parent is None:
+                raise TimeFFormatError(f"dataset {self._manifest.dataset_id!r} requires parent alias {alias!r}")
+            parent_ref = DatasetRef(parent.metadata.dataset_id, parent.metadata.dataset_version)
+            if parent_ref != reference.dataset:
+                raise TimeFFormatError(f"parent alias {alias!r} resolved to {parent_ref}, expected {reference.dataset}")
+            inherited = tuple(parent.iter_records((reference.object_id,)))
+            if len(inherited) != 1:
+                raise TimeFFormatError(f"parent {reference.dataset} did not resolve {reference}")
+            record = copy.copy(inherited[0])
+            # These occurrences can be referenced by child tasks. Validate them against the
+            # inherited hierarchy, then retain their stored IDs instead of minting new occurrences.
+            for annotation in proxy.annotations:
+                record._validate_annotation(annotation)
+            record.annotations = (*record.annotations, *proxy.annotations)
+            resolved.append(record)
+        return tuple(resolved)
 
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""

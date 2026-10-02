@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docs.timenet.ai/schemas/dataset-card-v1.schema.json",
+  "$id": "https://docs.timenet.ai/schemas/dataset-card-v2.schema.json",
   "title": "TimeNet Dataset Card",
   "description": "Human-authored metadata for a TimeNet dataset: the card YAML that sits beside a connector and is the single source for the dataset's descriptive identity.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "yaml_schema_version": {
       "type": "integer",
-      "const": 1,
-      "description": "The card's own field-schema version. Only 1 exists today."
+      "const": 2,
+      "description": "The card's own field-schema version."
     },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "dataset_version": { "$ref": "#/$defs/semver" },
@@ -20,10 +20,20 @@
     "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
     "tags": { "type": "array", "items": { "type": "string" } },
     "source_url": { "type": ["string", "null"] },
+    "source_revision": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Optional upstream release or revision; independent of the TimeNet dataset version."
+    },
     "license_url": { "type": ["string", "null"] },
     "citation": { "type": ["string", "null"] },
     "access": { "$ref": "#/$defs/access" },
-    "access_url": { "type": ["string", "null"] }
+    "access_url": { "type": ["string", "null"] },
+    "parents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parent" },
+      "description": "Exact parent versions exposed to the connector under stable aliases."
+    }
   },
   "$defs": {
     "datasetId": {
@@ -35,6 +45,19 @@
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "description": "major.minor.patch with non-negative integer components."
+    },
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "dataset_id", "version"],
+      "properties": {
+        "alias": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "dataset_id": { "$ref": "#/$defs/datasetId" },
+        "version": { "$ref": "#/$defs/semver" }
+      }
     },
     "license": {
       "type": "string",

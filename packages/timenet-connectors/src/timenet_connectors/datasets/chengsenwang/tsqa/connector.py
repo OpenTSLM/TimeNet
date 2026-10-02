@@ -9,6 +9,7 @@ is a list of lists. Each row becomes one record that carries the series and an
 import json
 from typing import Any
 
+from timenet.composition import BuildContext
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
@@ -27,7 +28,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
 
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
 
-    def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
+    def convert(self, raw_refs: list[dict[str, Any]], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build one record per row: the parsed series plus its question-and-answer task.
 
         Args:

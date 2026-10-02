@@ -2,7 +2,7 @@
 # Dataset Card for the chengsenwang/tsqa connector: the single source for this dataset's metadata.
 # The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
 # derived from the data into manifest.json.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: chengsenwang/tsqa
 dataset_version: 1.0.0
 name: TSQA

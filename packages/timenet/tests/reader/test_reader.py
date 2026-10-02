@@ -9,18 +9,25 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import file_checksum
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.manifest import DirectDependency, LockedDependency, ManifestDependencies
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import DatasetVersion, LocalRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    DatasetRef,
     Domain,
     License,
+    ObjectKind,
+    ObjectRef,
+    ParentDataset,
     Split,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -160,6 +167,74 @@ def test_iter_records_matches_full_read(tmp_path):
     assert streamed == materialized
 
 
+def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
+    parent_dataset = make_dataset()
+    parent_dir = _write(tmp_path, dataset=parent_dataset)
+    parent_ref = DatasetRef(
+        parent_dataset.metadata.dataset_id,
+        parent_dataset.metadata.dataset_version,
+    )
+    with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
+        imported = next(parent_reader.iter_records())
+        child = TimeFDataset(
+            metadata=DatasetMetadata(
+                dataset_id="test/composed-child",
+                dataset_version=Version(1, 0, 0),
+                name="Composed child",
+                description="Tasks over a parent record.",
+                license=License.CC_BY_4_0,
+                parents=(ParentDataset("base", parent_ref),),
+            )
+        )
+        child.include_record(
+            record=imported,
+            reference=ObjectRef(parent_ref, ObjectKind.RECORD, imported.id),
+            parent_alias="base",
+        )
+        parent_manifest = DatasetVersion.open_local(parent_dir).manifest
+        child.set_dependencies(
+            ManifestDependencies(
+                direct=(DirectDependency("base", parent_ref),),
+                lock=(
+                    LockedDependency(
+                        dataset=parent_ref,
+                        manifest_checksum=file_checksum(parent_dir / "manifest.json"),
+                        size=sum(part.size for part in parent_manifest.files.all_files()),
+                        counts=parent_manifest.counts,
+                        license=parent_manifest.metadata.license,
+                        access=parent_manifest.metadata.access,
+                    ),
+                ),
+            )
+        )
+        imported.annotate(Annotation(key="reviewed", value=True, id="reviewed"))
+        imported.annotate(
+            Annotation(
+                key="reviewed_at",
+                span=TimePoint.micros(0),
+                id="reviewed-at",
+            )
+        )
+        child.add_task(
+            task=AnswerTask(
+                id="child-question",
+                prompt="Is this imported?",
+                targets=("yes",),
+                inputs=(imported,),
+            )
+        )
+        child_dir = _write(tmp_path, dataset=child)
+
+    child_version = DatasetVersion.open_local(child_dir)
+    assert child_version.manifest.files.time_series == ()
+    with LocalRegistry(tmp_path).open_reader("test/composed-child", "1.0.0") as child_reader:
+        restored = child_reader.read()
+        record = restored.records[0]
+        assert restored.tasks[0].inputs == (record,)
+        assert {"reviewed", "reviewed-at"} <= {annotation.id for annotation in record.annotations}
+        assert record.signals[0].to_arrow().equals(parent_dataset.records[0].signals[0].to_arrow())
+
+
 def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
@@ -258,7 +333,7 @@ def test_missing_root_or_manifest_raises(tmp_path):
         DatasetVersion.open_local(empty)
 
 
-@pytest.mark.parametrize("format_version", [2, 3, 99])
+@pytest.mark.parametrize("format_version", [3, 99])
 def test_unsupported_format_version_raises(tmp_path, format_version):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"

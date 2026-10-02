@@ -6,18 +6,29 @@ import pint
 import pytest
 
 from timenet.errors import TimeNetInvalidManifestError
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import (
+    DirectDependency,
+    FilePart,
+    LockedDependency,
+    Manifest,
+    ManifestCounts,
+    ManifestDependencies,
+    ManifestFiles,
+)
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
+    Access,
     AnnotationDescriptor,
     AnnotationType,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    DatasetRef,
     DatasetSchema,
     Domain,
     InputModality,
     License,
+    ParentDataset,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -82,7 +93,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_default_format_version():
-    assert _manifest().timef_format_version == 1
+    assert _manifest().timef_format_version == 2
 
 
 def test_unknown_spec_unit_is_null_in_manifest():
@@ -124,8 +135,8 @@ def test_manifest_rejects_unknown_domain():
         Manifest.from_dict(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
+def test_nullable_schema_roundtrips_at_current_format_version():
+    # Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = replace(
         _manifest(),
@@ -138,7 +149,7 @@ def test_nullable_schema_roundtrips_at_format_version_1():
         files=base.files,
         schema=replace(base.schema, time_series_specs=(spec,)),
     )
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == 2
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.from_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
@@ -151,7 +162,7 @@ def test_missing_nullable_defaults_to_false():
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.from_dict(data)
-    assert restored.timef_format_version == 1
+    assert restored.timef_format_version == 2
     assert restored.schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
@@ -194,7 +205,7 @@ def test_json_roundtrip():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 1
+    assert d["timef_format_version"] == 2
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
@@ -408,3 +419,44 @@ def test_to_dict_copies_build_env():
     d = replace(_manifest(), build_env=build_env).to_dict()
     d["build_env"]["python"] = "2.7.0"
     assert build_env["python"] == "3.11.9"
+
+
+def test_dependency_lock_round_trips():
+    parent = DatasetRef("physionet/ptb-xl", Version(1, 0, 0))
+    dependencies = ManifestDependencies(
+        direct=(DirectDependency("ptbxl", parent),),
+        lock=(
+            LockedDependency(
+                dataset=parent,
+                manifest_checksum="sha256:" + "a" * 64,
+                size=1234,
+                counts=ManifestCounts(records=21_837, signals=262_044),
+                license=License.ODC_BY_1_0,
+                access=Access.OPEN,
+            ),
+        ),
+    )
+    manifest = replace(
+        _manifest(),
+        metadata=replace(
+            _manifest().metadata,
+            parents=(ParentDataset("ptbxl", parent),),
+        ),
+        dependencies=dependencies,
+        files=ManifestFiles(control=_CONTROL),
+    )
+
+    assert Manifest.from_json(manifest.to_json()) == manifest
+    jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
+
+
+def test_direct_dependency_must_be_in_lock():
+    with pytest.raises(TimeNetInvalidManifestError, match="absent from the dependency lock"):
+        ManifestDependencies(
+            direct=(
+                DirectDependency(
+                    "ptbxl",
+                    DatasetRef("physionet/ptb-xl", Version(1, 0, 0)),
+                ),
+            )
+        )

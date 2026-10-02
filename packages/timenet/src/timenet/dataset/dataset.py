@@ -9,18 +9,22 @@ from typing import Literal, TextIO, TypeVar, cast, overload
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import RecordImport
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
+from timenet.manifest import ManifestDependencies
 from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    ObjectKind,
+    ObjectRef,
     StepSpan,
     SupportsAnnotate,
     Task,
@@ -71,6 +75,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._metadata = metadata
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
+        self._record_imports: dict[str, RecordImport] = {}
         self._sources_by_id: dict[str, Source] = {}
         self._signals_by_id: dict[str, Signal] = {}
         self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
@@ -84,6 +89,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        self._manifest_dependencies = ManifestDependencies()
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -116,6 +122,76 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._signals_by_id.update(record_signals)
         self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
         return record
+
+    def include_record(
+        self,
+        *,
+        record: Record,
+        reference: ObjectRef,
+        parent_alias: str,
+    ) -> Record:
+        """Include a parent Record by reference instead of taking ownership of its values.
+
+        Args:
+            record: The hydrated parent record used while constructing child tasks.
+            reference: Exact reference to that record in the parent version.
+            parent_alias: Alias of the matching parent declaration in this dataset's card.
+
+        Returns:
+            The same Record instance.
+
+        Raises:
+            TimeFValidationError: If the reference and parent declaration do not match the record.
+        """
+        if reference.kind is not ObjectKind.RECORD or reference.object_id != record.id:
+            raise TimeFValidationError(f"record import reference {reference} does not identify Record {record.id!r}")
+        parents = {parent.alias: parent.dataset for parent in self.metadata.parents}
+        if parents.get(parent_alias) != reference.dataset:
+            raise TimeFValidationError(
+                f"record import parent {parent_alias!r} does not match declared version {reference.dataset}"
+            )
+        self.add_record(record=record)
+        inherited = frozenset(
+            annotation.occurrence_id for annotation in record.annotations if annotation.occurrence_id is not None
+        )
+        self._record_imports[record.id] = RecordImport(parent_alias, reference, inherited)
+        return record
+
+    def record_annotations_for_storage(self, record: Record) -> tuple[Annotation, ...]:
+        """Return annotations this layer owns for one logical record.
+
+        Owned records contribute their complete hierarchy. Imported records contribute only new
+        record-level overlays; their inherited annotations remain in the parent layer.
+
+        Args:
+            record: A record registered in this dataset.
+
+        Returns:
+            Annotation occurrences that this layer must serialize.
+        """
+        imported = self._record_imports.get(record.id)
+        if imported is None:
+            return tuple(record.walk_annotations())
+        return tuple(
+            annotation
+            for annotation in record.annotations
+            if annotation.occurrence_id not in imported.inherited_annotation_ids
+        )
+
+    def set_dependencies(self, dependencies: ManifestDependencies) -> None:
+        """Attach the resolved dependency lock that the writer will publish.
+
+        Args:
+            dependencies: Direct aliases and flattened exact-version lock.
+
+        Raises:
+            TimeFValidationError: If direct edges differ from the card's parent declarations.
+        """
+        declared = {parent.alias: parent.dataset for parent in self.metadata.parents}
+        resolved = {dependency.alias: dependency.dataset for dependency in dependencies.direct}
+        if declared != resolved:
+            raise TimeFValidationError("resolved direct dependencies must exactly match dataset card parents")
+        self._manifest_dependencies = dependencies
 
     @staticmethod
     def _duplicate_ids(ids: Iterable[str]) -> list[str]:
@@ -752,6 +828,21 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def records(self) -> tuple[Record, ...]:
         """All records in insertion order."""
         return tuple(self._records)
+
+    @property
+    def owned_records(self) -> tuple[Record, ...]:
+        """Records stored by this layer, excluding parent imports."""
+        return tuple(record for record in self._records if record.id not in self._record_imports)
+
+    @property
+    def record_imports(self) -> dict[str, RecordImport]:
+        """Imported records keyed by their public ID."""
+        return dict(self._record_imports)
+
+    @property
+    def manifest_dependencies(self) -> ManifestDependencies:
+        """Resolved dependency metadata to publish in the manifest."""
+        return self._manifest_dependencies
 
     @property
     def tasks(self) -> tuple[Task, ...]:

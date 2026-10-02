@@ -12,6 +12,7 @@ import inspect
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar
 
+from timenet.composition import BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
 
@@ -103,7 +104,11 @@ class BaseConnector(ABC, Generic[TRaw]):
         )
 
     @abstractmethod
-    def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
+    def convert(
+        self,
+        raw_refs: list[TRaw],
+        context: BuildContext | None = None,
+    ) -> TimeFDataset:
         """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
 
         CPU-bound: no network I/O. Attach time-series values as lazy loaders instead of materializing
@@ -111,6 +116,8 @@ class BaseConnector(ABC, Generic[TRaw]):
 
         Args:
             raw_refs: The references returned by :meth:`download`.
+            context: Build-scoped parent views. Present when the engine drives conversion; optional
+                so isolated converter tests can call this method directly.
 
         Returns:
             The populated dataset.

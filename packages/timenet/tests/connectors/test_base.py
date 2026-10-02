@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import make_dataset
@@ -29,7 +30,8 @@ def test_concrete_connector_implements_contract(tmp_path):
         def download(self, cache_dir: Path) -> list[str]:
             return ["ref"]
 
-        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        def convert(self, raw_refs: list[str], context: BuildContext | None = None) -> TimeFDataset:
+            _ = context
             return make_dataset()
 
     connector = DemoConnector()
@@ -53,7 +55,8 @@ def test_async_connector_download_bridges_to_download_async(tmp_path):
         async def download_async(self, cache_dir: Path) -> list[str]:
             return ["async-ref"]
 
-        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        def convert(self, raw_refs: list[str], context: BuildContext | None = None) -> TimeFDataset:
+            _ = context
             return make_dataset()
 
     # The engine only ever calls the sync download(); it must drive the async impl to completion.
@@ -66,7 +69,8 @@ def test_connector_implementing_neither_download_raises(tmp_path):
     class NoDownload(BaseConnector[str]):
         CARD = card
 
-        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        def convert(self, raw_refs: list[str], context: BuildContext | None = None) -> TimeFDataset:
+            _ = context
             return make_dataset()
 
     with pytest.raises(TypeError, match="download"):

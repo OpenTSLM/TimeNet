@@ -47,9 +47,12 @@ CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` is the entry point and commit marker. It contains the card metadata,
-derived schema, counts, and file list. `open_version` returns a handle to the manifest and version
-files. `TimeFReader` uses the handle to read the DuckDB hierarchy and lazy Signal values. The SDK
+derived schema, counts, file list, and dependency lock. `open_version` returns a handle to the
+manifest and version files. `TimeFReader` reads the DuckDB hierarchy and lazy Signal values. The SDK
 never imports connector code.
+
+A [composed dataset](composition.md) can reuse records from exact parent versions. The child stores
+small proxy rows, new annotations, and new tasks. The signal values remain in the parent version.
 
 ---
 

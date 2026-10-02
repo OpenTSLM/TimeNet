@@ -10,6 +10,7 @@ from timenet.types.access import Access
 from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
+from timenet.types.references import DatasetRef, ParentDataset
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import Task
 from timenet.types.version import Version
@@ -92,12 +93,29 @@ def _str_tuple(value: Any, key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _parents(value: Any) -> tuple[dict[str, Any], ...]:
+    """Validate the shape of the card's parent list before coercion.
+
+    Returns:
+        The parent mappings as a tuple.
+
+    Raises:
+        TypeError: If the parent block is not a list of mappings.
+    """
+    if not isinstance(value, list | tuple):
+        raise TypeError(f"'parents' must be a list, got {type(value).__name__}")
+    if not all(isinstance(parent, dict) for parent in value):
+        raise TypeError("'parents' entries must be mappings")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class DatasetMetadata:
     """A dataset's descriptive identity: who it is, not what it emits.
 
-    The dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream
-    source. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
+    The dataset card holds these fields. ``dataset_version`` identifies the immutable TimeNet release;
+    ``source_revision`` independently records an upstream release when one exists.
+    ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
     ``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid
     casing-only differences on case-insensitive filesystems.
     """
@@ -105,7 +123,7 @@ class DatasetMetadata:
     dataset_id: str
     """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: Version
-    """Semantic version of the upstream source data."""
+    """Semantic version of this immutable TimeNet dataset release."""
     name: str
     """Human-readable display name."""
     description: str
@@ -118,6 +136,8 @@ class DatasetMetadata:
     """Free-form tags for search and grouping."""
     source_url: str | None = None
     """Link to the dataset's origin, if any."""
+    source_revision: str | None = None
+    """Upstream release or revision from which this TimeNet release was built."""
     license_url: str | None = None
     """Where to read the full license text. Required when ``license`` is :attr:`License.OTHER`."""
     citation: str | None = None
@@ -126,7 +146,9 @@ class DatasetMetadata:
     """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
     access_url: str | None = None
     """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
-    yaml_schema_version: int = 1
+    parents: tuple[ParentDataset, ...] = ()
+    """Exact parent versions, each exposed to the connector through a unique alias."""
+    yaml_schema_version: int = 2
     """Version of the card's own field schema."""
 
     def __post_init__(self) -> None:
@@ -145,6 +167,9 @@ class DatasetMetadata:
             raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:
             raise TimeFValidationError(f"access_url is required when access is {self.access.value!r}")
+        aliases = [parent.alias for parent in self.parents]
+        if len(aliases) != len(set(aliases)):
+            raise TimeFValidationError("parent aliases must be unique")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DatasetMetadata":
@@ -171,11 +196,22 @@ class DatasetMetadata:
             domains=tuple(Domain(domain) for domain in _str_tuple(data.get("domains", ()), "domains")),
             tags=_str_tuple(data.get("tags", ()), "tags"),
             source_url=data.get("source_url"),
+            source_revision=data.get("source_revision"),
             license_url=data.get("license_url"),
             citation=data.get("citation"),
             access=Access(data.get("access", Access.OPEN)),
             access_url=data.get("access_url"),
-            yaml_schema_version=data.get("yaml_schema_version", 1),
+            parents=tuple(
+                ParentDataset(
+                    alias=parent["alias"],
+                    dataset=DatasetRef(
+                        dataset_id=parent["dataset_id"],
+                        version=Version.parse(parent["version"]),
+                    ),
+                )
+                for parent in _parents(data.get("parents", ()))
+            ),
+            yaml_schema_version=data.get("yaml_schema_version", 2),
         )
 
     @classmethod

@@ -4,12 +4,15 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 
+from timenet.composition import BuildContext
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry import LocalRegistry
 from timenet.registry.writable import WritableRegistry
+from timenet.types import DatasetMetadata
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -61,15 +64,18 @@ def run_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
+    registry = LocalRegistry(root)
+    _ensure_parent_versions(metadata, registry, root)
     raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
-    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset. This call is not redundant with that guard.
-    dataset.derive_schema()
-    if committed:  # force rebuild: drop the old committed version so the writer can republish it
-        shutil.rmtree(version_dir)
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(metadata, registry) as context:
+        dataset = connector.convert(raw_refs, context)
+        dataset.set_dependencies(context.dependency_lock())
+        # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts
+        # while the old committed version is still on disk.
+        dataset.derive_schema()
+        if committed:  # force rebuild: drop the old version so the writer can republish it
+            shutil.rmtree(version_dir)
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -116,9 +122,11 @@ def publish_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(metadata, registry) as context:
+        dataset = connector.convert(connector.download(cache), context)
+        dataset.set_dependencies(context.dependency_lock())
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
@@ -139,6 +147,37 @@ def _resolve_values_backend(connector: BaseConnector, override: str | None) -> s
             f"unknown values_backend {backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
     return backend
+
+
+def _ensure_parent_versions(
+    metadata: DatasetMetadata,
+    registry: LocalRegistry,
+    root: Path,
+) -> None:
+    """Build missing exact parents before the child connector starts.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If no installed builder can produce an absent exact parent.
+    """
+    from timenet.builders import find_builder  # noqa: PLC0415
+
+    for parent in metadata.parents:
+        version = str(parent.dataset.version)
+        if registry.exists(parent.dataset.dataset_id, version):
+            continue
+        builder = find_builder(parent.dataset.dataset_id)
+        if builder is None:
+            raise TimeNetDatasetNotFoundError(
+                f"parent {parent.dataset} is missing from {root} and no connector can build it"
+            )
+        declared = builder.declared_version(parent.dataset.dataset_id)
+        if declared is not None and declared != version:
+            raise TimeNetDatasetNotFoundError(
+                f"parent {parent.dataset} is pinned exactly, but its connector builds {declared}"
+            )
+        builder.build(parent.dataset.dataset_id, root)
+        if not registry.exists(parent.dataset.dataset_id, version):
+            raise TimeNetDatasetNotFoundError(f"builder did not produce required parent {parent.dataset}")
 
 
 def store_dataset(

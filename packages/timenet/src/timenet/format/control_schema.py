@@ -3,7 +3,7 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
+Version 2 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
 stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
 be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
@@ -154,6 +154,20 @@ RECORDS = Table(
     foreign_keys=(ForeignKey("clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
 )
+
+OBJECT_IMPORTS = Table(
+    "object_imports",
+    (
+        _key("object_key"),
+        _required("object_type"),
+        _required("object_id"),
+        _required("object_ref"),
+        _required("parent_alias"),
+    ),
+    unique=(("object_key",), ("object_type", "object_id"), ("object_ref",)),
+    foreign_keys=(ForeignKey("object_key", "records", "record_key"),),
+)
+"""Objects represented by a local proxy row but owned by an exact parent version."""
 
 CLOCKS = Table(
     "clocks",
@@ -367,6 +381,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     DATASETS,
     RECORDS,
+    OBJECT_IMPORTS,
     CLOCKS,
     SOURCES,
     AXES,

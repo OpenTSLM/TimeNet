@@ -72,6 +72,7 @@ The client provides these discovery methods:
 | --- | --- |
 | `list()` | Metadata for the latest version of every dataset. |
 | `get(dataset_id, version=None)` | One dataset manifest. |
+| `lineage(dataset_id, version=None)` | Direct parents and the flattened dependency lock. |
 | `search(...)` | Metadata that matches registry filters. |
 
 `search()` accepts filters for free text, domains, task classes, licenses, Signal specifications,

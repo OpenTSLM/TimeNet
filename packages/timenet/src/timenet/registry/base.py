@@ -10,13 +10,19 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 import shutil
-from typing import BinaryIO, TypeVar
+from typing import TYPE_CHECKING, BinaryIO, TypeVar
 import uuid
 
+from timenet.errors import TimeFFormatError
+from timenet.format.checksums import stream_checksum
 from timenet.manifest import Manifest
 from timenet.registry._paths import safe_version_path
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.types import DatasetMetadata, DatasetRef, Domain, License, Task
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -88,6 +94,72 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def open_reader(self, dataset_id: str, version: str | None = None) -> "TimeFReader":
+        """Open a reader for a dataset and its exact dependency closure.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest version.
+
+        Returns:
+            A reader whose parent aliases are recursively resolved in this registry.
+
+        Raises:
+            TimeFFormatError: If the dependency graph is cyclic, inconsistent, or fails a locked
+                manifest checksum.
+        """  # noqa: DOC502 - raised by recursive dependency resolution
+        from timenet.reader import TimeFReader  # noqa: PLC0415
+
+        handle = self.open_version(dataset_id, version)
+        root = DatasetRef(handle.manifest.dataset_id, handle.manifest.metadata.dataset_version)
+        return self._open_reader(root, ancestors=(), reader_type=TimeFReader)
+
+    def _open_reader(
+        self,
+        reference: DatasetRef,
+        *,
+        ancestors: tuple[DatasetRef, ...],
+        reader_type: type["TimeFReader"],
+    ) -> "TimeFReader":
+        """Resolve one node of a composition graph recursively.
+
+        Returns:
+            A reader with its direct parents attached.
+
+        Raises:
+            TimeFFormatError: If the graph is cyclic, inconsistent, or fails a locked checksum.
+        """
+        if reference in ancestors:
+            cycle = " -> ".join(str(item) for item in (*ancestors, reference))
+            raise TimeFFormatError(f"dataset dependency graph contains a cycle: {cycle}")
+        handle = self.open_version(reference.dataset_id, str(reference.version))
+        manifest = handle.manifest
+        actual = DatasetRef(manifest.dataset_id, manifest.metadata.dataset_version)
+        if actual != reference:
+            raise TimeFFormatError(f"registry resolved {reference} to unexpected version {actual}")
+        card_parents = {parent.alias: parent.dataset for parent in manifest.metadata.parents}
+        direct = {dependency.alias: dependency.dataset for dependency in manifest.dependencies.direct}
+        if card_parents != direct:
+            raise TimeFFormatError(f"manifest {reference} dependency edges do not match its dataset card metadata")
+        locked = {dependency.dataset: dependency for dependency in manifest.dependencies.lock}
+        parents: dict[str, TimeFReader] = {}
+        for alias, parent_ref in direct.items():
+            lock = locked.get(parent_ref)
+            if lock is None:
+                raise TimeFFormatError(f"manifest {reference} has no lock row for {parent_ref}")
+            with self.open_file(parent_ref.dataset_id, str(parent_ref.version), "manifest.json") as source:
+                checksum = stream_checksum(source)
+            if checksum != lock.manifest_checksum:
+                raise TimeFFormatError(
+                    f"dependency {parent_ref} manifest checksum is {checksum}, expected {lock.manifest_checksum}"
+                )
+            parents[alias] = self._open_reader(
+                parent_ref,
+                ancestors=(*ancestors, reference),
+                reader_type=reader_type,
+            )
+        return reader_type(handle, parents=parents)
 
     def download_version(  # noqa: PLR0913
         self,

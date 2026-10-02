@@ -1,0 +1,2 @@
+# huggingface_hub downloads the pinned source files from the Hub.
+huggingface_hub>=0.24

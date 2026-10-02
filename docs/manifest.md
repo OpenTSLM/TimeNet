@@ -9,7 +9,7 @@ tags:
 # Manifest
 
 The **Dataset Manifest** (`manifest.json`) is the entry point for a TimeF version. It contains the
-card metadata, derived schema, counts, and file descriptors. The
+card metadata, derived schema, counts, file descriptors, and dependency lock. The
 [writer](timef-writer.md) writes it last, so its presence marks a committed version. The
 [reader](timef-reader.md) reads it before opening `control.duckdb` or Signal values. Manifest types
 live in `timenet.manifest`.
@@ -29,7 +29,12 @@ available in Python as `timenet.schemas.MANIFEST_SCHEMA`. A test validates the o
 ## `Manifest`
 
 ```python
-from timenet.manifest import Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import (
+    Manifest,
+    ManifestCounts,
+    ManifestDependencies,
+    ManifestFiles,
+)
 
 Manifest(
     dataset_id="physionet/ecg-qa-cot",
@@ -40,7 +45,8 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
-    timef_format_version=1,     # validated against the supported set {1}
+    dependencies=ManifestDependencies(),
+    timef_format_version=2,     # readers also accept version 1
 )
 ```
 
@@ -56,6 +62,9 @@ selected. The field is empty for a backend that has no such choice.
 `build_env` records the environment that produced the version. It gives the interpreter version and
 every installed package with its version. `timenet.provenance.build_env` collects this data. Like
 `value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+
+`dependencies.direct` contains exact parent versions and their aliases. `dependencies.lock`
+contains the complete dependency closure. Each lock row includes the SHA-256 manifest checksum.
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a

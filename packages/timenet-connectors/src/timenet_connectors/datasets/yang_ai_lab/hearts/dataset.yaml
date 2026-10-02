@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v2.schema.json
+# Dataset card for the yang-ai-lab/hearts connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# The Hub release declares no license, and its cases derive from five upstream corpora (CGMacros,
+# HARESPOD, Coswara, COUGHVID, VCTK) with licenses of their own, so the card says `other`.
+yaml_schema_version: 2
+dataset_id: yang-ai-lab/hearts
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - alias: cgmacros
+    dataset_id: yang-ai-lab/hearts-cgmacros
+    version: 1.0.0
+  - alias: coswara
+    dataset_id: yang-ai-lab/hearts-coswara
+    version: 1.0.0
+  - alias: coughvid
+    dataset_id: yang-ai-lab/hearts-coughvid
+    version: 1.0.0
+  - alias: harespod
+    dataset_id: yang-ai-lab/hearts-harespod
+    version: 1.0.0
+  - alias: vctk
+    dataset_id: yang-ai-lab/hearts-vctk
+    version: 1.0.0
+name: HEARTS frozen test cases
+description: >-
+  The released test cases of HEARTS, a benchmark of LLM reasoning over health time series. The
+  tasks ask about glucose, respiration, oxygen saturation, heart rate, cough, breathing, and speech
+  recordings from five upstream corpora, and one task adds meal photographs. Every task is a test
+  item. A forecast or imputation answer is held in a record of its own.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains:
+  - health
+  - respiratory
+  - audio
+  - cardiology
+tags:
+  - benchmark
+  - qa
+  - reasoning
+  - glucose
+  - respiration
+  - spo2
+  - audio
+  - cough
+  - speech
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+citation: >-
+  Li, Xiao, Joshi, Metwally, McDuff, Wang, Yang. HEARTS: Benchmarking LLM Reasoning on Health Time
+  Series. arXiv:2603.06638.
