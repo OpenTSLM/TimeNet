@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["timef_format_version", "dataset_id", "metadata", "files"],
   "properties": {
-    "timef_format_version": { "type": "integer", "const": 1 },
+    "timef_format_version": { "type": "integer", "enum": [1, 2] },
     "dataset_id": { "$ref": "#/$defs/datasetId" },
     "metadata": { "$ref": "#/$defs/metadata" },
     "schema": { "$ref": "#/$defs/schema" },
@@ -33,7 +33,8 @@
           "description": "Installed distribution name to version, sorted by name."
         }
       }
-    }
+    },
+    "dependencies": { "$ref": "#/$defs/dependencies" }
   },
   "$defs": {
     "datasetId": {
@@ -137,11 +138,51 @@
         "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
         "tags": { "type": "array", "items": { "type": "string" } },
         "source_url": { "type": ["string", "null"] },
+        "source_revision": { "type": ["string", "null"] },
         "license_url": { "type": ["string", "null"] },
         "citation": { "type": ["string", "null"] },
         "access": { "$ref": "#/$defs/access" },
         "access_url": { "type": ["string", "null"] },
-        "yaml_schema_version": { "type": "integer" }
+        "yaml_schema_version": { "type": "integer" },
+        "parents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/directDependency" }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "direct": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/directDependency" }
+        },
+        "lock": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lockedDependency" }
+        }
+      }
+    },
+    "directDependency": {
+      "type": "object",
+      "required": ["alias", "dataset_id", "version"],
+      "properties": {
+        "alias": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "dataset_id": { "$ref": "#/$defs/datasetId" },
+        "version": { "$ref": "#/$defs/semver" }
+      }
+    },
+    "lockedDependency": {
+      "type": "object",
+      "required": ["dataset_id", "version", "manifest_checksum", "size", "counts", "license", "access"],
+      "properties": {
+        "dataset_id": { "$ref": "#/$defs/datasetId" },
+        "version": { "$ref": "#/$defs/semver" },
+        "manifest_checksum": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "counts": { "$ref": "#/$defs/counts" },
+        "license": { "$ref": "#/$defs/license" },
+        "access": { "$ref": "#/$defs/access" }
       }
     },
     "schema": {

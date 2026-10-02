@@ -12,7 +12,7 @@
 # with stage 4 into N3 and drops the epochs labeled `Movement time` or `Sleep stage ?`. Signals
 # are archival raw (every signal at the rate and in the unit its own EDF header states, no
 # resampling); a recording can span about a day, so trim it to the scored sleep at load time.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: physionet/sleep-edfx
 dataset_version: 1.0.0
 name: Sleep-EDF Expanded

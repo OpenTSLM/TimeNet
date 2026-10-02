@@ -1,0 +1,323 @@
+# Release facts from the VerbalTS dataset appendix and pinned source files.
+# The connector treats this checked-in file as trusted package data.
+#
+# meta.json gives native attribute names and code counts. The labels below come
+# from the paper's appendix and agree with the released captions:
+# https://proceedings.mlr.press/v267/gu25a.html
+#
+# Weather channels follow the Jena station column order. BlindWays publishes no
+# joint names, so its channels use their array positions. ETTm1 and Istanbul
+# captions name their selected variable, and their overlapping windows share a
+# split timeline without an absolute timestamp.
+
+attributes:
+  trend_type:
+    key: trend_type
+    description: >-
+      Shape of the generated trend. The captions abbreviate the labels to
+      linear, quad, exp and log.
+    labels: [linear, quadratic, exponential, logistic]
+
+  trend_direction:
+    key: trend_direction
+    description: Direction of the generated trend.
+    labels: [up, down]
+
+  season_cycles:
+    key: season_cycles
+    description: Number of sinusoidal cycles the generator added over the window.
+    labels: [0, 1, 2, 4]
+
+  variable_2_rule:
+    key: variable_2_rule
+    description: >-
+      How the generator derived variable 2 from variable 1. The shift distance
+      is stated in the caption only.
+    labels: [x-axis flip, y-axis flip, shift forward, shift backward]
+
+  season:
+    key: season
+    description: Calendar season of the window's day, from the month the caption names.
+    labels: [spring, summer, fall, winter]
+
+  time_of_day:
+    key: time_of_day
+    description: Which six-hour block of its day the window covers.
+    labels: [early morning, morning, afternoon, evening]
+
+  weather_condition:
+    key: weather_condition
+    description: >-
+      Weather condition ChatGPT 3.5 extracted from the forecast text, or
+      unknown when the text states none.
+    labels: [sunny, cloudy, rain, foggy, snowy, unknown]
+
+  temperature_trend:
+    key: temperature_trend
+    description: >-
+      Temperature trend ChatGPT 3.5 extracted from the forecast text, or
+      unknown when the text states none.
+    labels: [increase, decrease, steady, unknown]
+
+  wind_direction:
+    key: wind_direction
+    description: >-
+      Wind direction ChatGPT 3.5 extracted from the forecast text, or unknown
+      when the text states none.
+    labels: [S, N, W, E, SW, SE, NW, NE, unknown]
+
+  pressure_level:
+    key: pressure_level
+    description: >-
+      Atmospheric pressure level ChatGPT 3.5 extracted from the forecast text,
+      or unknown when the text states none.
+    labels: [low, average, high, unknown]
+
+  humidity_level:
+    key: humidity_level
+    description: >-
+      Humidity level ChatGPT 3.5 extracted from the forecast text, or unknown
+      when the text states none.
+    labels: [low, average, high, unknown]
+
+  guide_method:
+    key: guide_method
+    description: >-
+      Mobility aid the pedestrian used, extracted from the BlindWays
+      description by ChatGPT 3.5.
+    labels: [cane, guide dog]
+
+  hand:
+    key: hand
+    description: >-
+      Hand holding the aid, extracted from the BlindWays description by ChatGPT
+      3.5, or unknown when it states none.
+    labels: [left, right, unknown]
+
+  ettm1_variable:
+    key: variable
+    description: >-
+      Source variable the window was cut from, as the release's var_id code and
+      the caption name it.
+    labels: [HUFL, HULL, MUFL, MULL, LUFL, LULL, OT]
+
+  traffic_variable:
+    key: variable
+    description: >-
+      Source variable the window was cut from, as the release's var_id code and
+      the caption name it.
+    labels: [TI, TI_An, TI_Av]
+
+  trend:
+    key: trend
+    description: Sign of the linear-trend slope tsfresh fitted over the window.
+    labels: [upward, downward]
+
+  season_code:
+    key: season_code
+    description: >-
+      Dominant-frequency index tsfresh found over the window, minus one, as the
+      release codes it. The caption states it as 'around (code + 1) pi'; a
+      constant window carries -1.
+    codes: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+  skewness:
+    key: skewness
+    description: Sign of the value distribution's skewness over the window, from tsfresh.
+    labels: [negative, positive, symmetrical]
+
+  kurtosis:
+    key: kurtosis
+    description: Level of the value distribution's kurtosis over the window, from tsfresh.
+    labels: [low, normal, high]
+
+components:
+  synthetic_u:
+    spec:
+      type: synthetic
+      name: Synthetic generated variable
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: ordinal
+    channels: [variable 1]
+    attributes:
+      trend_types: trend_type
+      trend_directions: trend_direction
+      season_cycles: season_cycles
+
+  synthetic_m:
+    spec:
+      type: synthetic
+      name: Synthetic generated variable
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: ordinal
+    channels: [variable 1, variable 2]
+    attributes:
+      trend_types_0: trend_type
+      trend_directions_0: trend_direction
+      season_cycles_0: season_cycles
+      ops_0: variable_2_rule
+
+  Weather:
+    spec:
+      type: weather
+      name: Jena weather variable (z-scored)
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: regular
+      period_seconds: 600
+    channels:
+      - p
+      - T
+      - Tpot
+      - Tdew
+      - rh
+      - VPmax
+      - VPact
+      - VPdef
+      - sh
+      - H2OC
+      - rho
+      - wv
+      - max. wv
+      - wd
+      - rain
+      - raining
+      - SWDR
+      - PAR
+      - max. PAR
+      - Tlog
+      - CO2
+    attributes:
+      season: season
+      time: time_of_day
+      weather: weather_condition
+      temperature: temperature_trend
+      wind: wind_direction
+      atmospher: pressure_level
+      humidity: humidity_level
+
+  BlindWays:
+    spec:
+      type: pose
+      name: Body-joint coordinate (z-scored)
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: ordinal
+    channels:
+      - joint00_0
+      - joint00_1
+      - joint00_2
+      - joint01_0
+      - joint01_1
+      - joint01_2
+      - joint02_0
+      - joint02_1
+      - joint02_2
+      - joint03_0
+      - joint03_1
+      - joint03_2
+      - joint04_0
+      - joint04_1
+      - joint04_2
+      - joint05_0
+      - joint05_1
+      - joint05_2
+      - joint06_0
+      - joint06_1
+      - joint06_2
+      - joint07_0
+      - joint07_1
+      - joint07_2
+      - joint08_0
+      - joint08_1
+      - joint08_2
+      - joint09_0
+      - joint09_1
+      - joint09_2
+      - joint10_0
+      - joint10_1
+      - joint10_2
+      - joint11_0
+      - joint11_1
+      - joint11_2
+      - joint12_0
+      - joint12_1
+      - joint12_2
+      - joint13_0
+      - joint13_1
+      - joint13_2
+      - joint14_0
+      - joint14_1
+      - joint14_2
+      - joint15_0
+      - joint15_1
+      - joint15_2
+      - joint16_0
+      - joint16_1
+      - joint16_2
+      - joint17_0
+      - joint17_1
+      - joint17_2
+      - joint18_0
+      - joint18_1
+      - joint18_2
+      - joint19_0
+      - joint19_1
+      - joint19_2
+      - joint20_0
+      - joint20_1
+      - joint20_2
+      - joint21_0
+      - joint21_1
+      - joint21_2
+      - joint22_0
+      - joint22_1
+      - joint22_2
+      - joint23_0
+      - joint23_1
+      - joint23_2
+    attributes:
+      guide: guide_method
+      hand: hand
+
+  ETTm1:
+    spec:
+      type: power
+      name: ETTm1 variable (z-scored)
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: regular
+      period_seconds: 900
+    channel_from: variable
+    stride: 30
+    attributes:
+      var_id: ettm1_variable
+      trend: trend
+      season: season_code
+      skewness: skewness
+      kurtosis: kurtosis
+
+  istanbul_traffic:
+    spec:
+      type: traffic
+      name: Istanbul traffic index variable (z-scored)
+      unit: dimensionless
+      dtype: float64
+    axis:
+      kind: regular
+      period_seconds: 600
+    channel_from: variable
+    stride: 24
+    attributes:
+      var_id: traffic_variable
+      trend: trend
+      season: season_code
+      skewness: skewness
+      kurtosis: kurtosis

@@ -1,0 +1,1 @@
+{"input":"This metric is of length 6: <ts><ts/>. State its maximum.","output":"The maximum is 2.0.","timeseries":[[1.0,2.0,1.0]]}

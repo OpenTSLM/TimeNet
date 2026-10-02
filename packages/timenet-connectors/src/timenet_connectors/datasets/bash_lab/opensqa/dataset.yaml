@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# The release contains 62,248 generated training rows over 35,960 distinct
+# 6-second IMU windows. Its v1 and v2 rows repeat the same sensor windows with
+# different generated captions and questions. TimeF stores each window once and
+# lets all 497,426 recoverable AnswerTasks reference it.
+#
+# The Hub's tuning and wild-test JSON files refer to local .npy paths that the
+# public release does not contain. The connector therefore converts all and only
+# the tasks whose sensor inputs are recoverable from the published files.
+#
+# The README specifies 10 Hz. Generated prose gives inconsistent physical units
+# across source corpora, so signal value units remain unknown.
+yaml_schema_version: 2
+dataset_id: bash-lab/opensqa
+dataset_version: 1.0.0
+name: OpenSQA
+description: >-
+  OpenSQA's published training release as 35,960 shared six-second IMU windows with 435,178
+  sensor question-answer pairs and 62,248 embedded SensorCaps caption tasks. Each record has
+  three accelerometer and three gyroscope signals sampled at 10 Hz.
+license: other
+license_url: >-
+  https://firstdonoharm.dev/version/3/0/cl-eco-extr-ffd-law-media-mil-my-soc-sv-tal-usta.html
+source_url: https://huggingface.co/datasets/BASH-Lab/OpenSQA
+citation: >-
+  Imran, S. A., Khan, M. N. H., Biswas, S., and Islam, B. (2024). LLaSA: A Sensor-Aware LLM for
+  Natural Language Reasoning of Human Activity from IMU Data. arXiv:2406.14498.
+  https://arxiv.org/abs/2406.14498
+access: open
+domains:
+  - activity
+tags:
+  - activity-recognition
+  - captions
+  - human-motion
+  - imu
+  - qa
+  - sensor
+  - huggingface
