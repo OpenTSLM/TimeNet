@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v2.schema.json
+yaml_schema_version: 2
+dataset_id: yang-ai-lab/hearts-harespod
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+name: HEARTS HARESPOD record layer
+description: >-
+  Taskless, task-specific HARESPOD-derived records from the pinned HEARTS test release. This is a
+  frozen benchmark record layer, not a complete redistribution of the upstream HARESPOD dataset.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains:
+  - health
+  - respiratory
+  - cardiology
+tags:
+  - respiration
+  - spo2
+  - heart-rate
+  - base-dataset
+  - hearts
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS

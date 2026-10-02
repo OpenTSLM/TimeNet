@@ -13,7 +13,7 @@ import pyarrow as pa
 from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError
-from timenet.types import Annotation
+from timenet.types import Annotation, ForecastingTask, TimeInterval
 from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import load_payload
 from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     AUDIO,
@@ -21,6 +21,7 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     COLUMN_SPECS,
     DERIVED_COLUMNS,
     DESCRIPTIONS,
+    HELD_OUT_READINGS,
     PHOTOGRAPHS,
     TIME_COLUMNS,
     US_PER_MINUTE,
@@ -68,6 +69,31 @@ class Built(NamedTuple):
     origin_us: int
 
 
+class CaseRecords(NamedTuple):
+    """Input and candidate records constructed from one HEARTS case."""
+
+    inputs: tuple[Built, ...]
+    candidates: tuple[Built, ...]
+
+
+def case_records(case: Case) -> CaseRecords:
+    """Build every reusable input and candidate Record for one case.
+
+    Forecast inputs include the complete task horizon in ``time_span``. This is structural data,
+    so the taskless corpus layer owns it even though the child task supplies the target values.
+
+    Returns:
+        Input and candidate records in the order the task definition declares them.
+    """
+    inputs = tuple(input_records(case, case.definition.inputs))
+    candidates = tuple(input_records(case, case.definition.candidates))
+    if case.definition.task_type is ForecastingTask:
+        record, origin_us = inputs[0]
+        meal_us = moment_us(case.payload["meal_time"]) - origin_us
+        record.time_span = TimeInterval.micros(0, meal_us + HELD_OUT_READINGS * US_PER_MINUTE)
+    return CaseRecords(inputs, candidates)
+
+
 def input_records(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, ...]) -> list[Built]:
     """Build the records the entries name, in order.
 
@@ -112,6 +138,15 @@ def frame_times_us(frame: Any, column: str) -> tuple[np.ndarray, bool]:
         unit = "datetime64[us]" if values.dtype.kind == "M" else "timedelta64[us]"
         return values.astype(unit).astype(np.int64), values.dtype.kind == "M"
     return np.rint(values * US_PER_MINUTE).astype(np.int64), False  # iAUC frames count minutes since the meal
+
+
+def moment_us(value: Any) -> int:
+    """Read a naive source timestamp as whole microseconds on its source calendar.
+
+    Returns:
+        The timestamp in microseconds.
+    """
+    return int(np.datetime64(str(value), "us").astype(np.int64))
 
 
 def answer_record(case: Case, built: Built, offsets: np.ndarray, values: np.ndarray) -> Record:

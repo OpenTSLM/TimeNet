@@ -1,0 +1,6 @@
+# HEARTS stores its released frames as pandas 2.x pickles.
+pandas>=2.2,<3
+huggingface_hub>=0.24
+# This layer includes meal photographs and writes their tensors to Zarr.
+pillow>=11
+zarr>=3

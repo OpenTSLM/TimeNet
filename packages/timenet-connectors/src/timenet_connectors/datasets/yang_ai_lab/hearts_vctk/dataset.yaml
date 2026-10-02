@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v2.schema.json
+yaml_schema_version: 2
+dataset_id: yang-ai-lab/hearts-vctk
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+name: HEARTS VCTK record layer
+description: >-
+  Taskless, task-specific VCTK-derived records from the pinned HEARTS test release. This is a frozen
+  benchmark record layer, not a complete redistribution of the upstream VCTK dataset.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains:
+  - audio
+tags:
+  - speech
+  - base-dataset
+  - hearts
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS

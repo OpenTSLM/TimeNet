@@ -26,8 +26,9 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.records import (
     Built,
     Case,
     answer_record,
+    case_records,
     frame_times_us,
-    input_records,
+    moment_us,
 )
 from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     ANSWER_KEY,
@@ -53,8 +54,9 @@ def convert_case(dataset: TimeFDataset, case: Case) -> Task:  # noqa: PLR0911 - 
         TimeFFormatError: If a ranking answer does not order the case's records.
     """
     definition, answer = case.definition, case.payload[ANSWER_KEY]
-    inputs = input_records(case, definition.inputs)
-    candidates = input_records(case, definition.candidates)
+    records = case_records(case)
+    inputs = list(records.inputs)
+    candidates = list(records.candidates)
     for built in (*inputs, *candidates):
         dataset.add_record(record=built.record)
     shared: dict[str, Any] = {
@@ -118,7 +120,7 @@ def _classification(case: Case, inputs: list[Built], shared: Mapping[str, Any]) 
     context: list[Annotation] = []
     if definition.images:
         record, origin_us = inputs[0]
-        context.append(record.annotate(_meal_marker(_moment_us(case.payload["meal_time"]) - origin_us)))
+        context.append(record.annotate(_meal_marker(moment_us(case.payload["meal_time"]) - origin_us)))
     flags = _symptom_flags(case) if definition.symptoms else []
     if inputs:
         context.extend(inputs[0].record.add_annotations(flags))
@@ -212,13 +214,11 @@ def _forecast(case: Case, built: Built) -> tuple[tuple[Annotation, ...], Record]
         The task's context annotations, and the answer record.
     """
     payload, (record, origin_us) = case.payload, built
-    meal_us = _moment_us(payload["meal_time"]) - origin_us
-    # The horizon is part of the session, so the meal marker at the window's end is in range.
-    record.time_span = TimeInterval.micros(0, meal_us + HELD_OUT_READINGS * US_PER_MINUTE)
+    meal_us = moment_us(payload["meal_time"]) - origin_us
     context: list[Annotation] = []
     if "reference_meal_info_df" in payload:
         for meal in payload["reference_meal_info_df"].to_dict("records"):
-            context.extend(record.add_annotations(_meal_annotations(meal, _moment_us(meal["Timestamp"]) - origin_us)))
+            context.extend(record.add_annotations(_meal_annotations(meal, moment_us(meal["Timestamp"]) - origin_us)))
     context.append(record.annotate(_meal_marker(meal_us)))
     if case.definition.meal_info:
         context.extend(record.add_annotations(_meal_annotations(payload["meal_info"], meal_us)))
@@ -239,7 +239,7 @@ def _imputation(case: Case, built: Built) -> tuple[Annotation, Record]:
     frame = payload["window_df"]
     positions = frame.index.get_indexer(np.asarray(payload["mask_indices"]))
     times, _ = frame_times_us(frame, "Timestamp")
-    bounds = (_moment_us(payload["mask_start"]), _moment_us(payload["mask_end"]))
+    bounds = (moment_us(payload["mask_start"]), moment_us(payload["mask_end"]))
     if bool((positions < 0).any()) or (int(times[positions[0]]), int(times[positions[-1]])) != bounds:
         raise TimeFFormatError(f"HEARTS {case.id} mask_indices do not name the window rows from mask_start to mask_end")
     offsets = times[positions] - origin_us
@@ -288,12 +288,3 @@ def _meal_annotations(meal: Mapping[str, Any], at_us: int) -> list[Annotation]:
         Annotation(key=key, value=str(meal[column]) if unit is None else float(meal[column]), unit=unit, span=point)
         for column, key, unit in MEAL_COLUMNS
     ]
-
-
-def _moment_us(value: Any) -> int:
-    """Read a naive source timestamp as whole microseconds on the source's own calendar.
-
-    Returns:
-        The timestamp in microseconds.
-    """
-    return int(np.datetime64(str(value), "us").astype(np.int64))
