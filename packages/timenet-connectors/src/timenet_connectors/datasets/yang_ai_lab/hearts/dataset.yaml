@@ -5,7 +5,7 @@
 #
 # The Hub release declares no license, and its cases derive from five upstream corpora (CGMacros,
 # HARESPOD, Coswara, COUGHVID, VCTK) with licenses of their own, so the card says `other`.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: yang-ai-lab/hearts
 dataset_version: 1.0.0
 name: HEARTS frozen test cases

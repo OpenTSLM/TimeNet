@@ -13,12 +13,14 @@ from typing import Any, ClassVar
 from timenet.errors import TimeNetInvalidManifestError
 from timenet.format.constants import check_relative_path
 from timenet.manifest.counts import ManifestCounts
+from timenet.manifest.dependencies import DirectDependency, LockedDependency, ManifestDependencies
 from timenet.manifest.files import FilePart, ManifestFiles
 from timenet.types import (
     TASKS,
     AnnotationDescriptor,
     AnnotationType,
     DatasetMetadata,
+    DatasetRef,
     DatasetSchema,
     InputModality,
     Task,
@@ -37,7 +39,7 @@ class Manifest:
         TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
     """
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
+    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
 
     dataset_id: str
     """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
@@ -64,7 +66,9 @@ class Manifest:
     Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
     produced a dataset version without re-deriving it from a build log.
     """
-    timef_format_version: int = 1
+    dependencies: ManifestDependencies = field(default_factory=ManifestDependencies)
+    """Direct parents and the flattened, content-verified dependency closure."""
+    timef_format_version: int = 2
     """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
 
     def __post_init__(self) -> None:
@@ -116,6 +120,7 @@ class Manifest:
             "values_backend": self.values_backend,
             "value_encoding": dict(self.value_encoding),
             "build_env": dict(self.build_env),
+            "dependencies": _dependencies_to_dict(self.dependencies),
         }
 
     def to_json(self) -> str:
@@ -153,6 +158,7 @@ class Manifest:
             values_backend=data.get("values_backend", ValuesBackend.PARQUET),
             value_encoding=_dict_block(data, "value_encoding"),
             build_env=_dict_block(data, "build_env"),
+            dependencies=_dependencies_from_dict(data.get("dependencies", {})),
             timef_format_version=data["timef_format_version"],
         )
 
@@ -205,10 +211,19 @@ def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
         "domains": [str(domain) for domain in metadata.domains],
         "tags": list(metadata.tags),
         "source_url": metadata.source_url,
+        "source_revision": metadata.source_revision,
         "license_url": metadata.license_url,
         "citation": metadata.citation,
         "access": str(metadata.access),
         "access_url": metadata.access_url,
+        "parents": [
+            {
+                "alias": parent.alias,
+                "dataset_id": parent.dataset.dataset_id,
+                "version": str(parent.dataset.version),
+            }
+            for parent in metadata.parents
+        ],
         "yaml_schema_version": metadata.yaml_schema_version,
     }
 
@@ -322,6 +337,71 @@ def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
         )
     except (ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
+
+
+def _dependencies_to_dict(dependencies: ManifestDependencies) -> dict[str, Any]:
+    """Serialize dependency edges and the flattened lock.
+
+    Returns:
+        The JSON-compatible dependency block.
+    """
+    return {
+        "direct": [
+            {
+                "alias": dependency.alias,
+                "dataset_id": dependency.dataset.dataset_id,
+                "version": str(dependency.dataset.version),
+            }
+            for dependency in dependencies.direct
+        ],
+        "lock": [
+            {
+                "dataset_id": dependency.dataset.dataset_id,
+                "version": str(dependency.dataset.version),
+                "manifest_checksum": dependency.manifest_checksum,
+                "size": dependency.size,
+                "counts": _counts_to_dict(dependency.counts),
+                "license": str(dependency.license),
+                "access": str(dependency.access),
+            }
+            for dependency in dependencies.lock
+        ],
+    }
+
+
+def _dependencies_from_dict(data: Any) -> ManifestDependencies:
+    """Parse dependency edges and lock rows from a manifest block.
+
+    Returns:
+        The parsed dependency block.
+
+    Raises:
+        TimeNetInvalidManifestError: If the block is malformed.
+    """
+    if not isinstance(data, dict):
+        raise TimeNetInvalidManifestError("invalid manifest 'dependencies' block: expected an object")
+    try:
+        direct = tuple(
+            DirectDependency(
+                alias=entry["alias"],
+                dataset=DatasetRef(entry["dataset_id"], entry["version"]),
+            )
+            for entry in data.get("direct", ())
+        )
+        lock = tuple(
+            LockedDependency(
+                dataset=DatasetRef(entry["dataset_id"], entry["version"]),
+                manifest_checksum=entry["manifest_checksum"],
+                size=entry["size"],
+                counts=_counts_from_dict(entry.get("counts", {})),
+                license=entry["license"],
+                access=entry["access"],
+            )
+            for entry in data.get("lock", ())
+        )
+        return ManifestDependencies(direct=direct, lock=lock)
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        raise TimeNetInvalidManifestError(f"invalid manifest 'dependencies' block: {exc}") from exc
 
 
 def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:

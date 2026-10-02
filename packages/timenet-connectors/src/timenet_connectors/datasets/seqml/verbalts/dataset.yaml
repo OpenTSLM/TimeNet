@@ -39,7 +39,7 @@
 #
 # The source datasets have separate license terms. Check the upstream sources
 # before redistributing converted data.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: seqml/verbalts
 dataset_version: 1.0.0
 name: VerbalTS

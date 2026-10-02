@@ -10,7 +10,7 @@
 # Series tasks cite metric records; chart tasks use the released PNG images.
 # Values remain float64 with unspecified units. Null marks a missing timestep.
 # Series with missing steps use explicit time offsets.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: datadog/arfbench
 dataset_version: 1.0.0
 name: ARFBench

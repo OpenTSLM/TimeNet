@@ -38,7 +38,7 @@ def test_metadata_required_and_defaults():
     assert m.domains == ()
     assert m.tags == ()
     assert m.source_url is None
-    assert m.yaml_schema_version == 1
+    assert m.yaml_schema_version == 2
 
 
 def test_metadata_with_optionals():

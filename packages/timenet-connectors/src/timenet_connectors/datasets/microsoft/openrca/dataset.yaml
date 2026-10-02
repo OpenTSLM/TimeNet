@@ -4,7 +4,7 @@
 # component/KPI anomaly thresholds from the whole daily metric file before filtering to the
 # incident window. Tasks therefore share their daily Record and carry the 30-minute incident
 # region as an input annotation; task scope deliberately remains unset.
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: microsoft/openrca
 dataset_version: 1.0.0
 name: OpenRCA
