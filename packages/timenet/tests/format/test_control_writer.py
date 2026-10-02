@@ -261,7 +261,7 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
         iter_tasks=lambda: iter(()),
     )
 
-    with pytest.raises(TimeFValidationError, match="declares 2 values but its axis 'axis-irregular' has 3"):
+    with pytest.raises(TimeFValidationError, match="returned 3 time offsets but it declares n_values=2"):
         DuckDBControlWriter(tmp_path / "control.duckdb").write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
 
 

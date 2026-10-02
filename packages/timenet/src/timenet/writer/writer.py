@@ -12,7 +12,6 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
-from timenet.dataset.axis import IrregularAxis, to_time_offsets_us
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
@@ -328,7 +327,6 @@ class TimeFWriter:
         result = values_backend.write_series(
             unique_series,
             read_and_validate=self._read_and_validate,
-            read_time_offsets=self._read_time_offsets,
             on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
@@ -388,42 +386,6 @@ class TimeFWriter:
                 f"series {ts.id!r}: its loader returned {len(values)} values but it declares n_values={ts.n_values}"
             )
         return values
-
-    def _read_time_offsets(self, ts: Signal) -> pa.Array | None:  # noqa: PLR6301
-        """Read an irregular series' time offsets and check them against what it declares.
-
-        The method returns ``None`` for every other axis shape. The backend writes that as a null cell.
-        These checks make ``first_time_offset_us`` and ``last_time_offset_us`` verified metadata. An
-        axis cannot claim endpoints that its own stream does not have.
-
-        Args:
-            ts: The series to read.
-
-        Returns:
-            The validated int64 time offsets, or ``None`` if the series stores none.
-
-        Raises:
-            TimeFValidationError: If the stream is unusable, its length disagrees with ``n_values``, or
-                its endpoints disagree with the axis.
-        """
-        if ts.time_offsets_loader is None:
-            return None
-        axis = ts.time_axis
-        if not isinstance(axis, IrregularAxis):  # pragma: no cover - Signal.__post_init__ pairs these
-            raise TimeFValidationError(f"series {ts.id!r} carries time offsets but has {type(axis).__name__}")
-        time_offsets = to_time_offsets_us(ts.time_offsets_loader().to_numpy(zero_copy_only=False))
-        if len(time_offsets) != ts.n_values:
-            raise TimeFValidationError(
-                f"series {ts.id!r}: its time_offsets_loader returned {len(time_offsets)} time offsets "
-                f"but it declares n_values={ts.n_values}"
-            )
-        if int(time_offsets[0]) != axis.first_us or int(time_offsets[-1]) != axis.last_us:
-            raise TimeFValidationError(
-                f"series {ts.id!r}: its axis claims the stream runs "
-                f"{axis.first_us}..{axis.last_us} us but the stream runs "
-                f"{int(time_offsets[0])}..{int(time_offsets[-1])} us"
-            )
-        return pa.array(time_offsets)
 
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
