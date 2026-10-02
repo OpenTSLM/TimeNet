@@ -1,16 +1,16 @@
 """Round-trips for a series whose time offsets are stored rather than computed (TimeF cases 3 and 4)."""
 
-import json
-
 import duckdb
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
+import timenet.reader.reader as reader_module
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
@@ -97,24 +97,64 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     assert back["z"].span_us == (0, 1_000_000)
 
 
-def test_series_sharing_time_offsets_each_store_their_own_copy(tmp_path):
-    # Documented behaviour, not an accident: an axis is a value, repeated per series, exactly as two
-    # 500 Hz signals each carry their own RegularAxis. Writer-side dedupe of identical streams stays
-    # available later without a schema change, since two index rows may name one chunk locator.
+def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypatch):
     dataset = _dataset()
     shared_us = [0, 5_000, 9_000]
-    for signal in ("temp", "humidity"):
-        dataset_series = Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=shared_us, spec=_spec(), name=signal)
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(dataset_series,)),)))
+    offsets = pa.array(shared_us, type=pa.int64())
+    axis = IrregularAxis.spanning(shared_us)
+    loader_calls = 0
+
+    def load_offsets():
+        nonlocal loader_calls
+        loader_calls += 1
+        return offsets
+
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=_spec(),
+            time_axis=axis,
+            loader=lambda values=values: pa.array(values, type=pa.float32()),
+            n_values=3,
+            time_offsets_loader=load_offsets,
+        )
+        for name, values in (("temp", [1.0, 2.0, 3.0]), ("humidity", [4.0, 5.0, 6.0]))
+    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
-    streams = [s.signals[0].time_offsets_us().tolist() for s in reader.iter_records()]
-    assert streams == [shared_us, shared_us]
+    version = _written(tmp_path, dataset)
+    assert loader_calls == 1
+
+    with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM axis_offsets").fetchone() == (len(shared_us),)
+        assert connection.execute("SELECT count(DISTINCT axis_key) FROM signals").fetchone() == (1,)
+    for shard in (version / "time_series").glob("*.parquet"):
+        column = pq.read_table(shard, columns=["time_offsets_us"]).column(0)
+        assert column.null_count == len(column)
+
+    monkeypatch.setattr(reader_module, "_AXIS_OFFSETS_CACHE_TARGET_BYTES", offsets.nbytes - 1)
+    with TimeFReader(DatasetVersion.open_local(version)) as reader:
+        back = next(iter(reader.iter_records())).signals
+        control = reader._control_reader()
+        original = control.load_axis_offsets_by_key
+        read_calls = 0
+
+        def count_reads(axis_key, loaded_axis, n_values):
+            nonlocal read_calls
+            read_calls += 1
+            return original(axis_key, loaded_axis, n_values)
+
+        monkeypatch.setattr(control, "load_axis_offsets_by_key", count_reads)
+        assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
+        assert read_calls == 1
+        assert len(reader._axis_offsets_cache) == 1
+        assert reader._axis_offsets_cache_bytes == next(iter(reader._axis_offsets_cache.values())).nbytes
+        assert reader._axis_offsets_cache_bytes > reader_module._AXIS_OFFSETS_CACHE_TARGET_BYTES
 
 
-def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
-    # The whole reason one chunk locator can address both columns.
+def test_value_chunking_does_not_affect_shared_time_offsets(tmp_path):
     dataset = _dataset()
     time_offsets = list(range(0, 4000 * 1000, 1000))
     ts = Signal.from_irregular(
@@ -123,7 +163,7 @@ def test_chunking_splits_values_and_time_offsets_at_the_same_boundary(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
 
-    # 480 bytes per chunk => 40 steps per chunk at 12 bytes a step, so ~100 chunks.
+    # The values split into small chunks while the axis remains one control-plane object.
     reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, chunk_max_bytes=480)))
     back = next(iter(reader.iter_records())).signals[0]
     assert back.time_offsets_us().tolist() == time_offsets
@@ -139,6 +179,27 @@ def test_an_irregular_series_needs_its_time_offsets():
             loader=lambda: None,
             n_values=2,
         )
+
+
+def test_signals_cannot_share_an_axis_id_with_different_offsets(tmp_path):
+    axis = IrregularAxis.spanning([0, 5_000, 9_000])
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=_spec(),
+            time_axis=axis,
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            n_values=3,
+            time_offsets_loader=lambda offsets=offsets: pa.array(offsets, type=pa.int64()),
+        )
+        for name, offsets in (("temp", [0, 5_000, 9_000]), ("humidity", [0, 6_000, 9_000]))
+    )
+    dataset = _dataset()
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    dataset.derive_schema()
+
+    with pytest.raises(TimeFValidationError, match="shared by signals with different time offsets"):
+        _written(tmp_path, dataset)
 
 
 @pytest.mark.parametrize("axis", [RegularAxis.from_rate_hz(1), OrdinalAxis()])
@@ -179,10 +240,7 @@ def test_a_stream_disagreeing_with_its_axis_is_refused(tmp_path):
 
 
 @pytest.mark.parametrize("chunk_max_bytes", [64, 480, 1000, 4096])
-def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes):
-    # Zarr requires the shard shape to be a multiple of the chunk shape. The time offsets array has its
-    # own byte width, so it needs the same rounding the values array does; without it every byte
-    # target where the two do not divide aborts create_array.
+def test_zarr_shared_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes):
     dataset = _dataset()
     ts = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
@@ -193,9 +251,7 @@ def test_zarr_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max_bytes)
     assert back.time_offsets_us().tolist() == _HATCH_US
 
 
-def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
-    # The partition is what lets one element offset address both a partition's values and its
-    # time_offsets: mixing the two in one array would let the offsets drift apart silently.
+def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
     dataset = _dataset()
     dataset.add_record(
         record=Record(
@@ -219,9 +275,9 @@ def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
     version = _written(tmp_path, dataset, values_backend="zarr")
 
     store = version / "time_series.zarr"
-    assert (store / "env").is_dir()  # regular values keep today's top-level path
-    assert (store / "_irregular" / "env").is_dir()
-    assert (store / "_time_offsets" / "env").is_dir()
+    assert (store / "env").is_dir()
+    assert not (store / "_irregular").exists()
+    assert not (store / "_time_offsets").exists()
 
     back = {ts.name: ts for ts in next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_records())).signals}
     assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
@@ -230,7 +286,7 @@ def test_zarr_keeps_regular_and_irregular_arrays_apart(tmp_path):
 
 
 def test_a_spec_type_cannot_collide_with_the_zarr_groups():
-    # quote() leaves underscores alone, so these would land on the groups the writer owns.
+    # Keep names used by older Zarr layouts reserved so old and new artifacts stay unambiguous.
     for reserved in ("_irregular", "_time_offsets"):
         with pytest.raises(TimeFValidationError, match="must not be one of"):
             _spec(reserved)
@@ -250,16 +306,56 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
         back.time_offsets_us()
 
+def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path):
+    dataset = _dataset()
+    shared_us = [0, 5_000, 9_000]
+    axis = IrregularAxis.spanning(shared_us)
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=_spec(),
+            time_axis=axis,
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            n_values=3,
+            time_offsets_loader=lambda: pa.array(shared_us, type=pa.int64()),
+        )
+        for name in ("temp", "humidity")
+    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    dataset.derive_schema()
+    version_dir = _written(tmp_path, dataset)
+    with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
+        connection.execute("UPDATE signals SET n_values = 4 WHERE name = 'humidity'")
 
-def test_zarr_time_offsets_persist_the_delta_filter(tmp_path):
-    # The time offsets array claims a Delta filter for its monotonic stream; confirm it lands in the
-    # written zarr.json rather than trusting the create_array call that requested it.
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="shared by Signals with different lengths"),
+    ):
+        next(reader.iter_records())
+
+
+def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
+    dataset = _dataset()
+    ts = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
+    dataset.derive_schema()
+    version_dir = _written(tmp_path, dataset)
+    with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
+        connection.execute("UPDATE axis_offsets SET offset_us = -1 WHERE position = 1")
+    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).signals[0]
+    with pytest.raises(TimeFFormatError, match="decreasing offsets"):
+        back.time_offsets_us()
+
+
+def test_zarr_time_offsets_live_in_the_control_plane(tmp_path):
     dataset = _dataset()
     ts = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version = _written(tmp_path, dataset, values_backend="zarr")
 
-    meta = json.loads((version / "time_series.zarr" / "_time_offsets" / "env" / "zarr.json").read_text())
-    inner = meta["codecs"][0]["configuration"]["codecs"]  # inside the sharding codec
-    assert any(codec["name"] == "numcodecs.delta" for codec in inner)
+    assert not (version / "time_series.zarr" / "_time_offsets").exists()
+    with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
+        assert connection.execute("SELECT offset_us FROM axis_offsets ORDER BY position").fetchall() == [
+            (value,) for value in _HATCH_US
+        ]

@@ -50,8 +50,8 @@ The writer performs these operations:
 1. Derive the dataset schema when the caller has not done so.
 2. Validate hierarchy ownership and reusable annotation content.
 3. Read and validate each Signal, then write its values to Parquet or Zarr.
-4. Create `control.duckdb` and insert hierarchy, annotation, task, axis, and chunk rows in one
-   transaction.
+4. Create `control.duckdb`, store each shared axis once, and insert hierarchy, annotation, task, and
+   chunk rows in one transaction.
 5. Confirm the stored Source tree, checkpoint DuckDB, and close it.
 6. Calculate artifact sizes and SHA-256 checksums.
 7. Write `manifest.json` and atomically publish the version directory.
@@ -72,7 +72,7 @@ A failed operation publishes nothing.
 | `value_encoding` | Parquet values-column encoding, or `"auto"`. |
 
 Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve nullable
-timesteps and irregular-axis offsets.
+timesteps. Irregular-axis offsets live in `control.duckdb`, not in either values backend.
 
 ## Validation
 

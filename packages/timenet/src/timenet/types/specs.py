@@ -122,8 +122,8 @@ class TimeSeriesSpec:
             raise TimeFValidationError("TimeSeriesSpec.spec_type must be non-empty")
         if self.spec_type in _RESERVED_SPEC_TYPES:
             # The Zarr backend builds a per-spec_type array path from spec_type. Percent-encoding
-            # leaves all of these names untouched. "." and ".." are filesystem-special. The two
-            # underscore names are the groups that hold irregular values and their time offsets.
+            # leaves all of these names untouched. "." and ".." are filesystem-special. The
+            # underscore names remain reserved for compatibility with older Zarr layouts.
             raise TimeFValidationError(
                 f"TimeSeriesSpec.spec_type must not be one of {sorted(_RESERVED_SPEC_TYPES)}, got {self.spec_type!r}"
             )

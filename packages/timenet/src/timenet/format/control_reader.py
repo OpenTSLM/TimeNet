@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 
 import duckdb
-import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
@@ -41,7 +41,14 @@ from timenet.types.splits import Split, parse_split
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
-OffsetsLoader = Callable[[int, str], pa.Array]
+OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
+
+
+class _LoadedAxis(NamedTuple):
+    """One hydrated axis and the shared length of its stored offsets."""
+
+    axis: RegularAxis | IrregularAxis | OrdinalAxis
+    n_values: int | None
 
 
 class _RecordRow(NamedTuple):
@@ -480,21 +487,24 @@ class DuckDBControlReader:
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for signal_row in signal_rows:
-            axis = axes.get(signal_row.axis_key)
-            if axis is None:
+            loaded_axis = axes.get(signal_row.axis_key)
+            if loaded_axis is None:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing axis key {signal_row.axis_key!r}"
                 )
+            axis = loaded_axis.axis
             spec = specs.get(signal_row.spec_fields)
             if spec is None:
                 spec = self._spec_from_row(signal_row)
                 specs[signal_row.spec_fields] = spec
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
+                if loaded_axis.n_values is None:
+                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
                 offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis.axis_id)
+                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
                     if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis.axis_id)
+                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
                 )
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
@@ -1192,11 +1202,11 @@ class DuckDBControlReader:
     def _read_axes(
         self,
         axis_keys: Iterable[int] | None = None,
-    ) -> dict[int, RegularAxis | IrregularAxis | OrdinalAxis]:
+    ) -> dict[int, _LoadedAxis]:
         """Hydrate each shared axis exactly once.
 
         Returns:
-            Axes keyed by their stored IDs.
+            Axes and irregular offset lengths keyed by their stored IDs.
 
         Raises:
             TimeFFormatError: If an axis has an unknown type.
@@ -1204,34 +1214,65 @@ class DuckDBControlReader:
         requested = None if axis_keys is None else tuple(axis_keys)
         if requested == ():
             return {}
-        axes: dict[int, RegularAxis | IrregularAxis | OrdinalAxis] = {}
-        query = """SELECT axis_key, axis_id, axis_type, period_numerator_us, period_denominator,
-                          start_index, offset_us, first_us, last_us FROM axes"""
+        axes: dict[int, _LoadedAxis] = {}
+        query = """SELECT axes.axis_key, axis_id, axis_type, period_numerator_us, period_denominator,
+                          start_index, offset_us, first_us, last_us,
+                          lengths.min_n_values, lengths.max_n_values
+                   FROM axes
+                   LEFT JOIN (
+                       SELECT axis_key, min(n_values) AS min_n_values, max(n_values) AS max_n_values
+                       FROM signals GROUP BY axis_key
+                   ) lengths USING (axis_key)"""
         rows = (
             self.connection.execute(query).fetchall()
             if requested is None
             else self.connection.execute(
-                f"{query} WHERE axis_key IN (SELECT unnest(?))",
+                f"{query} WHERE axes.axis_key IN (SELECT unnest(?))",
                 [list(requested)],
             ).fetchall()
         )
-        for axis_key, axis_id, axis_type, numerator, denominator, start_index, offset, first, last in rows:
+        for (
+            axis_key,
+            axis_id,
+            axis_type,
+            numerator,
+            denominator,
+            start_index,
+            offset,
+            first,
+            last,
+            min_n_values,
+            max_n_values,
+        ) in rows:
             if axis_type == "regular":
-                axes[axis_key] = RegularAxis(
-                    axis_id=axis_id,
-                    period_us=Fraction(numerator, denominator),
-                    start_index=start_index,
-                    offset_us=offset,
+                axes[axis_key] = _LoadedAxis(
+                    RegularAxis(
+                        axis_id=axis_id,
+                        period_us=Fraction(numerator, denominator),
+                        start_index=start_index,
+                        offset_us=offset,
+                    ),
+                    None,
                 )
             elif axis_type == "irregular":
-                axes[axis_key] = IrregularAxis(axis_id=axis_id, first_us=first, last_us=last)
+                if min_n_values is None or max_n_values is None:
+                    raise TimeFFormatError(f"irregular axis {axis_id!r} has no Signals")
+                if min_n_values != max_n_values:
+                    raise TimeFFormatError(
+                        f"axis {axis_id!r} is shared by Signals with different lengths "
+                        f"{sorted((min_n_values, max_n_values))}"
+                    )
+                axes[axis_key] = _LoadedAxis(
+                    IrregularAxis(axis_id=axis_id, first_us=first, last_us=last),
+                    int(min_n_values),
+                )
             elif axis_type == "ordinal":
-                axes[axis_key] = OrdinalAxis(axis_id=axis_id)
+                axes[axis_key] = _LoadedAxis(OrdinalAxis(axis_id=axis_id), None)
             else:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
 
-    def load_axis_offsets_by_key(self, axis_key: int, axis_id: str) -> pa.Array:
+    def load_axis_offsets_by_key(self, axis_key: int, axis: IrregularAxis, n_values: int) -> pa.Array:
         """Load one shared irregular axis through its internal integer key.
 
         Returns:
@@ -1240,35 +1281,33 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the offsets disagree with the axis or its Signals.
         """
-        rows = self.connection.execute(
-            """SELECT offsets.offset_us
+        column = (
+            self.connection.execute(
+                """SELECT offsets.offset_us
                FROM axis_offsets offsets
                WHERE axis_key = ? ORDER BY offsets.position""",
-            [axis_key],
-        ).fetchall()
-        offsets = np.asarray([row[0] for row in rows], dtype=np.int64)
-        axis = self.connection.execute(
-            "SELECT first_us, last_us FROM axes WHERE axis_key = ? AND axis_type = 'irregular'",
-            [axis_key],
-        ).fetchone()
-        if axis is None:
-            raise TimeFFormatError(f"axis {axis_id!r} has offsets but is missing or not irregular")
-        lengths = {
-            row[0]
-            for row in self.connection.execute(
-                "SELECT DISTINCT n_values FROM signals WHERE axis_key = ?", [axis_key]
-            ).fetchall()
-        }
-        if len(lengths) != 1 or len(offsets) not in lengths:
-            raise TimeFFormatError(
-                f"axis {axis_id!r} stores {len(offsets)} offsets but its Signals declare lengths {sorted(lengths)}"
+                [axis_key],
             )
-        endpoints = axis[:2]
-        if len(offsets) == 0 or (int(offsets[0]), int(offsets[-1])) != endpoints:
-            raise TimeFFormatError(f"axis {axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
-        if np.any(np.diff(offsets) < 0):
-            raise TimeFFormatError(f"axis {axis_id!r} has decreasing offsets")
-        return pa.array(offsets, type=pa.int64())
+            .to_arrow_table()
+            .column(0)
+        )
+        offsets = column.chunk(0) if column.num_chunks == 1 else column.combine_chunks()
+        if len(offsets) != n_values:
+            raise TimeFFormatError(
+                f"axis {axis.axis_id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
+            )
+        if offsets.null_count:
+            raise TimeFFormatError(f"axis {axis.axis_id!r} stores null offsets")
+        endpoints = (axis.first_us, axis.last_us)
+        if len(offsets) == 0 or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
+            raise TimeFFormatError(f"axis {axis.axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
+        if len(offsets) > 1:
+            decreasing = pc.less(  # ty: ignore[unresolved-attribute]
+                offsets.slice(1), offsets.slice(0, len(offsets) - 1)
+            )
+            if pc.any(decreasing).as_py():  # ty: ignore[unresolved-attribute]
+                raise TimeFFormatError(f"axis {axis.axis_id!r} has decreasing offsets")
+        return offsets
 
     @staticmethod
     def _spec_from_row(row: _SignalRow) -> TimeSeriesSpec:

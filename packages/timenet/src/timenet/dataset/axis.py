@@ -2,7 +2,7 @@
 
 TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
 offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
-placements that no formula produces. It writes down every time offset beside the values.
+placements that no formula produces. Its shared control-plane object stores every time offset once.
 :class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
 one does not type-check.
 
@@ -265,11 +265,11 @@ def time_offsets_from_datetimes(moments: Sequence[datetime], *, start_time: date
 
 @dataclass(frozen=True, kw_only=True)
 class IrregularAxis:
-    """A placement no formula produces, so this axis writes down every time offset beside the values.
+    """A placement no formula produces, so this axis stores every time offset.
 
     This axis holds only the pair a builder can state and the writer can verify without a read. That
-    pair is the first and the last stored time offset. The time offsets themselves ride the values plane. Reach
-    them through :attr:`~timenet.dataset.Signal.time_offsets_us`.
+    pair is the first and the last stored time offset. The time offsets themselves live in the shared
+    stored axis. Reach them through :attr:`~timenet.dataset.Signal.time_offsets_us`.
 
     That split is the point. Two ints compare and hash, so the axis goes whole into the writer's series
     identity and round-trips as a value through the records struct. An axis holding the array does

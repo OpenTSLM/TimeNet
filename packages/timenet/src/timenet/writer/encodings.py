@@ -21,10 +21,6 @@ from timenet.writer.value_encoding import ValueEncoding
 VALUES_COLUMN = "values.list.element"
 """Parquet path of the shard values column. This is the nested element, not the list."""
 
-TIME_OFFSETS_COLUMN = "time_offsets_us.list.element"
-"""Parquet path of the shard time-offsets column. This is the nested element of the irregular-series
-list."""
-
 SHARD_CATEGORICAL = ["spec_type", "signal"]
 """These shard columns always use dictionary encoding, independent of the values encoding choice."""
 
@@ -79,11 +75,10 @@ def shard_encoding(value_encoding: ValueEncoding) -> dict[str, str]:
         value_encoding: The encoding the writer selected for this shard's values column.
 
     Returns:
-        The ``column_encoding`` map. This map always pins the monotonic index and the irregular
-        series' time offsets. The map has no entry for the values column if the values column
-        uses ``use_dictionary`` instead.
+        The ``column_encoding`` map. This map always pins the monotonic chunk index. It has no entry
+        for the values column if the values column uses ``use_dictionary`` instead.
     """
-    column_encoding = {"chunk_idx": "DELTA_BINARY_PACKED", TIME_OFFSETS_COLUMN: "DELTA_BINARY_PACKED"}
+    column_encoding = {"chunk_idx": "DELTA_BINARY_PACKED"}
     parquet_name = _PARQUET_COLUMN_ENCODING.get(value_encoding)
     if parquet_name is not None:
         column_encoding[VALUES_COLUMN] = parquet_name
