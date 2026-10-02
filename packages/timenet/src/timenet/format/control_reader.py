@@ -514,6 +514,7 @@ class DuckDBControlReader:
         object_keys = [*record_keys, *source_keys, *signal_keys]
         annotation_keys = None if read_all else object_keys
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
+        imported_record_ids = self.record_imports().keys()
         axes = self._read_axes({row.axis_key for row in signal_rows})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
@@ -598,14 +599,19 @@ class DuckDBControlReader:
                 hydrate_source(source_key, record_row.record_key)
                 for source_key in roots_by_record[record_row.record_key]
             )
+            record_annotations = annotations.get(("Record", record_id), ())
             record = Record(
                 record_id=record_id,
                 sources=root_sources,
                 start_time=self._clock_cache[record_row.clock_id],
-                annotations=annotations.get(("Record", record_id), ()),
+                # An imported proxy has no local Sources. Its overlays can only be validated after
+                # the reader resolves the parent hierarchy, so carry them to that step untouched.
+                annotations=() if record_id in imported_record_ids else record_annotations,
                 time_span=span,
                 metadata=_decode_json(record_row.metadata, default={}),
             )
+            if record_id in imported_record_ids:
+                record.annotations = record_annotations
             records.append(record)
         unreachable = source_data.keys() - hydrated_sources
         if unreachable:

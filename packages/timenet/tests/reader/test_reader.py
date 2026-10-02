@@ -27,6 +27,7 @@ from timenet.types import (
     ObjectRef,
     ParentDataset,
     Split,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -207,6 +208,13 @@ def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
             )
         )
         imported.annotate(Annotation(key="reviewed", value=True, id="reviewed"))
+        imported.annotate(
+            Annotation(
+                key="reviewed_at",
+                span=TimePoint.micros(0),
+                id="reviewed-at",
+            )
+        )
         child.add_task(
             task=AnswerTask(
                 id="child-question",
@@ -223,7 +231,7 @@ def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
         restored = child_reader.read()
         record = restored.records[0]
         assert restored.tasks[0].inputs == (record,)
-        assert "reviewed" in {annotation.id for annotation in record.annotations}
+        assert {"reviewed", "reviewed-at"} <= {annotation.id for annotation in record.annotations}
         assert record.signals[0].to_arrow().equals(parent_dataset.records[0].signals[0].to_arrow())
 
 

@@ -359,6 +359,10 @@ class TimeFReader:
             if len(inherited) != 1:
                 raise TimeFFormatError(f"parent {reference.dataset} did not resolve {reference}")
             record = copy.copy(inherited[0])
+            # These occurrences can be referenced by child tasks. Validate them against the
+            # inherited hierarchy, then retain their stored IDs instead of minting new occurrences.
+            for annotation in proxy.annotations:
+                record._validate_annotation(annotation)
             record.annotations = (*record.annotations, *proxy.annotations)
             resolved.append(record)
         return tuple(resolved)
