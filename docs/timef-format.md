@@ -47,7 +47,8 @@ Signals can reference the same immutable `TimeAxis`.
 
 | Table | Purpose |
 | --- | --- |
-| `records` | Recording sessions and session-level timing metadata. |
+| `records` | Recording sessions with a clock ID and optional session span. |
+| `clocks` | Shared Record origins with a nullable absolute timestamp. |
 | `sources` | Recursive sources, linked to their record and parent source by internal keys. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
@@ -84,7 +85,9 @@ compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and 
 `BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
 it between the Signals that use it.
 
-Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
+Regular axes store a rational microsecond period, `offset_us`, and `start_index`.
+A sample offset is `offset_us + floor((start_index + index) * period_us)`.
+All time offsets within a Record use its common origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
 `axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
 once regardless of how many Signals use that timeline.
@@ -96,12 +99,13 @@ content once: its key (`name`), unit, and value. The value sits in one typed col
 `value_kind`: `text_value`, `integer_value`, `float_value`, `boolean_value`, or `text_list_value`
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
-span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and
+span as `span_type`, `start_us`, and `end_us`, plus provenance, confidence, and
 occurrence metadata.
 
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
 apply to many objects without copying a long value. Each attachment still has its own
-`occurrence_id` and temporal placement.
+`occurrence_id` and temporal placement. For time annotations, the owner defines scope:
+one Signal, a Source subtree, or a Record. A selected subset uses separate Signal occurrences.
 
 ## Tasks
 
