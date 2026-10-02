@@ -8,8 +8,7 @@ import pytest
 from timenet.client import TimeNet
 from timenet.dataset import RegularAxis
 from timenet.types import InputModality
-from timenet.writer import TimeFWriter
-from timenet_connectors.datasets.yang_ai_lab.hearts.connector import HeartsConnector
+from timenet_connectors.datasets.yang_ai_lab.hearts.tests.composition import build_composed_hearts
 
 
 SYMPTOMS = {
@@ -61,13 +60,18 @@ CASES = {
 
 
 @pytest.fixture(scope="module")
-def dataset(tmp_path_factory):
+def built(tmp_path_factory):
     root = tmp_path_factory.mktemp("hearts")
     for (corpus, task), payload in CASES.items():
         directory = root / corpus / task
         directory.mkdir(parents=True)
         (directory / "0.pkl").write_bytes(pickle.dumps(payload))
-    return HeartsConnector().convert([root])
+    return build_composed_hearts(root, tmp_path_factory.mktemp("hearts-registry"))
+
+
+@pytest.fixture(scope="module")
+def dataset(built):
+    return built.dataset
 
 
 def _task(dataset, corpus, task):
@@ -147,10 +151,9 @@ def test_answers_are_spelt_as_the_harness_scores_them(dataset):
     assert [source.name for source in coefficients.inputs[0].sources] == ["audio"]
 
 
-def test_audio_values_round_trip_through_the_writer(dataset, tmp_path):
-    with TimeFWriter(tmp_path / "registry", dataset, values_backend="zarr") as writer:
-        writer.write()
-    read = TimeNet(registry=tmp_path / "registry").load("yang-ai-lab/hearts", auto_build=False)
+def test_audio_values_round_trip_through_the_writer(built):
+    built.registry.store(built.dataset, values_backend="zarr")
+    read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     task = _task(read, "coswara", "audio_classification")
     (signal,) = task.inputs[0].signals
     assert signal.to_arrow().to_pylist() == pytest.approx(BREATHING)

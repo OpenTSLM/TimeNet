@@ -1,14 +1,13 @@
-"""Download the pinned HEARTS release and convert its test cases."""
+"""Compose HEARTS tasks over five pinned, taskless corpus record layers."""
 
-from collections.abc import Iterator
 from pathlib import Path
 
-from timenet.composition import BuildContext
+from timenet.composition import BuildContext, DatasetBuilder
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDownloadError
-from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import load_payload
-from timenet_connectors.datasets.yang_ai_lab.hearts.records import Case
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet_connectors.datasets.yang_ai_lab.hearts.corpus import iter_cases
+from timenet_connectors.datasets.yang_ai_lab.hearts.records import Built, Case, CaseRecords, case_record_refs
 from timenet_connectors.datasets.yang_ai_lab.hearts.release import REPO, REVISION, TASKS, VOCABULARIES
 from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import convert_case
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
@@ -37,33 +36,56 @@ class HeartsConnector(BaseConnector[Path]):
             raise TimeNetDownloadError(f"{REPO!r} at {REVISION!r} returned no test cases for {missing} under {root}")
         return [root]
 
-    def convert(self, raw_refs: list[Path], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
-        """Build the records and the task of every test case under the tree.
+    def convert(  # noqa: PLR6301 - BaseConnector override
+        self, raw_refs: list[Path], context: BuildContext | None = None
+    ) -> TimeFDataset:
+        """Import parent records and build the task-owned parts of every test case.
 
         Args:
             raw_refs: The single handle :meth:`download` gave back.
+            context: Build context resolving all five exact corpus parents.
 
         Returns:
-            The populated dataset.
+            The composed HEARTS dataset.
+
+        Raises:
+            TimeFValidationError: If conversion has no composition context or a parent lacks a
+                required case record.
         """
-        dataset = TimeFDataset(metadata=self.metadata())
+        if context is None:
+            raise TimeFValidationError("HEARTS requires a build context with its five corpus parents")
+        dataset = context.dataset()
         dataset.register_annotations(VOCABULARIES.values())
-        dataset.add_tasks(tasks=[convert_case(dataset, case) for case in _cases(raw_refs[0])])
+        dataset.add_tasks(
+            tasks=[
+                convert_case(dataset, case, _import_case_records(dataset, case, context))
+                for case in iter_cases(raw_refs[0])
+            ]
+        )
         return dataset
 
 
-def _cases(root: Path) -> Iterator[Case]:
-    """Yield the loaded test cases in task-directory and numeric-file order.
+def _import_case_records(dataset: DatasetBuilder, case: Case, context: BuildContext) -> CaseRecords:
+    """Resolve and import one case's records from its matching corpus parent.
 
-    Yields:
-        Each test case of every task directory the tree holds.
+    Returns:
+        Imported records paired with the source origins needed to place task annotations.
+
+    Raises:
+        TimeFValidationError: If the corpus parent lacks a required record.
     """
-    for directory, definition in TASKS.items():
-        folder = root / directory
-        if not folder.is_dir():
-            continue
-        for path in sorted(folder.glob("*.pkl"), key=lambda path: int(path.stem)):
-            yield Case(directory, definition, int(path.stem), path, load_payload(str(path)))
+    refs = case_record_refs(case)
+    requested = tuple(dict.fromkeys(ref.record_id for ref in (*refs.inputs, *refs.candidates)))
+    parent_records = tuple(context.parent(case.corpus).iter_records(requested)) if requested else ()
+    by_id = {record.id: record for record in parent_records}
+    missing = sorted(set(requested) - by_id.keys())
+    if missing:
+        raise TimeFValidationError(f"HEARTS parent {case.corpus!r} lacks case records {missing}")
+    imported = {record_id: dataset.import_record(by_id[record_id], parent=case.corpus) for record_id in requested}
+    return CaseRecords(
+        tuple(Built(imported[item.record_id], item.origin_us) for item in refs.inputs),
+        tuple(Built(imported[item.record_id], item.origin_us) for item in refs.candidates),
+    )
 
 
 CONNECTOR = HeartsConnector

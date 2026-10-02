@@ -25,6 +25,7 @@ from timenet.types import (
 from timenet_connectors.datasets.yang_ai_lab.hearts.records import (
     Built,
     Case,
+    CaseRecords,
     answer_record,
     case_records,
     frame_times_us,
@@ -44,8 +45,16 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
 )
 
 
-def convert_case(dataset: TimeFDataset, case: Case) -> Task:  # noqa: PLR0911 - one return per task type the release holds
-    """Register a case's input and candidate records and build its task.
+def convert_case(  # noqa: PLR0911 - one return per task type the release holds
+    dataset: TimeFDataset,
+    case: Case,
+    records: CaseRecords | None = None,
+) -> Task:
+    """Build a case's task from new or already imported input records.
+
+    When ``records`` is omitted, this keeps the standalone behavior and registers newly constructed
+    records. A composed connector supplies imported parent records and only task-owned answer records
+    are added here.
 
     Returns:
         The task, not yet registered.
@@ -54,11 +63,13 @@ def convert_case(dataset: TimeFDataset, case: Case) -> Task:  # noqa: PLR0911 - 
         TimeFFormatError: If a ranking answer does not order the case's records.
     """
     definition, answer = case.definition, case.payload[ANSWER_KEY]
-    records = case_records(case)
+    owns_records = records is None
+    records = case_records(case) if records is None else records
     inputs = list(records.inputs)
     candidates = list(records.candidates)
-    for built in (*inputs, *candidates):
-        dataset.add_record(record=built.record)
+    if owns_records:
+        for built in (*inputs, *candidates):
+            dataset.add_record(record=built.record)
     shared: dict[str, Any] = {
         "id": f"{case.id}-task",
         "prompt": _prompt(case),

@@ -76,6 +76,20 @@ class CaseRecords(NamedTuple):
     candidates: tuple[Built, ...]
 
 
+class RecordRef(NamedTuple):
+    """Identity and source-clock origin of a reusable case record."""
+
+    record_id: str
+    origin_us: int
+
+
+class CaseRecordRefs(NamedTuple):
+    """Input and candidate record references for one HEARTS case."""
+
+    inputs: tuple[RecordRef, ...]
+    candidates: tuple[RecordRef, ...]
+
+
 def case_records(case: Case) -> CaseRecords:
     """Build every reusable input and candidate Record for one case.
 
@@ -92,6 +106,46 @@ def case_records(case: Case) -> CaseRecords:
         meal_us = moment_us(case.payload["meal_time"]) - origin_us
         record.time_span = TimeInterval.micros(0, meal_us + HELD_OUT_READINGS * US_PER_MINUTE)
     return CaseRecords(inputs, candidates)
+
+
+def case_record_refs(case: Case) -> CaseRecordRefs:
+    """Describe a case's parent records without constructing their signals.
+
+    Returns:
+        Input and candidate references in task-definition order.
+    """
+    return CaseRecordRefs(
+        tuple(input_record_refs(case, case.definition.inputs)),
+        tuple(input_record_refs(case, case.definition.candidates)),
+    )
+
+
+def input_record_refs(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, ...]) -> list[RecordRef]:
+    """Return the record IDs and source-clock origins declared by input entries.
+
+    Unlike :func:`input_records`, this does not construct signals or decode images. A composed child
+    can therefore resolve its parent records without recreating their value hierarchy.
+
+    Returns:
+        Lightweight references in the same order as :func:`input_records`.
+    """
+    refs: list[RecordRef] = []
+    for entry in entries:
+        if isinstance(entry, Waveform):
+            refs.append(RecordRef(case.id, 0))
+        elif isinstance(entry, tuple):
+            origin_us = min(_frame_origin_us(case.payload[key]) for key in entry)
+            refs.append(RecordRef(case.id, origin_us))
+        elif isinstance(case.payload[entry], dict):
+            refs.extend(
+                RecordRef(f"{case.id}-{name}", _frame_origin_us(frame))
+                for name, frame in sorted(case.payload[entry].items())
+            )
+        else:
+            name = entry if len(entries) > 1 else None
+            record_id = case.id if name is None else f"{case.id}-{name}"
+            refs.append(RecordRef(record_id, _frame_origin_us(case.payload[entry])))
+    return refs
 
 
 def input_records(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, ...]) -> list[Built]:
@@ -147,6 +201,11 @@ def moment_us(value: Any) -> int:
         The timestamp in microseconds.
     """
     return int(np.datetime64(str(value), "us").astype(np.int64))
+
+
+def _frame_origin_us(frame: Any) -> int:
+    """Return the earliest source time in a frame."""
+    return int(frame_times_us(frame, _columns(frame)[0])[0][0])
 
 
 def answer_record(case: Case, built: Built, offsets: np.ndarray, values: np.ndarray) -> Record:

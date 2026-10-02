@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v2.schema.json
 # Dataset card for the yang-ai-lab/hearts connector: the single source for this dataset's metadata.
 # The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
 # derived from the data into manifest.json.
@@ -8,6 +8,23 @@
 yaml_schema_version: 2
 dataset_id: yang-ai-lab/hearts
 dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - alias: cgmacros
+    dataset_id: yang-ai-lab/hearts-cgmacros
+    version: 1.0.0
+  - alias: coswara
+    dataset_id: yang-ai-lab/hearts-coswara
+    version: 1.0.0
+  - alias: coughvid
+    dataset_id: yang-ai-lab/hearts-coughvid
+    version: 1.0.0
+  - alias: harespod
+    dataset_id: yang-ai-lab/hearts-harespod
+    version: 1.0.0
+  - alias: vctk
+    dataset_id: yang-ai-lab/hearts-vctk
+    version: 1.0.0
 name: HEARTS frozen test cases
 description: >-
   The released test cases of HEARTS, a benchmark of LLM reasoning over health time series. The

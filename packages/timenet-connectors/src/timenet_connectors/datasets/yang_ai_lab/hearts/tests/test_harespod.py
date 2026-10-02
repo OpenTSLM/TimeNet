@@ -8,8 +8,7 @@ import pytest
 from timenet.client import TimeNet
 from timenet.dataset import RegularAxis
 from timenet.types import AnswerTask, InputModality, TSCorrespondenceTask
-from timenet.writer import TimeFWriter
-from timenet_connectors.datasets.yang_ai_lab.hearts.connector import HeartsConnector
+from timenet_connectors.datasets.yang_ai_lab.hearts.tests.composition import build_composed_hearts
 
 
 def _segment(column, start, values, *, freq="10ms"):
@@ -59,13 +58,18 @@ CASES = {
 
 
 @pytest.fixture(scope="module")
-def dataset(tmp_path_factory):
+def built(tmp_path_factory):
     root = tmp_path_factory.mktemp("hearts")
     for task, payload in CASES.items():
         directory = root / "harespod" / task
         directory.mkdir(parents=True)
         (directory / "0.pkl").write_bytes(pickle.dumps(payload))
-    return HeartsConnector().convert([root])
+    return build_composed_hearts(root, tmp_path_factory.mktemp("hearts-registry"))
+
+
+@pytest.fixture(scope="module")
+def dataset(built):
+    return built.dataset
 
 
 def _task(dataset, task):
@@ -126,10 +130,9 @@ def test_heart_rate_candidates_keep_their_one_hertz_cadence(dataset):
     assert task.inputs[0].signals[0].time_axis == RegularAxis.from_rate_hz(100)
 
 
-def test_pairing_round_trips_through_the_writer(dataset, tmp_path):
-    with TimeFWriter(tmp_path / "registry", dataset, values_backend="zarr") as writer:
-        writer.write()
-    read = TimeNet(registry=tmp_path / "registry").load("yang-ai-lab/hearts", auto_build=False)
+def test_pairing_round_trips_through_the_writer(built):
+    built.registry.store(built.dataset, values_backend="zarr")
+    read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     task = _task(read, "spo2_resp_pairing")
     assert {_by_key(record.annotations)["subject_id"].value for record in (*task.inputs, *task.candidate_records)} == {
         "harespod:314b"

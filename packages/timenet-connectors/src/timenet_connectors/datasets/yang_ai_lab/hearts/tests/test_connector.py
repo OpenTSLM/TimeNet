@@ -11,11 +11,11 @@ import pytest
 
 from timenet.client import TimeNet
 from timenet.dataset import IrregularAxis, RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.types import InputModality, Split, TimeInterval, TimePoint
-from timenet.writer import TimeFWriter
 from timenet_connectors.datasets.yang_ai_lab.hearts.connector import HeartsConnector
 from timenet_connectors.datasets.yang_ai_lab.hearts.records import frame_times_us
+from timenet_connectors.datasets.yang_ai_lab.hearts.tests.composition import build_composed_hearts
 
 
 START = datetime(2025, 1, 1, 0, 0)  # naive, as the release writes its timestamps
@@ -146,10 +146,15 @@ def _write_tree(root, cases):
 
 
 @pytest.fixture(scope="module")
-def dataset(tmp_path_factory):
+def built(tmp_path_factory):
     root = tmp_path_factory.mktemp("hearts")
     _write_tree(root, CASES)
-    return HeartsConnector().convert([root])
+    return build_composed_hearts(root, tmp_path_factory.mktemp("hearts-registry"))
+
+
+@pytest.fixture(scope="module")
+def dataset(built):
+    return built.dataset
 
 
 def _task(dataset, task):
@@ -212,7 +217,7 @@ def test_forecast_places_the_meal_and_its_context_on_the_shared_clock(dataset):
     assert answer.start_time is record.start_time
     assert answer.subject_ids == ()
     assert answer.metadata == {"corpus": "cgmacros"}
-    assert [annotation.key for annotation in answer.annotations] == ["subject_id", "recording_start_local"]
+    assert {annotation.key for annotation in answer.annotations} == {"subject_id", "recording_start_local"}
     assert _by_key(answer.annotations)["subject_id"].value == "cgmacros:CGMacros-048"
     assert answer.signals[0].span_us == (meal_us, meal_us + 30 * MINUTE_US)
     assert answer.signals[0].to_arrow().to_pylist() == FORECAST
@@ -288,7 +293,7 @@ def test_meal_photographs_are_image_signals_and_the_meal_is_marked(dataset):
     task = _task(dataset, "meal_img_classification")
     assert task.resolved_input_modalities == {InputModality.TEXT, InputModality.TIME_SERIES, InputModality.IMAGE}
     (record,) = task.inputs
-    assert [source.name for source in record.sources] == ["window_df", "image_mapping"]
+    assert {source.name for source in record.sources} == {"window_df", "image_mapping"}
     images = {signal.name: signal for signal in record.signals if signal.name.endswith(".jpg")}
     assert list(images) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
     assert images["b.jpg"].spec.value_shape == (2, 3, 3)
@@ -312,10 +317,9 @@ def test_scalar_answers_are_numeric_targets(dataset):
     assert _task(dataset, "fasting_glu_prediction").targets == (98.0,)
 
 
-def test_values_round_trip_through_the_writer(dataset, tmp_path):
-    with TimeFWriter(tmp_path / "registry", dataset, values_backend="zarr") as writer:
-        writer.write()
-    read = TimeNet(registry=tmp_path / "registry").load("yang-ai-lab/hearts", auto_build=False)
+def test_values_round_trip_through_the_writer(built):
+    built.registry.store(built.dataset, values_backend="zarr")
+    read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     forecast = _task(read, "meal_forecasting")
     assert forecast.metadata == {"corpus": "cgmacros", "task": "meal_forecasting", "testcase_idx": 0}
     assert forecast.inputs[0].metadata == {"corpus": "cgmacros"}
@@ -338,14 +342,14 @@ def test_rejects_a_mask_that_disagrees_with_its_bounds(tmp_path):
     payload = dict(CASES["non_meal_imputation_hr"], mask_end=str(START + timedelta(minutes=33)))
     _write_tree(tmp_path, {"non_meal_imputation_hr": payload})
     with pytest.raises(TimeFFormatError, match="mask_indices do not name"):
-        HeartsConnector().convert([tmp_path])
+        build_composed_hearts(tmp_path, tmp_path / "registry")
 
 
 def test_rejects_a_frame_column_it_cannot_place(tmp_path):
     payload = dict(CASES["a1c_classification"], window_df=_cgm_frame(START, [100.0, 101.0], Steps=[3.0, 4.0]))
     _write_tree(tmp_path, {"a1c_classification": payload})
     with pytest.raises(TimeFFormatError, match="only known value columns"):
-        HeartsConnector().convert([tmp_path])
+        build_composed_hearts(tmp_path, tmp_path / "registry")
 
 
 @pytest.mark.parametrize(
@@ -363,4 +367,9 @@ def test_rejects_frames_that_mix_wall_clock_and_relative_time(tmp_path):
     payload = dict(CASES["meal_forecasting"], window_df=relative)
     _write_tree(tmp_path, {"meal_forecasting": payload})
     with pytest.raises(TimeFFormatError, match="mixes wall-clock and relative time columns"):
+        build_composed_hearts(tmp_path, tmp_path / "registry")
+
+
+def test_convert_requires_all_declared_parents(tmp_path):
+    with pytest.raises(TimeFValidationError, match="requires a build context"):
         HeartsConnector().convert([tmp_path])
