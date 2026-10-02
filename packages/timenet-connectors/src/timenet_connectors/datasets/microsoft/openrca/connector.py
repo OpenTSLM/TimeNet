@@ -14,6 +14,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
@@ -59,7 +60,7 @@ class OpenRcaConnector(BaseConnector[OpenRcaSource]):
             raise TimeNetDownloadError(f"{RELEASE.repository!r} at {RELEASE.revision!r} lacks {preview}{suffix}")
         return [OpenRcaSource(cache_dir=cache_dir, root=root, revision=RELEASE.revision)]
 
-    def convert(self, raw_refs: list[OpenRcaSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[OpenRcaSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Prepare daily telemetry lazily, then build shared Records and AnswerTasks.
 
         Args:

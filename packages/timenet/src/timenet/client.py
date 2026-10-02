@@ -23,7 +23,7 @@ from timenet.errors import (
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
 )
-from timenet.manifest import Manifest
+from timenet.manifest import Manifest, ManifestDependencies
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
@@ -110,6 +110,22 @@ class TimeNet:
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
         return self._registry.get_manifest(dataset_id, version)
+
+    def lineage(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+    ) -> ManifestDependencies:
+        """Return direct parents and the flattened dependency lock.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest.
+
+        Returns:
+            The immutable dependency block from the selected manifest.
+        """
+        return self.get(dataset_id, version).dependencies
 
     def search(  # noqa: PLR0913
         self,

@@ -16,6 +16,7 @@ import tempfile
 import numpy as np
 import pyarrow as pa
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis, TimeAxis
@@ -194,7 +195,7 @@ class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
                 staged.replace(destination)
         return [VerbalTsComponent(name=component, folder=cache_dir / component) for component in COMPONENTS]
 
-    def convert(self, raw_refs: list[VerbalTsComponent]) -> TimeFDataset:
+    def convert(self, raw_refs: list[VerbalTsComponent], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build window records and stream one generation task per caption.
 
         Args:

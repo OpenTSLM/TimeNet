@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyarrow.parquet as pq
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
@@ -74,7 +75,7 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
             raise TimeNetDownloadError(f"{REPO!r} at {REVISION!r} holds no {QA_CSV} under {root}")
         return [ARFBenchSource(qa_csv=root / QA_CSV, series_dir=root / SERIES_DIR, chart_dir=root / CHART_DIR)]
 
-    def convert(self, raw_refs: list[ARFBenchSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[ARFBenchSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build one record per metric and one per chart, then two tasks per question.
 
         Args:

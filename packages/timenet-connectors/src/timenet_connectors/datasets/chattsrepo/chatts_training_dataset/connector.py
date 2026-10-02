@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
@@ -196,7 +197,7 @@ class ChatTSConnector(BaseConnector[ChatTSFile]):
             raise TimeNetDownloadError(f"{REPO}@{REVISION} is missing ChatTS configs: {', '.join(missing)}")
         return files
 
-    def convert(self, raw_refs: list[ChatTSFile]) -> TimeFDataset:
+    def convert(self, raw_refs: list[ChatTSFile], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build lazy ordinal records and a rereadable text-answer task stream.
 
         Args:

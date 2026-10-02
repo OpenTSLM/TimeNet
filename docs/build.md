@@ -49,11 +49,13 @@ versions used for the build.
 The engine runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card.
-2. Download raw artifacts into the build cache.
-3. Convert local artifacts into a `TimeFDataset`.
-4. Derive the dataset schema.
-5. Write or publish the complete TimeF version.
-6. Remove the raw cache after success, unless `--keep-cache` is set.
+2. Build missing exact parent versions from the card.
+3. Open the direct parents and create the dependency lock.
+4. Download raw artifacts into the build cache.
+5. Convert local artifacts into a dataset builder.
+6. Derive the dataset schema.
+7. Write or publish the complete TimeF version.
+8. Remove the raw cache after success, unless `--keep-cache` is set.
 
 `--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
 returns the committed version and skips expensive work.

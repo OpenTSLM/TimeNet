@@ -59,6 +59,11 @@ def test_get_returns_manifest(registry_root, tmp_path):
     assert isinstance(client.get("timenet/hello-world"), Manifest)
 
 
+def test_lineage_returns_manifest_dependencies(registry_root, tmp_path):
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    assert client.lineage("timenet/hello-world") == client.get("timenet/hello-world").dependencies
+
+
 def test_search(registry_root, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     assert {m.dataset_id for m in client.search(domain=Domain.GENERAL)} == {"timenet/hello-world"}

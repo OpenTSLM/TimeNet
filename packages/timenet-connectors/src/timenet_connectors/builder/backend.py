@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
+from timenet.builders import find_builder
 from timenet.config import settings
 from timenet.engine import run_pipeline
+from timenet.errors import TimeNetBuildError, TimeNetDatasetNotFoundError
+from timenet.registry import LocalRegistry
+from timenet.types import DatasetMetadata
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import connector_dir, has_connector, resolve
 
@@ -32,7 +36,6 @@ class ConnectorBuilder:
             The declared version string, or ``None`` if no readable card exists.
         """
         from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
-        from timenet.types import DatasetMetadata  # noqa: PLC0415
 
         try:
             card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
@@ -40,7 +43,7 @@ class ConnectorBuilder:
             return None
         return str(card.dataset_version)
 
-    def build(  # noqa: PLR6301 (protocol)
+    def build(
         self,
         dataset_id: str,
         root: Path,
@@ -63,6 +66,65 @@ class ConnectorBuilder:
         Returns:
             The committed version directory.
         """
+        return self._build(
+            dataset_id,
+            root,
+            force=force,
+            values_backend=values_backend,
+            ancestors=(),
+        )
+
+    @staticmethod
+    def _build(
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool,
+        values_backend: str | None,
+        ancestors: tuple[str, ...],
+    ) -> Path:
+        """Build one graph node after recursively materializing its direct parents.
+
+        Returns:
+            The committed version directory.
+
+        Raises:
+            TimeNetBuildError: If the card dependency graph contains a cycle.
+            TimeNetDatasetNotFoundError: If an exact parent cannot be built.
+        """
+        if dataset_id in ancestors:
+            cycle = " -> ".join((*ancestors, dataset_id))
+            raise TimeNetBuildError(f"dataset dependency graph contains a cycle: {cycle}")
+        metadata = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
+        registry = LocalRegistry(root)
+        for parent in metadata.parents:
+            parent_id = parent.dataset.dataset_id
+            version = str(parent.dataset.version)
+            if registry.exists(parent_id, version):
+                continue
+            builder = find_builder(parent_id)
+            if builder is None:
+                raise TimeNetDatasetNotFoundError(
+                    f"parent {parent.dataset} is missing from {root} and no connector can build it"
+                )
+            declared = builder.declared_version(parent_id)
+            if declared is not None and declared != version:
+                raise TimeNetDatasetNotFoundError(
+                    f"parent {parent.dataset} is pinned exactly, but its connector builds {declared}"
+                )
+            if isinstance(builder, ConnectorBuilder):
+                builder._build(
+                    parent_id,
+                    root,
+                    force=False,
+                    values_backend=None,
+                    ancestors=(*ancestors, dataset_id),
+                )
+            else:
+                builder.build(parent_id, root)
+            if not registry.exists(parent_id, version):
+                raise TimeNetDatasetNotFoundError(f"builder did not produce required parent {parent.dataset}")
+
         if settings().isolation == "off":
             connector = resolve(dataset_id)()
             resolved_backend = connector.values_backend if values_backend is None else values_backend

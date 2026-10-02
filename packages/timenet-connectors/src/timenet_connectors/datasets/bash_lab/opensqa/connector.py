@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDownloadError
@@ -69,7 +70,7 @@ class OpenSqaConnector(BaseConnector[OpenSqaSource]):
             raise TimeNetDownloadError(f"{REPOSITORY}@{REVISION} is missing OpenSQA files: {', '.join(missing)}")
         return [OpenSqaSource(files=files, revision=REVISION)]
 
-    def convert(self, raw_refs: list[OpenSqaSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[OpenSqaSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build shared lazy sensor records and a rereadable AnswerTask stream.
 
         Args:

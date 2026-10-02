@@ -9,6 +9,7 @@ from itertools import chain, groupby
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Source, TimeAxis, TimeFDataset
 from timenet.errors import TimeNetDownloadError
@@ -94,7 +95,7 @@ class SlipConnector(BaseConnector[SlipSource]):
         root = hub_snapshot(REPO, REVISION, cache_dir, patterns)
         return [_discover_source(root)]
 
-    def convert(self, raw_refs: list[SlipSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[SlipSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build one record per corpus row and per collection window, and stream their tasks.
 
         Args:

@@ -10,7 +10,8 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+knowledge of the registry or engine. A composed connector can read declared parents through its
+`BuildContext`. The consumer SDK never runs a connector.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -21,12 +22,17 @@ knowledge of the registry, the engine, or other connectors. The consumer SDK nev
 
 ```python
 from pathlib import Path
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 
 class MyConnector(BaseConnector[MyRawRef]):
     def download(self, cache_dir: Path) -> list[MyRawRef]: ...
-    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
+    def convert(
+        self,
+        raw_refs: list[MyRawRef],
+        context: BuildContext | None = None,
+    ) -> TimeFDataset: ...
 ```
 
 The two stages stay separate. This lets the engine drive
@@ -35,7 +41,7 @@ The two stages stay separate. This lets the engine drive
 | Method | Nature | Contract |
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
-| `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
+| `convert(raw_refs, context)` | local work | Parse references into a `TimeFDataset`. Use `context` only for declared parent versions. Do not use the network. |
 
 You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
@@ -46,6 +52,9 @@ own.
 
 `metadata()` is a concrete method that reads the dataset card. The engine owns storage and calls the
 writer after conversion.
+
+The engine passes a `BuildContext` to `convert()`. Root connectors can ignore it. Composed
+connectors use it as described in [Dataset composition](composition.md).
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different
