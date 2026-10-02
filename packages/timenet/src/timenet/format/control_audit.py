@@ -27,6 +27,9 @@ _DOMAIN_CHECKS = """
     SELECT 'annotation_occurrences.object_type' FROM annotation_occurrences
     WHERE object_type NOT IN ('Dataset', 'Task', 'Record', 'Source', 'Signal')
     UNION ALL
+    SELECT 'object_imports.object_type' FROM object_imports
+    WHERE object_type <> 'Record'
+    UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
     UNION ALL

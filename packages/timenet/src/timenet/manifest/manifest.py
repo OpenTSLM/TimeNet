@@ -31,6 +31,9 @@ from timenet.types import (
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 
+_COMPOSITION_FORMAT_VERSION = 2
+
+
 @dataclass(frozen=True)
 class Manifest:
     """The single source of truth a consumer reads to interpret a dataset version.
@@ -101,6 +104,11 @@ class Manifest:
             )
         if len(self.files.control) != 1:
             raise TimeNetInvalidManifestError("TimeF manifest must declare exactly one files.control entry")
+        if self.timef_format_version >= _COMPOSITION_FORMAT_VERSION:
+            declared = {parent.alias: parent.dataset for parent in self.metadata.parents}
+            resolved = {dependency.alias: dependency.dataset for dependency in self.dependencies.direct}
+            if declared != resolved:
+                raise TimeNetInvalidManifestError("manifest direct dependencies must exactly match metadata parents")
 
     # ---- serialization -------------------------------------------------------------------------
 

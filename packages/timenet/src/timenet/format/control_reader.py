@@ -28,6 +28,8 @@ from timenet.types import (
     TASKS,
     Annotation,
     InputModality,
+    ObjectKind,
+    ObjectRef,
     Task,
     TaskType,
     TimeInterval,
@@ -42,6 +44,7 @@ from timenet.types.splits import Split, parse_split
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
 OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
+_COMPOSITION_SCHEMA_VERSION = 2
 
 
 class _LoadedAxis(NamedTuple):
@@ -397,7 +400,7 @@ class DuckDBControlReader:
         self.path = Path(path)
         try:
             self.connection = connect_control(self.path, read_only=True)
-            check_control_schema(self.connection)
+            self.schema_version = check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         self._value_loader = value_loader or _missing_values
@@ -433,6 +436,35 @@ class DuckDBControlReader:
         return tuple(
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
+
+    def record_imports(self) -> dict[str, tuple[str, ObjectRef]]:
+        """Return imported Record references by their local public ID.
+
+        Returns:
+            ``record_id -> (parent_alias, object_ref)``. Version-1 control databases return an
+            empty mapping because they predate composition.
+
+        Raises:
+            TimeFFormatError: If an import row is not a valid Record reference.
+        """
+        if self.schema_version < _COMPOSITION_SCHEMA_VERSION:
+            return {}
+        rows = self.connection.execute(
+            """SELECT object_id, parent_alias, object_ref
+               FROM object_imports
+               WHERE object_type = 'Record'
+               ORDER BY object_id"""
+        ).fetchall()
+        imports: dict[str, tuple[str, ObjectRef]] = {}
+        for record_id, parent_alias, value in rows:
+            try:
+                reference = ObjectRef.parse(value)
+            except TimeFValidationError as exc:
+                raise TimeFFormatError(f"invalid imported Record reference {value!r}") from exc
+            if reference.kind is not ObjectKind.RECORD or reference.object_id != record_id:
+                raise TimeFFormatError(f"imported Record {record_id!r} has mismatched reference {reference}")
+            imports[record_id] = (parent_alias, reference)
+        return imports
 
     def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
         self,

@@ -222,7 +222,7 @@ class TimeFWriter:
     def _resolve_id_types(self) -> None:
         """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
-        for record in self._dataset.records:
+        for record in self._dataset.owned_records:
             values["record_id"].append(record.record_id)
             values["subject_id"].extend(record.subject_ids)
             for ts in record.signals:
@@ -267,7 +267,7 @@ class TimeFWriter:
         unique: dict[str, Signal] = {}
         series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
-        for record in self._dataset.records:
+        for record in self._dataset.owned_records:
             for ts in record.signals:
                 existing = unique.get(ts.id)
                 if existing is None:
@@ -403,6 +403,7 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
+            dependencies=self._dataset.manifest_dependencies,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
@@ -415,7 +416,12 @@ class TimeFWriter:
             TimeFValidationError: If one content ID has different payloads, or an ID is both
                 registered and carried by a record.
         """
-        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.walk_annotations()}
+        layer_annotations = tuple(
+            annotation
+            for record in self._dataset.records
+            for annotation in self._dataset.record_annotations_for_storage(record)
+        )
+        record_ann_ids = {annotation.id for annotation in layer_annotations}
         overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
         if overlap:
             raise TimeFValidationError(
@@ -423,8 +429,7 @@ class TimeFWriter:
                 f"annotation must be one no record carries"
             )
         seen: dict[str, tuple[object, ...]] = {}
-        record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
-        for ann in chain(record_annotations, self._dataset.registered_annotations):
+        for ann in chain(layer_annotations, self._dataset.registered_annotations):
             content = ann._content_fields
             if ann.content_id in seen and seen[ann.content_id] != content:
                 raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")

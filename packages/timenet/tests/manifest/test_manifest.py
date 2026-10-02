@@ -28,6 +28,7 @@ from timenet.types import (
     Domain,
     InputModality,
     License,
+    ParentDataset,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -437,6 +438,10 @@ def test_dependency_lock_round_trips():
     )
     manifest = replace(
         _manifest(),
+        metadata=replace(
+            _manifest().metadata,
+            parents=(ParentDataset("ptbxl", parent),),
+        ),
         dependencies=dependencies,
         files=ManifestFiles(control=_CONTROL),
     )

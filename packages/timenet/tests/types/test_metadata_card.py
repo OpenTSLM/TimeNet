@@ -5,7 +5,7 @@ from timenet.types import DatasetMetadata
 
 
 _VALID_CARD = """
-yaml_schema_version: 1
+yaml_schema_version: 2
 dataset_id: demo/hello-world
 dataset_version: 1.0.0
 name: Hello World

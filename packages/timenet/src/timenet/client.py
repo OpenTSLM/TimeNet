@@ -17,13 +17,17 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 from timenet.builders import find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetDatasetNotFoundError,
+)
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
-from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types import Access, DatasetMetadata, DatasetRef, Domain, License, Task
 
 
 if TYPE_CHECKING:
@@ -168,13 +172,60 @@ class TimeNet:
         self._reject_unhosted_access(dataset_id, version)
         manifest = self._registry.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
-        target = self._storage / dataset_id / resolved
-        # The registry owns the fetch: the base implementation stages each file and swaps atomically,
-        # and a remote registry overrides it to resolve and stream every file in parallel.
-        self._registry.download_version(
-            dataset_id, resolved, target, force=force, manifest=manifest, progress_cb=progress_cb
+        reference = DatasetRef(dataset_id, manifest.metadata.dataset_version)
+        self._download_closure(
+            reference,
+            force=force,
+            progress_cb=progress_cb,
+            visited=set(),
+            active=(),
         )
-        return target
+        return self._storage / dataset_id / resolved
+
+    def _download_closure(
+        self,
+        reference: DatasetRef,
+        *,
+        force: bool,
+        progress_cb: ProgressCallback | None,
+        visited: set[DatasetRef],
+        active: tuple[DatasetRef, ...],
+    ) -> None:
+        """Download parent versions before one composed child version.
+
+        Raises:
+            TimeFFormatError: If the declared dependency graph contains a cycle or inconsistent
+                direct edges.
+        """
+        if reference in visited:
+            return
+        if reference in active:
+            cycle = " -> ".join(str(item) for item in (*active, reference))
+            raise TimeFFormatError(f"dataset dependency graph contains a cycle: {cycle}")
+        self._reject_unhosted_access(reference.dataset_id, str(reference.version))
+        manifest = self._registry.get_manifest(reference.dataset_id, str(reference.version))
+        direct = {dependency.alias: dependency.dataset for dependency in manifest.dependencies.direct}
+        declared = {parent.alias: parent.dataset for parent in manifest.metadata.parents}
+        if direct != declared:
+            raise TimeFFormatError(f"manifest {reference} dependency edges do not match its dataset card metadata")
+        for parent in direct.values():
+            self._download_closure(
+                parent,
+                force=force,
+                progress_cb=progress_cb,
+                visited=visited,
+                active=(*active, reference),
+            )
+        target = self._storage / reference.dataset_id / str(reference.version)
+        self._registry.download_version(
+            reference.dataset_id,
+            str(reference.version),
+            target,
+            force=force,
+            manifest=manifest,
+            progress_cb=progress_cb,
+        )
+        visited.add(reference)
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
@@ -221,7 +272,11 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        with self._registry.open_reader(
+            handle.manifest.dataset_id,
+            str(handle.manifest.metadata.dataset_version),
+        ) as reader:
+            return reader.read()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.

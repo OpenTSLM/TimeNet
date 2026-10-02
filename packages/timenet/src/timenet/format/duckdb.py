@@ -13,8 +13,11 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 1
+CONTROL_SCHEMA_VERSION = 2
 """Schema version written into :data:`CONTROL_FILE`."""
+
+SUPPORTED_CONTROL_SCHEMA_VERSIONS = frozenset({1, 2})
+"""Control schema versions this SDK can read."""
 
 
 def connect_control(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -57,9 +60,11 @@ def check_control_schema(connection: duckdb.DuckDBPyConnection) -> int:
         row = connection.execute("SELECT value FROM control_metadata WHERE key = 'schema_version'").fetchone()
     except duckdb.Error as exc:
         raise TimeFFormatError("control.duckdb does not contain valid schema metadata") from exc
-    if row is None or row[0] != str(CONTROL_SCHEMA_VERSION):
+    if row is None or row[0] not in {str(version) for version in SUPPORTED_CONTROL_SCHEMA_VERSIONS}:
         found = None if row is None else row[0]
-        raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
+        raise TimeFFormatError(
+            f"unsupported control schema version {found!r}; expected one of {sorted(SUPPORTED_CONTROL_SCHEMA_VERSIONS)}"
+        )
     return int(row[0])
 
 

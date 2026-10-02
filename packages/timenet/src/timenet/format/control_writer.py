@@ -121,6 +121,7 @@ def _reserve_keys(connection: duckdb.DuckDBPyConnection, sequence: str, count: i
 def _reserve_hierarchy_keys(
     connection: duckdb.DuckDBPyConnection,
     records: Iterable[Any],
+    imported_records: int = 0,
 ) -> tuple[Iterator[int], Iterator[int]]:
     """Reserve exact key ranges for hierarchy objects and axes.
 
@@ -140,7 +141,7 @@ def _reserve_hierarchy_keys(
     object_keys = _reserve_keys(
         connection,
         "object_key_sequence",
-        record_count + source_count + signal_count,
+        record_count + source_count + signal_count + imported_records,
     )
     axis_keys = _reserve_keys(connection, "axis_key_sequence", len(axis_ids))
     return iter(object_keys), iter(axis_keys)
@@ -239,6 +240,7 @@ class _HierarchyBatches:
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self.records = _TableBatch(connection, TABLES["records"])
+        self.object_imports = _TableBatch(connection, TABLES["object_imports"])
         self.clocks = _TableBatch(connection, TABLES["clocks"])
         self.sources = _TableBatch(connection, TABLES["sources"])
         self.axes = _TableBatch(connection, TABLES["axes"])
@@ -248,6 +250,7 @@ class _HierarchyBatches:
     def flush(self) -> None:
         """Write all remaining hierarchy rows."""
         self.records.flush()
+        self.object_imports.flush()
         self.clocks.flush()
         self.sources.flush()
         self.axes.flush()
@@ -329,8 +332,13 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If two records share an ID.
         """
-        records = dataset.records
-        object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
+        records = getattr(dataset, "owned_records", dataset.records)
+        imports = getattr(dataset, "record_imports", {})
+        object_keys, axis_keys = _reserve_hierarchy_keys(
+            connection,
+            records,
+            imported_records=len(imports),
+        )
         batches = _HierarchyBatches(connection)
         axes: dict[str, _StoredAxis] = {}
         source_keys: dict[str, int] = {}
@@ -376,6 +384,44 @@ class DuckDBControlWriter:
                 object_keys,
                 axis_keys,
                 batches,
+            )
+        for record in dataset.records:
+            imported = imports.get(record.id)
+            if imported is None:
+                continue
+            identity = id(record.start_time)
+            if identity not in clock_keys:
+                clock_keys[identity] = len(clock_keys) + 1
+                batches.clocks.add(
+                    {
+                        "clock_id": clock_keys[identity],
+                        "start_time_us": record.start_time.timestamp,
+                    }
+                )
+            span = record.time_span
+            record_key = next(object_keys)
+            batches.records.add(
+                {
+                    "record_key": record_key,
+                    "record_id": record.record_id,
+                    "clock_id": clock_keys[identity],
+                    "time_span_start_us": None if span is None else span.start_us,
+                    "time_span_end_us": None if span is None else span.end_us,
+                    "metadata": _json(record.metadata),
+                }
+            )
+            batches.object_imports.add(
+                {
+                    "object_key": record_key,
+                    "object_type": "Record",
+                    "object_id": record.id,
+                    "object_ref": str(imported.reference),
+                    "parent_alias": imported.parent_alias,
+                }
+            )
+            record_keys[record.id] = record_key
+            annotations.extend(
+                ("Record", record_key, annotation) for annotation in dataset.record_annotations_for_storage(record)
             )
         batches.flush()
         annotation_refs, task_counts = self._write_tasks(
