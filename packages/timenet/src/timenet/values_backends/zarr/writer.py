@@ -1,21 +1,16 @@
-"""Zarr values backend (writer side): one Zarr array per ``(spec_type, stores_time_offsets)`` partition.
+"""Zarr values backend (writer side): one Zarr values array per ``spec_type``.
 
 This backend is an alternative to the default Parquet shard store. It uses Zarr's own layout:
 
 - The writer appends every series of a modality along time to one typed array in a ``time_series.zarr``
   group. Zarr chunks the storage itself, so a series is one index row (one placement spanning its full
   length), not a run of ``chunk_max_bytes`` logical chunks.
-- The writer partitions arrays by ``(spec_type, stores_time_offsets)``, not by ``spec_type`` alone. A series
-  that stores time offsets writes its values under ``_irregular/`` and its int64 time offsets under
-  ``_time_offsets/``. The two arrays advance together because every series in that partition writes to
-  both. That is what lets the index's single ``chunk_major_idx`` element offset address either one.
-  Partitioning by ``spec_type`` alone gives the time offsets array only some of the series, so the two
-  arrays drift apart with nothing to notice.
+- Irregular time offsets live once in the shared control-plane axis. They are not repeated beside each
+  Signal's values.
 - The writer buffers appends per partition and flushes them at shard-aligned boundaries, so it writes
   every Zarr shard object exactly once. A ``resize()``-per-series append rewrites the trailing shard for
   every series.
-  The backend sorts series by partition, so only one partition is open at a time. An irregular partition
-  keeps its values appender and its time offsets appender open together, so it buffers near two shards.
+  The backend sorts series by specification, so only one partition is open at a time.
 
 The ``(array path, element start)`` pair locates a chunk. The shared index carries that location in its
 backend-agnostic ``chunk_file`` / ``chunk_major_idx`` locator (``chunk_minor_idx`` is unused).
@@ -53,15 +48,6 @@ _BLOSC_MAX_CLEVEL = 9
 # One placement normally spans a whole series. The writer splits only to keep n_values inside int32 (the
 # index column type). 2^30 values is 4 GiB of float32 per placement.
 _MAX_PLACEMENT_VALUES = 2**30
-_BYTES_PER_TIME_OFFSET = 8
-
-
-#: Group that holds the values of series that store per-value time offsets. The writer keeps it apart
-#: from the regular arrays so a partition's values and time offsets advance together and one offset
-#: addresses both.
-_IRREGULAR_GROUP = "_irregular"
-#: Group that holds those series' int64 time offsets, one array per spec type, parallel to _IRREGULAR_GROUP.
-_TIME_OFFSETS_GROUP = "_time_offsets"
 #: Group that stores one boolean array for each nullable values array.
 #: Each boolean marks whether the corresponding timestep is present.
 #: Zarr does not represent nulls directly. A non-nullable spec writes nothing here.
@@ -84,22 +70,8 @@ def _scalar_bytes(dtype: str) -> int:
     return np.dtype(dtype).itemsize
 
 
-def _value_array_path(spec_type: str, stores_time_offsets: bool) -> str:
-    """Return the array path holding one partition's values.
-
-    Args:
-        spec_type: The modality tag.
-        stores_time_offsets: Whether the partition's series store per-value time offsets.
-
-    Returns:
-        The path relative to the Zarr store root.
-    """
-    name = _array_name(spec_type)
-    return f"{_IRREGULAR_GROUP}/{name}" if stores_time_offsets else name
-
-
-def _time_offsets_array_path(spec_type: str) -> str:
-    """Return the array path holding one partition's time offsets.
+def _value_array_path(spec_type: str) -> str:
+    """Return the array path holding one specification's values.
 
     Args:
         spec_type: The modality tag.
@@ -107,14 +79,13 @@ def _time_offsets_array_path(spec_type: str) -> str:
     Returns:
         The path relative to the Zarr store root.
     """
-    return f"{_TIME_OFFSETS_GROUP}/{_array_name(spec_type)}"
+    return _array_name(spec_type)
 
 
 def _validity_array_path(values_path: str) -> str:
     """Return the path of the validity array for a values array.
 
-    The path keeps the values array's group. Irregular validity arrays use ``_validity/_irregular/``.
-    This keeps regular and irregular arrays separate for the same spec type.
+    The path preserves any groups in the values path below ``_validity``.
 
     Args:
         values_path: The values array's path, as :func:`_value_array_path` returns it.
@@ -247,40 +218,6 @@ class ZarrValuesBackend(BaseValuesBackend):
             shard_len,
         )
 
-    def _time_offsets_appender(self, group: Any, spec_type: str, codec: Any, delta: Any) -> "_ArrayAppender":
-        """Create the time offsets array parallel to a partition's values, and wrap it in an appender.
-
-        The Delta filter makes stored time offsets cheap. Time offsets are monotonic, so the deltas are
-        small and the Blosc bitshuffle then has little left to do. This saves 15-17% over bitshuffle
-        alone on realistic irregular spacing.
-
-        Args:
-            group: The open Zarr group.
-            spec_type: The modality tag naming the array.
-            codec: The Blosc compressor.
-            delta: The Delta codec class, imported lazily with the rest of zarr.
-
-        Returns:
-            The appender for that array.
-        """
-        chunk_len = max(1, self._chunk_max_bytes // _BYTES_PER_TIME_OFFSET)
-        # Round down to a whole number of chunks, the same as the values array. Zarr requires the shard
-        # shape to be a multiple of the chunk shape. An unrounded value aborts create_array for any byte
-        # target where the two do not divide.
-        shard_len = max(1, (self._shard_target_bytes // _BYTES_PER_TIME_OFFSET) // chunk_len) * chunk_len
-        return _ArrayAppender(
-            group.create_array(
-                name=_time_offsets_array_path(spec_type),
-                shape=(0,),
-                dtype="int64",
-                chunks=(chunk_len,),
-                shards=(shard_len,),
-                filters=[delta(dtype="int64")],
-                compressors=codec,
-            ),
-            shard_len,
-        )
-
     def _validity_appender(self, group: Any, array_path: str, codec: Any) -> "_ArrayAppender":
         """Create an array that marks present timesteps and return its appender.
 
@@ -316,7 +253,6 @@ class ZarrValuesBackend(BaseValuesBackend):
         unique_series: list[Signal],
         *,
         read_and_validate: Callable[[Signal], pa.Array],
-        read_time_offsets: Callable[[Signal], pa.Array | None],
         on_series_done: Callable[[int, int], None],
         on_file_done: Callable[[int], None],
     ) -> ValuesWriteResult:
@@ -325,10 +261,9 @@ class ZarrValuesBackend(BaseValuesBackend):
         Args:
             unique_series: The deduped, sorted series to serialize.
             read_and_validate: Loads and validates one series against its dtype and shape contract.
-            read_time_offsets: Loads an irregular series' int64 time offsets, or ``None`` for other shapes.
             on_series_done: Progress callback invoked ``(completed, total)`` after each series.
             on_file_done: Progress callback invoked ``(arrays_finalized)`` as each partition closes,
-                counting a partition's values array plus its time offsets array when it has one.
+                counting a partition's values and optional validity arrays.
 
         Returns:
             The placements and the Zarr store's files (relative to the staging directory).
@@ -339,7 +274,6 @@ class ZarrValuesBackend(BaseValuesBackend):
         try:
             import zarr  # noqa: PLC0415
             from zarr.codecs import BloscCodec  # noqa: PLC0415
-            from zarr.codecs.numcodecs import Delta  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             raise ImportError("the zarr values backend needs the zarr extra: pip install 'timenet[zarr]'") from exc
 
@@ -351,42 +285,27 @@ class ZarrValuesBackend(BaseValuesBackend):
             shuffle="bitshuffle",
         )
 
-        partitions: dict[tuple[str, bool], _Partition] = {}
+        partitions: dict[str, _Partition] = {}
         placements: dict[tuple[str, int], ChunkPlacement] = {}
         closed = 0
-        active: tuple[str, bool] | None = None  # one partition is open at a time, see the sort below
+        active: str | None = None
         total = len(unique_series)
-        # The sort is stable, so the caller's (spec_type, signal, time_series_id) order survives within a
-        # partition. The group by whether a series stores time offsets keeps its values array and its time
-        # offsets array the same length. Every series in an irregular partition writes to both, so one
-        # element offset addresses either.
-        ordered = sorted(unique_series, key=lambda ts: (ts.spec.spec_type, ts.time_offsets_loader is not None))
-        for completed, ts in enumerate(ordered, start=1):
+        for completed, ts in enumerate(unique_series, start=1):
             arrow_values = read_and_validate(ts)
             values, validity = _dense_and_validity(arrow_values, ts.spec)
-            arrow_time_offsets = read_time_offsets(ts)
             spec_type = ts.spec.spec_type
-            stores_time_offsets = arrow_time_offsets is not None
-            partition = (spec_type, stores_time_offsets)
-            array_path = _value_array_path(spec_type, stores_time_offsets)
-            if partition != active:
+            array_path = _value_array_path(spec_type)
+            if spec_type != active:
                 if active is not None:
                     closed += partitions[active].finish()
                     on_file_done(closed)
-                if partition not in partitions:
-                    partitions[partition] = _Partition(
+                if spec_type not in partitions:
+                    partitions[spec_type] = _Partition(
                         values=self._value_appender(group, ts, array_path, codec),
-                        time_offsets=self._time_offsets_appender(group, spec_type, codec, Delta)
-                        if stores_time_offsets
-                        else None,
                         validity=self._validity_appender(group, array_path, codec) if ts.spec.nullable else None,
                     )
-                active = partition
-            base = partitions[partition].append(
-                values,
-                None if arrow_time_offsets is None else arrow_time_offsets.to_numpy(zero_copy_only=False),
-                validity,
-            )
+                active = spec_type
+            base = partitions[spec_type].append(values, validity)
             rel = f"{_STORE_DIR}/{array_path}"
             for chunk_idx, start in enumerate(range(0, len(values), _MAX_PLACEMENT_VALUES)):
                 n = min(_MAX_PLACEMENT_VALUES, len(values) - start)
@@ -409,45 +328,34 @@ class ZarrValuesBackend(BaseValuesBackend):
 
 @dataclass
 class _Partition:
-    """Keep a partition's values, time offsets, and validity arrays together.
+    """Keep a specification partition's values and validity arrays together.
 
-    A partition groups series with the same ``(spec_type, stores_time_offsets)``.
     Each series writes to all arrays in its partition. This keeps their lengths and positions aligned.
     """
 
     values: "_ArrayAppender"
-    time_offsets: "_ArrayAppender | None" = None
     validity: "_ArrayAppender | None" = None
 
-    def append(self, values: np.ndarray, time_offsets: np.ndarray | None, validity: np.ndarray | None = None) -> int:
+    def append(self, values: np.ndarray, validity: np.ndarray | None = None) -> int:
         """Append one series to the partition and report where its values landed.
 
         Args:
             values: The series values.
-            time_offsets: Its int64 time offsets, or ``None`` for a partition that stores none.
             validity: Its per-timestep validity, or ``None`` for a non-nullable partition.
 
         Returns:
             The element offset the values were written at.
 
         Raises:
-            TimeFValidationError: If ``time_offsets`` or ``validity`` disagrees with what this
-                partition stores.
+            TimeFValidationError: If ``validity`` disagrees with what this partition stores.
         """
         if (validity is None) != (self.validity is None):
             raise TimeFValidationError(
                 "a series' validity must match its partition: a nullable spec writes a validity mask "
                 "for every series, even one with no nulls, and any other writes none"
             )
-        if (time_offsets is None) != (self.time_offsets is None):
-            raise TimeFValidationError(
-                "a series' time offsets must match its partition: an irregular partition takes time offsets "
-                "from every series and any other takes none"
-            )
         base = self.values.logical_len
         self.values.append(values)
-        if self.time_offsets is not None and time_offsets is not None:
-            self.time_offsets.append(time_offsets)
         if self.validity is not None and validity is not None:
             self.validity.append(validity)
         return base
@@ -456,14 +364,12 @@ class _Partition:
         """Flush the partition's arrays.
 
         Returns:
-            The number of completed arrays. This includes values and any time-offset or validity arrays.
+            The number of completed arrays. This includes values and an optional validity array.
         """
         self.values.finish()
-        if self.time_offsets is not None:
-            self.time_offsets.finish()
         if self.validity is not None:
             self.validity.finish()
-        return 1 + (self.time_offsets is not None) + (self.validity is not None)
+        return 1 + (self.validity is not None)
 
 
 class _ArrayAppender:

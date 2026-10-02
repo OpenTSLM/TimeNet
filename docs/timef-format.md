@@ -86,7 +86,8 @@ it between the Signals that use it.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
-`axis_offsets`. Signals that share an axis reference the same `axis_id`.
+`axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
+once regardless of how many Signals use that timeline.
 
 ## Annotations
 
@@ -128,7 +129,8 @@ chunk_minor_index, n_values
 
 For Parquet, the locator identifies a shard row group and row. For Zarr, it identifies an array and
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
-reads load only intersecting chunks.
+reads load only intersecting chunks. The values plane does not duplicate irregular offsets; the
+reader obtains them from the shared axis in `control.duckdb` and caches each loaded axis once.
 
 ## Integrity
 
