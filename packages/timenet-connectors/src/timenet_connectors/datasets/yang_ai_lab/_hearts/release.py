@@ -1,4 +1,4 @@
-"""The pinned HEARTS release: its signal specs, its thirty task directories, and their prompts.
+"""Shared description of the pinned HEARTS source release and its task directories.
 
 Every test case is one pickle holding a dictionary. A DataFrame in it becomes a Source whose value
 columns become Signals, a waveform array becomes one audio Signal, and the case's answer becomes

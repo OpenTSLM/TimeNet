@@ -131,7 +131,7 @@ def test_heart_rate_candidates_keep_their_one_hertz_cadence(dataset):
 
 
 def test_pairing_round_trips_through_the_writer(built):
-    built.registry.store(built.dataset, values_backend="zarr")
+    built.registry.store(built.dataset)
     read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     task = _task(read, "spo2_resp_pairing")
     assert {_by_key(record.annotations)["subject_id"].value for record in (*task.inputs, *task.candidate_records)} == {

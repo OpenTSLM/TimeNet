@@ -1,6 +1,6 @@
 """Expose the COUGHVID-derived HEARTS records as a taskless layer."""
 
-from timenet_connectors.datasets.yang_ai_lab.hearts.corpus import HeartsCorpusConnector
+from timenet_connectors.datasets.yang_ai_lab._hearts_corpora import HeartsCorpusConnector
 
 
 class HeartsCoughvidConnector(HeartsCorpusConnector):

@@ -1,7 +1,7 @@
 """Check that the task table and the prompts describe every task directory coherently."""
 
 from timenet.types import ClassificationTask, ScalarPredictionTask, TSCorrespondenceTask
-from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
+from timenet_connectors.datasets.yang_ai_lab._hearts.release import (
     COLUMN_SPECS,
     PROMPTS,
     REVISION,

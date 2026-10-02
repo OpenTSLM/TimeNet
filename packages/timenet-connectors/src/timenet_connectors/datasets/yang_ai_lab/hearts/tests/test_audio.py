@@ -152,7 +152,7 @@ def test_answers_are_spelt_as_the_harness_scores_them(dataset):
 
 
 def test_audio_values_round_trip_through_the_writer(built):
-    built.registry.store(built.dataset, values_backend="zarr")
+    built.registry.store(built.dataset)
     read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     task = _task(read, "coswara", "audio_classification")
     (signal,) = task.inputs[0].signals

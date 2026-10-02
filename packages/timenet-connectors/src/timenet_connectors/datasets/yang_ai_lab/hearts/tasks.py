@@ -2,11 +2,12 @@
 
 from collections.abc import Mapping
 import json
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
-from timenet.dataset import Record, TimeFDataset
+from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFFormatError
 from timenet.types import (
     Annotation,
@@ -22,17 +23,14 @@ from timenet.types import (
     TSCorrespondenceTask,
     TSEditingTask,
 )
-from timenet_connectors.datasets.yang_ai_lab.hearts.records import (
-    Built,
+from timenet_connectors.datasets.yang_ai_lab._hearts.cases import (
     Case,
-    CaseRecords,
-    answer_record,
-    case_records,
     frame_times_us,
     moment_us,
 )
-from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
+from timenet_connectors.datasets.yang_ai_lab._hearts.release import (
     ANSWER_KEY,
+    CGM,
     DESCRIPTIONS,
     HELD_OUT_READINGS,
     MEAL_COLUMNS,
@@ -43,18 +41,29 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     Answer,
     TaskDef,
 )
+from timenet_connectors.time_axes import axis_for_offsets
+
+
+class BoundRecord(NamedTuple):
+    """An imported parent Record and the source time represented by its zero."""
+
+    record: Record
+    origin_us: int
+
+
+class CaseRecords(NamedTuple):
+    """Imported input and candidate records for one case."""
+
+    inputs: tuple[BoundRecord, ...]
+    candidates: tuple[BoundRecord, ...]
 
 
 def convert_case(  # noqa: PLR0911 - one return per task type the release holds
     dataset: TimeFDataset,
     case: Case,
-    records: CaseRecords | None = None,
+    records: CaseRecords,
 ) -> Task:
-    """Build a case's task from new or already imported input records.
-
-    When ``records`` is omitted, this keeps the standalone behavior and registers newly constructed
-    records. A composed connector supplies imported parent records and only task-owned answer records
-    are added here.
+    """Build a case's task from imported parent records.
 
     Returns:
         The task, not yet registered.
@@ -63,13 +72,8 @@ def convert_case(  # noqa: PLR0911 - one return per task type the release holds
         TimeFFormatError: If a ranking answer does not order the case's records.
     """
     definition, answer = case.definition, case.payload[ANSWER_KEY]
-    owns_records = records is None
-    records = case_records(case) if records is None else records
     inputs = list(records.inputs)
     candidates = list(records.candidates)
-    if owns_records:
-        for built in (*inputs, *candidates):
-            dataset.add_record(record=built.record)
     shared: dict[str, Any] = {
         "id": f"{case.id}-task",
         "prompt": _prompt(case),
@@ -121,7 +125,7 @@ def _prompt(case: Case) -> str:
     return PROMPTS[case.directory].substitute(values)
 
 
-def _classification(case: Case, inputs: list[Built], shared: Mapping[str, Any]) -> ClassificationTask:
+def _classification(case: Case, inputs: list[BoundRecord], shared: Mapping[str, Any]) -> ClassificationTask:
     """Build a classification task, with the meal marker or symptom flags the case shows the model.
 
     Returns:
@@ -218,7 +222,7 @@ def _matches(case: Case, inputs: tuple[Record, ...], pool: tuple[Record, ...]) -
     return matched
 
 
-def _forecast(case: Case, built: Built) -> tuple[tuple[Annotation, ...], Record]:
+def _forecast(case: Case, built: BoundRecord) -> tuple[tuple[Annotation, ...], Record]:
     """Place the meals the model may see on the input's clock and build the held-out answer record.
 
     Returns:
@@ -234,10 +238,10 @@ def _forecast(case: Case, built: Built) -> tuple[tuple[Annotation, ...], Record]
     if case.definition.meal_info:
         context.extend(record.add_annotations(_meal_annotations(payload["meal_info"], meal_us)))
     offsets = meal_us + np.arange(HELD_OUT_READINGS, dtype=np.int64) * US_PER_MINUTE
-    return tuple(context), answer_record(case, built, offsets, _readings(case))
+    return tuple(context), _answer_record(case, built, offsets, _readings(case))
 
 
-def _imputation(case: Case, built: Built) -> tuple[Annotation, Record]:
+def _imputation(case: Case, built: BoundRecord) -> tuple[Annotation, Record]:
     """Mark the zeroed stretch of the input and build the record holding its true readings.
 
     Returns:
@@ -261,7 +265,7 @@ def _imputation(case: Case, built: Built) -> tuple[Annotation, Record]:
             description=DESCRIPTIONS["cgm_mask"],
         )
     )
-    return mask, answer_record(case, built, offsets, _readings(case))
+    return mask, _answer_record(case, built, offsets, _readings(case))
 
 
 def _readings(case: Case) -> np.ndarray:
@@ -277,6 +281,33 @@ def _readings(case: Case) -> np.ndarray:
     if len(answer) != HELD_OUT_READINGS:
         raise TimeFFormatError(f"HEARTS {case.id} needs {HELD_OUT_READINGS} readings as its answer, got {len(answer)}")
     return np.asarray(answer, dtype=np.float64)
+
+
+def _answer_record(case: Case, built: BoundRecord, offsets: np.ndarray, values: np.ndarray) -> Record:
+    """Build the child-owned answer Record for a forecast or imputation task.
+
+    Returns:
+        The answer record on the imported input's clock.
+    """
+    record_id = f"{case.id}-GT"
+    ids = {"id": f"{record_id}-Libre GL", "source_id": record_id}
+    axis = axis_for_offsets(offsets)
+    if isinstance(axis, IrregularAxis):
+        signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=CGM, name="Libre GL", **ids)
+    else:
+        signal = Signal.from_values(values, spec=CGM, name="Libre GL", time_axis=axis, **ids)
+    record = Record(
+        record_id=record_id,
+        start_time=built.record.start_time,
+        sources=(Source(id=f"{record_id}-source", name="HEARTS held-out answer", signals=(signal,)),),
+        metadata=dict(built.record.metadata),
+    )
+    record.add_annotations(
+        annotation
+        for annotation in built.record.annotations
+        if annotation.key in {"recording_start_local", "subject_id"}
+    )
+    return record
 
 
 def _meal_marker(at_us: int) -> Annotation:

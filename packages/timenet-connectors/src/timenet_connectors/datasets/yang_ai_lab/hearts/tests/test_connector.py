@@ -13,8 +13,8 @@ from timenet.client import TimeNet
 from timenet.dataset import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.types import InputModality, Split, TimeInterval, TimePoint
+from timenet_connectors.datasets.yang_ai_lab._hearts.cases import frame_times_us
 from timenet_connectors.datasets.yang_ai_lab.hearts.connector import HeartsConnector
-from timenet_connectors.datasets.yang_ai_lab.hearts.records import frame_times_us
 from timenet_connectors.datasets.yang_ai_lab.hearts.tests.composition import build_composed_hearts
 
 
@@ -318,7 +318,7 @@ def test_scalar_answers_are_numeric_targets(dataset):
 
 
 def test_values_round_trip_through_the_writer(built):
-    built.registry.store(built.dataset, values_backend="zarr")
+    built.registry.store(built.dataset)
     read = TimeNet(registry=built.registry.root).load("yang-ai-lab/hearts", auto_build=False)
     forecast = _task(read, "meal_forecasting")
     assert forecast.metadata == {"corpus": "cgmacros", "task": "meal_forecasting", "testcase_idx": 0}

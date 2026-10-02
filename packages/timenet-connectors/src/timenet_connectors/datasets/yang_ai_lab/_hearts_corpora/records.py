@@ -1,7 +1,6 @@
-"""Turn the frames, waveforms, and photographs of a HEARTS case into TimeF Records."""
+"""Turn HEARTS corpus frames, waveforms, and photographs into reusable Records."""
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 import functools
 import operator
 from pathlib import Path
@@ -14,10 +13,10 @@ from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.types import Annotation, ForecastingTask, TimeInterval
-from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import load_payload
-from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
+from timenet_connectors.datasets.yang_ai_lab._hearts.cases import Case, frame_times_us, moment_us
+from timenet_connectors.datasets.yang_ai_lab._hearts.pickles import load_payload
+from timenet_connectors.datasets.yang_ai_lab._hearts.release import (
     AUDIO,
-    CGM,
     COLUMN_SPECS,
     DERIVED_COLUMNS,
     DESCRIPTIONS,
@@ -25,41 +24,10 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     PHOTOGRAPHS,
     TIME_COLUMNS,
     US_PER_MINUTE,
-    TaskDef,
     Waveform,
 )
 from timenet_connectors.sources.images import image_signal
 from timenet_connectors.time_axes import axis_for_offsets
-
-
-@dataclass(frozen=True)
-class Case:
-    """One test case: its task directory and definition, its index, its file, and its loaded payload."""
-
-    directory: str
-    definition: TaskDef
-    index: int
-    path: Path
-    payload: dict[str, Any]
-
-    @property
-    def corpus(self) -> str:
-        """Return the corpus directory of the case, such as ``cgmacros``."""
-        return self.directory.partition("/")[0]
-
-    @property
-    def task(self) -> str:
-        """Return the task directory inside the corpus, such as ``meal_forecasting``."""
-        return self.directory.partition("/")[2]
-
-    @property
-    def id(self) -> str:
-        """Return the stable id the case's records and task are named after."""
-        return f"hearts-{self.corpus}-{self.task}-{self.index:02d}"
-
-    def at(self, keys: tuple[str, ...]) -> Any:
-        """Return the value at a key path of the payload."""
-        return functools.reduce(operator.getitem, keys, self.payload)
 
 
 class Built(NamedTuple):
@@ -74,20 +42,6 @@ class CaseRecords(NamedTuple):
 
     inputs: tuple[Built, ...]
     candidates: tuple[Built, ...]
-
-
-class RecordRef(NamedTuple):
-    """Identity and source-clock origin of a reusable case record."""
-
-    record_id: str
-    origin_us: int
-
-
-class CaseRecordRefs(NamedTuple):
-    """Input and candidate record references for one HEARTS case."""
-
-    inputs: tuple[RecordRef, ...]
-    candidates: tuple[RecordRef, ...]
 
 
 def case_records(case: Case) -> CaseRecords:
@@ -106,46 +60,6 @@ def case_records(case: Case) -> CaseRecords:
         meal_us = moment_us(case.payload["meal_time"]) - origin_us
         record.time_span = TimeInterval.micros(0, meal_us + HELD_OUT_READINGS * US_PER_MINUTE)
     return CaseRecords(inputs, candidates)
-
-
-def case_record_refs(case: Case) -> CaseRecordRefs:
-    """Describe a case's parent records without constructing their signals.
-
-    Returns:
-        Input and candidate references in task-definition order.
-    """
-    return CaseRecordRefs(
-        tuple(input_record_refs(case, case.definition.inputs)),
-        tuple(input_record_refs(case, case.definition.candidates)),
-    )
-
-
-def input_record_refs(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, ...]) -> list[RecordRef]:
-    """Return the record IDs and source-clock origins declared by input entries.
-
-    Unlike :func:`input_records`, this does not construct signals or decode images. A composed child
-    can therefore resolve its parent records without recreating their value hierarchy.
-
-    Returns:
-        Lightweight references in the same order as :func:`input_records`.
-    """
-    refs: list[RecordRef] = []
-    for entry in entries:
-        if isinstance(entry, Waveform):
-            refs.append(RecordRef(case.id, 0))
-        elif isinstance(entry, tuple):
-            origin_us = min(_frame_origin_us(case.payload[key]) for key in entry)
-            refs.append(RecordRef(case.id, origin_us))
-        elif isinstance(case.payload[entry], dict):
-            refs.extend(
-                RecordRef(f"{case.id}-{name}", _frame_origin_us(frame))
-                for name, frame in sorted(case.payload[entry].items())
-            )
-        else:
-            name = entry if len(entries) > 1 else None
-            record_id = case.id if name is None else f"{case.id}-{name}"
-            refs.append(RecordRef(record_id, _frame_origin_us(case.payload[entry])))
-    return refs
 
 
 def input_records(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, ...]) -> list[Built]:
@@ -170,70 +84,6 @@ def input_records(case: Case, entries: tuple[str | tuple[str, ...] | Waveform, .
         else:
             built.append(_frame_record(case, entry if len(entries) > 1 else None, {(entry,): case.payload[entry]}))
     return built
-
-
-def frame_times_us(frame: Any, column: str) -> tuple[np.ndarray, bool]:
-    """Read a frame's time column as whole microseconds.
-
-    Returns:
-        One microsecond value per row, and whether they are naive wall-clock datetimes.
-
-    Raises:
-        TimeFFormatError: If the time column is empty or contains a missing time.
-    """
-    values = frame[column].to_numpy()
-    if len(values) == 0:
-        raise TimeFFormatError(f"HEARTS frame time column {column!r} has no values")
-    if values.dtype.kind == "O":  # CGMacros writes its timestamps as text
-        values = values.astype("datetime64[us]")
-    if values.dtype.kind in "Mm":
-        if bool(np.isnat(values).any()):
-            raise TimeFFormatError(f"HEARTS frame time column {column!r} has missing values")
-        unit = "datetime64[us]" if values.dtype.kind == "M" else "timedelta64[us]"
-        return values.astype(unit).astype(np.int64), values.dtype.kind == "M"
-    return np.rint(values * US_PER_MINUTE).astype(np.int64), False  # iAUC frames count minutes since the meal
-
-
-def moment_us(value: Any) -> int:
-    """Read a naive source timestamp as whole microseconds on its source calendar.
-
-    Returns:
-        The timestamp in microseconds.
-    """
-    return int(np.datetime64(str(value), "us").astype(np.int64))
-
-
-def _frame_origin_us(frame: Any) -> int:
-    """Return the earliest source time in a frame."""
-    return int(frame_times_us(frame, _columns(frame)[0])[0][0])
-
-
-def answer_record(case: Case, built: Built, offsets: np.ndarray, values: np.ndarray) -> Record:
-    """Build the Record holding the glucose readings a forecast or imputation asks for, on the input's clock.
-
-    Returns:
-        The answer record, sharing the input's origin, subject, and local start time.
-    """
-    record_id = f"{case.id}-GT"
-    ids = {"id": f"{record_id}-Libre GL", "source_id": record_id}
-    axis = axis_for_offsets(offsets)
-    if isinstance(axis, IrregularAxis):
-        signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=CGM, name="Libre GL", **ids)
-    else:
-        signal = Signal.from_values(values, spec=CGM, name="Libre GL", time_axis=axis, **ids)
-    source = Source(id=f"{record_id}-source", name="HEARTS held-out answer", signals=(signal,))
-    record = Record(
-        record_id=record_id,
-        start_time=built.record.start_time,
-        sources=(source,),
-        metadata=dict(built.record.metadata),
-    )
-    record.add_annotations(
-        annotation
-        for annotation in built.record.annotations
-        if annotation.key in {"recording_start_local", "subject_id"}
-    )
-    return record
 
 
 def _frame_record(case: Case, name: str | None, frames: Mapping[tuple[str, ...], Any]) -> Built:

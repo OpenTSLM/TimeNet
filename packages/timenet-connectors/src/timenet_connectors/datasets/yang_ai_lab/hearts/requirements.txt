@@ -4,6 +4,3 @@
 pandas>=2.2,<3
 # huggingface_hub fetches the test cases from the Hub at the pinned revision.
 huggingface_hub>=0.24
-# Pillow decodes the meal photographs, and zarr stores them as image tensors.
-pillow>=11
-zarr>=3

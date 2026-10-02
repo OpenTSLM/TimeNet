@@ -6,17 +6,14 @@ from timenet.composition import BuildContext, DatasetBuilder
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetDownloadError
-from timenet_connectors.datasets.yang_ai_lab.hearts.corpus import iter_cases
-from timenet_connectors.datasets.yang_ai_lab.hearts.records import Built, Case, CaseRecords, case_record_refs
-from timenet_connectors.datasets.yang_ai_lab.hearts.release import REPO, REVISION, TASKS, VOCABULARIES
-from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import convert_case
+from timenet_connectors.datasets.yang_ai_lab._hearts.cases import Case, case_record_refs, iter_cases
+from timenet_connectors.datasets.yang_ai_lab._hearts.release import REPO, REVISION, TASKS, VOCABULARIES
+from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import BoundRecord, CaseRecords, convert_case
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
 class HeartsConnector(BaseConnector[Path]):
     """Connector for the HEARTS released test cases (Hub repo ``yang-ai-lab/HEARTS``)."""
-
-    values_backend = "zarr"  # the meal photographs are image tensors
 
     def download(self, cache_dir: Path) -> list[Path]:  # noqa: PLR6301 - BaseConnector override
         """Fetch every task directory of the pinned release.
@@ -83,8 +80,8 @@ def _import_case_records(dataset: DatasetBuilder, case: Case, context: BuildCont
         raise TimeFValidationError(f"HEARTS parent {case.corpus!r} lacks case records {missing}")
     imported = {record_id: dataset.import_record(by_id[record_id], parent=case.corpus) for record_id in requested}
     return CaseRecords(
-        tuple(Built(imported[item.record_id], item.origin_us) for item in refs.inputs),
-        tuple(Built(imported[item.record_id], item.origin_us) for item in refs.candidates),
+        tuple(BoundRecord(imported[item.record_id], item.origin_us) for item in refs.inputs),
+        tuple(BoundRecord(imported[item.record_id], item.origin_us) for item in refs.candidates),
     )
 
 

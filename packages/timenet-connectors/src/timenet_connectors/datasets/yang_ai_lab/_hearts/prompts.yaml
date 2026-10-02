@@ -1,4 +1,4 @@
-# Prompts of the HEARTS test cases, adapted from exp/<source>/<task>.py of the reference harness.
+# Prompts of the pinned HEARTS cases, adapted from exp/<source>/<task>.py of the reference harness.
 # The connector treats this checked-in file as trusted package data.
 #
 # The harness wrote each input to a file in the agent's working directory and named the file in
