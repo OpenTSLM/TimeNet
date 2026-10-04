@@ -19,7 +19,7 @@ def version_dir(tmp_path) -> tuple[Path, Manifest]:
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
-    manifest = Manifest.from_json(next(tmp_path.rglob("manifest.json")).read_text())
+    manifest = Manifest.model_validate_json(next(tmp_path.rglob("manifest.json")).read_text())
     return next(tmp_path.rglob("manifest.json")).parent, manifest
 
 
@@ -99,7 +99,7 @@ def test_list_datasets_fetches_pinned_manifest_for_incomplete_summary(
     _, manifest = version_dir
     manifest_payload = manifest.to_dict()
     manifest_payload["metadata"].update(manifest_updates)
-    expected = Manifest.from_dict(manifest_payload).metadata
+    expected = Manifest.model_validate(manifest_payload).metadata
     summary = {
         "dataset_id": manifest.dataset_id,
         "version": str(manifest.metadata.dataset_version),

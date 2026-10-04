@@ -35,12 +35,12 @@ Manifest(
     dataset_id="physionet/ecg-qa-cot",
     metadata=metadata,          # DatasetMetadata
     files=files,                # ManifestFiles (required)
-    schema=schema,              # DatasetSchema (default: empty)
+    dataset_schema=schema,      # Serialized as the `schema` block
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
-    timef_format_version=1,     # validated against the supported set {1}
+    timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
 
@@ -64,19 +64,19 @@ separate format version.
 A spec records its `nullable` flag. Parquet stores nullability in Arrow validity bitmaps. Zarr stores
 it in validity arrays next to the values.
 
-If you construct or parse a `Manifest` with an unsupported `timef_format_version`, it raises
-`TimeNetInvalidManifestError`.
+Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
+`ValidationError`.
 
 ### Codec
 
 | Method | Purpose |
 | --- | --- |
 | `to_dict()` / `to_json()` | Canonical serialization (all keys present, explicit nulls). |
-| `from_dict(data)` / `from_json(text)` | Parse, tolerating missing optional blocks. |
+| `model_validate(data)` / `model_validate_json(text)` | Parse, tolerating missing optional blocks. |
 
-`from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema` and
-`counts` default to empty. The parser drops unmodeled metadata keys. A malformed block raises
-`TimeNetInvalidManifestError`. This error names the offending block.
+`model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema`
+and `counts` default to empty. Unknown fields are rejected. A malformed block raises Pydantic's
+`ValidationError` with its native field locations and error details.
 
 ### Serialization notes
 
@@ -84,7 +84,7 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
   unknown unit serializes as `null`. The field remains required.
 - Device and origin information belongs to the hierarchy's `Source`, not to `TimeSeriesSpec`.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
-  `TASKS` registry. An unknown `task_type` raises `TimeNetInvalidManifestError`. The annotation
+  `TASKS` registry. An unknown `task_type` raises Pydantic's `ValidationError`. The annotation
   `value_type` round-trips as a string. The reader uses it to decode values.
 
 ---

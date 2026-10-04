@@ -4,6 +4,7 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -288,7 +289,7 @@ def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
 def test_a_spec_type_cannot_collide_with_the_zarr_groups():
     # Keep names used by older Zarr layouts reserved so old and new artifacts stay unambiguous.
     for reserved in ("_irregular", "_time_offsets"):
-        with pytest.raises(TimeFValidationError, match="must not be one of"):
+        with pytest.raises(ValidationError, match="must not be one of"):
             _spec(reserved)
 
 

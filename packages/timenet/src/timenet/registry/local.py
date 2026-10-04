@@ -94,7 +94,7 @@ class LocalRegistry(WritableRegistry):
         cached = self._manifest_cache.get((dataset_id, resolved))
         if cached is not None and cached[0] == mtime:
             return cached[1]
-        manifest = Manifest.from_json(path.read_text())
+        manifest = Manifest.model_validate_json(path.read_text())
         if manifest.metadata.dataset_id != dataset_id:
             raise TimeFFormatError(
                 f"manifest under {dataset_id!r}/{resolved} declares dataset id "

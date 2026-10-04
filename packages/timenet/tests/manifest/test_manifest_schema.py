@@ -50,7 +50,7 @@ def _manifest() -> Manifest:
     return Manifest(
         dataset_id="demo/ecg",
         metadata=metadata,
-        schema=schema,
+        dataset_schema=schema,
         counts=ManifestCounts(
             records=2,
             sources=2,
@@ -63,9 +63,16 @@ def _manifest() -> Manifest:
             signals_by_spec={"ecg": 2},
         ),
         files=ManifestFiles(
-            control=(FilePart("control.duckdb", "sha256:" + "0" * 64, 5),),
-            time_series=(FilePart("time_series/part-00000.parquet", "sha256:" + "e" * 64, 50),),
+            control=(FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),),
+            time_series=(
+                FilePart(
+                    path="time_series/part-00000.parquet",
+                    checksum="sha256:" + "e" * 64,
+                    size=50,
+                ),
+            ),
         ),
+        timef_format_version=1,
     )
 
 

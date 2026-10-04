@@ -17,13 +17,14 @@ from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
+from timenet.types._wire import ValueDtype
 from timenet.writer import TimeFWriter
 
 
 pytestmark = pytest.mark.value_dtypes
 
 
-def _spec(dtype: str) -> TimeSeriesSpec:
+def _spec(dtype: ValueDtype) -> TimeSeriesSpec:
     return TimeSeriesSpec(spec_type=f"chan_{dtype}", name=dtype, unit_value=ureg.dimensionless, dtype=dtype)
 
 
