@@ -13,6 +13,7 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 
+from timenet._json import validate_json_value
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFValidationError
@@ -39,15 +40,9 @@ _TASK_BATCH_SIZE = _ROW_BATCH_SIZE
 
 
 def _json(value: object) -> str:
-    """Return deterministic JSON and name unsupported values as validation failures.
-
-    Raises:
-        TimeFValidationError: If ``value`` is not JSON-compatible.
-    """
-    try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise TimeFValidationError(f"value is not JSON-compatible: {value!r}") from exc
+    """Return deterministic JSON after validating its value."""
+    validated = validate_json_value(value)
+    return json.dumps(validated, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _validated_irregular_offsets(signal: Signal) -> np.ndarray:
