@@ -27,6 +27,7 @@ dependencies = [
     "numpy>=2.1",
     "pint>=0.25",
     "pyarrow>=21",
+    "pydantic>=2.12,<3",
     "pydantic-settings>=2.4",
 ]
 

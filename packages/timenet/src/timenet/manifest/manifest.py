@@ -215,7 +215,7 @@ def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
 
 def _metadata_from_dict(data: dict[str, Any]) -> DatasetMetadata:
     try:
-        return DatasetMetadata.from_dict(data)
+        return DatasetMetadata.model_validate(data)
     except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise TimeNetInvalidManifestError(f"invalid manifest 'metadata' block: {exc}") from exc
 

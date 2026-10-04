@@ -86,6 +86,7 @@ def test_to_dict_validates_against_schema():
         lambda d: d["schema"]["annotations"][0].update(annotation_type="sideways"),  # bad annotation_type
         lambda d: d["files"].update(control="control.duckdb"),  # a bare string, not a list of parts
         lambda d: d["metadata"].update(license="Nope"),  # unknown license
+        lambda d: d["metadata"].update(concepts=["snomed:80891009"]),  # unknown metadata key
     ],
 )
 def test_invalid_manifests_are_rejected(mutate):
