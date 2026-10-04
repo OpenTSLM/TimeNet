@@ -29,7 +29,8 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
-from timenet.types import DatasetMetadata, Version, validate_dataset_id
+from timenet.types import DatasetMetadata, Version
+from timenet.types._metadata_model import _DATASET_ID_ADAPTER
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -97,7 +98,7 @@ class S3Registry(WritableRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version has no manifest in the bucket.
         """
-        validate_dataset_id(dataset_id)
+        _DATASET_ID_ADAPTER.validate_python(dataset_id)
         resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
         if resolved is None:
             raise TimeNetDatasetNotFoundError(

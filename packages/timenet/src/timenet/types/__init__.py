@@ -13,7 +13,7 @@ from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, 
 from timenet.types.domains import Domain
 from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
-from timenet.types.metadata import DatasetMetadata, DatasetSchema, validate_dataset_id
+from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
 from timenet.types.spans import (
     Span,
@@ -92,6 +92,5 @@ __all__ = [
     "us_to_seconds",
     "use_as_application_registry",
     "uuid7",
-    "validate_dataset_id",
     "value_type_of",
 ]
