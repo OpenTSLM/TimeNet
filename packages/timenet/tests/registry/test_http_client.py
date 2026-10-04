@@ -21,17 +21,17 @@ def test_user_agent_is_timenet_versioned():
     assert timenet_user_agent().startswith("timenet/")
 
 
-def test_get_json_sets_prefix_auth_and_user_agent():
+def test_get_text_sets_prefix_auth_and_user_agent():
     seen = {}
 
     def handler(request):
         seen["path"] = request.url.path
         seen["auth"] = request.headers.get("authorization")
         seen["ua"] = request.headers.get("user-agent")
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, text="ok")
 
     client = _client(handler, token="tok_abc")
-    assert client.get_json("/datasets") == {"ok": True}
+    assert client.get_text("/datasets") == "ok"
     assert seen["path"] == "/api/v1/datasets"
     assert seen["auth"] == "Bearer tok_abc"
     assert seen["ua"].startswith("timenet/")
@@ -44,7 +44,7 @@ def test_anonymous_sends_no_authorization():
         seen["auth"] = request.headers.get("authorization")
         return httpx.Response(200, json={})
 
-    _client(handler).get_json("/datasets")
+    _client(handler).get_text("/datasets")
     assert seen["auth"] is None
 
 
@@ -53,7 +53,7 @@ def test_404_maps_to_dataset_not_found():
         return httpx.Response(404, json={"detail": "nope"})
 
     with pytest.raises(TimeNetDatasetNotFoundError):
-        _client(handler).get_json("/datasets/o/n")
+        _client(handler).get_text("/datasets/o/n")
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500])
@@ -62,7 +62,7 @@ def test_error_statuses_map_to_registry_error(status):
         return httpx.Response(status, json={"detail": "x"})
 
     with pytest.raises(TimeNetRegistryError):
-        _client(handler).get_json("/datasets")
+        _client(handler).get_text("/datasets")
 
 
 def test_retries_a_429_then_succeeds(monkeypatch):
@@ -72,11 +72,11 @@ def test_retries_a_429_then_succeeds(monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:
             return httpx.Response(429, headers={"Retry-After": "2"}, json={"detail": "slow down"})
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, text="ok")
 
     slept: list[float] = []
     monkeypatch.setattr("timenet.registry.remote._http.time.sleep", slept.append)
-    assert _client(handler).get_json("/datasets") == {"ok": True}
+    assert _client(handler).get_text("/datasets") == "ok"
     assert calls["n"] == 2  # one retry after the 429
     assert slept == [2.0]  # waited exactly the Retry-After the service asked for
 
@@ -89,7 +89,7 @@ def test_gives_up_after_the_retry_budget_and_raises():
         return httpx.Response(429, json={"detail": "always"})
 
     with pytest.raises(TimeNetRegistryError, match="429"):
-        _client(handler).get_json("/datasets")
+        _client(handler).get_text("/datasets")
     assert calls["n"] > 1  # retried before giving up
 
 

@@ -20,6 +20,12 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
+from timenet.registry.remote._models import (
+    _DatasetDetailModel,
+    _DatasetListModel,
+    _PublishResponseModel,
+    _UploadGrantModel,
+)
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
@@ -56,12 +62,10 @@ class RemoteRegistry(WritableRegistry):
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
-        payload = self._http.get_json("/datasets")
+        payload = _DatasetListModel.model_validate_json(self._http.get_text("/datasets"))
         metadatas = [
-            self.get_manifest(row["dataset_id"], row["version"]).metadata
-            if _summary_requires_manifest(row)
-            else _metadata_from_summary(row)
-            for row in payload["datasets"]
+            self.get_manifest(row.dataset_id, str(row.version)).metadata if row.requires_manifest() else row.metadata()
+            for row in payload.datasets
         ]
         return sorted(metadatas, key=lambda m: m.dataset_id)
 
@@ -191,7 +195,11 @@ class RemoteRegistry(WritableRegistry):
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
-            files = self._http.post(f"/datasets/{dataset_id}/{version}/publish", content=manifest_bytes).json()["files"]
+            publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
+            publish = _PublishResponseModel.model_validate_json(
+                self._http.post(publish_endpoint, content=manifest_bytes).content
+            )
+            files = publish.files
             # Cross-check the service's upload list against the manifest before uploading. A manifest file
             # the service omits would publish an incomplete version; a requested file we did not produce is
             # not ours to upload. Both fail loudly here instead of partway through the upload.
@@ -218,9 +226,10 @@ class RemoteRegistry(WritableRegistry):
             version_dir: The compiled version directory holding the file.
             relpath: The version-relative file path.
         """
-        grant = self._http.post(f"/datasets/{dataset_id}/{version}/publish/upload-url", json={"path": relpath}).json()
+        endpoint = f"/datasets/{dataset_id}/{version}/publish/upload-url"
+        grant = _UploadGrantModel.model_validate_json(self._http.post(endpoint, json={"path": relpath}).content)
         content = (version_dir / relpath).read_bytes()
-        self._http.put(grant["url"], content=content, headers=grant["headers"])
+        self._http.put(grant.url, content=content, headers=grant.headers)
 
     def _resolve_latest(self, dataset_id: str) -> str:
         """Resolve a dataset's latest version string via the detail endpoint.
@@ -231,37 +240,5 @@ class RemoteRegistry(WritableRegistry):
         Returns:
             The latest committed version string.
         """
-        detail = self._http.get_json(f"/datasets/{dataset_id}")
-        return detail["version"]
-
-
-def _metadata_from_summary(row: dict) -> DatasetMetadata:
-    """Build :class:`DatasetMetadata` from a registry summary row.
-
-    Args:
-        row: A ``DatasetSummary`` mapping from the API.
-
-    Returns:
-        The reconstructed metadata (``source_url`` unknown, schema version defaulted).
-    """
-    return DatasetMetadata.model_validate(
-        {
-            "dataset_id": row["dataset_id"],
-            "dataset_version": row["version"],
-            "name": row["name"],
-            "description": row["description"],
-            "license": row["license"],
-            "license_url": row.get("license_url"),
-            "domains": row.get("domains", []),
-            "tags": row.get("tags", []),
-            "access": row.get("access", "open"),
-            "access_url": row.get("access_url"),
-        }
-    )
-
-
-def _summary_requires_manifest(row: dict) -> bool:
-    """Return whether a summary omits metadata required to construct it safely."""
-    return (row["license"] == "other" and not row.get("license_url")) or (
-        row.get("access", "open") != "open" and not row.get("access_url")
-    )
+        detail = _DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{dataset_id}"))
+        return str(detail.version)
