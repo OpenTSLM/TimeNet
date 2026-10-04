@@ -51,12 +51,11 @@ cli = [
 torch = [
     "torch>=2.2",
 ]
-# Building a dataset loads and validates its human-authored card YAML against the packaged JSON Schema,
-# and runs the connector in an environment built from its own requirements. The PyPI `uv` package ships
+# Building a dataset loads its human-authored card YAML and validates it with Pydantic, then runs the
+# connector in an environment built from its own requirements. The PyPI `uv` package ships
 # the binary, so nobody installs uv by hand and the build path locates it without relying on PATH.
 build = [
     "pyyaml>=6",
-    "jsonschema>=4.18",
     "uv>=0.10.10",
 ]
 # The Zarr values backend (an alternative to the default Parquet shard store). The core reader/writer
