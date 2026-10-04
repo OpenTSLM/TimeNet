@@ -75,7 +75,7 @@ If you construct or parse a `Manifest` with an unsupported `timef_format_version
 | `from_dict(data)` / `from_json(text)` | Parse, tolerating missing optional blocks. |
 
 `from_dict` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema` and
-`counts` default to empty. The parser drops unmodeled metadata keys. A malformed block raises
+`counts` default to empty. The parser rejects unknown metadata keys. A malformed block raises
 `TimeNetInvalidManifestError`. This error names the offending block.
 
 ### Serialization notes

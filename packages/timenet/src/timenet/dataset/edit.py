@@ -320,7 +320,7 @@ def edit_version(
         writer_kwargs.setdefault("values_backend", reader.values_backend)  # an edit keeps the base dataset's backend
         edited = remove_records(base, remove_record_ids, cascade=cascade)
         edited = TimeFDataset.from_parts(
-            metadata=replace(edited.metadata, dataset_version=dataset_version),
+            metadata=edited.metadata.model_copy(update={"dataset_version": dataset_version}),
             records=edited.records,
             tasks=edited.tasks,
             schema=DatasetSchema(),

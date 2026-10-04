@@ -13,7 +13,8 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
-from timenet.types import DatasetMetadata, Version, validate_dataset_id
+from timenet.types import DatasetMetadata, Version
+from timenet.types.metadata_fields import validate_dataset_id
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -192,7 +193,7 @@ class LocalRegistry(WritableRegistry):
         Returns:
             The ``<root>/<dataset_id>/`` directory.
         """
-        validate_dataset_id(dataset_id)  # rejects ids that would resolve outside the root
+        validate_dataset_id(dataset_id)
         return self._root / dataset_id
 
     def _latest_version(self, dataset_id: str) -> str | None:

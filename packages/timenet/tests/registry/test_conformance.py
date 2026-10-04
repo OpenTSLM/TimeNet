@@ -6,7 +6,6 @@ behaviour (S3 key prefixes, remote 429/auth/presign, factory dispatch) stays in 
 this file only asserts the shared read/write contract.
 """
 
-import dataclasses
 from typing import NamedTuple
 import uuid
 
@@ -114,7 +113,7 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
         registry = _s3_registry(request, tmp_path, monkeypatch)
         supports_listing = False
     newer = make_dataset()
-    newer._metadata = dataclasses.replace(newer.metadata, dataset_version=Version(1, 1, 0))
+    newer._metadata = newer.metadata.model_copy(update={"dataset_version": Version(1, 1, 0)})
     for dataset in (make_dataset(), newer, _second_dataset()):
         registry.store(dataset)
     return Backend(registry=registry, supports_listing=supports_listing)

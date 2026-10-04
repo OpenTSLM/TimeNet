@@ -170,7 +170,7 @@ def versioned_registry(tmp_path):
     root = tmp_path / "vreg"
     for version in (Version(1, 0, 0), Version(1, 1, 0)):
         dataset = make_dataset()
-        dataset._metadata = dataclasses.replace(dataset.metadata, dataset_version=version)
+        dataset._metadata = dataset.metadata.model_copy(update={"dataset_version": version})
         dataset.derive_schema()
         with TimeFWriter(root, dataset) as writer:
             writer.write()

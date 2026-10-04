@@ -1,8 +1,9 @@
 from pathlib import Path
 
+from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
@@ -122,7 +123,7 @@ def test_local_registry_path_rejects_malformed_file_uri(uri, match):
 
 def test_get_manifest_rejects_traversal_id(registry_root):
     # every registry path-join validates the id, so a ``..`` id can't escape the root
-    with pytest.raises(TimeFValidationError, match="dataset_id"):
+    with pytest.raises(ValidationError, match="string_pattern_mismatch"):
         LocalRegistry(registry_root).get_manifest("../evil")
 
 

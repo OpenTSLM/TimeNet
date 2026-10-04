@@ -8,7 +8,8 @@ tags:
 
 # Types
 
-TimeF value types live in `timenet.types`. They are standard typed dataclasses and enums. The full
+TimeF value types live in `timenet.types`. Wire-facing types are Pydantic models; other runtime
+objects use typed dataclasses and enums. The full
 object model is split across these focused pages:
 
 - [TimeFDataset](timef-dataset.md) covers the complete in-memory hierarchy.
@@ -189,7 +190,10 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetInvalidManifestError` | `manifest.json` is malformed. |
-| `TimeNetInvalidCardError` | `dataset.yaml` is malformed. |
+| `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
+
+Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
+native field location and details.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.

@@ -3407,6 +3407,7 @@ dependencies = [
     { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pint" },
     { name = "pyarrow" },
+    { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
 
@@ -3454,6 +3455,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.1" },
     { name = "pint", specifier = ">=0.25" },
     { name = "pyarrow", specifier = ">=21" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pyyaml", marker = "extra == 'build'", specifier = ">=6" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },

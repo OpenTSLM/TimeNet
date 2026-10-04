@@ -29,7 +29,8 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
-from timenet.types import DatasetMetadata, Version, validate_dataset_id
+from timenet.types import DatasetMetadata, Version
+from timenet.types.metadata_fields import validate_dataset_id
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
