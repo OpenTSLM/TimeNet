@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 import pyarrow as pa
 
+from timenet._json import JsonMapping, validate_json_mapping
 from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
@@ -39,7 +40,7 @@ class Record(SupportsAnnotate):
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
@@ -62,6 +63,7 @@ class Record(SupportsAnnotate):
         """
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
+        self.metadata = validate_json_mapping(self.metadata)
         if self.sources:
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]

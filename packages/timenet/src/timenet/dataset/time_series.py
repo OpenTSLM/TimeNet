@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from timenet._json import JsonMapping, validate_json_mapping
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFValidationError
@@ -109,7 +110,7 @@ class Signal(SupportsAnnotate):
     """
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached directly to this signal."""
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible signal metadata."""
 
     def __init__(  # noqa: PLR0913 - a signal carries its complete public metadata
@@ -122,7 +123,7 @@ class Signal(SupportsAnnotate):
         data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
         source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
-        metadata: dict[str, object] | None = None,
+        metadata: JsonMapping | None = None,
     ) -> None:
         """Build a signal from values that are already in memory."""
         array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
@@ -151,7 +152,7 @@ class Signal(SupportsAnnotate):
         time_offsets_loader: Callable[[], pa.Array] | None = None,
         source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
-        metadata: dict[str, object] | None = None,
+        metadata: JsonMapping | None = None,
     ) -> "Signal":
         """Build a signal whose values are loaded only when they are read.
 
@@ -185,7 +186,7 @@ class Signal(SupportsAnnotate):
         time_offsets_loader: Callable[[], pa.Array] | None = None,
         source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
-        metadata: dict[str, object] | None = None,
+        metadata: JsonMapping | None = None,
     ) -> None:
         """Set and validate fields shared by eager and lazy construction."""
         set_field = object.__setattr__
@@ -238,6 +239,7 @@ class Signal(SupportsAnnotate):
         """
         if not self.name:
             raise ValueError("Signal.name must be non-empty")
+        object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)

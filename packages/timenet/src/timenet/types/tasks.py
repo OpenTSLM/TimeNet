@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
 
 import pint
 
+from timenet._json import JsonMapping, validate_json_mapping
 from timenet.errors import TimeFValidationError
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import new_id
@@ -128,7 +129,7 @@ class Task(SupportsAnnotate, ABC):
     """Tasks from which this task was derived."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations describing this task itself."""
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
 
     def __post_init__(self) -> None:
@@ -143,6 +144,7 @@ class Task(SupportsAnnotate, ABC):
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
         self.annotations = tuple(self.annotations)
+        self.metadata = validate_json_mapping(self.metadata)
         if self.split is not None:
             self.split = parse_split(self.split)
         if self.input_modalities is not None:
