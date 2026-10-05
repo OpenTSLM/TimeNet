@@ -29,6 +29,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: schemas-check
+        name: check generated JSON schemas
+        entry: uv run --frozen python scripts/gen_schemas.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: ty-check
         name: ty check
         entry: uv run --frozen ty check

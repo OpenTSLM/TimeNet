@@ -9,6 +9,7 @@ required-version = ">=0.10.10"
 dev = [
     "huggingface-hub>=0.20",
     "hypothesis>=6.140",
+    "jsonschema>=4.18",
     "moto[server]>=5",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
