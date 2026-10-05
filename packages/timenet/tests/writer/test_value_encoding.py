@@ -88,7 +88,7 @@ def _write(tmp_path, dataset, **kwargs):
 
 
 def _manifest(version_dir):
-    return Manifest.from_json((version_dir / "manifest.json").read_text())
+    return Manifest.model_validate_json((version_dir / "manifest.json").read_text())
 
 
 # ---- the rule ----------------------------------------------------------------------------------
@@ -343,7 +343,7 @@ def test_reader_needs_no_encoding_hint(tmp_path):
     assert document.pop("value_encoding") == {"ecg": ValueEncoding.DICTIONARY.value}
     manifest_path.write_text(json.dumps(document, indent=2))
 
-    assert Manifest.from_json(manifest_path.read_text()).value_encoding == {}
+    assert Manifest.model_validate_json(manifest_path.read_text()).value_encoding == {}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))

@@ -224,7 +224,7 @@ class BaseRegistry(ABC):
 
     def _schema_matches(self, dataset_id: str, tasks: list[type[Task]], specs: list[str]) -> bool:
         """Return whether the manifest schema of a dataset satisfies the type filters."""
-        schema = self.get_manifest(dataset_id).schema
+        schema = self.get_manifest(dataset_id).dataset_schema
         if tasks and not set(tasks) & set(schema.tasks):
             return False
         return not (specs and not set(specs) <= {spec.spec_type for spec in schema.time_series_specs})

@@ -189,11 +189,12 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
-| `TimeNetInvalidManifestError` | `manifest.json` is malformed. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.
+
+Manifest parsing uses the same error for invalid JSON and invalid fields.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.

@@ -29,7 +29,7 @@ def _summary(manifest: Manifest) -> dict:
 
 
 def _detail(manifest: Manifest) -> dict:
-    schema = manifest.schema
+    schema = manifest.dataset_schema
     return {
         **_summary(manifest),
         "task_types": [t.task_type for t in schema.tasks],
@@ -47,7 +47,7 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
     cannot see a MockTransport.
     """
     version_dir = Path(version_dir)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     dataset_id = manifest.metadata.dataset_id
     version = str(manifest.metadata.dataset_version)
     requests: list[httpx.Request] = []

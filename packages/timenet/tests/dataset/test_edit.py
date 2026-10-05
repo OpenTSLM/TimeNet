@@ -199,7 +199,7 @@ def test_edit_version_round_trip(tmp_path):
         restored = reader.read()
     assert {s.record_id for s in restored.records} == {"record-0", "record-2"}
 
-    manifest = Manifest.from_json((out / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert str(manifest.metadata.dataset_version) == "1.0.1"
 
     with duckdb.connect(str(out / "control.duckdb"), read_only=True) as connection:

@@ -31,7 +31,7 @@ def _write(tmp_path, **kwargs) -> Path:
 
 def test_manifest_records_zarr_backend_and_store_files(tmp_path):
     version_dir = _write(tmp_path)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     assert manifest.files.time_series, "expected the zarr store's files to be listed"
     for part in manifest.files.time_series:
@@ -107,7 +107,7 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
-    manifest = Manifest.from_json((out / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         record = next(iter(reader.iter_records()))
@@ -196,7 +196,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=120) as writer:
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.timef_format_version == 1
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]

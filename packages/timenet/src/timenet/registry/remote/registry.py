@@ -80,7 +80,7 @@ class RemoteRegistry(WritableRegistry):
         """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
         resolved = self._resolve_latest(dataset_id) if version in {None, "", "latest"} else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
-        return Manifest.from_json(text)
+        return Manifest.model_validate_json(text)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -190,7 +190,7 @@ class RemoteRegistry(WritableRegistry):
                 writer.write()
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
-            declared = {part.path for part in Manifest.from_json(manifest_bytes.decode()).files.all_files()}
+            declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
             files = self._http.post(f"/datasets/{dataset_id}/{version}/publish", content=manifest_bytes).json()["files"]
             # Cross-check the service's upload list against the manifest before uploading. A manifest file
             # the service omits would publish an incomplete version; a requested file we did not produce is

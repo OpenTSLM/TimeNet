@@ -1,11 +1,11 @@
-from dataclasses import replace
+from typing import Any, TypeVar, cast
 
 from hypothesis import given, strategies as st
 import jsonschema
 import pint
+from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.errors import TimeNetInvalidManifestError
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
@@ -22,12 +22,20 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.values_backends import ValuesBackend
 
 
-_CONTROL = (FilePart("control.duckdb", "sha256:" + "0" * 64, 5),)
+_CONTROL = (FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),)
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
-def _manifest(*, values_backend: str = "parquet") -> Manifest:
+def _replace(model: _ModelT, **changes: Any) -> _ModelT:
+    """Return a validated model with selected fields replaced."""
+    return type(model).model_validate({**model.__dict__, **changes})
+
+
+def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
@@ -53,7 +61,7 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
     return Manifest(
         dataset_id="demo/ecg",
         metadata=metadata,
-        schema=schema,
+        dataset_schema=schema,
         counts=ManifestCounts(
             records=2,
             sources=2,
@@ -67,9 +75,16 @@ def _manifest(*, values_backend: str = "parquet") -> Manifest:
         ),
         files=ManifestFiles(
             control=_CONTROL,
-            time_series=(FilePart("time_series/part-00000.parquet", "sha256:ee", 50),),
+            time_series=(
+                FilePart(
+                    path="time_series/part-00000.parquet",
+                    checksum="sha256:" + "e" * 64,
+                    size=50,
+                ),
+            ),
         ),
-        values_backend=values_backend,
+        values_backend=cast("ValuesBackend", values_backend),
+        timef_format_version=1,
     )
 
 
@@ -81,21 +96,23 @@ def test_files_all_parts_concatenates_in_order():
     )
 
 
-def test_default_format_version():
+def test_format_version():
     assert _manifest().timef_format_version == 1
 
 
 def test_unknown_spec_unit_is_null_in_manifest():
     base = _manifest()
-    unknown = replace(base.schema.time_series_specs[0], unit_value=None)
-    manifest = replace(
-        base, schema=replace(base.schema, time_series_specs=(unknown,)), files=ManifestFiles(control=_CONTROL)
+    unknown = _replace(base.dataset_schema.time_series_specs[0], unit_value=None)
+    manifest = _replace(
+        base,
+        dataset_schema=_replace(base.dataset_schema, time_series_specs=(unknown,)),
+        files=ManifestFiles(control=_CONTROL),
     )
     data = manifest.to_dict()
 
     assert data["schema"]["time_series_specs"][0]["unit_value"] is None
     jsonschema.validate(data, MANIFEST_SCHEMA)
-    assert Manifest.from_dict(data).schema.time_series_specs[0].unit_value is None
+    assert Manifest.model_validate(data).dataset_schema.time_series_specs[0].unit_value is None
 
 
 @pytest.mark.parametrize(
@@ -113,58 +130,59 @@ def test_unknown_spec_unit_is_null_in_manifest():
 def test_manifest_round_trips_benchmark_domain(domain):
     payload = _manifest().to_dict()
     payload["metadata"]["domains"] = [domain]
-    restored = Manifest.from_dict(payload)
+    restored = Manifest.model_validate(payload)
     assert restored.to_dict()["metadata"]["domains"] == [domain]
 
 
 def test_manifest_rejects_unknown_domain():
     payload = _manifest().to_dict()
     payload["metadata"]["domains"] = ["not-a-domain"]
-    with pytest.raises(TimeNetInvalidManifestError, match="invalid manifest 'metadata' block"):
-        Manifest.from_dict(payload)
+    with pytest.raises(ValidationError, match=r"metadata\.domains"):
+        Manifest.model_validate(payload)
 
 
 def test_nullable_schema_roundtrips_at_format_version_1():
     # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
-    base = replace(
+    base = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     )
-    spec = replace(base.schema.time_series_specs[0], nullable=True)
+    spec = _replace(base.dataset_schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
         dataset_id=base.dataset_id,
         metadata=base.metadata,
         files=base.files,
-        schema=replace(base.schema, time_series_specs=(spec,)),
+        dataset_schema=_replace(base.dataset_schema, time_series_specs=(spec,)),
+        timef_format_version=1,
     )
     assert manifest.timef_format_version == 1
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
-    assert Manifest.from_json(manifest.to_json()) == manifest
+    assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
 
 
 def test_missing_nullable_defaults_to_false():
-    data = replace(
+    data = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
-    restored = Manifest.from_dict(data)
+    restored = Manifest.model_validate(data)
     assert restored.timef_format_version == 1
-    assert restored.schema.time_series_specs[0].nullable is False
+    assert restored.dataset_schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
 @pytest.mark.parametrize("nullable", [1, None, "true"])
 def test_manifest_rejects_nonboolean_nullable(nullable):
-    data = replace(
+    data = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     ).to_dict()
     data["schema"]["time_series_specs"][0]["nullable"] = nullable
-    with pytest.raises(TimeNetInvalidManifestError, match="nullable"):
-        Manifest.from_dict(data)
+    with pytest.raises(ValidationError, match="nullable"):
+        Manifest.model_validate(data)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(data, MANIFEST_SCHEMA)
 
@@ -173,23 +191,33 @@ def test_manifest_rejects_nonboolean_nullable(nullable):
 def test_parsed_manifest_requires_integer_version(version):
     data = _manifest().to_dict()
     data["timef_format_version"] = version
-    with pytest.raises(TimeNetInvalidManifestError, match="timef_format_version"):
-        Manifest.from_dict(data)
+    with pytest.raises(ValidationError, match="timef_format_version"):
+        Manifest.model_validate(data)
 
 
 @pytest.mark.parametrize("modality", [InputModality.TIME_SERIES, InputModality.IMAGE, InputModality.AUDIO])
 def test_dict_roundtrip(modality):
     m = _manifest()
-    m = replace(
-        m, schema=replace(m.schema, time_series_specs=(replace(m.schema.time_series_specs[0], modality=modality),))
+    m = _replace(
+        m,
+        dataset_schema=_replace(
+            m.dataset_schema,
+            time_series_specs=(_replace(m.dataset_schema.time_series_specs[0], modality=modality),),
+        ),
     )
-    jsonschema.validate(m.to_dict()["schema"]["time_series_specs"][0], MANIFEST_SCHEMA["$defs"]["timeSeriesSpec"])
-    assert Manifest.from_dict(m.to_dict()) == m
+    jsonschema.validate(m.to_dict(), MANIFEST_SCHEMA)
+    assert Manifest.model_validate(m.to_dict()) == m
 
 
 def test_json_roundtrip():
     m = _manifest()
-    assert Manifest.from_json(m.to_json()) == m
+    assert Manifest.model_validate_json(m.to_json()) == m
+
+
+def test_model_validate_json_exposes_pydantic_json_error():
+    with pytest.raises(ValidationError) as exc_info:
+        Manifest.model_validate_json("{")
+    assert exc_info.value.errors()[0]["type"] == "json_invalid"
 
 
 def test_to_dict_shape():
@@ -204,35 +232,35 @@ def test_to_dict_shape():
     assert d["counts"]["tasks"] == {"classification": 2}
 
 
-def test_from_dict_resolves_tasks_to_real_classes():
-    schema = Manifest.from_dict(_manifest().to_dict()).schema
+def test_model_validate_resolves_tasks_to_real_classes():
+    schema = Manifest.model_validate(_manifest().to_dict()).dataset_schema
     assert schema.tasks == (ClassificationTask, AnswerTask)
 
 
 def test_units_roundtrip_as_pint():
-    spec = Manifest.from_dict(_manifest().to_dict()).schema.time_series_specs[0]
+    spec = Manifest.model_validate(_manifest().to_dict()).dataset_schema.time_series_specs[0]
     assert spec.unit_value == ureg.millivolt
     assert isinstance(spec.unit_value, pint.Unit)
 
 
 def test_str_dtype_round_trips():
     m = _manifest()
-    spec = m.schema.time_series_specs[0]
-    str_spec = replace(spec, dtype="str")
-    m = replace(m, schema=replace(m.schema, time_series_specs=(str_spec,)))
-    restored = Manifest.from_dict(m.to_dict())
-    assert restored.schema.time_series_specs[0].dtype == "str"
+    spec = m.dataset_schema.time_series_specs[0]
+    str_spec = _replace(spec, dtype="str")
+    m = _replace(m, dataset_schema=_replace(m.dataset_schema, time_series_specs=(str_spec,)))
+    restored = Manifest.model_validate(m.to_dict())
+    assert restored.dataset_schema.time_series_specs[0].dtype == "str"
 
 
 def test_unsupported_format_version_rejected():
     d = _manifest().to_dict()
     d["timef_format_version"] = 99
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
 
 
 def test_direct_construction_validates_format_version():
-    with pytest.raises(TimeNetInvalidManifestError):
+    with pytest.raises(ValidationError):
         Manifest(
             dataset_id="x",
             metadata=_manifest().metadata,
@@ -242,16 +270,21 @@ def test_direct_construction_validates_format_version():
 
 
 def test_dataset_id_must_match_metadata():
-    with pytest.raises(TimeNetInvalidManifestError, match="does not match"):
-        Manifest(dataset_id="other", metadata=_manifest().metadata, files=_manifest().files)
+    with pytest.raises(ValidationError, match="does not match"):
+        Manifest(
+            dataset_id="other/dataset",
+            metadata=_manifest().metadata,
+            files=_manifest().files,
+            timef_format_version=1,
+        )
 
 
 @pytest.mark.parametrize("missing", ["timef_format_version", "dataset_id", "metadata", "files"])
-def test_from_dict_requires_core_blocks(missing):
+def test_model_validate_requires_core_blocks(missing):
     d = _manifest().to_dict()
     del d[missing]
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
 
 
 @pytest.mark.parametrize(
@@ -270,21 +303,42 @@ def test_from_dict_requires_core_blocks(missing):
         {"path": "time_series/../../etc/passwd", "checksum": "sha256:" + "a" * 64, "size": 10},  # traversal mid-path
     ],
 )
-def test_from_dict_rejects_a_malformed_file_entry(entry):
-    # A file group is a list of {path, checksum, size} descriptors; a non-dict entry or one missing a
-    # field is a corrupt manifest, surfaced as TimeNetInvalidManifestError rather than a raw TypeError/KeyError.
+def test_model_validate_rejects_a_malformed_file_entry(entry):
+    # A file group is a list of {path, checksum, size} descriptors. Pydantic reports a malformed
+    # entry with its exact nested field location.
     d = _manifest().to_dict()
     d["files"]["time_series"] = [entry]
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        ("x", "sha256:ee", 1),
+        ("x", "sha256:" + "A" * 64, 1),
+        ("x", "sha256:" + "a" * 64, -1),
+        ("x", "sha256:" + "a" * 64, True),
+        ("../x", "sha256:" + "a" * 64, 1),
+    ],
+)
+def test_direct_file_part_construction_enforces_wire_invariants(part):
+    with pytest.raises(ValidationError):
+        FilePart(path=part[0], checksum=part[1], size=part[2])
+
+
+@pytest.mark.parametrize("value", [-1, True, "1"])
+def test_direct_manifest_counts_require_non_negative_integers(value):
+    with pytest.raises(ValidationError, match="records"):
+        ManifestCounts(records=value)
 
 
 def test_optional_schema_and_counts_default_empty():
     d = _manifest().to_dict()
     del d["schema"]
     del d["counts"]
-    m = Manifest.from_dict(d)
-    assert m.schema == DatasetSchema()
+    m = Manifest.model_validate(d)
+    assert m.dataset_schema == DatasetSchema()
     assert m.counts == ManifestCounts()
 
 
@@ -296,60 +350,60 @@ def test_values_backend_defaults_to_parquet():
 def test_values_backend_absent_reads_as_parquet():
     d = _manifest().to_dict()
     del d["values_backend"]  # a pre-backend manifest
-    assert Manifest.from_dict(d).values_backend == "parquet"
+    assert Manifest.model_validate(d).values_backend == "parquet"
 
 
 def test_values_backend_round_trips():
     m = _manifest(values_backend="parquet")
-    assert Manifest.from_json(m.to_json()).values_backend == "parquet"
+    assert Manifest.model_validate_json(m.to_json()).values_backend == "parquet"
 
 
 def test_unknown_values_backend_rejected_when_parsing():
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
+    with pytest.raises(ValidationError, match="values_backend"):
         _manifest(values_backend="feather")
 
 
 def test_unknown_values_backend_rejected():
     data = _manifest().to_dict()
     data["values_backend"] = "hdf5"
-    with pytest.raises(TimeNetInvalidManifestError, match="values_backend"):
-        Manifest.from_dict(data)
+    with pytest.raises(ValidationError, match="values_backend"):
+        Manifest.model_validate(data)
 
 
 def test_unmodeled_metadata_keys_rejected():
     d = _manifest().to_dict()
     d["metadata"]["concepts"] = ["snomed:80891009"]  # not a modeled field
-    with pytest.raises(TimeNetInvalidManifestError, match="concepts"):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError, match="concepts"):
+        Manifest.model_validate(d)
 
 
 def test_unknown_task_type_rejected():
     d = _manifest().to_dict()
     d["schema"]["tasks"] = [{"task_type": "not_a_task"}]
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
 
 
 def test_bad_unit_string_rejected():
     d = _manifest().to_dict()
     d["schema"]["time_series_specs"][0]["unit_value"] = "not_a_unit"
-    with pytest.raises(TimeNetInvalidManifestError, match="schema"):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError, match="schema"):
+        Manifest.model_validate(d)
 
 
 def test_non_string_dataset_version_rejected():
     d = _manifest().to_dict()
     d["metadata"]["dataset_version"] = 3
-    with pytest.raises(TimeNetInvalidManifestError, match="metadata"):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError, match="metadata"):
+        Manifest.model_validate(d)
 
 
 @pytest.mark.parametrize("block", ["schema", "counts", "metadata", "files"])
 def test_null_block_rejected(block):
     d = _manifest().to_dict()
     d[block] = None
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
 
 
 @given(
@@ -369,8 +423,9 @@ def test_codec_roundtrip_property(version, records, task_counts):
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(control=_CONTROL),
+        timef_format_version=1,
     )
-    assert Manifest.from_json(manifest.to_json()) == manifest
+    assert Manifest.model_validate_json(manifest.to_json()) == manifest
 
 
 @pytest.mark.parametrize(
@@ -381,17 +436,17 @@ def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters
     d = _manifest().to_dict()
     d[block][key] = "oops"
-    with pytest.raises(TimeNetInvalidManifestError):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
 
 
 @pytest.mark.parametrize("block", ["value_encoding", "build_env"])
 def test_bad_dict_block_names_itself(block):
-    # each block names itself in the error, rather than a shared message
+    # Pydantic includes the block name in its native error location.
     d = _manifest().to_dict()
     d[block] = "oops"
-    with pytest.raises(TimeNetInvalidManifestError, match=block):
-        Manifest.from_dict(d)
+    with pytest.raises(ValidationError, match=block):
+        Manifest.model_validate(d)
 
 
 def test_build_env_defaults_to_empty():
@@ -399,12 +454,38 @@ def test_build_env_defaults_to_empty():
 
 
 def test_build_env_round_trips():
-    m = replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}})
-    assert Manifest.from_dict(m.to_dict()).build_env == m.build_env
+    m = _replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}})
+    assert Manifest.model_validate(m.to_dict()).build_env == m.build_env
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"build_env": {"python": 313}},
+        {"value_encoding": {"ecg_lead": "zip"}},
+    ],
+)
+def test_direct_manifest_rejects_invalid_provenance_blocks(change):
+    with pytest.raises(ValidationError):
+        _replace(_manifest(), **change)
 
 
 def test_to_dict_copies_build_env():
     build_env = {"python": "3.11.9", "packages": {"timenet": "0.1.0"}}
-    d = replace(_manifest(), build_env=build_env).to_dict()
+    d = _replace(_manifest(), build_env=build_env).to_dict()
     d["build_env"]["python"] = "2.7.0"
     assert build_env["python"] == "3.11.9"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda manifest: manifest.build_env.update(python=313),
+        lambda manifest: manifest.counts.tasks.update(classification=-1),
+    ],
+)
+def test_serialization_revalidates_mutable_nested_values(mutate):
+    manifest = _manifest()
+    mutate(manifest)
+    with pytest.raises(ValidationError):
+        manifest.to_dict()

@@ -17,8 +17,9 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         dataset_id=dataset.metadata.dataset_id,
         metadata=dataset.metadata,
         files=ManifestFiles(
-            control=(FilePart(path.name, file_checksum(path), path.stat().st_size),),
+            control=(FilePart(path=path.name, checksum=file_checksum(path), size=path.stat().st_size),),
         ),
+        timef_format_version=1,
     )
     version = DatasetVersion(
         manifest=manifest,
