@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from timenet.dataset import OrdinalAxis, Signal
 from timenet.errors import TimeFFormatError
-from timenet.types import TimeSeriesSpec, ureg
+from timenet.types import InputModality, TimeSeriesSpec, ureg
 
 
 _RGBA_CHANNELS = 4
@@ -37,7 +37,7 @@ def _decode_image(source: Path | bytes) -> np.ndarray:
 
 
 def image_signal(source: Path | bytes, *, signal_id: str, name: str) -> Signal:
-    """Create a lazy one-frame RGB or RGBA Signal with a shape-specific spec.
+    """Create a lazy one-frame RGB or RGBA Signal with a shape-specific spec of the image modality.
 
     Returns:
         A Signal whose single value is the original-size image tensor.
@@ -52,6 +52,7 @@ def image_signal(source: Path | bytes, *, signal_id: str, name: str) -> Signal:
         dtype="uint8",
         value_shape=(height, width, channels),
         dimension_names=("height", "width", "channel"),
+        modality=InputModality.IMAGE,
     )
     return Signal.from_loader(
         id=signal_id,
