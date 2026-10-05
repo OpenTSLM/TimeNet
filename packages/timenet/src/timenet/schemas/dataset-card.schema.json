@@ -53,10 +53,37 @@
       ],
       "title": "License",
       "type": "string"
+    },
+    "ParentDataset": {
+      "additionalProperties": false,
+      "description": "A named, exact parent declared by a dataset card.",
+      "properties": {
+        "alias": {
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "title": "Alias",
+          "type": "string"
+        },
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias",
+        "dataset_id",
+        "version"
+      ],
+      "title": "ParentDataset",
+      "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
+  "description": "A dataset's descriptive identity: who it is, not what it emits.",
   "properties": {
     "dataset_id": {
       "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
@@ -108,6 +135,18 @@
       "default": null,
       "title": "Source Url"
     },
+    "source_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Revision"
+    },
     "license_url": {
       "anyOf": [
         {
@@ -147,6 +186,14 @@
       ],
       "default": null,
       "title": "Access Url"
+    },
+    "parents": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ParentDataset"
+      },
+      "title": "Parents",
+      "type": "array"
     },
     "yaml_schema_version": {
       "default": 1,

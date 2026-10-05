@@ -105,7 +105,7 @@
     },
     "DatasetMetadata": {
       "additionalProperties": false,
-      "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
+      "description": "A dataset's descriptive identity: who it is, not what it emits.",
       "properties": {
         "dataset_id": {
           "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
@@ -157,6 +157,18 @@
           "default": null,
           "title": "Source Url"
         },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
         "license_url": {
           "anyOf": [
             {
@@ -197,6 +209,14 @@
           "default": null,
           "title": "Access Url"
         },
+        "parents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentDataset"
+          },
+          "title": "Parents",
+          "type": "array"
+        },
         "yaml_schema_version": {
           "default": 1,
           "maximum": 1,
@@ -217,7 +237,7 @@
     },
     "DatasetSchema": {
       "additionalProperties": false,
-      "description": "A dataset's type declaration, derived from its data (never hand-authored).\n\nIt holds flat descriptor instances for specs and annotations. It also holds the real built-in\n:class:`~timenet.types.tasks.Task` subclasses, resolved against the registry instead of reconstructed.",
+      "description": "A dataset's type declaration, derived from its data (never hand-authored).",
       "properties": {
         "time_series_specs": {
           "default": [],
@@ -348,6 +368,33 @@
       "title": "License",
       "type": "string"
     },
+    "LockedDependency": {
+      "additionalProperties": false,
+      "description": "One exact version in a dataset's dependency closure, pinned by its manifest checksum.\n\nThe checksum covers the parent's ``manifest.json``, which lists the checksum of every file in\nthat version, so one row pins the parent's complete content.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        },
+        "manifest_checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Checksum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version",
+        "manifest_checksum"
+      ],
+      "title": "LockedDependency",
+      "type": "object"
+    },
     "ManifestCounts": {
       "additionalProperties": false,
       "description": "TimeF entity counts recorded for inspection without opening DuckDB.",
@@ -440,6 +487,33 @@
         "control"
       ],
       "title": "ManifestFiles",
+      "type": "object"
+    },
+    "ParentDataset": {
+      "additionalProperties": false,
+      "description": "A named, exact parent declared by a dataset card.",
+      "properties": {
+        "alias": {
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "title": "Alias",
+          "type": "string"
+        },
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias",
+        "dataset_id",
+        "version"
+      ],
+      "title": "ParentDataset",
       "type": "object"
     },
     "TimeSeriesSpec": {
@@ -578,6 +652,14 @@
     },
     "build_env": {
       "$ref": "#/$defs/BuildEnvironment"
+    },
+    "dependencies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LockedDependency"
+      },
+      "title": "Dependencies",
+      "type": "array"
     },
     "timef_format_version": {
       "maximum": 1,
