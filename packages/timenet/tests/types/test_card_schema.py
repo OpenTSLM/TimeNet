@@ -1,4 +1,5 @@
 import jsonschema
+from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeNetInvalidCardError
@@ -65,7 +66,7 @@ def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
     ],
 )
 def test_from_yaml_rejects_invalid_cards(tmp_path, bad):
-    with pytest.raises(TimeNetInvalidCardError):
+    with pytest.raises(ValidationError):
         DatasetMetadata.from_yaml(_write(tmp_path, bad))
 
 

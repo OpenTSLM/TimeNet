@@ -126,7 +126,8 @@
     },
     "metadata": {
       "type": "object",
-      "description": "Descriptive identity. Unmodeled keys are tolerated (the codec drops them), so this block is not strict.",
+      "description": "Descriptive identity. Unknown keys are rejected.",
+      "additionalProperties": false,
       "required": ["dataset_id", "dataset_version", "name", "description", "license"],
       "properties": {
         "dataset_id": { "$ref": "#/$defs/datasetId" },

@@ -244,7 +244,7 @@ def _metadata_from_summary(row: dict) -> DatasetMetadata:
     Returns:
         The reconstructed metadata (``source_url`` unknown, schema version defaulted).
     """
-    return DatasetMetadata.from_dict(
+    return DatasetMetadata.model_validate(
         {
             "dataset_id": row["dataset_id"],
             "dataset_version": row["version"],

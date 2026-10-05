@@ -1,3 +1,4 @@
+from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeNetInvalidCardError
@@ -32,7 +33,7 @@ def test_from_yaml_round_trips_a_valid_card(tmp_path):
 
 
 def test_from_yaml_rejects_a_card_missing_required_fields(tmp_path):
-    with pytest.raises(TimeNetInvalidCardError, match="failed validation"):
+    with pytest.raises(ValidationError, match="Field required"):
         DatasetMetadata.from_yaml(_write(tmp_path, "dataset_id: demo/hello-world\n"))
 
 
@@ -43,5 +44,5 @@ def test_from_yaml_rejects_a_non_mapping(tmp_path):
 
 def test_from_yaml_rejects_a_bad_enum_value(tmp_path):
     bad = _VALID_CARD.replace("license: CC-BY-4.0", "license: NOT-A-LICENSE")
-    with pytest.raises(TimeNetInvalidCardError):
+    with pytest.raises(ValidationError, match="license"):
         DatasetMetadata.from_yaml(_write(tmp_path, bad))

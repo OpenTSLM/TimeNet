@@ -316,11 +316,11 @@ def test_unknown_values_backend_rejected():
         Manifest.from_dict(data)
 
 
-def test_unmodeled_metadata_keys_dropped():
+def test_unmodeled_metadata_keys_rejected():
     d = _manifest().to_dict()
     d["metadata"]["concepts"] = ["snomed:80891009"]  # not a modeled field
-    m = Manifest.from_dict(d)  # tolerated, dropped
-    assert not hasattr(m.metadata, "concepts")
+    with pytest.raises(TimeNetInvalidManifestError, match="concepts"):
+        Manifest.from_dict(d)
 
 
 def test_unknown_task_type_rejected():
