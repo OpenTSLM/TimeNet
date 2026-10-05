@@ -1,6 +1,7 @@
 """The in-memory TimeF model a connector populates during ``convert()``."""
 
 from timenet.dataset.axis import AxisType, IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis
+from timenet.dataset.composition import RecordImport
 from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.dataset.selection import SignalSelection
@@ -13,6 +14,7 @@ __all__ = [
     "IrregularAxis",
     "OrdinalAxis",
     "Record",
+    "RecordImport",
     "RegularAxis",
     "Signal",
     "SignalSelection",
