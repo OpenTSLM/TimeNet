@@ -1,8 +1,9 @@
 """Hydrate the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from fractions import Fraction
 from functools import partial
 import json
@@ -14,6 +15,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset.composition import RecordImport, inherited_state
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
@@ -43,6 +45,8 @@ from timenet.types.wire import ValueDtype
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
 OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
+ParentRecords = Callable[[str, Sequence[str], bool], Iterable[Record]]
+"""Resolve imported records: ``(parent_alias, record_ids)`` to the parent's Records in that order."""
 
 
 class _LoadedAxis(NamedTuple):
@@ -57,10 +61,10 @@ class _RecordRow(NamedTuple):
 
     record_key: int
     record_id: str
-    clock_id: int
+    clock_id: int | None
     time_span_start_us: int | None
     time_span_end_us: int | None
-    metadata: str
+    metadata: str | None
 
 
 class _SourceRow(NamedTuple):
@@ -217,7 +221,7 @@ def _signal_ids_cte(name: str, table: str, keys_column: str, group_by: tuple[str
         FROM (
             SELECT {grouped}, unnest({keys_column}) AS signal_key, generate_subscripts({keys_column}, 1) AS ordinal
             FROM {table}
-        ) JOIN signals USING (signal_key)
+        ) JOIN signal_refs USING (signal_key)
         GROUP BY {grouped}
     )"""  # noqa: S608 - fixed identifiers
 
@@ -383,6 +387,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        parent_records: ParentRecords | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -391,6 +396,8 @@ class DuckDBControlReader:
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            parent_records: Resolver for records imported from parent datasets. Required to read a
+                composed dataset.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -404,6 +411,8 @@ class DuckDBControlReader:
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
+        self._parent_records = parent_records
+        self._record_imports: dict[str, str] | None = None
         self._record_keys: dict[str, int] = {}
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._task_facts: _TaskFacts | None = None
@@ -434,6 +443,47 @@ class DuckDBControlReader:
         return tuple(
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
+
+    def record_imports(self) -> dict[str, str]:
+        """Return the parent alias of every imported Record, keyed by record ID.
+
+        Returns:
+            ``record_id -> parent_alias``.
+        """
+        if self._record_imports is None:
+            rows = self.connection.execute(
+                """SELECT records.record_id, record_imports.parent_alias
+                   FROM record_imports JOIN records USING (record_key)
+                   ORDER BY records.record_id"""
+            ).fetchall()
+            self._record_imports = dict(rows)
+        return self._record_imports
+
+    def read_record_imports(self, records: Iterable[Record]) -> dict[str, RecordImport]:
+        """Restore ownership state for rewriting hydrated records without copying parent values.
+
+        Returns:
+            Imported records keyed by their child-visible IDs.
+        """
+        imports = self.record_imports()
+        if not imports:
+            return {}
+        inherited: dict[str, set[str]] = defaultdict(set)
+        for record_id, occurrence_id in self.connection.execute(
+            """SELECT records.record_id, imported_annotations.occurrence_id
+               FROM imported_annotations JOIN records USING (record_key)"""
+        ).fetchall():
+            inherited[record_id].add(occurrence_id)
+        result = {}
+        for record in records:
+            if record.id in imports:
+                ids = frozenset(
+                    a.occurrence_id
+                    for a in record.annotations
+                    if a.occurrence_id is not None and a.occurrence_id in inherited[record.id]
+                )
+                result[record.id] = RecordImport(imports[record.id], ids, inherited_state(record, ids))
+        return result
 
     def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
         self,
@@ -483,6 +533,10 @@ class DuckDBControlReader:
         object_keys = [*record_keys, *source_keys, *signal_keys]
         annotation_keys = None if read_all else object_keys
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
+        imports = self.record_imports()
+        inherited = self._inherited_records(
+            {rid: imports[rid] for rid in order if rid in imports}, annotations, with_annotations=with_annotations
+        )
         axes = self._read_axes({row.axis_key for row in signal_rows})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
@@ -525,7 +579,8 @@ class DuckDBControlReader:
                 )
             )
 
-        missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
+        # Imported records use their parent's clock.
+        missing_clocks = {row.clock_id for row in rows if row.clock_id is not None} - self._clock_cache.keys()
         if missing_clocks:
             for clock_id, timestamp in self.connection.execute(
                 "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
@@ -556,6 +611,9 @@ class DuckDBControlReader:
 
         records: list[Record] = []
         for record_id in order:
+            if record_id in inherited:
+                records.append(inherited[record_id])
+                continue
             record_row = by_id[record_id]
             span = None
             if record_row.time_span_start_us is not None:
@@ -570,7 +628,7 @@ class DuckDBControlReader:
             record = Record(
                 record_id=record_id,
                 sources=root_sources,
-                start_time=self._clock_cache[record_row.clock_id],
+                start_time=self._clock_cache[_required(record_row.clock_id, f"the clock of record {record_id!r}")],
                 annotations=annotations.get(("Record", record_id), ()),
                 time_span=span,
                 metadata=_decode_json(record_row.metadata, default={}),
@@ -582,6 +640,52 @@ class DuckDBControlReader:
                 f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
             )
         return tuple(records)
+
+    def _inherited_records(
+        self,
+        imported: Mapping[str, str],
+        annotations: Mapping[tuple[str, str], tuple[Annotation, ...]],
+        *,
+        with_annotations: bool,
+    ) -> dict[str, Record]:
+        """Resolve imported proxies to their parent Records, with one parent read per alias.
+
+        Args:
+            imported: Imported record ids to resolve, each with its parent alias.
+            annotations: This layer's annotation occurrences by ``(object type, object id)``.
+            with_annotations: Whether parent readers should hydrate annotations.
+
+        Returns:
+            Parent Records carrying this layer's record annotations, keyed by record id.
+
+        Raises:
+            TimeFFormatError: If the parent resolver is missing or does not return the requested records.
+        """
+        if not imported:
+            return {}
+        if self._parent_records is None:
+            raise TimeFFormatError(f"{self.path} imports records from parents, but no parent reader is attached")
+        by_alias: dict[str, list[str]] = defaultdict(list)
+        for record_id, alias in imported.items():
+            by_alias[alias].append(record_id)
+        resolved: dict[str, Record] = {}
+        for alias, record_ids in by_alias.items():
+            try:
+                parents = tuple(self._parent_records(alias, record_ids, with_annotations))
+            except TimeFValidationError as exc:
+                # A missing parent record means this layer has an invalid proxy.
+                raise TimeFFormatError(
+                    f"{self.path} imports records that parent {alias!r} does not hold: {exc}"
+                ) from exc
+            if [record.id for record in parents] != record_ids:
+                raise TimeFFormatError(f"parent {alias!r} did not return the imported records {record_ids}")
+            for record in parents:
+                # Child tasks reference the overlay occurrences by their stored ids, so they are kept
+                # as read. ``replace`` re-runs Record validation against the inherited hierarchy. The
+                # parent's tasks are not this layer's tasks.
+                overlay = annotations.get(("Record", record.id), ())
+                resolved[record.id] = replace(record, annotations=(*record.annotations, *overlay), task_ids=())
+        return resolved
 
     def _read_rows(
         self,
@@ -867,7 +971,7 @@ class DuckDBControlReader:
                 FROM task_targets x
                 JOIN tasks t USING (task_key)
                 LEFT JOIN records ON records.record_key = x.record_key
-                LEFT JOIN signals ON signals.signal_key = x.signal_key
+                LEFT JOIN signal_refs signals ON signals.signal_key = x.signal_key
                 LEFT JOIN span_ids ON span_ids.task_key = x.task_key AND span_ids.position = x.position
                 {where}
                 ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
@@ -1099,7 +1203,7 @@ class DuckDBControlReader:
         if not requested:
             return {}
         rows = self.connection.execute(
-            "SELECT signal_key, signal_id FROM signals WHERE signal_key IN (SELECT unnest(?))",
+            "SELECT signal_key, signal_id FROM signal_refs WHERE signal_key IN (SELECT unnest(?))",
             [requested],
         ).fetchall()
         if len(rows) != len(requested):
@@ -1743,7 +1847,7 @@ class _TaskHydration:
         if not occurrence_keys:
             return {}
         rows = self.connection.execute(
-            "SELECT occurrence_key, occurrence_id FROM annotation_occurrences WHERE occurrence_key IN (SELECT unnest(?))",
+            "SELECT occurrence_key, occurrence_id FROM annotation_refs WHERE occurrence_key IN (SELECT unnest(?))",
             [sorted(occurrence_keys)],
         ).fetchall()
         resolved: dict[int, Annotation] = {}
