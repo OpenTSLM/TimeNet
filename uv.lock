@@ -27,6 +27,7 @@ dev = [
     { name = "edfio", specifier = ">=0.4.14" },
     { name = "huggingface-hub", specifier = ">=0.20" },
     { name = "hypothesis", specifier = ">=6.140" },
+    { name = "jsonschema", specifier = ">=4.18" },
     { name = "moto", extras = ["server"], specifier = ">=5" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.0.3" },
@@ -3414,7 +3415,6 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "boto3" },
-    { name = "jsonschema" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "torch", version = "2.13.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
@@ -3425,7 +3425,6 @@ all = [
     { name = "zarr", version = "3.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 build = [
-    { name = "jsonschema" },
     { name = "pyyaml" },
     { name = "uv" },
 ]
@@ -3451,7 +3450,6 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.5,<1.6" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jaxtyping", specifier = ">=0.3" },
-    { name = "jsonschema", marker = "extra == 'build'", specifier = ">=4.18" },
     { name = "numpy", specifier = ">=2.1" },
     { name = "pint", specifier = ">=0.25" },
     { name = "pyarrow", specifier = ">=21" },
