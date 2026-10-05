@@ -21,6 +21,7 @@ from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
+from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     Task,
@@ -39,15 +40,9 @@ _TASK_BATCH_SIZE = _ROW_BATCH_SIZE
 
 
 def _json(value: object) -> str:
-    """Return deterministic JSON and name unsupported values as validation failures.
-
-    Raises:
-        TimeFValidationError: If ``value`` is not JSON-compatible.
-    """
-    try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise TimeFValidationError(f"value is not JSON-compatible: {value!r}") from exc
+    """Return deterministic JSON after validating its value."""
+    validated = validate_json_value(value)
+    return json.dumps(validated, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _validated_irregular_offsets(signal: Signal) -> np.ndarray:

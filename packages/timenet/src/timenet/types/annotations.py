@@ -19,6 +19,7 @@ import pint
 from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
+from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
@@ -71,11 +72,11 @@ class Annotation:
     """Reusable content identifier, a UUIDv7 string by default."""
     occurrence_id: str | None = field(default=None, compare=False)
     """Identity of one attachment. It is assigned by ``annotate()``."""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonMapping = field(default_factory=dict)
     """Optional metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
-    occurrence_metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+    occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
 
     def __post_init__(self) -> None:
@@ -93,6 +94,12 @@ class Annotation:
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
+        object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
+        object.__setattr__(
+            self,
+            "occurrence_metadata",
+            validate_json_mapping(self.occurrence_metadata),
+        )
         if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
