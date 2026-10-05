@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
+from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, new_id
 
 
@@ -28,7 +29,7 @@ class Source(SupportsAnnotate):
     """Signals produced directly by this source."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to this source."""
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
 
     def __post_init__(self) -> None:
@@ -39,6 +40,7 @@ class Source(SupportsAnnotate):
         """
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
+        self.metadata = validate_json_mapping(self.metadata)
         source_ids = [source.id for source in self.sources]
         signal_ids = [signal.id for signal in self.signals]
         if len(source_ids) != len(set(source_ids)):
