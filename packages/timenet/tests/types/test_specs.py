@@ -4,7 +4,8 @@ import pint
 from pydantic import ValidationError
 import pytest
 
-from timenet.types import TimeSeriesSpec, ureg
+from timenet.types import DatasetSchema, TimeSeriesSpec, ureg
+from timenet.types.specs import Unit
 
 
 def _ecg_spec(**overrides):
@@ -63,7 +64,7 @@ def test_spec_value_unit_unconstrained():
 class _WithGain(TimeSeriesSpec):
     """A spec subclass adding its own unit field (module scope so it pickles)."""
 
-    unit_gain: pint.Unit = ureg.bpm
+    unit_gain: Unit = ureg.bpm
 
 
 def test_pickle_round_trips_a_subclass_added_unit_field():
@@ -132,3 +133,17 @@ def test_pickle_round_trips_str_dtype():
     spec = _ecg_spec(dtype="str")
     restored = pickle.loads(pickle.dumps(spec))
     assert restored == spec
+
+
+def test_pickling_leaves_the_source_spec_untouched():
+    # Pydantic's __getstate__ returns the live __dict__. Converting units in place would turn the
+    # original's unit into a string and leave a bookkeeping key behind, so a spec that was sent to a
+    # DataLoader worker could no longer be nested in a DatasetSchema or pickled a second time.
+    spec = _ecg_spec()
+    pickle.dumps(spec)
+    assert isinstance(spec.unit_value, pint.Unit)
+    assert spec == _ecg_spec()
+    assert DatasetSchema(time_series_specs=(spec,)).time_series_specs[0] == spec
+    twice = pickle.loads(pickle.dumps(pickle.loads(pickle.dumps(spec))))
+    assert isinstance(twice.unit_value, pint.Unit)
+    assert twice.unit_value == ureg.millivolt

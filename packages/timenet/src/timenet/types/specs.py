@@ -45,6 +45,30 @@ UnitValue = Annotated[
 """A Pint unit represented by its canonical string on the wire."""
 
 
+def _to_required_unit(value: Any) -> pint.Unit:
+    """Return ``value`` as a :data:`ureg`-bound unit, rejecting ``None``.
+
+    Returns:
+        The resolved unit bound to :data:`ureg`.
+
+    Raises:
+        ValueError: If the value is ``None`` or not a unit.
+    """
+    unit = _to_unit(value)
+    if unit is None:
+        raise ValueError("a unit is required")
+    return unit
+
+
+Unit = Annotated[
+    pint.Unit,
+    PlainValidator(_to_required_unit, json_schema_input_type=str),
+    PlainSerializer(str, return_type=str),
+    WithJsonSchema({"type": "string", "minLength": 1}),
+]
+"""A required Pint unit represented by its canonical string on the wire."""
+
+
 #: Spec types the Zarr backend cannot encode as its own array path segment.
 _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_validity"})
 
@@ -98,42 +122,3 @@ class TimeSeriesSpec(TimeFModel):
         if len(set(self.dimension_names)) != len(self.dimension_names):
             raise ValueError("TimeSeriesSpec.dimension_names must be unique")
         return self
-
-    def __getstate__(self) -> dict[str, object]:
-        """Pickle every unit by name rather than as a registry-bound object.
-
-        A :class:`pint.Unit` unpickles against whatever registry is process-global at the time. A spec
-        pickled as-is can come back bound to a foreign registry. It can also fail on ``bpm`` and the
-        other units that only :data:`~timenet.types.units.ureg` defines. Storing names keeps a pickled
-        spec self-describing, which multiprocessing DataLoaders need.
-
-        This method converts every ``pint.Unit`` attribute, not a fixed list. Connectors can subclass
-        this class with field defaults. A subclass that adds its own unit field otherwise pickles it
-        registry-bound and fails on a custom unit. The state records the converted names so
-        :meth:`__setstate__` knows which strings to rebuild.
-
-        Returns:
-            The instance state with every unit field replaced by its name.
-        """
-        state = super().__getstate__()
-        values = state["__dict__"]
-        unit_fields = sorted(name for name, value in values.items() if isinstance(value, pint.Unit))
-        for name in unit_fields:
-            values[name] = str(values[name])
-        values[_UNIT_FIELDS_KEY] = unit_fields
-        return state
-
-    def __setstate__(self, state: dict[str, object]) -> None:
-        """Rebuild the recorded unit fields against the shared registry.
-
-        Args:
-            state: The pickled state produced by :meth:`__getstate__`.
-        """
-        values = cast("dict[str, object]", state["__dict__"])
-        for name in cast("list[str]", values.pop(_UNIT_FIELDS_KEY, [])):
-            values[name] = ureg.Unit(str(values[name]))
-        super().__setstate__(state)
-
-
-#: Key under which :meth:`TimeSeriesSpec.__getstate__` records which attributes held units.
-_UNIT_FIELDS_KEY = "__timenet_unit_fields__"
