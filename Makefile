@@ -1,4 +1,4 @@
-.PHONY: sync test test-unit test-connectors check check-ci install-hooks lint-fix build license-check docs docs-serve docs-preview docs-datasets docs-api clean
+.PHONY: sync test test-unit test-connectors check check-ci install-hooks lint-fix build license-check schemas schemas-check docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
 	uv sync --all-groups --all-extras
@@ -59,7 +59,7 @@ build:
 	uv build --package timenet
 	uv build --package timenet-connectors
 
-check:
+check: schemas-check
 	uv run ruff format .
 	uv run ruff check .
 	uv run ty check .
@@ -78,6 +78,12 @@ check-ci:
 
 lint-fix:
 	uv run ruff check . --fix
+
+schemas:
+	uv run python scripts/gen_schemas.py
+
+schemas-check:
+	uv run python scripts/gen_schemas.py --check
 
 install-hooks:
 	uv run pre-commit install

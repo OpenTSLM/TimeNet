@@ -1,74 +1,273 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.timenet.ai/schemas/manifest.schema.json",
-  "title": "TimeNet Dataset Manifest",
-  "description": "The compiled manifest.json: the single source a consumer reads to interpret a dataset version. Describes the serialized shape produced by Manifest.to_dict().",
-  "type": "object",
-  "required": ["timef_format_version", "dataset_id", "metadata", "files"],
-  "properties": {
-    "timef_format_version": { "type": "integer", "const": 1 },
-    "dataset_id": { "$ref": "#/$defs/datasetId" },
-    "metadata": { "$ref": "#/$defs/metadata" },
-    "schema": { "$ref": "#/$defs/schema" },
-    "counts": { "$ref": "#/$defs/counts" },
-    "files": { "$ref": "#/$defs/files" },
-    "values_backend": {
-      "type": "string",
-      "enum": ["parquet", "zarr"],
-      "description": "Storage backend for the time-series values plane. Determines how files.time_series and the index's chunk locator are interpreted. Defaults to 'parquet' when absent."
-    },
-    "value_encoding": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/valueEncoding" },
-      "description": "Map of spec_type to the values-column encoding its shards carry. Provenance only: Parquet records the applied encoding in each file's footer, so a reader does not need this. Empty or absent for a backend with no such choice."
-    },
-    "build_env": {
-      "type": "object",
-      "description": "Provenance for the environment that produced the version. No reader consults it to interpret the data. Empty when a build records no provenance.",
-      "properties": {
-        "python": { "type": "string", "description": "The Python interpreter version, for example '3.13.12'." },
-        "packages": {
-          "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Installed distribution name to version, sorted by name."
-        }
-      }
-    }
-  },
   "$defs": {
-    "datasetId": {
-      "type": "string",
-      "pattern": "^(?!\\.)[A-Za-z0-9._-]+/(?!\\.)[A-Za-z0-9._-]+$",
-      "description": "HuggingFace-style org/name: exactly one slash, and no segment may start with '.'."
-    },
-    "semver": {
-      "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "description": "major.minor.patch with non-negative integer components."
-    },
-    "license": {
-      "type": "string",
-      "description": "SPDX-style license identifier. Kept in sync with timenet.types.License by a drift test.",
+    "Access": {
+      "description": "How a user obtains the source data.",
       "enum": [
-        "MIT",
-        "Apache-2.0",
-        "BSD-2-Clause",
-        "BSD-3-Clause",
-        "GPL-3.0",
-        "LGPL-3.0",
-        "MPL-2.0",
-        "CC0-1.0",
-        "CC-BY-4.0",
-        "CC-BY-SA-4.0",
-        "CC-BY-NC-4.0",
-        "ODC-By-1.0",
-        "ODbL-1.0",
-        "other"
-      ]
+        "open",
+        "credentialed",
+        "restricted"
+      ],
+      "title": "Access",
+      "type": "string"
     },
-    "domain": {
-      "type": "string",
-      "description": "Kept in sync with timenet.types.Domain by a drift test.",
+    "AnnotationDescriptor": {
+      "additionalProperties": false,
+      "description": "Type-level projection of an annotation key, stored in the schema and manifest.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "annotation_type": {
+          "$ref": "#/$defs/AnnotationType"
+        },
+        "value_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "bool",
+                "int",
+                "float",
+                "str",
+                "list"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Type"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "key",
+        "annotation_type"
+      ],
+      "title": "AnnotationDescriptor",
+      "type": "object"
+    },
+    "AnnotationType": {
+      "description": "Name the shape an annotation key takes across the dataset. It is a schema-level projection in the manifest.",
+      "enum": [
+        "static",
+        "point",
+        "interval"
+      ],
+      "title": "AnnotationType",
+      "type": "string"
+    },
+    "BuildEnvironment": {
+      "additionalProperties": false,
+      "description": "Build-provenance fields recorded in a manifest.",
+      "properties": {
+        "python": {
+          "title": "Python",
+          "type": "string"
+        },
+        "packages": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Packages",
+          "type": "object"
+        }
+      },
+      "title": "BuildEnvironment",
+      "type": "object"
+    },
+    "DatasetMetadata": {
+      "additionalProperties": false,
+      "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "dataset_version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "license": {
+          "$ref": "#/$defs/License"
+        },
+        "domains": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Domain"
+          },
+          "title": "Domains",
+          "type": "array"
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        },
+        "license_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License Url"
+        },
+        "citation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation"
+        },
+        "access": {
+          "$ref": "#/$defs/Access",
+          "default": "open"
+        },
+        "access_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Access Url"
+        },
+        "yaml_schema_version": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Yaml Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "dataset_version",
+        "name",
+        "description",
+        "license"
+      ],
+      "title": "DatasetMetadata",
+      "type": "object"
+    },
+    "DatasetSchema": {
+      "additionalProperties": false,
+      "description": "A dataset's type declaration, derived from its data (never hand-authored).\n\nIt holds flat descriptor instances for specs and annotations. It also holds the real built-in\n:class:`~timenet.types.tasks.Task` subclasses, resolved against the registry instead of reconstructed.",
+      "properties": {
+        "time_series_specs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TimeSeriesSpec"
+          },
+          "title": "Time Series Specs",
+          "type": "array"
+        },
+        "annotations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AnnotationDescriptor"
+          },
+          "title": "Annotations",
+          "type": "array"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "task_type": {
+                "enum": [
+                  "classification",
+                  "answer",
+                  "scalar_prediction",
+                  "temporal_localization",
+                  "forecasting",
+                  "ts_editing",
+                  "ts_generation",
+                  "ts_correspondence"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "task_type"
+            ],
+            "type": "object"
+          },
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "title": "DatasetSchema",
+      "type": "object"
+    },
+    "Domain": {
+      "description": "Describes what kind of data a dataset contains. A dataset may declare more than one.",
       "enum": [
         "health",
         "cardiology",
@@ -84,144 +283,315 @@
         "observability",
         "audio",
         "general"
-      ]
+      ],
+      "title": "Domain",
+      "type": "string"
     },
-    "annotationType": {
-      "type": "string",
-      "description": "Kept in sync with timenet.types.AnnotationType by a drift test.",
-      "enum": ["static", "point", "interval"]
-    },
-    "valueEncoding": {
-      "type": "string",
-      "description": "Parquet encoding of the shard values column. Kept in sync with timenet.writer.value_encoding.ValueEncoding by a drift test.",
-      "enum": [
-        "dictionary",
-        "byte_stream_split",
-        "plain"
-      ]
-    },
-    "valueType": {
-      "type": "string",
-      "description": "The manifest value_type tag for an annotation value. Kept in sync with timenet.types.value_type_of by a drift test.",
-      "enum": ["bool", "int", "float", "str", "list"]
-    },
-    "taskType": {
-      "type": "string",
-      "description": "Kept in sync with timenet.types.TaskType by a drift test.",
-      "enum": [
-        "classification",
-        "answer",
-        "scalar_prediction",
-        "temporal_localization",
-        "forecasting",
-        "ts_editing",
-        "ts_generation",
-        "ts_correspondence"
-      ]
-    },
-    "access": {
-      "type": "string",
-      "description": "Kept in sync with timenet.types.Access by a drift test.",
-      "enum": ["open", "credentialed", "restricted"]
-    },
-    "metadata": {
-      "type": "object",
-      "description": "Descriptive identity. Unknown keys are rejected.",
+    "FilePart": {
       "additionalProperties": false,
-      "required": ["dataset_id", "dataset_version", "name", "description", "license"],
+      "description": "One data file of a dataset version. It has a path, a checksum, and a byte size in one record.\n\nThe path, checksum, and size stay together in one record. A reader does not need to join a file\nto its digest across two structures. A consumer can verify integrity and plan a download from\nthe manifest alone.",
       "properties": {
-        "dataset_id": { "$ref": "#/$defs/datasetId" },
-        "dataset_version": { "$ref": "#/$defs/semver" },
-        "name": { "type": "string" },
-        "description": { "type": "string" },
-        "license": { "$ref": "#/$defs/license" },
-        "domains": { "type": "array", "items": { "$ref": "#/$defs/domain" } },
-        "tags": { "type": "array", "items": { "type": "string" } },
-        "source_url": { "type": ["string", "null"] },
-        "license_url": { "type": ["string", "null"] },
-        "citation": { "type": ["string", "null"] },
-        "access": { "$ref": "#/$defs/access" },
-        "access_url": { "type": ["string", "null"] },
-        "yaml_schema_version": { "type": "integer" }
-      }
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Checksum",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "checksum",
+        "size"
+      ],
+      "title": "FilePart",
+      "type": "object"
     },
-    "schema": {
-      "type": "object",
-      "description": "A faithful serialization of DatasetSchema (flat descriptors), derived from the data.",
+    "InputModality": {
+      "description": "A kind of input supplied to a task.",
+      "enum": [
+        "text",
+        "time_series",
+        "image",
+        "audio",
+        "no_input"
+      ],
+      "title": "InputModality",
+      "type": "string"
+    },
+    "License": {
+      "description": "The legal license of the source data. Values are SPDX-style identifiers.",
+      "enum": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "GPL-3.0",
+        "LGPL-3.0",
+        "MPL-2.0",
+        "CC0-1.0",
+        "CC-BY-4.0",
+        "CC-BY-SA-4.0",
+        "CC-BY-NC-4.0",
+        "ODC-By-1.0",
+        "ODbL-1.0",
+        "other"
+      ],
+      "title": "License",
+      "type": "string"
+    },
+    "ManifestCounts": {
+      "additionalProperties": false,
+      "description": "TimeF entity counts recorded for inspection without opening DuckDB.",
       "properties": {
-        "time_series_specs": { "type": "array", "items": { "$ref": "#/$defs/timeSeriesSpec" } },
-        "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
-        "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
-      }
+        "records": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Records",
+          "type": "integer"
+        },
+        "sources": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sources",
+          "type": "integer"
+        },
+        "signals": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Signals",
+          "type": "integer"
+        },
+        "axes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Axes",
+          "type": "integer"
+        },
+        "annotation_contents": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Annotation Contents",
+          "type": "integer"
+        },
+        "annotation_occurrences": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Annotation Occurrences",
+          "type": "integer"
+        },
+        "tasks": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": "Tasks",
+          "type": "object"
+        },
+        "signal_chunks": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Signal Chunks",
+          "type": "integer"
+        },
+        "signals_by_spec": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": "Signals By Spec",
+          "type": "object"
+        }
+      },
+      "title": "ManifestCounts",
+      "type": "object"
     },
-    "timeSeriesSpec": {
-      "type": "object",
-      "required": ["spec_type", "name", "unit_value"],
-      "properties": {
-        "spec_type": { "type": "string", "minLength": 1 },
-        "name": { "type": "string" },
-        "unit_value": { "type": ["string", "null"], "minLength": 1, "description": "A pint unit name, or null when the source does not establish a unit." },
-        "dtype": { "type": "string", "enum": ["bool", "enum", "float32", "float64", "int8", "int16", "int32", "str", "uint8", "uint16", "uint32"], "default": "float32" },
-        "categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Ordered codebook for dtype='enum'. Empty for every other dtype." },
-        "value_shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "default": [] },
-        "nullable": { "type": "boolean", "default": false, "description": "Whether whole timesteps can be missing. Arrow validity marks present timesteps. Zarr stores this validity in parallel arrays." },
-        "modality": { "type": "string", "enum": ["text", "time_series", "image", "audio"], "default": "time_series" },
-        "dimension_names": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
-      }
-    },
-    "annotation": {
-      "type": "object",
-      "required": ["key", "annotation_type"],
-      "properties": {
-        "key": { "type": "string" },
-        "annotation_type": { "$ref": "#/$defs/annotationType" },
-        "value_type": { "anyOf": [{ "$ref": "#/$defs/valueType" }, { "type": "null" }] },
-        "unit": { "type": ["string", "null"] },
-        "description": { "type": ["string", "null"] }
-      }
-    },
-    "task": {
-      "type": "object",
-      "required": ["task_type"],
-      "properties": { "task_type": { "$ref": "#/$defs/taskType" } }
-    },
-    "counts": {
-      "type": "object",
-      "properties": {
-        "records": { "type": "integer" },
-        "sources": { "type": "integer" },
-        "signals": { "type": "integer" },
-        "axes": { "type": "integer" },
-        "annotation_contents": { "type": "integer" },
-        "annotation_occurrences": { "type": "integer" },
-        "tasks": { "type": "object", "additionalProperties": { "type": "integer" } },
-        "signal_chunks": { "type": "integer" },
-        "signals_by_spec": { "type": "object", "additionalProperties": { "type": "integer" } }
-      }
-    },
-    "files": {
-      "type": "object",
-      "description": "File descriptors, grouped by kind. Each artifact is a list of file parts, never a bare string.",
-      "required": ["control", "time_series"],
+    "ManifestFiles": {
+      "additionalProperties": false,
+      "description": "Descriptors for every TimeF artifact. Readers use this data rather than a file glob.",
       "properties": {
         "control": {
-          "type": "array",
-          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
           "maxItems": 1,
-          "items": { "$ref": "#/$defs/filePart" }
+          "minItems": 1,
+          "title": "Control",
+          "type": "array"
         },
-        "time_series": { "type": "array", "items": { "$ref": "#/$defs/filePart" } }
-      }
+        "time_series": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "title": "Time Series",
+          "type": "array"
+        }
+      },
+      "required": [
+        "control"
+      ],
+      "title": "ManifestFiles",
+      "type": "object"
     },
-    "filePart": {
-      "type": "object",
-      "description": "One data file: its version-relative path, checksum, and byte size.",
-      "required": ["path", "checksum", "size"],
+    "TimeSeriesSpec": {
+      "additionalProperties": false,
+      "description": "Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.\n\nThe spec carries no unit for time or for a sampling rate. Time offsets are integer microseconds and\na cadence is a Fraction of them, so those units can only be ``second`` and ``hertz``.",
       "properties": {
-        "path": { "type": "string", "minLength": 1, "description": "Version-relative POSIX path." },
-        "checksum": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The file's 'sha256:<hex>' digest." },
-        "size": { "type": "integer", "minimum": 0, "description": "The file's size in bytes." }
-      }
+        "spec_type": {
+          "minLength": 1,
+          "title": "Spec Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "unit_value": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Unit Value"
+        },
+        "dtype": {
+          "default": "float32",
+          "enum": [
+            "bool",
+            "enum",
+            "float32",
+            "float64",
+            "int8",
+            "int16",
+            "int32",
+            "str",
+            "uint8",
+            "uint16",
+            "uint32"
+          ],
+          "title": "Dtype",
+          "type": "string"
+        },
+        "categories": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "value_shape": {
+          "default": [],
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "title": "Value Shape",
+          "type": "array"
+        },
+        "dimension_names": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Dimension Names",
+          "type": "array"
+        },
+        "nullable": {
+          "default": false,
+          "title": "Nullable",
+          "type": "boolean"
+        },
+        "modality": {
+          "$ref": "#/$defs/InputModality",
+          "default": "time_series"
+        }
+      },
+      "required": [
+        "spec_type",
+        "name",
+        "unit_value"
+      ],
+      "title": "TimeSeriesSpec",
+      "type": "object"
+    },
+    "ValuesBackend": {
+      "description": "Storage backend for the time-series values plane, recorded as the manifest ``values_backend`` tag.\n\nEach member value is the on-disk tag. This class is a :class:`~enum.StrEnum`, so each member is\nalso a plain ``str``. Each member compares and serializes like its bare tag.",
+      "enum": [
+        "parquet",
+        "zarr"
+      ],
+      "title": "ValuesBackend",
+      "type": "string"
     }
-  }
+  },
+  "additionalProperties": false,
+  "description": "The single source of truth a consumer reads to interpret a dataset version.",
+  "properties": {
+    "dataset_id": {
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/DatasetMetadata"
+    },
+    "files": {
+      "$ref": "#/$defs/ManifestFiles"
+    },
+    "schema": {
+      "$ref": "#/$defs/DatasetSchema"
+    },
+    "counts": {
+      "$ref": "#/$defs/ManifestCounts"
+    },
+    "values_backend": {
+      "$ref": "#/$defs/ValuesBackend",
+      "default": "parquet"
+    },
+    "value_encoding": {
+      "additionalProperties": {
+        "enum": [
+          "dictionary",
+          "byte_stream_split",
+          "plain"
+        ],
+        "type": "string"
+      },
+      "title": "Value Encoding",
+      "type": "object"
+    },
+    "build_env": {
+      "$ref": "#/$defs/BuildEnvironment"
+    },
+    "timef_format_version": {
+      "maximum": 1,
+      "minimum": 1,
+      "title": "Timef Format Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "dataset_id",
+    "metadata",
+    "files",
+    "timef_format_version"
+  ],
+  "title": "Manifest",
+  "type": "object"
 }
