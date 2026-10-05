@@ -177,6 +177,7 @@ class TimeFWriter:
         """Serialize every artifact except the manifest into the staging directory."""
         if self._dataset.schema is None:
             self._dataset.derive_schema()
+        self._dataset.check_records()
         self._validate_shared_annotations()
         self._resolve_id_types()
 
@@ -405,6 +406,7 @@ class TimeFWriter:
             value_encoding=self._value_encoding,
             build_env=build_env(),
             timef_format_version=1,
+            dependencies=self._dataset.dependencies,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
