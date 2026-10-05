@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 from _fake_registry import build_fake, build_publish_fake
 import httpx
+from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
@@ -41,6 +43,26 @@ def test_list_datasets_maps_summaries(version_dir, tmp_path):
     assert metadatas[0].access is Access.OPEN
     assert metadatas[0].access_url is None
     assert [request.url.path for request in requests] == ["/api/v1/datasets"]
+
+
+def test_list_datasets_rejects_malformed_payload_with_field_path(tmp_path):
+    def handler(request):
+        assert request.url.path == "/api/v1/datasets"
+        return httpx.Response(200, json={"datasets": [{"dataset_id": 3}]})
+
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path)
+    with pytest.raises(ValidationError, match=r"datasets\.0\.dataset_id"):
+        registry.list_datasets()
+
+
+def test_list_datasets_exposes_pydantic_json_errors(tmp_path):
+    registry = RemoteRegistry(
+        "http://api.local",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=b"not json")),
+        cache_dir=tmp_path,
+    )
+    with pytest.raises(ValidationError, match="Invalid JSON"):
+        registry.list_datasets()
 
 
 def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
@@ -197,6 +219,46 @@ def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
     )
     with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
         registry.store(make_dataset(), force=True)
+
+
+def test_store_rejects_unsafe_publish_paths(tmp_path):
+    def handler(request):
+        if request.url.path.endswith("/publish"):
+            return httpx.Response(200, json={"files": ["../escape"]})
+        return httpx.Response(200, json={})
+
+    registry = RemoteRegistry(
+        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
+    )
+    with pytest.raises(ValidationError, match="stay within the dataset root"):
+        registry.store(make_dataset(), force=True)
+
+
+def test_store_rejects_malformed_upload_grant(tmp_path):
+    def handler(request):
+        if request.url.path.endswith("/publish"):
+            manifest = json.loads(request.content)
+            files = [part["path"] for group in manifest["files"].values() for part in group]
+            return httpx.Response(200, json={"files": files})
+        if request.url.path.endswith("/publish/upload-url"):
+            return httpx.Response(200, json={"url": "not-a-url", "headers": []})
+        return httpx.Response(200, json={})
+
+    registry = RemoteRegistry(
+        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
+    )
+    with pytest.raises(ValidationError, match="headers"):
+        registry.store(make_dataset(), force=True)
+
+
+def test_latest_detail_rejects_non_string_version(tmp_path):
+    def handler(request):
+        assert request.url.path == "/api/v1/datasets/demo/example"
+        return httpx.Response(200, json={"version": 3})
+
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path)
+    with pytest.raises(ValidationError, match="version"):
+        registry.get_manifest("demo/example")
 
 
 def test_remote_registry_uses_client_storage_path(tmp_path):
