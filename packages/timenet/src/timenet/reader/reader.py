@@ -127,7 +127,7 @@ class TimeFReader:
     @property
     def schema(self) -> DatasetSchema:
         """Return the dataset's type declaration."""
-        return self._manifest.schema
+        return self._manifest.dataset_schema
 
     @property
     def tasks(self) -> tuple[Task, ...]:

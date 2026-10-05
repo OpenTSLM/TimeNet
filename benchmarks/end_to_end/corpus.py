@@ -26,6 +26,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.wire import ValueDtype
 
 
 @dataclass(frozen=True)
@@ -138,7 +139,7 @@ def _scalar_series(
 
 def _nonfloat_series(
     name: str,
-    dtype: str,
+    dtype: ValueDtype,
     values: tuple[str, ...] | np.ndarray,
     scale: int,
     categories: tuple[str, ...] = (),
@@ -181,7 +182,7 @@ def _nonfloat_series(
     )
 
 
-_NONFLOAT_SIGNALS: tuple[tuple[str, str, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
+_NONFLOAT_SIGNALS: tuple[tuple[str, ValueDtype, tuple[str, ...] | np.ndarray, tuple[str, ...]], ...] = (
     ("machine-mode", "int16", np.array([0, 1, 2, 1, 0, 1, 2, 2], dtype=np.int16), ()),
     ("alarm", "bool", np.array([False, False, True, False, True, False, False, True]), ()),
     ("precise", "float64", np.array([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0], dtype=np.float64), ()),

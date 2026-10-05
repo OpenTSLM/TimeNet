@@ -22,7 +22,7 @@ DEFAULT_CHUNK_MAX_BYTES = 1 * 2**20
 DEFAULT_COMPRESSION = "zstd"
 
 
-def check_relative_path(name: str, path: str) -> None:
+def check_relative_path(name: str, path: str) -> str:
     """Reject a path that would resolve outside the dataset root it is meant to stay under.
 
     Callers join a manifest file entry and a registry handle's ``relpath`` onto a root directory
@@ -34,11 +34,15 @@ def check_relative_path(name: str, path: str) -> None:
         name: The name of the field to check. It appears in the error message.
         path: The path to check. It must be relative and rooted inside the dataset.
 
+    Returns:
+        The validated path.
+
     Raises:
         TimeFValidationError: If ``path`` is absolute, or has a ``..`` segment.
     """
     if path.startswith("/") or any(segment == ".." for segment in path.split("/")):
         raise TimeFValidationError(f"{name} must stay within the dataset root, got {path!r}")
+    return path
 
 
 def part_path(template: str, index: int, **fields: str) -> str:

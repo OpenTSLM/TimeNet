@@ -7,7 +7,7 @@ from fractions import Fraction
 from functools import partial
 import json
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar, cast
 
 import duckdb
 import pyarrow as pa
@@ -37,6 +37,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.splits import Split, parse_split
+from timenet.types.wire import ValueDtype
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
@@ -1329,7 +1330,7 @@ class DuckDBControlReader:
             spec_type=row.spec_type,
             name=row.spec_name,
             unit_value=None if row.unit is None else ureg.Unit(row.unit),
-            dtype=row.dtype,
+            dtype=cast("ValueDtype", row.dtype),
             categories=tuple(row.categories),
             value_shape=tuple(row.value_shape),
             dimension_names=tuple(row.dimension_names),

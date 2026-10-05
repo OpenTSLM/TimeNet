@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 import pyarrow as pa
 import pytest
 
@@ -152,7 +150,7 @@ def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
         )
         for signal, spec in zip(
             old_signals,
-            (unknown, replace(unknown, spec_type="ratio", unit_value=ureg.dimensionless)),
+            (unknown, unknown.model_copy(update={"spec_type": "ratio", "unit_value": ureg.dimensionless})),
             strict=True,
         )
     )

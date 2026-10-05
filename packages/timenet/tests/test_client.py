@@ -1,12 +1,12 @@
-import dataclasses
 from pathlib import Path
 
+from pydantic import ValidationError
 import pytest
 
 from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
@@ -83,19 +83,9 @@ def test_download_reports_progress(registry_root, tmp_path):
     assert sum(reported) == expected  # summed to the version's total byte size
 
 
-def test_download_rejects_path_traversal(registry_root, tmp_path):
-    # a corrupt manifest relpath must not let a download write outside the target directory
-    client = TimeNet(registry_root, storage_path=tmp_path / "store")
-    manifest = client.get("timenet/hello-world")
-    bad = dataclasses.replace(
-        manifest,
-        files=dataclasses.replace(
-            manifest.files,
-            time_series=(FilePart("../../escape.txt", "sha256:0", 0),),
-        ),
-    )
-    with pytest.raises(TimeFFormatError, match="escapes"):
-        client._registry.download_version("timenet/hello-world", "1.0.0", tmp_path / "target", manifest=bad)
+def test_manifest_file_rejects_path_traversal():
+    with pytest.raises(ValidationError, match="stay within the dataset root"):
+        FilePart(path="../../escape.txt", checksum="sha256:" + "0" * 64, size=0)
 
 
 def test_download_is_idempotent(registry_root, tmp_path):

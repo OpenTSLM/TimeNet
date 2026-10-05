@@ -3,7 +3,6 @@ import pickle
 from pydantic import ValidationError
 import pytest
 
-from timenet.manifest.manifest import _metadata_to_dict
 from timenet.types import (
     Access,
     AnnotationDescriptor,
@@ -105,7 +104,7 @@ def test_metadata_round_trips_access_and_license_fields():
         access=Access.CREDENTIALED,
         access_url="https://physionet.example/dua",
     )
-    assert DatasetMetadata.model_validate(_metadata_to_dict(m)) == m
+    assert DatasetMetadata.model_validate(m.model_dump(mode="json")) == m
 
 
 def test_metadata_coerces_string_license():

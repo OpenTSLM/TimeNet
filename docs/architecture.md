@@ -95,9 +95,9 @@ can read it directly.
 
 - The manifest describes the version. The SDK reads schema, counts, and file pointers from
   `manifest.json`. The object hierarchy lives in `control.duckdb`.
-- Types are plain dataclasses. Specs and annotation content are typed
-  [descriptors](types.md), so they pickle and round-trip through the reader with no runtime class
-  synthesis. That keeps multiprocessing `DataLoader` workers safe.
+- Wire-facing types are immutable Pydantic models. Runtime objects use typed dataclasses. Specs and
+  annotation content are typed [descriptors](types.md), so they pickle and round-trip through the
+  reader with no runtime class synthesis. That keeps multiprocessing `DataLoader` workers safe.
 - Values are Arrow in, Arrow out. A [`Signal`](timef-dataset.md#signal) exposes `to_arrow()`,
   `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
   per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for

@@ -13,14 +13,17 @@ manifest.
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 import pint
+from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
+from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
+from timenet.types.wire import ValueType
 
 
 @unique
@@ -161,27 +164,22 @@ class SupportsAnnotate(Protocol):
         ...
 
 
-@dataclass(frozen=True)
-class AnnotationDescriptor:
+class AnnotationDescriptor(TimeFModel):
     """Type-level projection of an annotation key, stored in the schema and manifest."""
 
-    key: str
+    key: StrictStr
     """Name of the annotation this descriptor projects."""
     annotation_type: AnnotationType
     """Which of the three annotation shapes this key uses."""
-    value_type: str | None = None
+    value_type: ValueType | None = None
     """Manifest value-type tag (bool, int, float, str, list, or map)."""
-    unit: str | None = None
+    unit: Annotated[StrictStr | None, BeforeValidator(normalize_unit)] = None
     """Optional physical unit of the value."""
-    description: str | None = None
+    description: StrictStr | None = None
     """Optional human-readable description of the annotation."""
 
-    def __post_init__(self) -> None:
-        """Validate ``unit`` against the shared registry."""
-        object.__setattr__(self, "unit", normalize_unit(self.unit))
 
-
-def value_type_of(value: Any) -> str | None:
+def value_type_of(value: Any) -> ValueType | None:
     """Return the manifest ``value_type`` tag for an annotation value.
 
     Args:

@@ -82,7 +82,7 @@ def test_default_ids_are_uuid7():
 
 def test_manifest_has_no_id_encoding(tmp_path):
     version_dir = _write(tmp_path, _uuid_dataset())
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
 
 

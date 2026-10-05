@@ -2,10 +2,11 @@
 
 from importlib.metadata import distributions
 import platform
-from typing import Any
+
+from timenet.manifest import BuildEnvironment
 
 
-def build_env() -> dict[str, Any]:
+def build_env() -> BuildEnvironment:
     """Describe this process's Python version and installed packages.
 
     Under an isolated build the recorded set is exactly the base, the connector's requirements, and
