@@ -17,9 +17,14 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 from timenet.builders import find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetDatasetNotFoundError,
+)
+from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
@@ -163,17 +168,27 @@ class TimeNet:
 
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
+
+        Raises:
+            TimeFFormatError: If a dependency lock or local manifest differs from the registry.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
         self._reject_unhosted_access(dataset_id, version)
-        manifest = self._registry.get_manifest(dataset_id, version)
-        resolved = str(manifest.metadata.dataset_version)
-        target = self._storage / dataset_id / resolved
-        # The registry owns the fetch: the base implementation stages each file and swaps atomically,
-        # and a remote registry overrides it to resolve and stream every file in parallel.
-        self._registry.download_version(
-            dataset_id, resolved, target, force=force, manifest=manifest, progress_cb=progress_cb
-        )
+        closure = self._registry.resolve_versions(dataset_id, version)
+        for node in closure:
+            self._reject_unhosted_access(node.reference.dataset_id, str(node.reference.version))
+        for node in closure:
+            dataset_id, resolved = node.reference.dataset_id, str(node.reference.version)
+            target = self._storage / dataset_id / resolved
+            self._registry.download_version(
+                dataset_id, resolved, target, force=force, manifest=node.manifest, progress_cb=progress_cb
+            )
+            # Cached manifests must match the registry's bytes.
+            if file_checksum(target / "manifest.json") != node.checksum:
+                raise TimeFFormatError(
+                    f"the copy of {node.reference} at {target} does not match the registry's manifest; "
+                    "remove it or download with force=True"
+                )
         return target
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
@@ -221,7 +236,11 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        with self._registry.open_reader(
+            handle.manifest.dataset_id,
+            str(handle.manifest.metadata.dataset_version),
+        ) as reader:
+            return reader.read()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
