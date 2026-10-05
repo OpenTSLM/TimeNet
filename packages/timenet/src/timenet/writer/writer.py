@@ -5,7 +5,7 @@ from itertools import chain
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any
+from typing import Any, cast
 import uuid
 
 import numpy as np
@@ -33,6 +33,7 @@ from timenet.format.schemas import (
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
     ChunkPlacement,
@@ -112,9 +113,9 @@ class TimeFWriter:
         self._compression = compression
         self._compression_level = compression_level
         self._data_page_size = data_page_size
-        self._values_backend_name = values_backend
+        self._values_backend_name = ValuesBackend(values_backend)
         self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
-        self._value_encoding: dict[str, str] = {}
+        self._value_encoding: dict[str, ManifestValueEncoding] = {}
         self._progress_cb = progress_cb
 
         version = str(dataset.metadata.dataset_version)
@@ -331,7 +332,7 @@ class TimeFWriter:
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
         self._value_files = result.files
-        self._value_encoding = dict(result.value_encoding)
+        self._value_encoding = cast("dict[str, ManifestValueEncoding]", dict(result.value_encoding))
         return result.placements
 
     def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
@@ -394,7 +395,7 @@ class TimeFWriter:
         manifest = Manifest(
             dataset_id=self._dataset.metadata.dataset_id,
             metadata=self._dataset.metadata,
-            schema=schema,
+            dataset_schema=schema,
             counts=self._counts,
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
@@ -403,6 +404,7 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
+            timef_format_version=1,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 

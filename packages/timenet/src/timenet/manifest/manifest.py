@@ -1,122 +1,66 @@
-"""The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec.
+"""The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec."""
 
-The manifest is pure data. It has no file I/O. The writer and the reader do the read and write
-operations for the file. The ``schema`` block is a direct serialization of
-:class:`~timenet.types.DatasetSchema` (flat descriptors). No separate set of "entry" types exists to
-keep in sync.
-"""
+from typing import Annotated, Any, Self
 
-from dataclasses import dataclass, field
-import json
-from typing import Any, ClassVar
+from pydantic import Field, StrictStr, model_validator
+from typing_extensions import TypedDict
 
-from timenet.errors import TimeNetInvalidManifestError
-from timenet.format.constants import check_relative_path
 from timenet.manifest.counts import ManifestCounts
-from timenet.manifest.files import FilePart, ManifestFiles
-from timenet.types import (
-    TASKS,
-    AnnotationDescriptor,
-    AnnotationType,
-    DatasetMetadata,
-    DatasetSchema,
-    InputModality,
-    Task,
-    TaskType,
-    TimeSeriesSpec,
-    ureg,
-)
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
+from timenet.manifest.files import ManifestFiles
+from timenet.types import DatasetMetadata, DatasetSchema
+from timenet.types._model import TimeFModel
+from timenet.types.metadata_fields import DatasetId
+from timenet.types.wire import ValueEncoding
+from timenet.values_backends import ValuesBackend
 
 
-@dataclass(frozen=True)
-class Manifest:
-    """The single source of truth a consumer reads to interpret a dataset version.
+class BuildEnvironment(TypedDict, total=False):
+    """Build-provenance fields recorded in a manifest."""
 
-    Raises:
-        TimeNetInvalidManifestError: If ``timef_format_version`` is not a supported version.
-    """
+    python: StrictStr
+    packages: dict[StrictStr, StrictStr]
 
-    SUPPORTED_FORMAT_VERSIONS: ClassVar[frozenset[int]] = frozenset({1})
 
-    dataset_id: str
-    """A denormalized copy of ``metadata.dataset_id``. A reader can get the id without parsing metadata."""
+class Manifest(TimeFModel):
+    """The single source of truth a consumer reads to interpret a dataset version."""
+
+    dataset_id: DatasetId
+    """A denormalized copy of ``metadata.dataset_id``."""
     metadata: DatasetMetadata
-    """Descriptive identity of the dataset (name, version, license, domains, tags)."""
+    """Descriptive identity of the dataset."""
     files: ManifestFiles
-    """Descriptor (path, checksum, size) for every data artifact, grouped by kind."""
-    schema: DatasetSchema = field(default_factory=DatasetSchema)
+    """Descriptor for every data artifact, grouped by kind."""
+    dataset_schema: Annotated[DatasetSchema, Field(alias="schema")] = Field(default_factory=DatasetSchema)
     """Structural schema: time-series specs, annotations, and tasks."""
-    counts: ManifestCounts = field(default_factory=ManifestCounts)
+    counts: ManifestCounts = Field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    values_backend: str = ValuesBackend.PARQUET
+    values_backend: ValuesBackend = ValuesBackend.PARQUET
     """Storage backend for the time-series values plane."""
-    value_encoding: dict[str, str] = field(default_factory=dict)
-    """``spec_type`` -> the values-column encoding that its shards carry.
+    value_encoding: dict[StrictStr, ValueEncoding] = Field(default_factory=dict)
+    """``spec_type`` to the values-column encoding used by its shards."""
+    build_env: BuildEnvironment = Field(default_factory=dict)
+    """The Python version and package set that produced this version."""
+    timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    """The TimeF manifest format version."""
 
-    This field exists only for provenance. Parquet already records the applied encoding in each
-    file's footer, so a reader does not need this field. The field lets a builder see what a build
-    chose without opening a shard. The field is empty for a backend with no such choice.
-    """
-    build_env: dict[str, Any] = field(default_factory=dict)
-    """The Python version and package set that produced this version.
-
-    Provenance only: nothing reads it to interpret the data. It is here so a builder can answer what
-    produced a dataset version without re-deriving it from a build log.
-    """
-    timef_format_version: int = 1
-    """The TimeF manifest format version. The value must be in ``SUPPORTED_FORMAT_VERSIONS``."""
-
-    def __post_init__(self) -> None:
-        """Validate the format version, the values backend, and the denormalized ``dataset_id``.
-
-        ``dataset_id`` is a top-level copy of ``metadata.dataset_id``, so a consumer can read the id
-        without parsing the metadata block. The two values must match.
-
-        Raises:
-            TimeNetInvalidManifestError: If ``timef_format_version`` is unsupported, ``dataset_id`` does
-                not match ``metadata.dataset_id``, or the required control database is missing.
-        """
-        if (
-            type(self.timef_format_version) is not int
-            or self.timef_format_version not in self.SUPPORTED_FORMAT_VERSIONS
-        ):
-            raise TimeNetInvalidManifestError(
-                f"unsupported timef_format_version {self.timef_format_version!r}; "
-                f"supported: {sorted(self.SUPPORTED_FORMAT_VERSIONS)}"
-            )
-        if self.values_backend not in SUPPORTED_VALUES_BACKENDS:
-            raise TimeNetInvalidManifestError(
-                f"unsupported values_backend {self.values_backend!r}; "
-                f"supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
-            )
+    @model_validator(mode="after")
+    def _matching_dataset_id(self) -> Self:
         if self.dataset_id != self.metadata.dataset_id:
-            raise TimeNetInvalidManifestError(
+            raise ValueError(
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
-        if len(self.files.control) != 1:
-            raise TimeNetInvalidManifestError("TimeF manifest must declare exactly one files.control entry")
-
-    # ---- serialization -------------------------------------------------------------------------
+        return self
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the manifest to a JSON-compatible dict with all keys present.
+        """Serialize the manifest to a validated JSON-compatible dict with all keys present.
 
         Returns:
             The canonical dict form.
         """
-        return {
-            "timef_format_version": self.timef_format_version,
-            "dataset_id": self.dataset_id,
-            "metadata": _metadata_to_dict(self.metadata),
-            "schema": _schema_to_dict(self.schema),
-            "counts": _counts_to_dict(self.counts),
-            "files": _files_to_dict(self.files),
-            "values_backend": self.values_backend,
-            "value_encoding": dict(self.value_encoding),
-            "build_env": dict(self.build_env),
-        }
+        # Frozen models still contain mutable dictionaries; validate before publishing them.
+        validated = type(self).model_validate(self)
+        return validated.model_dump(mode="json", by_alias=True)
 
     def to_json(self) -> str:
         """Serialize the manifest to a pretty JSON string.
@@ -124,255 +68,6 @@ class Manifest:
         Returns:
             The JSON text.
         """
-        return json.dumps(self.to_dict(), indent=2)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Manifest":
-        """Parse a manifest dict. Allow missing optional blocks.
-
-        Args:
-            data: The manifest dict, for example the output of ``json.loads``.
-
-        Returns:
-            The parsed :class:`Manifest`.
-
-        Raises:
-            TimeNetInvalidManifestError: If a required key is missing or a block is invalid.
-        """
-        for required in ("timef_format_version", "dataset_id", "metadata", "files"):
-            if required not in data:
-                raise TimeNetInvalidManifestError(f"manifest missing required key {required!r}")
-        if type(data["timef_format_version"]) is not int:
-            raise TimeNetInvalidManifestError("manifest timef_format_version must be an integer")
-        return cls(
-            dataset_id=data["dataset_id"],
-            metadata=_metadata_from_dict(data["metadata"]),
-            files=_files_from_dict(data["files"]),
-            schema=_schema_from_dict(data.get("schema", {})),
-            counts=_counts_from_dict(data.get("counts", {})),
-            values_backend=data.get("values_backend", ValuesBackend.PARQUET),
-            value_encoding=_dict_block(data, "value_encoding"),
-            build_env=_dict_block(data, "build_env"),
-            timef_format_version=data["timef_format_version"],
-        )
-
-    @classmethod
-    def from_json(cls, text: str) -> "Manifest":
-        """Parse a manifest from a JSON string.
-
-        Args:
-            text: The JSON text.
-
-        Returns:
-            The parsed :class:`Manifest`.
-
-        Raises:
-            TimeNetInvalidManifestError: If the text is not valid JSON or a block is invalid.
-        """
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise TimeNetInvalidManifestError(f"manifest is not valid JSON: {exc}") from exc
-        return cls.from_dict(data)
-
-
-def _dict_block(data: dict[str, Any], key: str) -> dict:
-    """Convert an optional manifest dict block to a ``dict``. Name the block in the error on failure.
-
-    Args:
-        data: The manifest dict.
-        key: The block's key.
-
-    Returns:
-        The block as a ``dict``. The result is empty when the block is absent.
-
-    Raises:
-        TimeNetInvalidManifestError: If the block is present but is not a mapping.
-    """
-    try:
-        return dict(data.get(key, {}))
-    except (ValueError, TypeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest {key!r} block: {exc}") from exc
-
-
-def _metadata_to_dict(metadata: DatasetMetadata) -> dict[str, Any]:
-    return {
-        "dataset_id": metadata.dataset_id,
-        "dataset_version": str(metadata.dataset_version),
-        "name": metadata.name,
-        "description": metadata.description,
-        "license": str(metadata.license),
-        "domains": [str(domain) for domain in metadata.domains],
-        "tags": list(metadata.tags),
-        "source_url": metadata.source_url,
-        "license_url": metadata.license_url,
-        "citation": metadata.citation,
-        "access": str(metadata.access),
-        "access_url": metadata.access_url,
-        "yaml_schema_version": metadata.yaml_schema_version,
-    }
-
-
-def _metadata_from_dict(data: dict[str, Any]) -> DatasetMetadata:
-    try:
-        return DatasetMetadata.model_validate(data)
-    except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest 'metadata' block: {exc}") from exc
-
-
-def _schema_to_dict(schema: DatasetSchema) -> dict[str, Any]:
-    return {
-        "time_series_specs": [
-            {
-                "spec_type": spec.spec_type,
-                "name": spec.name,
-                "unit_value": None if spec.unit_value is None else str(spec.unit_value),
-                "dtype": spec.dtype,
-                "categories": list(spec.categories),
-                "value_shape": list(spec.value_shape),
-                "dimension_names": list(spec.dimension_names),
-                "nullable": spec.nullable,
-                "modality": spec.modality.value,
-            }
-            for spec in schema.time_series_specs
-        ],
-        "annotations": [
-            {
-                "key": ann.key,
-                "annotation_type": str(ann.annotation_type),
-                "value_type": ann.value_type,
-                "unit": ann.unit,
-                "description": ann.description,
-            }
-            for ann in schema.annotations
-        ],
-        "tasks": [{"task_type": str(task.task_type)} for task in schema.tasks],
-    }
-
-
-def _schema_from_dict(data: dict[str, Any]) -> DatasetSchema:
-    try:
-        specs = tuple(
-            TimeSeriesSpec(
-                spec_type=entry["spec_type"],
-                name=entry["name"],
-                unit_value=None if entry["unit_value"] is None else ureg.Unit(entry["unit_value"]),
-                dtype=entry.get("dtype", "float32"),
-                categories=tuple(entry.get("categories", ())),
-                value_shape=tuple(entry.get("value_shape", ())),
-                dimension_names=tuple(entry.get("dimension_names", ())),
-                nullable=entry.get("nullable", False),
-                modality=InputModality(entry.get("modality", "time_series")),
-            )
-            for entry in data.get("time_series_specs", ())
-        )
-        annotations = tuple(
-            AnnotationDescriptor(
-                key=entry["key"],
-                annotation_type=AnnotationType(entry["annotation_type"]),
-                value_type=entry.get("value_type"),
-                unit=entry.get("unit"),
-                description=entry.get("description"),
-            )
-            for entry in data.get("annotations", ())
-        )
-        tasks = tuple(_resolve_task(entry["task_type"]) for entry in data.get("tasks", ()))
-        return DatasetSchema(
-            time_series_specs=specs,
-            annotations=annotations,
-            tasks=tasks,
-        )
-    except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest 'schema' block: {exc}") from exc
-
-
-def _resolve_task(task_type: str) -> type[Task]:
-    try:
-        return TASKS[TaskType(task_type)]
-    except ValueError as exc:
-        raise ValueError(f"unknown task_type {task_type!r}") from exc
-
-
-def _counts_to_dict(counts: ManifestCounts) -> dict[str, Any]:
-    return {
-        "records": counts.records,
-        "sources": counts.sources,
-        "signals": counts.signals,
-        "axes": counts.axes,
-        "annotation_contents": counts.annotation_contents,
-        "annotation_occurrences": counts.annotation_occurrences,
-        "tasks": dict(counts.tasks),
-        "signal_chunks": counts.signal_chunks,
-        "signals_by_spec": dict(counts.signals_by_spec),
-    }
-
-
-def _counts_from_dict(data: dict[str, Any]) -> ManifestCounts:
-    try:
-        return ManifestCounts(
-            records=data.get("records", 0),
-            sources=data.get("sources", 0),
-            signals=data.get("signals", 0),
-            axes=data.get("axes", 0),
-            annotation_contents=data.get("annotation_contents", 0),
-            annotation_occurrences=data.get("annotation_occurrences", 0),
-            tasks=dict(data.get("tasks", {})),
-            signal_chunks=data.get("signal_chunks", 0),
-            signals_by_spec=dict(data.get("signals_by_spec", {})),
-        )
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest 'counts' block: {exc}") from exc
-
-
-def _files_to_dict(files: ManifestFiles) -> dict[str, Any]:
-    return {
-        "control": [_part_to_dict(part) for part in files.control],
-        "time_series": [_part_to_dict(part) for part in files.time_series],
-    }
-
-
-def _part_to_dict(part: FilePart) -> dict[str, Any]:
-    return {"path": part.path, "checksum": part.checksum, "size": part.size}
-
-
-def _files_from_dict(data: dict[str, Any]) -> ManifestFiles:
-    try:
-        return ManifestFiles(
-            control=_parts(data["control"], "control"),
-            time_series=_parts(data.get("time_series", ()), "time_series"),
-        )
-    except (KeyError, ValueError, TypeError, AttributeError) as exc:
-        raise TimeNetInvalidManifestError(f"invalid manifest 'files' block: {exc}") from exc
-
-
-def _parts(value: Any, key: str) -> tuple[FilePart, ...]:
-    """Read one ``files`` field. The field is a list of ``{path, checksum, size}`` objects. Reject a bare string.
-
-    Args:
-        value: The field's value from the manifest ``files`` block.
-        key: The field's name. The name appears in error messages.
-
-    Returns:
-        The field's parts as a tuple of :class:`FilePart`. A missing ``path``, ``checksum``, or
-        ``size`` raises ``KeyError``. The caller re-raises this error as ``TimeNetInvalidManifestError``.
-
-    Raises:
-        TypeError: If the field is a string, or an entry is not an object.
-    """
-    if isinstance(value, str):
-        raise TypeError(f"'files.{key}' must be a list of file entries, not a string")
-    return tuple(_part_from_dict(entry, key) for entry in value)
-
-
-def _part_from_dict(entry: Any, key: str) -> FilePart:
-    if not isinstance(entry, dict):
-        raise TypeError(f"'files.{key}' entries must be objects, got {type(entry).__name__}")
-    path, checksum, size = entry["path"], entry["checksum"], entry["size"]
-    if not isinstance(path, str) or not path:
-        raise TypeError(f"'files.{key}' path must be a non-empty string, got {path!r}")
-    check_relative_path(f"'files.{key}' path", path)
-    if not isinstance(checksum, str) or not checksum.startswith("sha256:"):
-        raise ValueError(f"'files.{key}' checksum must be 'sha256:<hex>', got {checksum!r}")
-    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
-        raise TypeError(f"'files.{key}' size must be a non-negative integer, got {size!r}")
-    return FilePart(path=path, checksum=checksum, size=size)
+        # Apply the same validation as to_dict() to catch changes in nested dictionaries.
+        validated = type(self).model_validate(self)
+        return validated.model_dump_json(indent=2, by_alias=True)

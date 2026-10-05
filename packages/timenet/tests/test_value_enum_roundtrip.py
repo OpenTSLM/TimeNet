@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -79,7 +80,7 @@ def test_enum_spec_construction():
 
 
 def test_enum_spec_rejects_empty_categories():
-    with pytest.raises(TimeFValidationError, match="must be non-empty"):
+    with pytest.raises(ValidationError, match="must be non-empty"):
         TimeSeriesSpec(
             spec_type="stage",
             name="s",
@@ -89,7 +90,7 @@ def test_enum_spec_rejects_empty_categories():
 
 
 def test_enum_spec_rejects_duplicates():
-    with pytest.raises(TimeFValidationError, match="must be unique"):
+    with pytest.raises(ValidationError, match="must be unique"):
         TimeSeriesSpec(
             spec_type="stage",
             name="s",
@@ -100,7 +101,7 @@ def test_enum_spec_rejects_duplicates():
 
 
 def test_non_enum_rejects_categories():
-    with pytest.raises(TimeFValidationError, match="only for dtype 'enum'"):
+    with pytest.raises(ValidationError, match="only valid for dtype 'enum'"):
         TimeSeriesSpec(
             spec_type="hr",
             name="h",
@@ -142,8 +143,8 @@ def test_enum_shard_leaf_is_dictionary(tmp_path):
 
 def test_enum_manifest_records_dtype_and_categories(tmp_path):
     version_dir = _write(tmp_path, _dataset(["awake", "deep"]))
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    spec = manifest.schema.time_series_specs[0]
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    spec = manifest.dataset_schema.time_series_specs[0]
     assert spec.dtype == "enum"
     assert spec.categories == ("awake", "light", "deep", "rem")
 

@@ -82,5 +82,5 @@ class DatasetVersion:
         manifest_path = root_path / MANIFEST_FILE
         if not manifest_path.exists():
             raise FileNotFoundError(f"no manifest at {manifest_path}")
-        manifest = Manifest.from_json(manifest_path.read_text())
+        manifest = Manifest.model_validate_json(manifest_path.read_text())
         return cls(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root_path))

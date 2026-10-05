@@ -4,6 +4,7 @@ from pathlib import Path
 import pickle
 
 import pyarrow.parquet as pq
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -265,7 +266,7 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(TimeFFormatError):
+    with pytest.raises(ValidationError, match="timef_format_version"):
         DatasetVersion.open_local(version_dir)
 
 

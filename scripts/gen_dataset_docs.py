@@ -99,7 +99,7 @@ def _find_manifest(registry: Path | None, dataset_id: str) -> Manifest | None:
     manifests = sorted((registry / dataset_id).glob("*/manifest.json"))
     if not manifests:
         return None
-    return Manifest.from_json(manifests[-1].read_text(encoding="utf-8"))
+    return Manifest.model_validate_json(manifests[-1].read_text(encoding="utf-8"))
 
 
 def _schema_html(manifest: Manifest) -> str:
@@ -115,7 +115,7 @@ def _schema_html(manifest: Manifest) -> str:
     rows = "".join(
         f"<tr><td><code>{html.escape(s.spec_type)}</code></td><td>{html.escape(s.name)}</td>"
         f"<td>{html.escape(str(s.unit_value))}</td></tr>"
-        for s in manifest.schema.time_series_specs
+        for s in manifest.dataset_schema.time_series_specs
     )
     tasks = ", ".join(f"{html.escape(name)} ({n})" for name, n in sorted(counts.tasks.items())) or "n/a"
     return (

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import pickle
 
+from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
@@ -137,7 +138,7 @@ def test_span_must_be_a_span():
 
 
 def test_annotation_descriptor_rejects_invalid_unit():
-    with pytest.raises(TimeFValidationError, match="unknown unit"):
+    with pytest.raises(ValidationError, match="unknown unit"):
         AnnotationDescriptor(key="x", annotation_type=AnnotationType.STATIC, unit="not_a_unit")
 
 
