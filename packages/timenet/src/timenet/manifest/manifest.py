@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
-from timenet.types import DatasetMetadata, DatasetSchema
+from timenet.types import DatasetMetadata, DatasetSchema, LockedDependency
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
 from timenet.types.wire import ValueEncoding
@@ -40,16 +40,25 @@ class Manifest(TimeFModel):
     """``spec_type`` to the values-column encoding used by its shards."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
+    dependencies: tuple[LockedDependency, ...] = ()
+    """Every version this one reads from, direct parents and their closure, each pinned by its
+    manifest checksum."""
     timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
     """The TimeF manifest format version."""
 
     @model_validator(mode="after")
-    def _matching_dataset_id(self) -> Self:
+    def _consistent(self) -> Self:
         if self.dataset_id != self.metadata.dataset_id:
             raise ValueError(
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
+        locked = {dependency.dataset for dependency in self.dependencies}
+        if len(locked) != len(self.dependencies):
+            raise ValueError("dependencies lock the same dataset version twice")
+        for parent in self.metadata.parents:
+            if parent.dataset not in locked:
+                raise ValueError(f"direct parent {parent.dataset} is absent from the dependency lock")
         return self
 
     def to_dict(self) -> dict[str, Any]:

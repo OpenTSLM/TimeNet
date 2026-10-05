@@ -1,17 +1,17 @@
 """The :class:`BaseConnector` contract every dataset integration implements.
 
-A connector fetches raw data and converts it into a :class:`~timenet.dataset.TimeFDataset`. It has no
-knowledge of the registry, engine, or any other connector. The engine drives it
-``download -> convert``, then stores the result itself. The consumer SDK never imports connector
-code: it builds only through the ``timenet.builders`` entry point.
+A connector downloads raw data and builds a :class:`~timenet.dataset.TimeFDataset`.
+The engine calls ``convert``, or ``compose`` for cards with parents, then stores the dataset.
+The consumer SDK builds through the ``timenet.builders`` entry point.
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC
 import asyncio
 import inspect
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar
 
+from timenet.composition import BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
 
@@ -22,9 +22,8 @@ TRaw = TypeVar("TRaw")
 class BaseConnector(ABC, Generic[TRaw]):
     """Abstract base for dataset connectors. One concrete subclass per dataset.
 
-    A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
-    card beside it (read by :meth:`metadata`). Set :attr:`CARD` to point elsewhere. Subclasses
-    implement the two abstract stages. ``download`` is I/O-only and ``convert`` is CPU-only.
+    Each connector has a ``dataset.yaml`` card beside it. :attr:`CARD` can override the card path.
+    Subclasses implement ``download`` and ``convert``, or ``compose`` for cards with parents.
     Connectors take no constructor arguments.
     """
 
@@ -43,6 +42,8 @@ class BaseConnector(ABC, Generic[TRaw]):
         # neither would instantiate and only fail deep in the engine. Catch it at construction instead.
         if cls.download is BaseConnector.download and cls.download_async is BaseConnector.download_async:
             raise TypeError(f"{cls.__name__} must implement download() or download_async()")
+        if cls.convert is BaseConnector.convert and cls.compose is BaseConnector.compose:
+            raise TypeError(f"{cls.__name__} must implement convert() or compose()")
 
     @classmethod
     def _card_path(cls) -> Path:
@@ -102,16 +103,37 @@ class BaseConnector(ABC, Generic[TRaw]):
             "a connector must implement download() (synchronous) or download_async() (asynchronous)"
         )
 
-    @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
         """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
 
-        CPU-bound: no network I/O. Attach time-series values as lazy loaders instead of materializing
-        them.
+        Use lazy Signal loaders without network I/O. Cards with parents use :meth:`compose` instead.
 
         Args:
             raw_refs: The references returned by :meth:`download`.
 
         Returns:
             The populated dataset.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
         """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement convert(), or compose() when its card declares parents"
+        )
+
+    def compose(self, raw_refs: list[TRaw], context: BuildContext) -> TimeFDataset:
+        """Build a dataset from raw references and its declared parents.
+
+        Like :meth:`convert`, this method runs without network I/O.
+
+        Args:
+            raw_refs: The references returned by :meth:`download`.
+            context: Open parent views keyed by their card aliases.
+
+        Returns:
+            The populated dataset with parent records imported by reference.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        raise NotImplementedError(f"{type(self).__name__} declares parents in its card, so it must implement compose()")

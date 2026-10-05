@@ -10,7 +10,8 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+knowledge of the registry or engine. A composed connector can read declared parents through its
+`BuildContext`. The consumer SDK never runs a connector.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -36,8 +37,10 @@ The two stages stay separate. This lets the engine drive
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
 | `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
+| `compose(raw_refs, context)` | local work | The form of `convert` for a card that declares parents. `context` holds one open view per parent alias. |
 
-You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
+You must implement `convert`, or `compose` when the card declares parents. The engine calls the one
+the card selects. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
 define `async download_async(cache_dir)` to fetch artifacts at the same time. Implement only one of
 these two forms. The engine always calls the synchronous `download()`. Its default implementation
@@ -46,6 +49,9 @@ own.
 
 `metadata()` is a concrete method that reads the dataset card. The engine owns storage and calls the
 writer after conversion.
+
+A composed connector implements `compose(raw_refs, context)` instead of `convert`, as described in
+[Dataset composition](composition.md).
 
 - `metadata()` reads and validates the dataset's [`dataset.yaml` card](manifest.md) from disk, through
   `DatasetMetadata.from_yaml`. This method does file I/O. Override it only to point to a different

@@ -4,7 +4,7 @@ import pytest
 
 from timenet.errors import TimeNetInvalidCardError
 from timenet.schemas import DATASET_CARD_SCHEMA
-from timenet.types import DatasetMetadata, Domain, License, Version
+from timenet.types import DatasetMetadata, Domain, License, ParentDataset, Version
 
 
 _VALID_CARD = """\
@@ -51,7 +51,35 @@ def test_from_yaml_loads_a_valid_card(tmp_path):
 
 def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
     m = DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD))
-    assert (m.domains, m.tags, m.source_url, m.yaml_schema_version) == ((), (), None, 1)
+    assert (m.domains, m.tags, m.source_url, m.parents, m.yaml_schema_version) == (
+        (),
+        (),
+        None,
+        (),
+        1,
+    )
+
+
+def test_from_yaml_loads_exact_parent_references(tmp_path):
+    card = (
+        _VALID_CARD
+        + """\
+source_revision: upstream-r7
+parents:
+  - alias: ptbxl
+    dataset_id: physionet/ptb-xl
+    version: 1.0.0
+"""
+    )
+    metadata = DatasetMetadata.from_yaml(_write(tmp_path, card))
+    assert metadata.source_revision == "upstream-r7"
+    assert metadata.parents == (
+        ParentDataset(
+            alias="ptbxl",
+            dataset_id="physionet/ptb-xl",
+            version=Version(1, 0, 0),
+        ),
+    )
 
 
 @pytest.mark.parametrize(

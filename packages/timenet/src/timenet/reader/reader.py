@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import types as _types
@@ -16,7 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -34,7 +34,12 @@ _AXIS_OFFSETS_CACHE_TARGET_BYTES = 64 * 2**20
 class TimeFReader:
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
-    def __init__(self, version: DatasetVersion) -> None:
+    def __init__(
+        self,
+        version: DatasetVersion,
+        *,
+        parents: Mapping[str, TimeFReader] | None = None,
+    ) -> None:
         """Configure a lazy reader for an opened dataset version.
 
         Opening a reader does not download or query ``control.duckdb``. The first structural read
@@ -42,11 +47,13 @@ class TimeFReader:
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
+            parents: Direct parent readers keyed by the aliases in the child manifest.
         """
         self._version = version
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
+        self._parents = dict(parents or {})
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
@@ -90,6 +97,8 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for parent in self._parents.values():
+            parent.close()
         self._records = None
         self._tasks = None
         self._chunk_rows_cache.clear()
@@ -278,6 +287,8 @@ class TimeFReader:
             tasks=tasks,
             schema=self.schema,
             annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
+            record_imports=self._control_reader().read_record_imports(records),
+            dependencies=self._manifest.dependencies,
         )
 
     def iter_records(
@@ -296,10 +307,7 @@ class TimeFReader:
             Hydrated records whose Signal values remain lazy.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(
-                record_ids,
-                with_annotations=with_annotations,
-            )
+            yield from self._control_reader().read_records(record_ids, with_annotations=with_annotations)
 
     def _control_reader(self) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
@@ -312,6 +320,7 @@ class TimeFReader:
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
+                parent_records=self._parent_records,
             )
         return self._control
 
@@ -320,6 +329,24 @@ class TimeFReader:
         if self._records is None:
             self._records = self._control_reader().read_records()
         return self._records
+
+    def _parent_records(self, alias: str, record_ids: Sequence[str], with_annotations: bool) -> Iterator[Record]:
+        """Read imported records from the direct parent the manifest declares under ``alias``.
+
+        Returns:
+            The parent's Records in the requested order, with lazy values.
+
+        Raises:
+            TimeFFormatError: If no reader is attached for the alias, or it opened another version.
+        """
+        declared = {parent.alias: parent.dataset for parent in self._manifest.metadata.parents}.get(alias)
+        reader = self._parents.get(alias)
+        if declared is None or reader is None:
+            raise TimeFFormatError(f"dataset {self._manifest.dataset_id!r} requires parent alias {alias!r}")
+        actual = DatasetRef(dataset_id=reader.metadata.dataset_id, version=reader.metadata.dataset_version)
+        if actual != declared:
+            raise TimeFFormatError(f"parent alias {alias!r} resolved to {actual}, expected {declared}")
+        return reader.iter_records(record_ids, with_annotations=with_annotations)
 
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""

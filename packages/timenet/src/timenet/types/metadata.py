@@ -19,23 +19,18 @@ from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
 from timenet.types.metadata_fields import DatasetId, NonEmptyText, SemanticVersion
+from timenet.types.references import ParentDataset
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import TASKS, Task, TaskType
 
 
 class DatasetMetadata(TimeFModel):
-    """A dataset's descriptive identity: who it is, not what it emits.
-
-    The dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream
-    source. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
-    ``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid
-    casing-only differences on case-insensitive filesystems.
-    """
+    """A dataset's descriptive identity: who it is, not what it emits."""
 
     dataset_id: DatasetId
     """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: SemanticVersion
-    """Semantic version of the upstream source data."""
+    """Semantic version of this immutable TimeNet dataset release."""
     name: NonEmptyText
     """Human-readable display name."""
     description: NonEmptyText
@@ -48,6 +43,8 @@ class DatasetMetadata(TimeFModel):
     """Free-form tags for search and grouping."""
     source_url: StrictStr | None = None
     """Link to the dataset's origin, if any."""
+    source_revision: StrictStr | None = None
+    """Upstream release or revision from which this TimeNet release was built."""
     license_url: StrictStr | None = None
     """Where to read the full license text. Required when ``license`` is :attr:`License.OTHER`."""
     citation: StrictStr | None = None
@@ -55,7 +52,9 @@ class DatasetMetadata(TimeFModel):
     access: Access = Access.OPEN
     """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
     access_url: StrictStr | None = None
-    """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
+    """Where to obtain access. Required when ``access`` is not ``OPEN``."""
+    parents: tuple[ParentDataset, ...] = ()
+    """Exact parent versions, each exposed to the connector through a unique alias."""
     yaml_schema_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
     """Version of the card's own field schema."""
 
@@ -67,20 +66,22 @@ class DatasetMetadata(TimeFModel):
         return value
 
     @model_validator(mode="after")
-    def _dependent_urls(self) -> Self:
+    def _dependent_fields(self) -> Self:
         if self.license is License.OTHER and not self.license_url:
             raise ValueError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:
             raise ValueError(f"access_url is required when access is {self.access.value!r}")
+        aliases = [parent.alias for parent in self.parents]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("parent aliases must be unique")
         return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "DatasetMetadata":
         """Load and validate a dataset card YAML into metadata.
 
-        Authoring mistakes surface as clear, aggregated messages instead of a stack trace from deep
-        inside coercion. PyYAML is optional and imported lazily. Install the ``timenet[build]`` extra
-        to use this method.
+        Authoring mistakes surface as aggregated validation messages. PyYAML is imported lazily,
+        so install the ``timenet[build]`` extra to use this method.
 
         Args:
             path: Path to the card YAML file.
@@ -108,7 +109,6 @@ class DatasetMetadata(TimeFModel):
             raise TimeNetInvalidCardError(f"could not read dataset card {card_path}: {exc}") from exc
         if not isinstance(raw, dict):
             raise TimeNetInvalidCardError(f"dataset card {card_path} must be a YAML mapping, got {type(raw).__name__}")
-
         return cls.model_validate(raw)
 
 
@@ -149,11 +149,7 @@ TaskDeclaration = Annotated[
 
 
 class DatasetSchema(TimeFModel):
-    """A dataset's type declaration, derived from its data (never hand-authored).
-
-    It holds flat descriptor instances for specs and annotations. It also holds the real built-in
-    :class:`~timenet.types.tasks.Task` subclasses, resolved against the registry instead of reconstructed.
-    """
+    """A dataset's type declaration, derived from its data (never hand-authored)."""
 
     time_series_specs: tuple[TimeSeriesSpec, ...] = ()
     """Descriptors for the dataset's measurement modalities."""

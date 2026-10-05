@@ -4,14 +4,17 @@ from typing import cast
 
 import pytest
 
+from timenet.composition import BuildContext
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
+from timenet.registry import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
+from timenet.types import AnswerTask
 
 
 def _write_demo_card() -> Path:
@@ -56,6 +59,38 @@ class _DemoConnector(BaseConnector[str]):
         return make_dataset()
 
 
+def _write_child_card() -> Path:
+    card = Path(tempfile.mkdtemp()) / "dataset.yaml"
+    card.write_text(
+        "dataset_id: test/child\ndataset_version: 1.0.0\nname: Child\ndescription: d\nlicense: MIT\n"
+        "parents:\n  - alias: base\n    dataset_id: timenet/hello-world\n    version: 1.0.0\n"
+    )
+    return card
+
+
+class _ChildConnector(BaseConnector[str]):
+    CARD = _write_child_card()
+
+    def download(self, cache_dir: Path) -> list[str]:
+        return ["ref"]
+
+    def compose(self, raw_refs: list[str], context: BuildContext) -> TimeFDataset:
+        dataset = TimeFDataset(metadata=context.metadata)
+        record = next(context.parent("base").iter_records(["record-0"]))
+        dataset.import_record(record, parent="base")
+        dataset.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+        return dataset
+
+
+class _ForeignImportConnector(_ChildConnector):
+    def compose(self, raw_refs: list[str], context: BuildContext) -> TimeFDataset:
+        dataset = super().compose(raw_refs, context)
+        foreign = make_dataset().records[1]
+        foreign.record_id = "foreign"
+        dataset.import_record(foreign, parent="base")
+        return dataset
+
+
 def test_store_writes_a_readable_layout(tmp_path):
     connector = _DemoConnector()
     dataset = connector.convert(connector.download(tmp_path))
@@ -77,6 +112,32 @@ def test_run_pipeline_end_to_end(tmp_path):
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.counts.records == 3
     assert manifest.dataset_id == "timenet/hello-world"
+
+
+def test_run_pipeline_composes_over_a_parent_in_the_root(tmp_path):
+    run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    version_dir = run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert [dependency.dataset_id for dependency in manifest.dependencies] == ["timenet/hello-world"]
+    assert manifest.counts.records == 1
+    with LocalRegistry(tmp_path).open_reader("test/child") as reader:
+        assert [record.id for record in reader.read().tasks[0].inputs] == ["record-0"]
+
+
+def test_run_pipeline_requires_compose_for_a_card_with_parents(tmp_path):
+    class RootOnly(_DemoConnector):
+        CARD = _ChildConnector.CARD
+
+    run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    with pytest.raises(NotImplementedError, match="compose"):
+        run_pipeline(RootOnly(), tmp_path, cache_dir=tmp_path / "cache")
+
+
+def test_run_pipeline_rejects_an_import_the_parent_does_not_hold(tmp_path):
+    run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    with pytest.raises(TimeFValidationError, match="does not hold imported record"):
+        run_pipeline(_ForeignImportConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    assert not (tmp_path / "test/child").exists()
 
 
 def test_connector_defaults_to_the_parquet_values_backend():
