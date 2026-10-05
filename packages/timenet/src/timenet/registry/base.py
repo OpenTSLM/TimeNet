@@ -7,16 +7,23 @@ the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type f
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import BinaryIO, TypeVar
+from typing import TYPE_CHECKING, BinaryIO, TypeVar
 import uuid
 
+from timenet.errors import TimeFFormatError
+from timenet.format.checksums import bytes_checksum
 from timenet.manifest import Manifest
 from timenet.registry._paths import safe_version_path
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.types import DatasetMetadata, DatasetRef, Domain, License, LockedDependency, Task
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -24,6 +31,29 @@ T = TypeVar("T")
 # Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_version``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
 ProgressCallback = Callable[[int], None]
+
+
+@dataclass(frozen=True)
+class ResolvedVersion:
+    """A resolved version with its manifest and checksum."""
+
+    manifest: Manifest
+    checksum: str
+    """SHA-256 checksum of the registry's manifest bytes."""
+
+    @property
+    def reference(self) -> DatasetRef:
+        """Return the exact dataset version the manifest describes."""
+        return DatasetRef(dataset_id=self.manifest.dataset_id, version=self.manifest.metadata.dataset_version)
+
+    @property
+    def lock(self) -> LockedDependency:
+        """Return the dependency lock entry for this version."""
+        return LockedDependency(
+            dataset_id=self.manifest.dataset_id,
+            version=self.manifest.metadata.dataset_version,
+            manifest_checksum=self.checksum,
+        )
 
 
 class BaseRegistry(ABC):
@@ -88,6 +118,104 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def open_reader(self, dataset_id: str, version: str | None = None) -> "TimeFReader":
+        """Open a reader for a dataset and its exact dependency closure.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest version.
+
+        Returns:
+            A reader whose parent aliases are recursively resolved in this registry.
+
+        Raises:
+            TimeFFormatError: If the dependency graph is cyclic, inconsistent, or fails a locked
+                manifest checksum.
+        """  # noqa: DOC502 - raised by resolve_versions
+        return self.open_closure(self.resolve_versions(dataset_id, version))
+
+    def open_closure(self, closure: Sequence[ResolvedVersion]) -> "TimeFReader":
+        """Open readers for a resolved dependency closure.
+
+        Args:
+            closure: A dependency closure from :meth:`resolve_versions`, requested dataset last.
+
+        Returns:
+            The reader of the last version, with its parents attached by alias.
+
+        Raises:
+            TimeFFormatError: If a manifest changed between resolution and opening.
+        """
+        from timenet.reader import TimeFReader  # noqa: PLC0415
+
+        readers: dict[DatasetRef, TimeFReader] = {}
+        for node in closure:
+            handle = self.open_version(node.reference.dataset_id, str(node.reference.version))
+            if handle.manifest != node.manifest:
+                raise TimeFFormatError(f"manifest {node.reference} changed while opening its reader")
+            parents = {parent.alias: readers[parent.dataset] for parent in node.manifest.metadata.parents}
+            readers[node.reference] = TimeFReader(handle, parents=parents)
+        return readers[closure[-1].reference]
+
+    def resolve_versions(self, dataset_id: str, version: str | None = None) -> tuple[ResolvedVersion, ...]:
+        """Resolve a dataset's dependencies and check their manifest checksums.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest version.
+
+        Returns:
+            Each version once, in dependency order, with the requested dataset last.
+
+        Raises:
+            TimeFFormatError: If the dependency graph, manifest checksum, or resolved version is invalid.
+        """  # noqa: DOC502 - raised by the nested helpers
+        root = self.get_manifest(dataset_id, version)
+        resolved: dict[DatasetRef, ResolvedVersion] = {}
+        closures: dict[DatasetRef, set[DatasetRef]] = {}
+        expected: dict[DatasetRef, str] = {}
+        active: set[DatasetRef] = set()
+
+        def load(reference: DatasetRef) -> ResolvedVersion:
+            with self.open_file(reference.dataset_id, str(reference.version), "manifest.json") as source:
+                raw = source.read()
+            node = ResolvedVersion(Manifest.model_validate_json(raw), bytes_checksum(raw))
+            if node.reference != reference:
+                raise TimeFFormatError(f"registry resolved {reference} to unexpected version {node.reference}")
+            return node
+
+        def visit(node: ResolvedVersion) -> set[DatasetRef]:
+            reference = node.reference
+            if reference in active:
+                raise TimeFFormatError(f"dataset dependency graph contains a cycle at {reference}")
+            if reference in closures:
+                return closures[reference]
+            active.add(reference)
+            locked = {dependency.dataset: dependency.manifest_checksum for dependency in node.manifest.dependencies}
+            for dependency, checksum in locked.items():
+                if expected.setdefault(dependency, checksum) != checksum:
+                    raise TimeFFormatError(f"conflicting manifest checksums for dependency {dependency}")
+            closure: set[DatasetRef] = set()
+            for parent in node.manifest.metadata.parents:
+                parent_ref = parent.dataset
+                if parent_ref in active:
+                    raise TimeFFormatError(f"dataset dependency graph contains a cycle at {parent_ref}")
+                if parent_ref not in resolved:
+                    parent_node = load(parent_ref)
+                    if parent_node.checksum != expected[parent_ref]:
+                        raise TimeFFormatError(f"dependency {parent_ref} manifest checksum does not match its lock")
+                    visit(parent_node)
+                closure.update((parent_ref, *closures[parent_ref]))
+            if closure != locked.keys():
+                raise TimeFFormatError(f"dependency lock for {reference} does not match its complete parent closure")
+            active.remove(reference)
+            closures[reference] = closure
+            resolved[reference] = node
+            return closure
+
+        visit(load(DatasetRef(dataset_id=root.dataset_id, version=root.metadata.dataset_version)))
+        return tuple(resolved.values())
 
     def download_version(  # noqa: PLR0913
         self,

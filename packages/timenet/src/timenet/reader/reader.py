@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 import types as _types
@@ -34,7 +34,12 @@ _AXIS_OFFSETS_CACHE_TARGET_BYTES = 64 * 2**20
 class TimeFReader:
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
-    def __init__(self, version: DatasetVersion) -> None:
+    def __init__(
+        self,
+        version: DatasetVersion,
+        *,
+        parents: Mapping[str, TimeFReader] | None = None,
+    ) -> None:
         """Configure a lazy reader for an opened dataset version.
 
         Opening a reader does not download or query ``control.duckdb``. The first structural read
@@ -42,11 +47,13 @@ class TimeFReader:
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
+            parents: Direct parent readers keyed by the aliases in the child manifest.
         """
         self._version = version
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
+        self._parents = dict(parents or {})
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
@@ -90,6 +97,8 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for parent in self._parents.values():
+            parent.close()
         self._records = None
         self._tasks = None
         self._chunk_rows_cache.clear()
