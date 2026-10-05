@@ -74,7 +74,7 @@ def test_store_derives_schema_if_needed(tmp_path):
 
 def test_run_pipeline_end_to_end(tmp_path):
     version_dir = run_pipeline(_DemoConnector(), tmp_path, cache_dir=tmp_path / "cache")
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.counts.records == 3
     assert manifest.dataset_id == "timenet/hello-world"
 
@@ -97,7 +97,7 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
         values_backend=connector.values_backend,
     )
 
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
 
 

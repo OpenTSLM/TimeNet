@@ -1,10 +1,17 @@
 """Dataset-level descriptive identity and derived type declaration."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    Field,
+    PlainSerializer,
+    PlainValidator,
+    StrictStr,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 from timenet.types._model import TimeFModel
 from timenet.types.access import Access
@@ -13,7 +20,7 @@ from timenet.types.domains import Domain
 from timenet.types.licenses import License
 from timenet.types.metadata_fields import DatasetId, NonEmptyText, SemanticVersion
 from timenet.types.specs import TimeSeriesSpec
-from timenet.types.tasks import Task
+from timenet.types.tasks import TASKS, Task, TaskType
 
 
 class DatasetMetadata(TimeFModel):
@@ -105,8 +112,43 @@ class DatasetMetadata(TimeFModel):
         return cls.model_validate(raw)
 
 
-@dataclass(frozen=True)
-class DatasetSchema:
+def _resolve_task(value: Any) -> type[Task]:
+    """Resolve a manifest task declaration to its public task class.
+
+    Returns:
+        The built-in task class.
+
+    Raises:
+        ValueError: If the declaration does not name a built-in task.
+    """
+    if isinstance(value, type) and issubclass(value, Task):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("task declaration must be a Task class or an object with task_type")
+    try:
+        task_type = TaskType(value["task_type"])
+        return TASKS[task_type]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"unknown task_type {value.get('task_type')!r}") from exc
+
+
+TaskDeclaration = Annotated[
+    type[Task],
+    PlainValidator(_resolve_task, json_schema_input_type=dict[str, str]),
+    PlainSerializer(lambda task: {"task_type": str(task.task_type)}, return_type=dict[str, str]),
+    WithJsonSchema(
+        {
+            "type": "object",
+            "properties": {"task_type": {"type": "string", "enum": [item.value for item in TaskType]}},
+            "required": ["task_type"],
+            "additionalProperties": False,
+        }
+    ),
+]
+"""A built-in task class encoded as a ``task_type`` declaration."""
+
+
+class DatasetSchema(TimeFModel):
     """A dataset's type declaration, derived from its data (never hand-authored).
 
     It holds flat descriptor instances for specs and annotations. It also holds the real built-in
@@ -117,5 +159,5 @@ class DatasetSchema:
     """Descriptors for the dataset's measurement modalities."""
     annotations: tuple[AnnotationDescriptor, ...] = ()
     """Type-level descriptors for the dataset's annotation keys."""
-    tasks: tuple[type[Task], ...] = field(default=())
+    tasks: tuple[TaskDeclaration, ...] = ()
     """Built-in ``Task`` subclasses the dataset declares, resolved from the registry."""

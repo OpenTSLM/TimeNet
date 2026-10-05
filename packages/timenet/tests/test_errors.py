@@ -4,7 +4,6 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetDownloadError,
     TimeNetError,
-    TimeNetInvalidManifestError,
     TimeNetRegistryError,
 )
 
@@ -16,7 +15,6 @@ def test_all_derive_from_base():
         TimeNetDownloadError,
         TimeFValidationError,
         TimeFFormatError,
-        TimeNetInvalidManifestError,
     ):
         assert issubclass(exc, TimeNetError)
 
@@ -24,11 +22,6 @@ def test_all_derive_from_base():
 def test_validation_error_is_value_error():
     # So existing `except ValueError` handlers still catch dataset/writer validation failures.
     assert issubclass(TimeFValidationError, ValueError)
-
-
-def test_invalid_manifest_is_format_and_value_error():
-    assert issubclass(TimeNetInvalidManifestError, TimeFFormatError)
-    assert issubclass(TimeNetInvalidManifestError, ValueError)
 
 
 def test_catchable_as_base():

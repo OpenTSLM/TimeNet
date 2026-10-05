@@ -1,7 +1,6 @@
-from dataclasses import replace
-
 import numpy as np
 import pyarrow as pa
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -28,7 +27,7 @@ def _spec(dtype="float32", **kwargs):
 
 @pytest.mark.parametrize("nullable", [1, 0, None, "true", np.bool_(True)])
 def test_nullable_requires_a_real_bool(nullable):
-    with pytest.raises(TimeFValidationError, match="nullable"):
+    with pytest.raises(ValidationError, match="nullable"):
         _spec(nullable=nullable)
 
 
@@ -84,7 +83,7 @@ def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
     writer = TimeFWriter(tmp_path, make_dataset())
     assert writer._read_and_validate(_lazy_series(spec, array)).equals(array)
     with pytest.raises(TimeFValidationError, match="null"):
-        writer._read_and_validate(_lazy_series(replace(spec, nullable=False), array))
+        writer._read_and_validate(_lazy_series(spec.model_copy(update={"nullable": False}), array))
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])

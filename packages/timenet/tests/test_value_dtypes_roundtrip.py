@@ -19,6 +19,7 @@ from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
+from timenet.types.wire import ValueDtype
 from timenet.writer import TimeFWriter
 
 
@@ -46,7 +47,7 @@ def _values(dtype: str) -> np.ndarray:
     return np.array([1, 2, 3, 4], dtype=np.dtype(dtype))
 
 
-def _spec(dtype: str = "float32") -> TimeSeriesSpec:
+def _spec(dtype: ValueDtype = "float32") -> TimeSeriesSpec:
     return TimeSeriesSpec(
         spec_type=f"chan_{dtype}",
         name=dtype,
@@ -124,8 +125,8 @@ def test_str_shard_leaf_is_string(tmp_path):
 
 def test_str_dtype_round_trips_manifest(tmp_path):
     version_dir = _write(tmp_path, _dataset(_spec(dtype="str"), ["normal", "afib"]))
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
-    assert manifest.schema.time_series_specs[0].dtype == "str"
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert manifest.dataset_schema.time_series_specs[0].dtype == "str"
 
 
 def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):

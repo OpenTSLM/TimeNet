@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -144,14 +143,14 @@ def test_from_values_generates_unique_id_unless_given():
 
 
 def test_from_values_casts_to_the_specified_numpy_dtype():
-    spec = replace(_spec(), dtype="int16")
+    spec = _spec().model_copy(update={"dtype": "int16"})
     arr = Signal.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.int16()
     assert arr.to_pylist() == [1, 2, 3]
 
 
 def test_from_values_str_spec_keeps_string_labels():
-    spec = replace(_spec(), dtype="str")
+    spec = _spec().model_copy(update={"dtype": "str"})
     arr = Signal.from_values(["normal", "afib"], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.string()
     assert arr.to_pylist() == ["normal", "afib"]

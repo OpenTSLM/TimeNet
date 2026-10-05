@@ -95,7 +95,7 @@ def _index_rows(version_dir):
 def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_len):
     original = _sharded_dataset(n_records, series_len)
     version_dir = _write(tmp_path, _sharded_dataset(n_records, series_len), **_SMALL_TARGETS)
-    files = Manifest.from_json((version_dir / "manifest.json").read_text()).files
+    files = Manifest.model_validate_json((version_dir / "manifest.json").read_text()).files
     assert len(files.control) == 1
     assert len(files.time_series) >= 3  # values-plane shards
     for rel in files.all_parts():
@@ -110,7 +110,7 @@ def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_le
 
 def test_index_metadata_locates_every_series_in_the_shards(tmp_path):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     shards = {part.path for part in manifest.files.time_series}
     row_group_counts = {rel: pq.ParquetFile(version_dir / rel).metadata.num_row_groups for rel in shards}
     rows = _index_rows(version_dir)
@@ -138,7 +138,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
 @pytest.mark.parametrize("series_id", ["ts-000", "ts-006", "ts-011"])
 def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, series_id):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
-    manifest = Manifest.from_json((version_dir / "manifest.json").read_text())
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     expected_shards = {row["chunk_file"] for row in _index_rows(version_dir) if row["signal_id"] == series_id}
     assert expected_shards <= {part.path for part in manifest.files.time_series}
     assert len(expected_shards) < len(manifest.files.time_series)  # the series lives in only some shards

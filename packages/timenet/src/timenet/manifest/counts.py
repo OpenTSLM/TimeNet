@@ -1,27 +1,29 @@
 """The :class:`ManifestCounts` block: summary statistics computed at write time."""
 
-from dataclasses import dataclass, field
+from pydantic import Field, StrictStr
+
+from timenet.types._model import TimeFModel
+from timenet.types.wire import StrictNonNegativeInt
 
 
-@dataclass(frozen=True)
-class ManifestCounts:
+class ManifestCounts(TimeFModel):
     """TimeF entity counts recorded for inspection without opening DuckDB."""
 
-    records: int = 0
+    records: StrictNonNegativeInt = 0
     """Total number of records in the dataset."""
-    sources: int = 0
+    sources: StrictNonNegativeInt = 0
     """Total number of Sources at every recursion depth."""
-    signals: int = 0
+    signals: StrictNonNegativeInt = 0
     """Total number of Signals."""
-    axes: int = 0
+    axes: StrictNonNegativeInt = 0
     """Number of distinct shared TimeAxes."""
-    annotation_contents: int = 0
+    annotation_contents: StrictNonNegativeInt = 0
     """Number of reusable annotation content items."""
-    annotation_occurrences: int = 0
+    annotation_occurrences: StrictNonNegativeInt = 0
     """Number of annotation attachments across all object types."""
-    tasks: dict[str, int] = field(default_factory=dict)
+    tasks: dict[StrictStr, StrictNonNegativeInt] = Field(default_factory=dict)
     """Count of tasks keyed by task type."""
-    signal_chunks: int = 0
+    signal_chunks: StrictNonNegativeInt = 0
     """Number of Signal chunk placements in the values plane."""
-    signals_by_spec: dict[str, int] = field(default_factory=dict)
+    signals_by_spec: dict[StrictStr, StrictNonNegativeInt] = Field(default_factory=dict)
     """Signal count keyed by specification type."""

@@ -1,7 +1,7 @@
 """TimeNet's exception hierarchy, and the warnings it raises.
 
-Every TimeNet-raised error derives from :class:`TimeNetError`. Validation and manifest errors also
-derive from :class:`ValueError` so existing ``except ValueError`` handlers keep working. TimeNet raises
+Every TimeNet-raised error derives from :class:`TimeNetError`. TimeF validation errors also derive
+from :class:`ValueError`, so existing ``except ValueError`` handlers keep working. TimeNet raises
 the builtin ``FileNotFoundError`` and ``FileExistsError`` directly for user-supplied paths.
 
 Every TimeNet-raised warning derives from :class:`TimeNetWarning`.
@@ -54,7 +54,3 @@ class SpanOutsideWindowWarning(TimeNetWarning):
 
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
-
-
-class TimeNetInvalidManifestError(TimeFFormatError, ValueError):
-    """A ``manifest.json`` is missing required blocks or fields, or TimeNet cannot parse it."""

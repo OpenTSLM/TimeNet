@@ -1,20 +1,16 @@
-from dataclasses import dataclass, replace
 import pickle
 
 import pint
+from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFValidationError
 from timenet.types import TimeSeriesSpec, ureg
 
 
 def _ecg_spec(**overrides):
-    spec = TimeSeriesSpec(
-        spec_type="ecg_lead",
-        name="ECG Lead",
-        unit_value=ureg.millivolt,
-    )
-    return replace(spec, **overrides) if overrides else spec
+    values = {"spec_type": "ecg_lead", "name": "ECG Lead", "unit_value": ureg.millivolt}
+    values.update(overrides)
+    return TimeSeriesSpec.model_validate(values)
 
 
 def test_spec_construction_modality_only():
@@ -25,7 +21,7 @@ def test_spec_construction_modality_only():
 
 
 def test_spec_frozen():
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         _ecg_spec().spec_type = "x"
 
 
@@ -64,7 +60,6 @@ def test_spec_value_unit_unconstrained():
     assert _ecg_spec(unit_value=ureg.bpm).unit_value == ureg.bpm
 
 
-@dataclass(frozen=True)
 class _WithGain(TimeSeriesSpec):
     """A spec subclass adding its own unit field (module scope so it pickles)."""
 
@@ -98,8 +93,11 @@ def test_spec_nd_value_contract():
         ({"spec_type": ".."}, "spec_type"),
         ({"dtype": "complex64"}, "dtype"),
         ({"modality": "no_input"}, "cannot have the no_input"),
-        ({"modality": "unknown"}, "invalid Signal modality"),
-        ({"value_shape": (32, 0, 3)}, "positive integers"),
+        ({"modality": "unknown"}, "modality"),
+        ({"value_shape": (32, 0, 3)}, "greater than 0"),
+        ({"value_shape": (True,)}, "valid integer"),
+        ({"value_shape": (1.0,)}, "valid integer"),
+        ({"value_shape": ("1",)}, "valid integer"),
         ({"value_shape": (32, 32, 3), "dimension_names": ("height",)}, "match value_shape"),
         (
             {"value_shape": (32, 32, 3), "dimension_names": ("space", "space", "color")},
@@ -119,7 +117,7 @@ def test_spec_coerces_string_unit_value():
 
 
 def test_spec_rejects_invalid_string_unit_value():
-    with pytest.raises(TimeFValidationError, match="unknown unit"):
+    with pytest.raises(ValidationError, match="unknown unit"):
         _ecg_spec(unit_value="definitely_not_a_unit")
 
 
