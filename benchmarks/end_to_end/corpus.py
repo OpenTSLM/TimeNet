@@ -12,6 +12,7 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.json import JsonMapping
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -65,7 +66,7 @@ def _add_record(
     record_id: str,
     source_name: str,
     signals: tuple[Signal, ...],
-    metadata: dict[str, object] | None = None,
+    metadata: JsonMapping | None = None,
 ) -> Record:
     """Add one explicit benchmark hierarchy.
 
