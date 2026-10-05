@@ -189,22 +189,6 @@ class RegistryHttpClient:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
-    def get_json(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
-        """GET an API path and return the parsed JSON body.
-
-        Args:
-            path: A path under ``/api/v1`` (e.g. ``/datasets``).
-            params: Optional query parameters.
-
-        Returns:
-            The decoded JSON.
-        """
-        response = _send_with_retry(
-            lambda: self._client.get(f"{API_PREFIX}{path}", params=params, headers=self.api_headers())
-        )
-        _raise_for_status(response)
-        return response.json()
-
     def get_text(self, path: str) -> str:
         """GET an API path and return the raw text body (used for ``manifest.json``).
 
