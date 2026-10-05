@@ -31,6 +31,7 @@ from timenet.errors import TimeNetRegistryError
 from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
+from timenet_connectors.builder.backend import build_parents
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
@@ -117,8 +118,15 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
         raise typer.BadParameter(
             f"unknown values backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
+    target = _resolve_target(out)
+    if isinstance(target, Path):
+        # Build missing local parents before the child starts.
+        try:
+            build_parents(dataset_id, target)
+        except LookupError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     # The flag is tri-state. An explicit --isolation wins over TIMENET_ISOLATION=off. An isolated
-    # child exports that variable as its recursion guard and never forwards it as a flag.
+    # child receives --no-isolation only for its own invocation; parent builds stay isolated.
     override = None if isolation is None else ("on" if isolation else "off")
     if settings(isolation=override).isolation == "on":
         # The child is this same CLI and inherits stderr, so it is the only narrator: it prints the
@@ -153,7 +161,6 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     # connector needs the dependencies the child is about to install.
     connector = connector_cls()
     resolved_backend = values_backend if values_backend is not None else connector.values_backend
-    target = _resolve_target(out)
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         if isinstance(target, Path):
