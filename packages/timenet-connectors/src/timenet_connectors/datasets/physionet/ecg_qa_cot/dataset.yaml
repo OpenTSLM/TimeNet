@@ -11,6 +11,9 @@
 yaml_schema_version: 1
 dataset_id: physionet/ecg-qa-cot
 dataset_version: 1.0.0
+source_revision: OpenTSLM-ECG-QA-CoT
+parents:
+  - physionet/ptb-xl@1.0.0
 name: ECG-QA CoT
 description: >-
   12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought
@@ -24,4 +27,3 @@ tags:
   - qa
   - cot
   - physionet
-source_url: https://physionet.org/content/ptb-xl/
