@@ -1,0 +1,13 @@
+yaml_schema_version: 1
+dataset_id: epfl/coughvid
+dataset_version: 1.0.0
+source_revision: zenodo-7024894-v3
+name: COUGHVID
+description: >-
+  The public COUGHVID version 3 recordings and compiled participant, expert, and semi-supervised
+  labels. Audio keeps its native sample rate and channels. Missing, empty, and undecodable files
+  retain their metadata with an explicit audio status. The private test set is not included.
+license: CC-BY-4.0
+domains: [health, respiratory, audio]
+tags: [cough, covid-19, base-dataset]
+source_url: https://zenodo.org/records/7024894
