@@ -1,0 +1,13 @@
+yaml_schema_version: 1
+dataset_id: iiscleap/coswara
+dataset_version: 1.0.0
+source_revision: 4942c97e31de7180a93d17f2e7530a9c543cfd50
+name: Coswara
+description: >-
+  Original Coswara respiratory and speech recordings at their native sampling rates, with
+  participant metadata and released audio-quality ratings. One record per recording and one
+  metadata-only record per participant. No benchmark-specific filtering or tasks.
+license: CC-BY-4.0
+domains: [health, respiratory, audio]
+tags: [cough, speech, breathing, base-dataset]
+source_url: https://github.com/iiscleap/Coswara-Data
