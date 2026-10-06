@@ -18,6 +18,10 @@ _DOMAIN_CHECKS = """
     SELECT 'sources.parent_source_key' AS field
     FROM sources WHERE parent_source_key = source_key
     UNION ALL
+    SELECT 'records.clock_id' FROM records
+    LEFT JOIN record_imports USING (record_key)
+    WHERE (record_imports.record_key IS NULL) = (records.clock_id IS NULL)
+    UNION ALL
     SELECT 'datasets' FROM (SELECT count(*) AS n FROM datasets) WHERE n <> 1
     UNION ALL
     SELECT 'signals.n_values' FROM signals WHERE n_values <= 0
@@ -107,8 +111,7 @@ _TASK_RECORD_SCOPE = """
     FROM spans
     JOIN tasks USING (task_key)
     LEFT JOIN task_record_refs refs ON refs.task_key = spans.task_key AND refs.field = 'inputs'
-    LEFT JOIN sources ON sources.record_key = refs.record_key
-    LEFT JOIN signals USING (source_key)
+    LEFT JOIN signal_refs signals ON signals.record_key = refs.record_key
     GROUP BY spans.span_key, tasks.task_id, spans.signal_keys
     HAVING count(DISTINCT CASE
         WHEN spans.signal_keys IS NULL OR list_contains(spans.signal_keys, signals.signal_key)

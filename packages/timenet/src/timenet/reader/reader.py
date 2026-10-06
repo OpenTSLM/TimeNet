@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from collections.abc import Iterable, Iterator, Mapping
+from collections import OrderedDict, defaultdict
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 import types as _types
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, Record, TimeFDataset
+from timenet.dataset.composition import inherited_state
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.format.duckdb import ControlSession
+from timenet.types import DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -29,6 +32,20 @@ _CHUNK_LOCATOR_BATCH_SIZE = 1_024
 _AXIS_OFFSETS_CACHE_SIZE = 64
 # The newest axis may exceed this target so Signals can still share one large offset array.
 _AXIS_OFFSETS_CACHE_TARGET_BYTES = 64 * 2**20
+
+
+class _DeferredRecordStates:
+    """Load the original ownership snapshots together on the first validation."""
+
+    def __init__(self, load: Callable[[], dict[str, object]]) -> None:
+        self._load = load
+        self._states: dict[str, object] | None = None
+
+    def get(self, record_id: str) -> object:
+        """Return one original snapshot, reusing it for later validations."""
+        if self._states is None:
+            self._states = self._load()
+        return self._states[record_id]
 
 
 class TimeFReader:
@@ -56,6 +73,7 @@ class TimeFReader:
         self._parents = dict(parents or {})
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
+        self._control_session = ControlSession()
         self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._chunk_locator_batches: list[list[int]] = []
@@ -281,14 +299,61 @@ class TimeFReader:
                 record = by_id.get(referenced.id)
                 if record is not None and task.id not in record.task_ids:
                     record.task_ids = (*record.task_ids, task.id)
+        control = self._control_reader()
+        references = control.record_imports()
+        loaders = {
+            signal.id: (signal.loader, signal.time_offsets_loader)
+            for record in records
+            if record.id in references
+            for signal in record.signals
+        }
+        states = _DeferredRecordStates(partial(self._read_import_states, references, loaders))
         return TimeFDataset.from_parts(
             metadata=self.metadata,
             records=records,
             tasks=tasks,
             schema=self.schema,
-            annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
-            registered_annotations=self._control_reader().read_registered_annotations(),
+            annotations=control.read_dataset_annotations(self._manifest.dataset_id),
+            registered_annotations=control.read_registered_annotations(),
+            record_imports=control.read_record_imports(records, state_loader=states.get),
+            dependencies=self._manifest.dependencies,
         )
+
+    def _read_import_states(
+        self,
+        references: Mapping[str, str],
+        loaders: Mapping[str, tuple[Callable[[], pa.Array], Callable[[], pa.Array] | None]],
+    ) -> dict[str, object]:
+        """Snapshot the parent-owned fields of imported records from a fresh hydration.
+
+        The consumer may have edited its records since the read, so the originals are hydrated
+        again from the parents. Their loader identities are mapped onto the consumer's loaders,
+        so an unchanged record compares equal without loading values or offsets.
+
+        Returns:
+            Original snapshots keyed by record ID.
+        """
+        by_parent: dict[str, list[str]] = defaultdict(list)
+        for record_id, dataset_id in references.items():
+            by_parent[dataset_id].append(record_id)
+        states: dict[str, object] = {}
+        snapshots: dict[int, tuple[object, object]] = {}
+        for dataset_id, record_ids in by_parent.items():
+            originals = self._parent_records(dataset_id, record_ids, True)
+            for record_id, original in zip(record_ids, originals, strict=True):
+                callable_ids: dict[int, int] = {}
+                for signal in original.signals:
+                    loader, offsets = loaders.get(signal.id, (None, None))
+                    callable_ids[id(signal.loader)] = id(loader)
+                    if signal.time_offsets_loader is not None:
+                        callable_ids[id(signal.time_offsets_loader)] = id(offsets)
+                annotation_ids = frozenset(
+                    annotation.occurrence_id
+                    for annotation in original.annotations
+                    if annotation.occurrence_id is not None
+                )
+                states[record_id] = inherited_state(original, annotation_ids, memo=snapshots, callable_ids=callable_ids)
+        return states
 
     def iter_records(
         self,
@@ -306,22 +371,26 @@ class TimeFReader:
             Hydrated records whose Signal values remain lazy.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(
-                record_ids,
-                with_annotations=with_annotations,
-            )
+            yield from self._control_reader().read_records(record_ids, with_annotations=with_annotations)
 
-    def _control_reader(self) -> DuckDBControlReader:
+    def _control_reader(self, *, session: ControlSession | None = None) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
+
+        Args:
+            session: Shared DuckDB instance of the dataset that reads through this reader.
 
         Returns:
             The cached control reader.
         """
         if self._control is None:
+            if session is not None:
+                self._control_session = session
             self._control = DuckDBControlReader(
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
+                parent_records=self._parent_records,
+                session=self._control_session,
             )
         return self._control
 
@@ -330,6 +399,29 @@ class TimeFReader:
         if self._records is None:
             self._records = self._control_reader().read_records()
         return self._records
+
+    def _parent_records(self, dataset_id: str, record_ids: Sequence[str], with_annotations: bool) -> Iterator[Record]:
+        """Read imported records from the direct parent the manifest declares under ``dataset_id``.
+
+        The parent shares this reader's DuckDB session, so a graph of parents opens one instance.
+
+        Yields:
+            The parent's Records in the requested order, with lazy values.
+
+        Raises:
+            TimeFFormatError: If no reader is attached for the dataset ID, or it opened another version.
+        """
+        declared = {parent.dataset_id: parent for parent in self._manifest.metadata.parents}.get(dataset_id)
+        reader = self._parents.get(dataset_id)
+        if declared is None or reader is None:
+            raise TimeFFormatError(f"dataset {self._manifest.dataset_id!r} requires parent dataset ID {dataset_id!r}")
+        actual = DatasetRef(dataset_id=reader.metadata.dataset_id, version=reader.metadata.dataset_version)
+        if actual != declared:
+            raise TimeFFormatError(f"parent dataset ID {dataset_id!r} resolved to {actual}, expected {declared}")
+        with reader._as_format_error(preserve_validation=True):
+            yield from reader._control_reader(session=self._control_session).read_records(
+                record_ids, with_annotations=with_annotations
+            )
 
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""
