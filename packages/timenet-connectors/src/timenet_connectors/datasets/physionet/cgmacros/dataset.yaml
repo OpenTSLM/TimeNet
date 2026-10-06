@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: physionet/cgmacros
+dataset_version: 1.0.0
+source_revision: "1.0.0"
+name: CGMacros
+description: >-
+  Original CGMacros 1.0.0 participant recordings, meal events, photographs, and supplementary
+  participant tables. Preserve the published one-minute glucose and activity readings, including
+  missing values. Dates are shifted, local source timestamps, not asserted UTC times. No HEARTS
+  preprocessing or benchmark tasks are included.
+license: other
+license_url: https://physionet.org/content/cgmacros/view-license/1.0.0/
+domains: [health, cardiology]
+tags: [glucose, nutrition, cgm, base-dataset]
+source_url: https://physionet.org/content/cgmacros/1.0.0/
+citation: >-
+  Gutierrez-Osuna, R., Kerr, D., Mortazavi, B., and Das, A. (2025).
+  CGMacros: a scientific dataset for personalized nutrition and diet monitoring, version 1.0.0.
+  PhysioNet. https://doi.org/10.13026/3z8q-x658
