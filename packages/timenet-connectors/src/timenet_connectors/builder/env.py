@@ -133,7 +133,7 @@ def run_isolated(  # noqa: PLR0913
         LookupError: If no connector exists for the id.
     """  # noqa: DOC502 (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out), "--no-isolation"]
     if force:
         argv.append("--force")
     if keep_cache:
@@ -141,8 +141,9 @@ def run_isolated(  # noqa: PLR0913
     if values_backend is not None:
         argv += ["--values-backend", values_backend]
     command = uv_command(env_spec(dataset_id, values_backend=values_backend), argv)
-    # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
-    child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
+    # The flag prevents this connector from launching itself again. Other connectors, including
+    # missing parents, still need their own requirements and must remain isolated.
+    child_env = {**os.environ, "TIMENET_ISOLATION": "on"}
     stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
