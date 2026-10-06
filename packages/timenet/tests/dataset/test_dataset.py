@@ -845,6 +845,106 @@ def test_get_split_rejects_a_dataset_that_assigns_no_splits(make_series):
     assert dataset.get_all() == (task,)
 
 
+@pytest.fixture(params=[False, True], ids=["materialized", "streamed"])
+def split_dataset(request, make_series):
+    dataset = _dataset()
+    record = _record(dataset, make_series)
+    tasks = (
+        ClassificationTask(inputs=(record,), targets=("a",), split=Split.VALIDATION, prompt="Classify."),
+        ClassificationTask(inputs=(record,), targets=("b",), split=Split.TRAIN),
+        ClassificationTask(inputs=(record,), targets=("c",), split=Split.TEST),
+        ClassificationTask(inputs=(record,), targets=("d",)),
+        ClassificationTask(inputs=(record,), targets=("e",), split=Split.TRAIN),
+    )
+    if request.param:
+        dataset.set_task_stream(task_types=(ClassificationTask,), source=lambda: iter(tasks))
+    else:
+        dataset.add_tasks(tasks=tasks)
+    return dataset, tasks
+
+
+def test_get_splits_preserves_order_identity_and_assignments(split_dataset):
+    dataset, tasks = split_dataset
+    original_splits = tuple(task.split for task in tasks)
+
+    selected = dataset.get_splits(Split.TRAIN, "validation", Split.TRAIN)
+
+    assert tuple(task.id for task in selected) == (tasks[0].id, tasks[1].id, tasks[4].id)
+    assert selected[0] is tasks[0]
+    assert tuple(task.split for task in tasks) == original_splits
+    assert dataset.get_test() == (tasks[2],)
+    assert dataset.get_all() == tasks
+
+
+def test_iter_tasks_selects_multiple_splits_and_modalities(split_dataset):
+    dataset, tasks = split_dataset
+
+    selected = dataset.iter_tasks(split=(split for split in ("train", "validation", "train")))
+    assert tuple(selected) == (tasks[0], tasks[1], tasks[4])
+    assert tuple(
+        dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION), required_modalities=(InputModality.TEXT,))
+    ) == (tasks[0],)
+    assert tuple(
+        dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION), supported_modalities=(InputModality.TIME_SERIES,))
+    ) == (tasks[1], tasks[4])
+
+
+def test_multi_split_selection_reads_stream_once_and_iteration_is_lazy(make_series):
+    dataset = _dataset()
+    record = _record(dataset, make_series)
+    train = ClassificationTask(inputs=(record,), targets=("a",), split=Split.TRAIN)
+    validation = ClassificationTask(inputs=(record,), targets=("b",), split=Split.VALIDATION)
+    visited = []
+
+    def stream():
+        for task in (train, validation):
+            visited.append(task.id)
+            yield task
+
+    dataset.set_task_stream(task_types=(ClassificationTask,), source=stream)
+    selected = dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION))
+    assert visited == []
+    assert next(selected) is train
+    assert visited == [train.id]
+
+    visited.clear()
+    assert dataset.get_splits(Split.TRAIN, Split.VALIDATION) == (train, validation)
+    assert visited == [train.id, validation.id]
+
+
+@pytest.mark.parametrize("splits", [(), ("holdout",)])
+def test_multi_split_selection_rejects_empty_or_unknown_names(split_dataset, splits):
+    dataset, _ = split_dataset
+    with pytest.raises(TimeFValidationError):
+        dataset.get_splits(*splits)
+    with pytest.raises(TimeFValidationError):
+        tuple(dataset.iter_tasks(split=splits))
+
+
+@pytest.mark.parametrize("split", [Split.TRAIN, "train", ["train"], (Split.TRAIN,), {"train"}])
+def test_iter_tasks_accepts_scalar_or_iterable_split(split_dataset, split):
+    dataset, tasks = split_dataset
+    assert tuple(dataset.iter_tasks(split=split)) == (tasks[1], tasks[4])
+
+
+def test_iter_tasks_without_split_includes_unassigned_tasks(split_dataset):
+    dataset, tasks = split_dataset
+    assert tuple(dataset.iter_tasks(split=None)) == tasks
+    assert tuple(dataset.iter_tasks()) == tasks
+
+
+def test_get_splits_handles_missing_partitions_and_unpartitioned_datasets(make_series):
+    dataset = _dataset()
+    record = _record(dataset, make_series)
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    with pytest.raises(TimeFValidationError, match="assigns no split"):
+        dataset.get_splits(Split.TRAIN, Split.VALIDATION)
+    assert tuple(dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION))) == ()
+
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("b",), split=Split.TEST))
+    assert dataset.get_splits(Split.TRAIN, Split.VALIDATION) == ()
+
+
 def test_to_features_and_targets_can_take_one_split(make_series):
     dataset = _dataset()
     records = [_record(dataset, make_series, f"record-{index}") for index in range(3)]

@@ -28,7 +28,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
-from timenet.types.splits import Split, parse_split
+from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
 
 
@@ -302,25 +302,26 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
-        split: Split | str | None = None,
+        split: Split | str | Iterable[Split | str] | None = None,
     ) -> Iterator[Task]:
         """Yield the dataset's tasks, from the stream when one is set, else the materialized list.
 
         Args:
-            split: Keep only tasks of this split, or ``None`` for every task.
+            split: One split or an iterable of splits to select, or ``None`` for every task.
+                Selection preserves dataset order and original task assignments.
 
         Yields:
             Each task. A streamed dataset re-reads its source on every call.
 
         Raises:
-            TimeFValidationError: If ``split`` is unknown.
-        """  # noqa: DOC502 - raised by parse_split
+            TimeFValidationError: If the selection is empty or contains an unknown split.
+        """  # noqa: DOC502 - raised by parse_splits
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
-        wanted = None if split is None else parse_split(split)
+        wanted = None if split is None else parse_splits(split)
         source = self._task_stream() if self._task_stream is not None else self._tasks
         for task in source:
-            if wanted is not None and task.split is not wanted:
+            if wanted is not None and task.split not in wanted:
                 continue
             if not required and supported is None:
                 yield task
@@ -806,13 +807,30 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If ``split`` is unknown, or if no task of the dataset belongs to any
                 split. Asking a partition of a dataset that has none is a mistake rather than an
                 empty selection, so it fails rather than returning nothing.
+        """  # noqa: DOC502 - raised by get_splits
+        return self.get_splits(split)
+
+    def get_splits(self, *splits: Split | str) -> tuple[Task, ...]:
+        """Return the union of selected splits without changing task assignments.
+
+        Args:
+            *splits: One or more partitions, such as ``Split.TRAIN, Split.VALIDATION``.
+
+        Returns:
+            Matching tasks in dataset order. Repeated split names do not duplicate tasks.
+            Tasks without a split are excluded. A streamed dataset is read once to materialize
+            the selection.
+
+        Raises:
+            TimeFValidationError: If no splits are supplied, a name is unknown, or the dataset
+                assigns no split to any task. A missing partition otherwise returns no tasks.
         """
-        wanted = parse_split(split)
+        wanted = parse_splits(splits)
         selected: list[Task] = []
         partitioned = False
         for task in self.iter_tasks():
             partitioned = partitioned or task.split is not None
-            if task.split is wanted:
+            if task.split in wanted:
                 selected.append(task)
         if not partitioned:
             raise TimeFValidationError(

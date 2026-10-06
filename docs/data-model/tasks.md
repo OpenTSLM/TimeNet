@@ -90,6 +90,25 @@ mistake rather than an empty selection. `iter_tasks(split=...)` on a dataset or 
 filters the same way; the reader applies the filter in DuckDB, so a Task outside the split is never
 built. `to_features_and_targets(split=...)` builds the `(X, y)` pair of one split.
 
+To train on train and validation together while keeping test separate, select their union:
+
+```python
+training_tasks = dataset.get_splits(Split.TRAIN, Split.VALIDATION)
+test_tasks = dataset.get_test()
+
+# Or consume the selection lazily from a TimeFDataset:
+for task in dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION)):
+    process(task)
+```
+
+Selection preserves dataset order and each Task's original `split`. Repeated split names do not
+duplicate Tasks, and Tasks with `split=None` are excluded. `get_splits()` materializes its result
+in one pass and raises if the dataset has no split assignments. The dataset iterator remains lazy
+and simply yields no matches in that case. Both selectors require at least one valid split;
+pass `split=None`, omit the argument, or use `get_all()` to include every Task. The dataset
+iterator's `split` argument accepts an enum, a string, or an iterable of either. Modality filters
+can be combined with split selection.
+
 ## Register Tasks
 
 Register all referenced objects before you register the Task:

@@ -163,8 +163,10 @@ annotations, and optional metadata. The DuckDB storage layer turns these object 
 normalized ID relationships and restores the objects when it reads the dataset.
 
 A Task may name its `split`: `train`, `validation`, or `test`. `get_train()`, `get_validation()`,
-and `get_test()` return the Tasks of one split, `get_all()` every Task, and `iter_tasks(split=...)`
-filters a stream. See [Tasks](data-model/tasks.md#splits).
+and `get_test()` return the Tasks of one split. `get_splits(Split.TRAIN, Split.VALIDATION)` selects
+their union in dataset order without changing assignments. `get_all()` returns every Task;
+`iter_tasks(split=...)` filters a stream by one split or an iterable of splits.
+See [Tasks](data-model/tasks.md#splits).
 
 ## Building a dataset
 
