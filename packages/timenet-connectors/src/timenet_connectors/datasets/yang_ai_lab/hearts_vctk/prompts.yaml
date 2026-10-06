@@ -1,0 +1,8 @@
+# Prompts adapted from the pinned HEARTS reference harness.
+
+vctk/waveform_temporal_direction_detection: |-
+  A raw audio waveform is provided as the signal 'audio'. This is a mono audio signal sampled at 16000 Hz. The waveform may be playing forward (normal) or time-reversed (backward). Speaker: $speaker. Determine whether the waveform is playing in the forward direction or has been time-reversed. Output your final answer as a JSON object without any other text, in the following format:
+  {
+      "direction": "[forward|reversed]",
+      "reason": "[explanation of your choice]"
+  }
