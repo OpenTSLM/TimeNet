@@ -1,0 +1,14 @@
+yaml_schema_version: 1
+dataset_id: oca-john/harespod
+dataset_version: 1.0.0
+source_revision: figshare-22736432-v1
+name: HARESPOD continuous recordings
+description: >-
+  The complete continuous-data release for 15 HARESPOD participants. All five released channels,
+  native sample clocks, normalized values, and experiment timestamp notes are retained. This
+  connector excludes the separately published incomplete recordings and duplicate split windows.
+  The release does not provide a reliable timezone or inverse normalization constants.
+license: CC0-1.0
+domains: [health, respiratory]
+tags: [respiration, hypoxia, altitude, base-dataset]
+source_url: https://springernature.figshare.com/articles/dataset/Continuously_data/22736432

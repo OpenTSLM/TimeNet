@@ -1,0 +1,16 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts-coughvid
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - epfl/coughvid@1.0.0
+name: HEARTS COUGHVID
+description: >-
+  The six HEARTS COUGHVID tasks derived from public original recordings. Child-owned audio uses
+  mono and the benchmark's PCM16 conversion for WebM and Ogg. The comparison allows one PCM16 step for
+  decoder rounding differences. The pinned HEARTS release supplies selections, prompts, and labels.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [health, respiratory, audio]
+tags: [cough, covid-19, hearts, benchmark]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS

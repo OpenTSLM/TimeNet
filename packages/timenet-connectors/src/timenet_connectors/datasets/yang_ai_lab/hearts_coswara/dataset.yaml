@@ -1,0 +1,16 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts-coswara
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - iiscleap/coswara@1.0.0
+name: HEARTS Coswara
+description: >-
+  The five HEARTS Coswara tasks, with child-owned mono audio from original Coswara recordings.
+  The pinned benchmark supplies case selection, prompts, and answers. Symptoms must agree with
+  the original participant metadata. The parent keeps all recordings at their native rates.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [health, respiratory, audio]
+tags: [cough, speech, breathing, hearts, benchmark]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
