@@ -3,9 +3,10 @@ import sys
 
 import pytest
 
+from timenet.errors import TimeNetBuildError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import DatasetVersion, LocalRegistry
 from timenet_connectors.builder import backend as backend_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 
@@ -83,3 +84,58 @@ def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, mo
     monkeypatch.setattr(backend_module, "run_pipeline", pipeline)
     ConnectorBuilder().build("timenet/hello-world", tmp_path)
     assert captured["backend"] == "zarr"
+
+
+def _card(directory: Path, dataset_id: str, parents: tuple[str, ...] = ()) -> Path:
+    lines = [
+        f"dataset_id: {dataset_id}",
+        "dataset_version: 1.0.0",
+        f"name: {dataset_id}",
+        "description: d",
+        "license: MIT",
+    ]
+    if parents:
+        lines.append("parents:")
+        for parent in parents:
+            lines.append(f"  - {parent}@1.0.0")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "dataset.yaml").write_text("\n".join(lines) + "\n")
+    return directory
+
+
+def _serve_cards(monkeypatch, cards: dict[str, Path]) -> None:
+    real = backend_module.connector_dir
+    monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: cards.get(dataset_id) or real(dataset_id))
+
+
+def test_build_materializes_a_missing_parent_through_its_own_builder(tmp_path, monkeypatch):
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    _serve_cards(monkeypatch, {"test/child": _card(tmp_path / "child", "test/child", ("timenet/hello-world",))})
+    built = []
+    monkeypatch.setattr(LocalRegistry, "exists", lambda self, dataset_id, version: dataset_id in built)
+    monkeypatch.setattr(backend_module, "resolve", lambda dataset_id: pytest.fail(f"{dataset_id} imported in-process"))
+
+    def fake_isolated(dataset_id, root, *, force=False, values_backend=None):
+        built.append(dataset_id)
+        return Path(root) / dataset_id / "1.0.0"
+
+    monkeypatch.setattr(backend_module, "run_isolated", fake_isolated)
+    ConnectorBuilder().build("test/child", tmp_path / "registry")
+
+    assert built == ["timenet/hello-world", "test/child"]
+
+
+def test_build_rejects_a_card_dependency_cycle(tmp_path, monkeypatch):
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    _serve_cards(
+        monkeypatch,
+        {
+            "test/a": _card(tmp_path / "a", "test/a", ("test/b",)),
+            "test/b": _card(tmp_path / "b", "test/b", ("test/a",)),
+        },
+    )
+    monkeypatch.setattr(backend_module, "find_builder", lambda dataset_id: ConnectorBuilder())
+    monkeypatch.setattr(backend_module, "run_isolated", _unexpected_isolation)
+
+    with pytest.raises(TimeNetBuildError, match="test/a -> test/b -> test/a"):
+        ConnectorBuilder().build("test/a", tmp_path / "registry")
