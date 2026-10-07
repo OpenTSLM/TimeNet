@@ -1,0 +1,58 @@
+# Prompts adapted from the pinned HEARTS reference harness.
+
+harespod/altitude_ranking_respiration: |-
+  You are given 5-minute segments of respiration signals as the records A, B and C, each holding the signal 'rsp' with its timestamps. Each segment corresponds to one of the altitude ranges provided below:
+
+  - 1.5k-2k meters
+  - 2k-2.5k meters
+  - 2.5k-3k meters
+  - 3k-3.5k meters
+  - 3.5k-4k meters
+
+  Your task is to analyze the respiration signals and rank the segments from highest altitude to lowest altitude.
+
+  Output your ranking as a list of labels in JSON format:
+  {
+      "ranking": ["label from highest altitude", "label from mid altitude", "label from lowest altitude"]
+  }
+harespod/altitude_ranking_spo2: |-
+  You are given 5-minute segments of SpO2 (oxygen saturation) signals as the records A, B and C, each holding the signal 'spo' with its timestamps. Each segment corresponds to one of the altitude ranges provided below:
+
+  - 1.5k-2k meters
+  - 2k-2.5k meters
+  - 2.5k-3k meters
+  - 3k-3.5k meters
+  - 3.5k-4k meters
+
+  Your task is to analyze the SpO2 signals and rank the segments from highest altitude to lowest altitude.
+
+  Output your ranking as a list of labels in JSON format:
+  {
+      "ranking": ["label from highest altitude", "label from mid altitude", "label from lowest altitude"]
+  }
+harespod/hr_resp_pairing: |-
+  You are given 5-minute segments of respiration and heart rate signals from the same subject at different altitude phases.
+
+  The respiration signals are the records respiration_A and respiration_B, each holding the signal 'rsp' with its timestamps.
+
+  The heart rate signals are the records hr_1 and hr_2, each holding the signal 'hr' with its timestamps.
+
+  Your task is to analyze the signals and pair which heart rate signal corresponds to which respiration signal, based on them being from the same altitude phase. The pairing should reflect which heart rate matches which respiration from the same phase.
+
+  Output your pairing as a dictionary in JSON format without any other text, for example:
+  {
+      "pairing": {"A": "1", "B": "2"} # or {"A": "2", "B": "1"}
+  }
+harespod/spo2_resp_pairing: |-
+  You are given 5-minute segments of respiration and SpO2 (oxygen saturation) signals from the same subject at different altitude phases.
+
+  The respiration signals are the records respiration_A and respiration_B, each holding the signal 'rsp' with its timestamps.
+
+  The SpO2 signals are the records spo_1 and spo_2, each holding the signal 'spo' with its timestamps.
+
+  Your task is to analyze the signals and pair which SpO2 signal corresponds to which respiration signal, based on them being from the same altitude phase. The pairing should reflect which SpO2 matches which respiration from the same phase.
+
+  Output your pairing as a dictionary in JSON format without any other text, for example:
+  {
+      "pairing": {"A": "1", "B": "2"} # or {"A": "2", "B": "1"}
+  }
