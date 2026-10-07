@@ -1,0 +1,20 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts-vctk
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - cstr/vctk@1.0.0
+name: HEARTS VCTK
+description: >-
+  HEARTS temporal-direction detection over child-owned VCTK recordings. The child selects the
+  original microphone using a verified mapping for the pinned benchmark, then
+  resamples to 16 kHz with soxr HQ and reverses the selected cases. It verifies the resulting
+  waveform against the pinned benchmark within float32 rounding tolerance. The parent retains
+  both microphones at their native rates and orientations.
+# The pinned HEARTS release does not declare a benchmark license.
+# Original VCTK recordings are CC-BY-4.0.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [audio]
+tags: [speech, direction, hearts, benchmark]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
