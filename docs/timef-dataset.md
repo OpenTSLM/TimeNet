@@ -125,7 +125,6 @@ record = Record(
 | --- | --- | --- |
 | `record_id` | `str` | Stable identity. `record.id` is the public alias. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
-| `subject_ids` | `tuple[str, ...]` | Optional subject identifiers. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
@@ -136,6 +135,16 @@ the same deterministic traversal used by the writer.
 
 Call `record.annotate(annotation)` to attach an occurrence. `time_point()` and `time_interval()`
 convert wall-clock values against the Record origin. They require a known absolute timestamp.
+
+Store subject identifiers as a list-valued record annotation. Omit it for a record with no subjects:
+
+```python
+from timenet.types import Annotation
+
+record.annotate(
+    Annotation(key="subject_ids", value=["patient-1", "patient-2"])
+)
+```
 
 ## Task
 
