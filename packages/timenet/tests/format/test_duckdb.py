@@ -41,11 +41,12 @@ def test_control_transaction_rolls_back_all_rows(tmp_path):
         assert connection.execute("SELECT count(*) FROM records").fetchone() == (0,)
 
 
-def test_control_schema_rejects_an_unknown_version(tmp_path):
+@pytest.mark.parametrize("version", ["2", "999"])
+def test_control_schema_rejects_an_unknown_version(tmp_path, version):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '999'")
+        connection.execute("UPDATE control_metadata SET value = ?", [version])
 
         with pytest.raises(TimeFFormatError, match="unsupported control schema version"):
             check_control_schema(connection)

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts-cgmacros
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - physionet/cgmacros@1.0.0
+name: HEARTS CGMacros
+description: >-
+  HEARTS CGMacros tasks built from original CGMacros recordings. The benchmark release supplies
+  the exact case selection, prompts, answers, and photographic task assets. Child-owned records
+  select source timestamps and apply the published imputation masks without changing the parent.
+# The pinned HEARTS release does not declare a benchmark license.
+# Original CGMacros recordings are CC-BY-NC-SA-4.0.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [health, cardiology]
+tags: [glucose, cgm, benchmark, hearts]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
