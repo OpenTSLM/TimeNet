@@ -3,13 +3,17 @@
 from collections.abc import Callable
 from pathlib import Path
 import shutil
+from typing import Any
 
+from timenet.composition import BuildContext
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry import BaseRegistry, LocalRegistry
 from timenet.registry.writable import WritableRegistry
+from timenet.types import DatasetMetadata
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -26,23 +30,17 @@ def run_pipeline(  # noqa: PLR0913
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
 
-    This function is idempotent. If the target version is already committed, it skips the expensive
-    ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
-    to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
-    references into it, ``convert`` them into a dataset, ``derive_schema``, ``store``, then delete
-    the cache directory. The engine only writes local files. Publishing to a remote registry is a
-    separate step.
+    Committed versions are reused unless ``force`` is set. New builds download, convert or compose,
+    derive the schema, and store the dataset. The engine writes local files.
+
+    Composed connectors require their parent versions in ``root``. ``timenet-build`` builds missing parents first.
 
     Args:
         connector: The connector to build.
-        root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
+        root: Output root for ``<root>/<dataset_id>/<version>/``.
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
-            Conversion is the only stage that needs the raw sources, so removing them frees disk
-            after a successful build. The sources re-download on the next run.
-        values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
-            ``None``, this function uses the connector's ``values_backend``, so a connector that
-            needs Zarr declares it once on the class.
+        keep_cache: Keep downloaded artifacts after a successful build.
+        values_backend: Values storage backend. Defaults to the connector's ``values_backend``.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
 
@@ -61,13 +59,11 @@ def run_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
-    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset. This call is not redundant with that guard.
+    dataset = _convert(connector, metadata, LocalRegistry(root), connector.download(cache))
+    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts
+    # while the old committed version is still on disk.
     dataset.derive_schema()
-    if committed:  # force rebuild: drop the old committed version so the writer can republish it
+    if committed:  # force rebuild: drop the old version so the writer can republish it
         shutil.rmtree(version_dir)
     store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
@@ -116,7 +112,7 @@ def publish_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
+    dataset = _convert(connector, metadata, registry, connector.download(cache))
     dataset.derive_schema()
     registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -139,6 +135,26 @@ def _resolve_values_backend(connector: BaseConnector, override: str | None) -> s
             f"unknown values_backend {backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
     return backend
+
+
+def _convert(
+    connector: BaseConnector,
+    metadata: DatasetMetadata,
+    registry: BaseRegistry,
+    raw_refs: list[Any],
+) -> TimeFDataset:
+    """Convert raw references or compose over the declared parents.
+
+    Returns:
+        The converted dataset, before schema derivation.
+    """
+    if not metadata.parents:
+        return connector.convert(raw_refs)
+    with BuildContext.open(metadata, registry) as context:
+        dataset = connector.compose(raw_refs, context)
+        context.verify_imports(dataset)
+        dataset.set_dependencies(context.dependency_lock())
+    return dataset
 
 
 def store_dataset(

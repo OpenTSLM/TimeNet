@@ -7,6 +7,7 @@ from pydantic import BeforeValidator, Field, PlainSerializer, StrictStr, TypeAda
 from timenet.types.version import Version
 
 
+# Three numeric components separated by dots, such as 1.2.3.
 _SEMANTIC_VERSION_PATTERN = r"^\d+\.\d+\.\d+$"
 
 
@@ -23,6 +24,7 @@ def _parse_version(value: Any) -> Any:
 
 DatasetId = Annotated[
     StrictStr,
+    # An org/name pair using letters, digits, '.', '_', and '-'; neither part starts with a dot.
     Field(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$"),
 ]
 """A safe, case-sensitive ``org/name`` dataset identifier."""
