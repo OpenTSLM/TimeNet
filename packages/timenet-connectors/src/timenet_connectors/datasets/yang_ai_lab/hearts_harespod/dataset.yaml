@@ -1,0 +1,19 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts-harespod
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - oca-john/harespod@1.0.0
+name: HEARTS HARESPOD
+description: >-
+  HEARTS altitude-ranking and signal-pairing tasks derived from complete HARESPOD recordings.
+  Ranking windows select exact source timestamps. Pairing windows reset their clocks, so the
+  connector requires a unique matching source window and verifies its sampling clock. The child
+  owns these windows and the benchmark labels; the parent retains the complete recordings.
+# The pinned HEARTS release does not declare a benchmark license.
+# Original HARESPOD recordings are CC0-1.0.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [health, respiratory]
+tags: [respiration, hypoxia, altitude, hearts, benchmark]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS

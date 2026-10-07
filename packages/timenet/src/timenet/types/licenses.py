@@ -22,6 +22,7 @@ class License(StrEnum):
     CC_BY_4_0 = "CC-BY-4.0"
     CC_BY_SA_4_0 = "CC-BY-SA-4.0"
     CC_BY_NC_4_0 = "CC-BY-NC-4.0"
+    CC_BY_NC_SA_4_0 = "CC-BY-NC-SA-4.0"
     ODC_BY_1_0 = "ODC-By-1.0"
     ODBL_1_0 = "ODbL-1.0"
     OTHER = "other"
