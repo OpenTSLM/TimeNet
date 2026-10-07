@@ -1,0 +1,4 @@
+Timestamp,Libre GL,Dexcom GL,HR,Calories (Activity),METs,Intensity,Meal Type,Calories,Carbs,Protein,Fat,Fiber,Amount Consumed,Image path
+2024-01-25 09:12:00,98,100,70,0.8,10,0,,,,,,,,
+2024-01-25 09:13:00,100,,72,0.9,10,,lunch,200,20,10,5,2,100,photos/meal.jpg
+2024-01-25 09:15:00,102,104,,1.0,12,3,,,,,,,,
