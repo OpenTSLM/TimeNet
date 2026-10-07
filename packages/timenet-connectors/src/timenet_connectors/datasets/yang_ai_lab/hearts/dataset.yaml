@@ -1,0 +1,26 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts
+dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  - yang-ai-lab/hearts-cgmacros@1.0.0
+  - yang-ai-lab/hearts-coswara@1.0.0
+  - yang-ai-lab/hearts-coughvid@1.0.0
+  - yang-ai-lab/hearts-harespod@1.0.0
+  - yang-ai-lab/hearts-vctk@1.0.0
+name: HEARTS
+description: >-
+  The combined HEARTS benchmark. Five independently buildable benchmark children select and
+  transform original CGMacros, Coswara, COUGHVID, HARESPOD, and VCTK recordings. This aggregate
+  imports their records and tasks without new waveform copies or external downloads. All tasks
+  retain the published test split, prompts, labels, and case identifiers.
+# The pinned HEARTS release does not declare a benchmark license.
+# Original recordings retain their source licenses; see README.md.
+license: other
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains: [health, respiratory, audio, cardiology]
+tags: [benchmark, reasoning, glucose, respiration, cough, speech]
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+citation: >-
+  Li, Xiao, Joshi, Metwally, McDuff, Wang, Yang. HEARTS: Benchmarking LLM Reasoning on Health Time
+  Series. arXiv:2603.06638.
