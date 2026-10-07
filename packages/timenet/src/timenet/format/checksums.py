@@ -38,6 +38,18 @@ def file_checksum(path: Path) -> str:
         return stream_checksum(handle)
 
 
+def bytes_checksum(data: bytes | memoryview) -> str:
+    """Return the manifest checksum of bytes already in memory.
+
+    Args:
+        data: The bytes to hash.
+
+    Returns:
+        The checksum as ``"sha256:<hex>"``.
+    """
+    return CHECKSUM_PREFIX + hashlib.sha256(data).hexdigest()
+
+
 def stream_checksum(handle: _Readable) -> str:
     """Return an open binary stream's manifest checksum, hashing it a block at a time.
 
