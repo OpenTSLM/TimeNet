@@ -1,0 +1,50 @@
+# Prompts adapted from the pinned HEARTS reference harness.
+
+coughvid/cough_detection_good_qual: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Analyze the audio and determine if a cough is present in the recording.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "has_cough": true/false
+  }
+coughvid/cough_detection_poor_qual: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Analyze the audio and determine if a cough is present in the recording.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "has_cough": true/false
+  }
+coughvid/covid_status_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine if the subject has COVID-19.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "is_covid": true/false
+  }
+coughvid/diagnosis_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine the most likely diagnosis from the following options:
+  - upper_infection
+  - lower_infection
+  - obstructive_disease
+  - COVID-19
+  - healthy_cough
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "diagnosis": "diagnosis_option"
+  }
+coughvid/health_status_classification: |-
+  One audio recording is provided as the signal 'audio', which is sampled at 48 kHz. Analyze the audio and determine if the subject is healthy.
+
+  Healthy is defined as the subject having no underlying health conditions can be recognized from the audio.
+
+  Output your answer in the following JSON format without any other text:
+  {
+      "is_healthy": true/false
+  }
+coughvid/mfcc_mean_std: |-
+  One audio recording is provided as the signal 'audio'. It is a cough audio sampled at 48 kHz. Calculate the Mel Frequency Cepstral Coefficients (MFCCs) with 13 coefficients, then compute the mean and standard deviation of each MFCC over time. Please output your final answer in the following JSON format without any other text:
+  {
+      "mfcc_mean": [list of 13 floats],
+      "mfcc_std": [list of 13 floats]
+  }
