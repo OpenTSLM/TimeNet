@@ -123,17 +123,19 @@ def test_isolated_environment_installs_backend_dependencies(monkeypatch, tmp_pat
     assert ("timenet[zarr]==9.9.9" in dependencies) == (backend != "parquet")
 
 
-def test_run_isolated_disables_isolation_in_the_child(monkeypatch, tmp_path):
+def test_run_isolated_disables_isolation_only_for_current_connector(monkeypatch, tmp_path):
     captured = {}
 
     def _fake(command, env):
         captured["env"] = env
+        captured["command"] = command
         return f"{tmp_path}/timenet/hello-world/1.0.0\n", "", 0
 
     monkeypatch.setattr(env_module, "_run_build", _fake)
     run_isolated("timenet/hello-world", tmp_path)
 
-    assert captured["env"]["TIMENET_ISOLATION"] == "off"
+    assert captured["env"]["TIMENET_ISOLATION"] == "on"
+    assert "--no-isolation" in captured["command"]
 
 
 def test_run_isolated_returns_the_version_directory(monkeypatch, tmp_path):

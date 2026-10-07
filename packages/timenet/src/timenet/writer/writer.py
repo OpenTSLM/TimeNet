@@ -1,5 +1,6 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
+from collections import Counter
 from collections.abc import Callable, Iterable
 from itertools import chain
 from pathlib import Path
@@ -177,6 +178,7 @@ class TimeFWriter:
         """Serialize every artifact except the manifest into the staging directory."""
         if self._dataset.schema is None:
             self._dataset.derive_schema()
+        self._dataset.check_records()
         self._validate_shared_annotations()
         self._resolve_id_types()
 
@@ -223,7 +225,7 @@ class TimeFWriter:
     def _resolve_id_types(self) -> None:
         """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
-        for record in self._dataset.records:
+        for record in self._dataset.owned_records:
             values["record_id"].append(record.record_id)
             values["subject_id"].extend(record.subject_ids)
             for ts in record.signals:
@@ -268,7 +270,7 @@ class TimeFWriter:
         unique: dict[str, Signal] = {}
         series_to_records: dict[str, list[str]] = {}
         seen_pairs: set[tuple[str, str]] = set()
-        for record in self._dataset.records:
+        for record in self._dataset.owned_records:
             for ts in record.signals:
                 existing = unique.get(ts.id)
                 if existing is None:
@@ -405,6 +407,7 @@ class TimeFWriter:
             value_encoding=self._value_encoding,
             build_env=build_env(),
             timef_format_version=1,
+            dependencies=self._dataset.dependencies,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
@@ -417,7 +420,10 @@ class TimeFWriter:
             TimeFValidationError: If one content ID has different payloads, or an ID is both
                 registered and carried by a record.
         """
-        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.walk_annotations()}
+        layer_annotations = tuple(
+            annotation for record in self._dataset.records for annotation in self._dataset.owned_annotations(record)
+        )
+        record_ann_ids = {annotation.id for annotation in layer_annotations}
         overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
         if overlap:
             raise TimeFValidationError(
@@ -425,19 +431,29 @@ class TimeFWriter:
                 f"annotation must be one no record carries"
             )
         seen: dict[str, tuple[object, ...]] = {}
-        record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
-        for ann in chain(record_annotations, self._dataset.registered_annotations):
+        for ann in chain(layer_annotations, self._dataset.registered_annotations):
             content = ann._content_fields
             if ann.content_id in seen and seen[ann.content_id] != content:
                 raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")
             seen[ann.content_id] = content
 
     def _build_counts(self) -> ManifestCounts:
-        """Read exact entity counts from the completed control database.
+        """Count owned and inherited entities, plus this layer's value chunks.
+
+        Task annotations stream through the writer, so annotation counts come from the database and imported records.
 
         Returns:
             Counts for the manifest.
         """
+        records = self._dataset.records
+        signals = [signal for record in records for signal in record.signals]
+        imports = self._dataset.record_imports
+        inherited_contents = {
+            annotation.content_id
+            for record in records
+            if record.id in imports
+            for annotation in record.walk_annotations()
+        }
         with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
 
             def count(table: str) -> int:
@@ -446,21 +462,20 @@ class TimeFWriter:
                     raise TimeFValidationError(f"could not count rows in control table {table!r}")
                 return int(row[0])
 
-            signals_by_spec = dict(
-                connection.execute(
-                    "SELECT spec_type, count(*) FROM signals GROUP BY spec_type ORDER BY spec_type"
-                ).fetchall()
-            )
+            stored_contents = {
+                content_id
+                for (content_id,) in connection.execute("SELECT content_id FROM annotation_contents").fetchall()
+            }
             return ManifestCounts(
-                records=count("records"),
-                sources=count("sources"),
-                signals=count("signals"),
-                axes=count("axes"),
-                annotation_contents=count("annotation_contents"),
-                annotation_occurrences=count("annotation_occurrences"),
+                records=len(records),
+                sources=sum(1 for record in records for _ in record.walk_sources()),
+                signals=len(signals),
+                axes=len({signal.time_axis.axis_id for signal in signals}),
+                annotation_contents=len(stored_contents | inherited_contents),
+                annotation_occurrences=count("annotation_occurrences") + count("imported_annotations"),
                 tasks=self._task_type_counts,
                 signal_chunks=count("signal_chunks"),
-                signals_by_spec=signals_by_spec,
+                signals_by_spec=dict(sorted(Counter(signal.spec.spec_type for signal in signals).items())),
             )
 
     def _file_parts(self, rels: Iterable[str]) -> tuple[FilePart, ...]:
