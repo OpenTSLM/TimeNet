@@ -9,7 +9,9 @@ from timenet.dataset import RegularAxis, Signal
 from timenet.errors import TimeFFormatError
 
 
-def derived_signal(expected: Signal, original: Signal, loader: Callable[[], pa.Array], *, parent: str) -> Signal:
+def derived_signal(
+    expected: Signal, original: Signal, loader: Callable[[], pa.Array], *, parent: str, atol: float = 1e-8
+) -> Signal:
     """Copy the benchmark signal structure with values computed from an original signal.
 
     Returns:
@@ -20,7 +22,7 @@ def derived_signal(expected: Signal, original: Signal, loader: Callable[[], pa.A
         values = loader()
         reference = expected.to_arrow()
         if len(values) != len(reference) or not np.allclose(
-            values.to_numpy(), reference.to_numpy(), rtol=1e-7, atol=1e-8, equal_nan=False
+            values.to_numpy(), reference.to_numpy(), rtol=1e-7, atol=atol, equal_nan=False
         ):
             raise TimeFFormatError(
                 f"{expected.id}: values derived from {parent}/{original.id} do not reproduce the pinned HEARTS input"
