@@ -1,0 +1,4 @@
+pandas>=2.2,<3
+pillow>=11
+huggingface-hub>=0.20
+zarr>=3

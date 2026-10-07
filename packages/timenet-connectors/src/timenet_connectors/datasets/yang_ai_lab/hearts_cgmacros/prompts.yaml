@@ -1,0 +1,72 @@
+# Prompts adapted from the pinned HEARTS reference harness.
+
+cgmacros/a1c_classification: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the timestamp of each reading. Your task is to predict the disease status based on CGM data. There are 3 different status: normal, prediabetes, and diabetes. Please analyze the entire CGM time series and output your final prediction of disease status as a JSON object without any other text in the following format:
+  {
+      "disease_status": [string, normal|prediabetes|diabetes]
+  }
+cgmacros/cgm_stat_calculation: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the time of each reading. Calculate percentage of time CGM is below and above normal range (70 - 180 mg/dL). Please calculate and output your final answer as a JSON object without any other text in the following format:
+  {
+      "below": [float, percentage of time CGM < 70 mg/dL],
+      "above": [float, percentage of time CGM > 180 mg/dL]
+  }
+cgmacros/fasting_glu_prediction: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL) with the timestamp of each reading. Your task is to predict the subject's fasting blood glucose value (in mg/dL) based on the entire CGM time series. Please output your final prediction as a JSON object without any other text in the following format:
+  {
+      "fasting_glu": [float, fasting blood glucose value in mg/dL]
+  }
+cgmacros/iauc_calculation: |-
+  The CGM (continuous glucose monitoring) data for 2 hours after a meal is provided as the signal 'CGM (mg/dL)', whose time axis counts the minutes since the meal started.
+  Please calculate the incremental Area Under the Curve (iAUC) for the postprandial glucose response. Use first CGM value as baseline. Please output your calculated iAUC value as a JSON object without any other text in the following format:
+  {
+      "iauc": [number]
+  }
+cgmacros/meal_react_comparison: |-
+  You are given two CGM data windows (A and B), each is a 4-hour window (1 hour before and 3 hours after a meal) from two different subjects. Both subjects ate a meal with similar carbohydrate and calorie content, but one subject is normal (non-diabetes) and the other has prediabetes or diabetes. Each CGM window is a record, 'A' and 'B', holding the signal 'Libre GL' (mg/dL) with the timestamp of each reading.
+
+  Your task: Based on the CGM data, decide which window (A or B) is from the normal subject and which is from the prediabetes or diabetes subject. Output your answer as a JSON object with the following format (no extra text):
+  {
+      "normal_subject": "A"  # or "B"
+  }
+cgmacros/meal_time_localization: |-
+  The continuous glucose monitors (CGM) data for this subject is provided as the signal 'Libre GL', which holds the glucose values (mg/dL); its time axis gives the time of each reading in whole minutes from the start of the window. There is exactly one meal event in this 2-hour window. Please analyze the CGM data and output your final answer as a JSON object without any other text in the following format:
+  {
+      "meal_timestamp": [float, timestamp (in minutes) when the meal starts]
+  }
+cgmacros/meal_forecasting: |-
+  The CGM (continuous glucose monitoring) data for this subject's first three days is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'reference_cgm_df', with the timestamp of each reading.
+  All meal events for the first three days are provided as annotations on that timeline: at each meal's time, 'meal_type' names the meal and 'calories', 'carbs', 'protein', 'fat' and 'fiber' give its content. These meal events are for your reference.
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' of source 'window_df'.
+  A meal event occurred at $meal_time.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_meal_info: |-
+  The CGM (continuous glucose monitoring) data for this subject's first three days is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'reference_cgm_df', with the timestamp of each reading.
+  All meal events for the first three days are provided as annotations on that timeline: at each meal's time, 'meal_type' names the meal and 'calories', 'carbs', 'protein', 'fat' and 'fiber' give its content. These meal events are for your reference.
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' of source 'window_df'.
+  A meal event occurred at $meal_time. The information for this meal is: $meal_info.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_no_ref: |-
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  A meal event occurred at $meal_time.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_forecasting_no_ref_meal_info: |-
+  The CGM data for the 1 hour before the following meal event is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  A meal event occurred at $meal_time. The information for this meal is: $meal_info.
+  Please forecast the CGM values for the next 30 minutes (in mg/dL) after the meal starts. Return your forecasted values in order as a list. Make sure there are 30 values.
+cgmacros/meal_img_classification: |-
+  The CGM data for the 4 hours around the meal event (1 hour before and 3 hours after) is provided as the signal 'Libre GL' (CGM, mg/dL) of source 'window_df', with the timestamp of each reading. A meal event occurred at $meal_time.
+  The 4 possible meal image options are the image signals a.jpg, b.jpg, c.jpg and d.jpg of source 'image_mapping'.
+  Your task is to choose which image is most likely this meal based on the CGM data. Please output your final choice as a JSON object without any other text in the following format:
+  {
+      "chosen_image": "a.jpg" # or "b.jpg", "c.jpg", "d.jpg"
+  }
+cgmacros/non_meal_imputation_calories: |-
+  The CGM (continuous glucose monitoring) and activity calories consumption data for this subject is provided as the signals 'Libre GL' (CGM, mg/dL) and 'Calories (Activity)' (estimation of calories burned in the past minute by a smartwatch), with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the calories and remaining CGM data. Then return your imputed values in order as a list.
+cgmacros/non_meal_imputation_cgm_only: |-
+  The CGM (continuous glucose monitoring) data for this subject is provided as the signal 'Libre GL' (CGM, mg/dL) with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the remaining CGM data. Then return your imputed values in order as a list.
+cgmacros/non_meal_imputation_hr: |-
+  The CGM (continuous glucose monitoring) and heart rate (HR, bpm) data for this subject is provided as the signals 'Libre GL' (CGM, mg/dL) and 'HR' (heart rate, beats per minute), with the timestamp of each reading.
+  In this 2-hour window, a 30-min segment of CGM readings is corrupted (set to 0), start from $mask_start and end at $mask_end. Please impute the missing CGM values in this segment using the heart rate and remaining CGM data. Then return your imputed values in order as a list.

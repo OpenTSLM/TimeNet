@@ -1,0 +1,13 @@
+yaml_schema_version: 1
+dataset_id: cstr/vctk
+dataset_version: 1.0.0
+source_revision: edinburgh-vctk-0.92
+name: VCTK
+description: >-
+  Original VCTK 0.92 microphone recordings at their native sample rates, with speaker metadata and
+  available transcripts. Both microphone versions remain separate. The connector uses the released
+  silence-trimmed FLAC files without further trimming, resampling, or reversal.
+license: CC-BY-4.0
+domains: [audio]
+tags: [speech, english, speakers, base-dataset]
+source_url: https://datashare.ed.ac.uk/handle/10283/3443
