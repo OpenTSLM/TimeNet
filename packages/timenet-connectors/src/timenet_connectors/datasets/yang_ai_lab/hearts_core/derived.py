@@ -63,6 +63,8 @@ def sample_offsets(signal: Signal) -> np.ndarray:
     """Return integer offsets for either a regular or an explicit-time signal."""
     axis = signal.time_axis
     if isinstance(axis, RegularAxis):
+        if axis.period_us.denominator == 1:
+            return np.arange(signal.n_values, dtype=np.int64) * axis.period_us.numerator + axis.time_offset_us(0)
         return np.fromiter(
             (axis.time_offset_us(index) for index in range(signal.n_values)), dtype=np.int64, count=signal.n_values
         )
