@@ -1,0 +1,54 @@
+# Prompts adapted from the pinned HEARTS reference harness.
+
+coswara/audio_classification: |-
+  Analyze the audio in the signal 'audio'.
+
+  Classify the audio as one of the following categories:
+  - speech: spoken words or sounds like counting or vowels
+  - cough: coughing sounds
+  - breathing: breathing sounds (deep or shallow)
+
+  Output your classification in JSON format:
+  {
+      "prediction": "speech" or "cough" or "breathing"
+  }
+coswara/cough_covid_status_classification: |-
+  Analyze the cough audio in the signal 'audio'.
+
+  Based on the sound of the cough, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/cough_covid_status_classification_with_symptoms: |-
+  Analyze the cough audio in the signal 'audio' and the subject's symptoms to classify the subject as either healthy or covid positive.
+
+  Symptoms: $symptoms
+
+  Based on the sound of the cough and the symptoms, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/cough_covid_status_classification_symptoms_only: |-
+  Analyze the subject's symptoms to classify the subject as either healthy or covid positive.
+
+  Symptoms: $symptoms
+
+  Based on the symptoms, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
+coswara/speech_covid_status_classification: |-
+  Analyze the speech audio in the signal 'audio'.
+
+  Based on the sound of the speech, classify the subject as either healthy or covid positive.
+
+  Output your classification in JSON format:
+  {
+      "prediction": "healthy" or "covid_positive"
+  }
