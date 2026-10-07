@@ -120,3 +120,11 @@ include = ["examples/**", ".github/scripts/**", "docs/scripts/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
+
+[[tool.ty.overrides]]
+# Connector-only dependencies are installed by make test-connectors, not make sync.
+# That check also runs ty with each connector's own requirements available.
+include = ["packages/timenet-connectors/src/timenet_connectors/datasets/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"

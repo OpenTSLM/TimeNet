@@ -1,0 +1,2 @@
+soundfile>=0.13
+zarr>=3
