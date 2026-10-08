@@ -1,0 +1,11 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/chatts-training-dataset
+dataset_version: 1.0.0
+name: ChatTS Training Dataset
+description: >-
+  The complete ChatTS training corpus across its five alignment, supervised fine-tuning,
+  instruction-following, and development configurations.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, alignment, sft, instruction-following, synthetic, time-series, huggingface]
