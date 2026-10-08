@@ -44,12 +44,12 @@ def _dataset():
 
 def test_add_record_registers_and_returns(make_series):
     ds = _dataset()
-    record = ds.add_record(
-        record=Record(sources=(Source(name="Source", signals=(make_series(),)),), subject_ids=("p1",))
-    )
+    record = Record(sources=(Source(name="Source", signals=(make_series(),)),))
+    record.annotate(Annotation(key="subject_ids", value=["p1"]))
+    ds.add_record(record=record)
     assert isinstance(record, Record)
     assert ds.records == (record,)
-    assert record.subject_ids == ("p1",)
+    assert record.annotations[0].value == ["p1"]
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):

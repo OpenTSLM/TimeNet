@@ -11,6 +11,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -47,6 +48,36 @@ def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
     restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
     assert_datasets_equal(original, restored)
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("subjects", [(), ("patient-1",), ("patient-2", "patient-1")])
+def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
+    dataset = _referenced_annotation_dataset()
+    record = dataset.records[0]
+    if subjects:
+        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        (selected,) = reader.iter_records((record.id,))
+
+    for back in (restored.records[0], selected):
+        values = [annotation.value for annotation in back.annotations if annotation.key == "subject_ids"]
+        assert values == ([list(subjects)] if subjects else [])
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        matches = connection.execute(
+            """SELECT DISTINCT r.record_id
+               FROM records r
+               JOIN annotation_occurrences o
+                 ON o.object_type = 'Record' AND o.object_key = r.record_key
+               JOIN annotation_contents c USING (content_key)
+               WHERE c.name = 'subject_ids'
+                 AND list_contains(c.text_list_value, ?)""",
+            ["patient-1"],
+        ).fetchall()
+    assert matches == ([(record.id,)] if subjects else [])
 
 
 def _referenced_annotation_dataset() -> TimeFDataset:
