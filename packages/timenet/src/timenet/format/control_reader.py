@@ -133,6 +133,7 @@ class _OccurrenceRow(NamedTuple):
     boolean_value: bool | None
     text_list_value: list[str] | None
     unit: str | None
+    description: str | None
     content_metadata: str | None
     content_key: int
     object_key: int | None
@@ -261,7 +262,7 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
         SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
                o.start_us, o.end_us, o.provenance, o.confidence,
                o.metadata, c.content_id, c.name, c.value_kind, c.text_value, c.integer_value,
-               c.float_value, c.boolean_value, c.text_list_value, c.unit, c.metadata,
+               c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata,
                o.content_key, objects.object_key
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_key)
@@ -679,7 +680,7 @@ class DuckDBControlReader:
             self.connection.execute(
                 """SELECT r.*, c.content_id, c.name, c.value_kind, c.text_value,
                       c.integer_value, c.float_value, c.boolean_value, c.text_list_value,
-                      c.unit, c.metadata AS content_metadata
+                      c.unit, c.description, c.metadata AS content_metadata
                FROM registered_annotations r
                LEFT JOIN annotation_contents c USING (content_key)
                ORDER BY r.position"""
@@ -691,8 +692,6 @@ class DuckDBControlReader:
         for row in rows:
             if row["content_id"] is None or row["name"] is None:
                 raise TimeFFormatError(f"registered annotation refers to missing content key {row['content_key']!r}")
-            metadata = _decode_json(row["content_metadata"], default={})
-            description = metadata.pop("description", None)
             annotations.append(
                 Annotation(
                     id=row["content_id"],
@@ -706,8 +705,8 @@ class DuckDBControlReader:
                         row["text_list_value"],
                     ),
                     unit=row["unit"],
-                    description=description,
-                    metadata=metadata,
+                    description=row["description"],
+                    metadata=_decode_json(row["content_metadata"], default={}),
                     span=_annotation_span(row["span_type"], row["start_us"], row["end_us"], row["content_id"]),
                     source=_decode_json(row["provenance"]),
                     confidence=row["confidence"],
@@ -950,7 +949,7 @@ class DuckDBControlReader:
             f"""WITH object_ids AS ({object_ids})
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
-                       c.text_list_value, c.unit, o.span_type, o.start_us, o.end_us,
+                       c.text_list_value, c.unit, c.description, o.span_type, o.start_us, o.end_us,
                        o.confidence, o.provenance, c.metadata AS content_metadata, o.metadata
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_key)
@@ -1440,8 +1439,6 @@ class DuckDBControlReader:
                 )
         for row in rows:
             span = _annotation_span(row.span_type, row.start_us, row.end_us, row.occurrence_id)
-            content_metadata = _decode_json(row.content_metadata, default={})
-            description = content_metadata.pop("description", None)
             # The first pass over ``rows`` already rejected NULL content and object columns.
             content_id = _required(row.content_id, "annotation content")
             name = _required(row.name, "annotation name")
@@ -1459,8 +1456,8 @@ class DuckDBControlReader:
                     row.text_list_value,
                 ),
                 unit=row.unit,
-                description=description,
-                metadata=content_metadata,
+                description=row.description,
+                metadata=_decode_json(row.content_metadata, default={}),
                 span=span,
                 source=_decode_json(row.provenance),
                 confidence=row.confidence,

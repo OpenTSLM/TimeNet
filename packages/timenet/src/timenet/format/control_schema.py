@@ -259,6 +259,7 @@ ANNOTATION_CONTENTS = Table(
         Column("boolean_value", ColumnType.BOOLEAN),
         Column("text_list_value", ColumnType.VARCHAR_LIST),
         Column("unit", ColumnType.VARCHAR),
+        Column("description", ColumnType.VARCHAR),
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("content_key",), ("content_id",)),

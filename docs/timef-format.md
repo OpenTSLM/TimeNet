@@ -110,8 +110,10 @@ WHERE c.name = 'subject_ids'
 ```
 
 An annotation has reusable content and one or more occurrences. `annotation_contents` stores the
-content once: its key (`name`), unit, and value. The value sits in one typed column selected by
-`value_kind`: `text_value`, `integer_value`, `float_value`, `boolean_value`, or `text_list_value`
+content once: its key (`name`), unit, description, metadata, and value. The dedicated `description`
+column is separate from metadata, which can contain its own `description` key. The value sits in
+one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
+`boolean_value`, or `text_list_value`
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
 span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and

@@ -889,9 +889,6 @@ class DuckDBControlWriter:
                 )
             if previous is None:
                 contents[annotation.content_id] = content
-                metadata = dict(annotation.metadata)
-                if annotation.description is not None:
-                    metadata["description"] = annotation.description
                 content_key = content_key_source.next()
                 content_keys[annotation.content_id] = content_key
                 content_batch.add(
@@ -901,7 +898,8 @@ class DuckDBControlWriter:
                         "name": annotation.name,
                         **encode_annotation_value(annotation.value, label=f"annotation {annotation.content_id!r}"),
                         "unit": annotation.unit,
-                        "metadata": _json(metadata),
+                        "description": annotation.description,
+                        "metadata": _json(annotation.metadata),
                     }
                 )
             return content_keys[annotation.content_id]

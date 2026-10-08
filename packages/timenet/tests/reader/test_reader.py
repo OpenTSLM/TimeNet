@@ -156,6 +156,65 @@ def test_registered_annotation_content_round_trip(tmp_path, backend):
     ]
 
 
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("description", [None, "Dedicated description", ""])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"description": "User description", "nested": {"values": [1, None, True]}},
+        {"description": {"language": "en", "text": "User detail"}},
+        {"description": None},
+    ],
+)
+def test_annotation_description_is_separate_from_metadata(tmp_path, backend, description, metadata):
+    dataset = _referenced_annotation_dataset()
+    record = dataset.records[0]
+    owners = (dataset, record, record.sources[0], record.signals[0], dataset.tasks[0])
+    for index, owner in enumerate(owners):
+        owner.annotate(
+            Annotation(
+                id=f"description-{index}",
+                key="description-probe",
+                value="context",
+                description=description,
+                metadata=metadata,
+                occurrence_metadata={"description": "Occurrence description"},
+            )
+        )
+    registered = Annotation(
+        id="registered-description",
+        key="registered-description",
+        value="definition",
+        description=description,
+        metadata=metadata,
+    )
+    dataset.register_annotations((registered,))
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        rows = [row for row in reader.annotation_table().to_pylist() if row["key"] == "description-probe"]
+
+    assert len(rows) == len(owners)
+    for row in rows:
+        assert row["description"] == description
+        assert json.loads(row["content_metadata"]) == metadata
+    restored_record = restored.records[0]
+    restored_owners = (
+        restored,
+        restored_record,
+        restored_record.sources[0],
+        restored_record.signals[0],
+        restored.tasks[0],
+    )
+    for owner in restored_owners:
+        annotation = next(item for item in owner.annotations if item.key == "description-probe")
+        assert annotation.description == description
+        assert annotation.metadata == metadata
+        assert annotation.occurrence_metadata == {"description": "Occurrence description"}
+    assert asdict(restored.registered_annotations[0]) == asdict(registered)
+
+
 def _referenced_annotation_dataset(*, source_id: str | None = None) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
