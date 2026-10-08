@@ -222,6 +222,7 @@ SIGNALS = Table(
         _key("n_values"),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
+        Column("source_id", ColumnType.VARCHAR),
     ),
     unique=(("signal_key",), ("signal_id",)),
     foreign_keys=(

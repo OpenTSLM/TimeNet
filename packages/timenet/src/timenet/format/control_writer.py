@@ -777,6 +777,7 @@ class DuckDBControlWriter:
                 "n_values": signal.n_values,
                 "metadata": _json(signal.metadata),
                 "modality": spec.modality.value,
+                "source_id": signal.source_id,
             }
         )
         return signal_key

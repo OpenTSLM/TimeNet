@@ -76,13 +76,17 @@ stored inline:
 
 ```text
 signal_key, signal_id, source_key, name, axis_key, spec_type, spec_name, unit,
-dtype, categories, value_shape, dimension_names, nullable, n_values, metadata
+dtype, categories, value_shape, dimension_names, nullable, n_values, metadata,
+modality, source_id
 ```
 
 There is no separate specification table. The fields are small, typed, directly queryable, and
 compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and `value_shape` is
 `BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
 it between the Signals that use it.
+
+`source_key` identifies the owning Source node. The nullable `source_id` preserves the Signal's
+raw recording ID, which can differ from that node's public ID.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in

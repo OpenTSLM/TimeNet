@@ -93,6 +93,7 @@ class _SignalRow(NamedTuple):
     n_values: int
     metadata: str
     modality: str
+    source_id: str | None
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
@@ -522,6 +523,7 @@ class DuckDBControlReader:
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_row.signal_id), ()),
                     metadata=_decode_json(signal_row.metadata, default={}),
+                    source_id=signal_row.source_id,
                 )
             )
 
