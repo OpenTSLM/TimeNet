@@ -37,25 +37,18 @@ Manifest(
     files=files,                # ManifestFiles (required)
     dataset_schema=schema,      # Serialized as the `schema` block
     counts=counts,              # ManifestCounts (default: empty)
-    values_backend="parquet",   # "parquet" (default) or "zarr"
-    value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
     timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
 
-`values_backend` names the [values backend](timef-writer.md#values-settings) that wrote
-`files.time_series`. The reader uses this value to select the backend. If the key is absent, the
-reader uses `"parquet"`.
-
-`value_encoding` gives the [values encoding](timef-writer.md#values-settings) that wrote the shards
-of each spec type. No code reads this field. Parquet records the applied encoding in the footer of
-each file, so the reader does not need it. The field lets a builder see which encoding a build
-selected. The field is empty for a backend that has no such choice.
+`files` lists every artifact, keyed by kind. Each kind records the backend that wrote it. See
+[`ManifestFiles`](#manifestfiles).
 
 `build_env` records the environment that produced the version. It gives the interpreter version and
 every installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+`files.time_series.encoding`, `build_env` is provenance only. No code reads it to interpret the
+data.
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
@@ -97,14 +90,49 @@ The fields count `records`, `sources`, `signals`, `axes`, reusable `annotation_c
 
 ## `ManifestFiles`
 
-`ManifestFiles` lists the single `control.duckdb` artifact and the `time_series` values-plane
-artifacts. A reader uses this list and never uses a directory glob.
+`ManifestFiles` keys the artifacts by kind. Both kinds are required. A reader uses these lists and
+never uses a directory glob.
 
-Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
-`checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
-live in separate structures.
+```json
+"files": {
+  "control": {
+    "backend": "duckdb",
+    "parts": [
+      {"path": "control.duckdb", "checksum": "sha256:...", "size": 1048576}
+    ]
+  },
+  "time_series": {
+    "backend": "parquet",
+    "encoding": {"ecg": "dictionary"},
+    "parts": [
+      {"path": "time_series/part-00000000.parquet",
+       "checksum": "sha256:...", "size": 4194304}
+    ]
+  }
+}
+```
 
-`all_files()` returns every descriptor. `all_parts()` returns only the paths.
+| Kind | Model | Fields |
+| --- | --- | --- |
+| `control` | `ControlFiles` | `backend` (always `"duckdb"`), `parts` (exactly one file) |
+| `time_series` | `TimeSeriesFiles` | `backend` (`"parquet"` or `"zarr"`), `encoding`, `parts` |
+
+`files.time_series.backend` names the [values backend](timef-writer.md#values-settings) that wrote
+the values plane. The reader uses this value to select the backend. `TimeFReader.values_backend`
+returns it.
+
+`files.time_series.encoding` maps each spec type to the
+[values encoding](timef-writer.md#values-settings) of its shards. No code reads this field. Parquet
+records the applied encoding in the footer of each file, so the reader does not need it. The field
+lets a builder see which encoding a build selected. The key is required, and it is `{}` for Zarr.
+Validation rejects a non-empty `encoding` on a Zarr group. The `control` group has no `encoding`
+field, and unknown keys fail validation.
+
+Each entry in `parts` is a `FilePart`. A `FilePart` carries the file's `path` (version-relative),
+its `checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest
+never live in separate structures.
+
+`all_files()` returns every descriptor, control file first. `all_parts()` returns only the paths.
 
 ---
 

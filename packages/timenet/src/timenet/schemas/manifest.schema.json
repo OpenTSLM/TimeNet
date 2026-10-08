@@ -103,6 +103,32 @@
       "title": "BuildEnvironment",
       "type": "object"
     },
+    "ControlFiles": {
+      "additionalProperties": false,
+      "description": "The control plane: one DuckDB file.",
+      "properties": {
+        "backend": {
+          "const": "duckdb",
+          "title": "Backend",
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Parts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "backend",
+        "parts"
+      ],
+      "title": "ControlFiles",
+      "type": "object"
+    },
     "DatasetMetadata": {
       "additionalProperties": false,
       "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
@@ -416,30 +442,55 @@
     },
     "ManifestFiles": {
       "additionalProperties": false,
-      "description": "Descriptors for every TimeF artifact. Readers use this data rather than a file glob.",
+      "description": "Every TimeF artifact, keyed by kind. Readers use this data rather than a file glob.",
       "properties": {
         "control": {
-          "items": {
-            "$ref": "#/$defs/FilePart"
-          },
-          "maxItems": 1,
-          "minItems": 1,
-          "title": "Control",
-          "type": "array"
+          "$ref": "#/$defs/ControlFiles"
         },
         "time_series": {
-          "default": [],
+          "$ref": "#/$defs/TimeSeriesFiles"
+        }
+      },
+      "required": [
+        "control",
+        "time_series"
+      ],
+      "title": "ManifestFiles",
+      "type": "object"
+    },
+    "TimeSeriesFiles": {
+      "additionalProperties": false,
+      "description": "The values plane: the files that hold the time-series values.",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/ValuesBackend"
+        },
+        "encoding": {
+          "additionalProperties": {
+            "enum": [
+              "dictionary",
+              "byte_stream_split",
+              "plain"
+            ],
+            "type": "string"
+          },
+          "title": "Encoding",
+          "type": "object"
+        },
+        "parts": {
           "items": {
             "$ref": "#/$defs/FilePart"
           },
-          "title": "Time Series",
+          "title": "Parts",
           "type": "array"
         }
       },
       "required": [
-        "control"
+        "backend",
+        "encoding",
+        "parts"
       ],
-      "title": "ManifestFiles",
+      "title": "TimeSeriesFiles",
       "type": "object"
     },
     "TimeSeriesSpec": {
@@ -531,7 +582,7 @@
       "type": "object"
     },
     "ValuesBackend": {
-      "description": "Storage backend for the time-series values plane, recorded as the manifest ``values_backend`` tag.\n\nEach member value is the on-disk tag. This class is a :class:`~enum.StrEnum`, so each member is\nalso a plain ``str``. Each member compares and serializes like its bare tag.",
+      "description": "Storage backend for the time-series values plane, recorded as the manifest ``files.time_series.backend`` tag.\n\nEach member value is the on-disk tag. This class is a :class:`~enum.StrEnum`, so each member is\nalso a plain ``str``. Each member compares and serializes like its bare tag.",
       "enum": [
         "parquet",
         "zarr"
@@ -559,22 +610,6 @@
     },
     "counts": {
       "$ref": "#/$defs/ManifestCounts"
-    },
-    "values_backend": {
-      "$ref": "#/$defs/ValuesBackend",
-      "default": "parquet"
-    },
-    "value_encoding": {
-      "additionalProperties": {
-        "enum": [
-          "dictionary",
-          "byte_stream_split",
-          "plain"
-        ],
-        "type": "string"
-      },
-      "title": "Value Encoding",
-      "type": "object"
     },
     "build_env": {
       "$ref": "#/$defs/BuildEnvironment"

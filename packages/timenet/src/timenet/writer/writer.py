@@ -30,7 +30,7 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import ControlFiles, FilePart, Manifest, ManifestCounts, ManifestFiles, TimeSeriesFiles
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
@@ -397,11 +397,13 @@ class TimeFWriter:
             dataset_schema=schema,
             counts=self._counts,
             files=ManifestFiles(
-                control=(self._file_part(self._control_file),),
-                time_series=self._file_parts(self._value_files),
+                control=ControlFiles(backend="duckdb", parts=(self._file_part(self._control_file),)),
+                time_series=TimeSeriesFiles(
+                    backend=self._values_backend_name,
+                    encoding=self._value_encoding,
+                    parts=self._file_parts(self._value_files),
+                ),
             ),
-            values_backend=self._values_backend_name,
-            value_encoding=self._value_encoding,
             build_env=build_env(),
             timef_format_version=1,
         )

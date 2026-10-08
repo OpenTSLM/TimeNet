@@ -238,7 +238,7 @@ def test_store_rejects_malformed_upload_grant(tmp_path):
     def handler(request):
         if request.url.path.endswith("/publish"):
             manifest = json.loads(request.content)
-            files = [part["path"] for group in manifest["files"].values() for part in group]
+            files = [part["path"] for group in manifest["files"].values() for part in group["parts"]]
             return httpx.Response(200, json={"files": files})
         if request.url.path.endswith("/publish/upload-url"):
             return httpx.Response(200, json={"url": "not-a-url", "headers": []})
