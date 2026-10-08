@@ -93,12 +93,12 @@ def test_manifest_has_per_file_checksum_and_size(tmp_path):
 def test_manifest_data_files_are_lists_of_parts(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert len(manifest.files.control) == 1
+    assert len(manifest.files.control.parts) == 1
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
     assert set(raw_files) == {"control", "time_series"}
     for key in ("control", "time_series"):
-        assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
-        for entry in raw_files[key]:
+        assert isinstance(raw_files[key]["parts"], list), f"{key} parts should serialize as a JSON array"
+        for entry in raw_files[key]["parts"]:
             assert set(entry) == {"path", "checksum", "size"}, f"{key} entries are {{path, checksum, size}}"
 
 
@@ -116,12 +116,12 @@ def test_shard_has_time_series_id_column(tmp_path):
 def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.value_encoding, "the manifest should record what each modality was encoded with"
+    assert manifest.files.time_series.encoding, "the manifest should record what each modality was encoded with"
     for shard in version_dir.glob("time_series/part-*.parquet"):
         pf = pq.ParquetFile(shard)
         spec_types = set(pf.read(columns=["spec_type"]).column("spec_type").to_pylist())
         assert len(spec_types) == 1, "shards are single-modality so one encoding always fits"
-        selected = ValueEncoding(manifest.value_encoding[spec_types.pop()])
+        selected = ValueEncoding(manifest.files.time_series.encoding[spec_types.pop()])
         assert applied_matches(selected, values_encoding_of(str(shard)))
 
 
@@ -162,8 +162,8 @@ def test_shard_rotation_leaves_no_empty_trailing_shard(tmp_path):
     # Tiny shard cap forces a rotation on essentially every row group, including the last one.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64, shard_target_bytes=64)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.files.time_series, "expected at least one shard"
-    for part in manifest.files.time_series:
+    assert manifest.files.time_series.parts, "expected at least one shard"
+    for part in manifest.files.time_series.parts:
         assert pq.ParquetFile(version_dir / part.path).metadata.num_rows > 0, f"empty shard {part.path} published"
 
 

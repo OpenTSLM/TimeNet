@@ -224,7 +224,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backe
     stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert stdout_lines[-1] == str(version_dir)
     assert (version_dir / "manifest.json").is_file()
-    assert Manifest.model_validate_json((version_dir / "manifest.json").read_text()).values_backend == (
+    assert Manifest.model_validate_json((version_dir / "manifest.json").read_text()).files.time_series.backend == (
         backend or "parquet"
     )
     if backend != "zarr" or find_spec("zarr") is not None:

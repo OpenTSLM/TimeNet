@@ -3,7 +3,7 @@
 This module mirrors :mod:`timenet.values_backends.writer`. A :class:`BaseValuesReader` takes the index rows
 for one series and returns a primitive or fixed-shape tensor Arrow array that matches the spec. The rows are
 sorted by ``chunk_idx``, and each row carries the backend's chunk locator. :class:`TimeFReader` picks the
-backend from the manifest's ``values_backend`` tag. It never imports a specific storage library itself.
+backend from the manifest's ``files.time_series.backend`` tag. It never imports a specific storage library itself.
 Concrete readers live in their own modules: :mod:`timenet.values_backends.parquet.reader` (the default) and
 :mod:`timenet.values_backends.zarr.reader`.
 """
@@ -60,7 +60,7 @@ def make_values_reader(name: str) -> BaseValuesReader:
     """Construct the reader-side values backend named ``name``.
 
     Args:
-        name: The manifest ``values_backend`` tag.
+        name: The manifest ``files.time_series.backend`` tag.
 
     Returns:
         The constructed reader backend.

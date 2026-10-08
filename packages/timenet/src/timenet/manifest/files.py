@@ -1,13 +1,14 @@
 """Manifest descriptors for the DuckDB control file and values-plane artifacts."""
 
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, Field, StrictStr, model_validator
 
 from timenet.format.constants import check_relative_path
 from timenet.types._model import TimeFModel
-from timenet.types.wire import Checksum, NonEmptyString, StrictNonNegativeInt
+from timenet.types.wire import Checksum, NonEmptyString, StrictNonNegativeInt, ValueEncoding
+from timenet.values_backends import ValuesBackend
 
 
 _ManifestPath = Annotated[
@@ -36,13 +37,39 @@ ControlParts = Annotated[tuple[FilePart, ...], Field(min_length=1, max_length=1)
 """The exactly-one control-file tuple."""
 
 
-class ManifestFiles(TimeFModel):
-    """Descriptors for every TimeF artifact. Readers use this data rather than a file glob."""
+class ControlFiles(TimeFModel):
+    """The control plane: one DuckDB file."""
 
-    control: ControlParts
+    backend: Literal["duckdb"]
+    """The backend that wrote the file."""
+    parts: ControlParts
     """The single immutable ``control.duckdb`` file."""
-    time_series: tuple[FilePart, ...] = ()
+
+
+class TimeSeriesFiles(TimeFModel):
+    """The values plane: the files that hold the time-series values."""
+
+    backend: ValuesBackend
+    """The backend that wrote the files."""
+    encoding: dict[StrictStr, ValueEncoding]
+    """``spec_type`` to the values encoding that its shards use. Empty for Zarr."""
+    parts: tuple[FilePart, ...]
     """Parquet shards or files inside the Zarr values store."""
+
+    @model_validator(mode="after")
+    def _encoding_needs_parquet(self) -> Self:
+        if self.encoding and self.backend != ValuesBackend.PARQUET:
+            raise ValueError(f"the {self.backend} backend does not record a values encoding")
+        return self
+
+
+class ManifestFiles(TimeFModel):
+    """Every TimeF artifact, keyed by kind. Readers use this data rather than a file glob."""
+
+    control: ControlFiles
+    """The control plane."""
+    time_series: TimeSeriesFiles
+    """The values plane."""
 
     def all_files(self) -> tuple[FilePart, ...]:
         """Return every file descriptor across all artifacts, in a stable order.
@@ -51,8 +78,8 @@ class ManifestFiles(TimeFModel):
             The control file followed by every values-plane artifact.
         """
         return (
-            *self.control,
-            *self.time_series,
+            *self.control.parts,
+            *self.time_series.parts,
         )
 
     def all_parts(self) -> tuple[str, ...]:
