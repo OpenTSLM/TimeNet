@@ -59,6 +59,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `task_dependencies` | Ordered task derivation relationships. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
+| `registered_annotations` | Ordered reusable definitions registered without an object attachment. |
 | `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
 
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
@@ -119,6 +120,12 @@ occurrence metadata.
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
 apply to many objects without copying a long value. Each attachment still has its own
 `occurrence_id` and temporal placement.
+
+`register_annotations()` stores reusable definitions, such as the label vocabulary named by a
+classification task's `target_schema`. Their content lives in `annotation_contents`; the
+`registered_annotations` table preserves registration order and any authored span, provenance,
+confidence, or occurrence fields. Registration creates no row in `annotation_occurrences`.
+`TimeFReader.read()` restores them to `TimeFDataset.registered_annotations`.
 
 ## Tasks
 

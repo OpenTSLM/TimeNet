@@ -285,6 +285,23 @@ ANNOTATION_OCCURRENCES = Table(
     key_sequence=OCCURRENCE_KEYS,
 )
 
+REGISTERED_ANNOTATIONS = Table(
+    "registered_annotations",
+    (
+        _key("content_key"),
+        _key("position"),
+        Column("occurrence_id", ColumnType.VARCHAR),
+        _required("span_type"),
+        Column("start_us", ColumnType.BIGINT),
+        Column("end_us", ColumnType.BIGINT),
+        Column("provenance", ColumnType.JSON),
+        Column("confidence", ColumnType.DOUBLE),
+        _required("metadata", ColumnType.JSON),
+    ),
+    unique=(("content_key",), ("position",)),
+    foreign_keys=(ForeignKey("content_key", "annotation_contents", "content_key"),),
+)
+
 TASKS = Table(
     "tasks",
     (
@@ -376,6 +393,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,
     ANNOTATION_OCCURRENCES,
+    REGISTERED_ANNOTATIONS,
     TASKS,
     TASK_TARGETS,
     TASK_RECORD_REFS,
