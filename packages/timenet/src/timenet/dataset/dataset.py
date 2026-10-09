@@ -359,6 +359,28 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._annotations.append(attached)
         return attached
 
+    def import_annotations(self, annotations: Iterable[Annotation]) -> None:
+        """Attach dataset annotation occurrences imported from a parent as they are.
+
+        Unlike :meth:`annotate`, this keeps each occurrence ID, which imported tasks refer to.
+
+        Args:
+            annotations: Occurrences hydrated under the parent's import prefix.
+
+        Raises:
+            TimeFValidationError: If an occurrence has a time span, has no ID, or is already attached.
+        """
+        attached = {annotation.occurrence_id for annotation in self._annotations}
+        for annotation in annotations:
+            if annotation.span is not None:
+                raise TimeFValidationError("dataset annotations cannot have a time span")
+            if annotation.occurrence_id is None or annotation.occurrence_id in attached:
+                raise TimeFValidationError(
+                    f"dataset annotation occurrence {annotation.occurrence_id!r} is missing or already attached"
+                )
+            self._annotations.append(annotation)
+            attached.add(annotation.occurrence_id)
+
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
