@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from fractions import Fraction
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.control_audit import audit_control_database
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
@@ -23,6 +25,8 @@ from timenet.types import (
     Domain,
     License,
     Split,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -80,7 +84,79 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     assert matches == ([(record.id,)] if subjects else [])
 
 
-def _referenced_annotation_dataset() -> TimeFDataset:
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("source_id", [None, "raw-recording-1"])
+def test_signal_source_id_round_trip(tmp_path, backend, source_id):
+    dataset = _referenced_annotation_dataset(source_id=source_id)
+    record = dataset.records[0]
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        (selected,) = reader.iter_records((record.id,), with_annotations=False)
+
+    assert restored.records[0].signals[0].source_id == source_id
+    assert selected.signals[0].source_id == source_id
+    assert restored.records[0].sources[0].id == record.sources[0].id
+    assert selected.sources[0].id == record.sources[0].id
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_registered_annotation_content_round_trip(tmp_path, backend):
+    dataset = _referenced_annotation_dataset()
+    labels = Annotation(key="labels", value=["yes", "no"], id="z-labels", description="Label vocabulary")
+    other = tuple(
+        Annotation(
+            key=f"registered-{index}",
+            value=value,
+            id=f"content-{index}",
+            unit="second",
+            description="Reusable definition",
+            metadata={"nested": {"aliases": ["definition", None]}},
+            span=TimePoint(start_us=0) if index % 2 == 0 else TimeInterval(start_us=0, end_us=1),
+            source="original definition",
+            confidence=0.75,
+            occurrence_id="retained-id" if index == 0 else None,
+            occurrence_metadata={"method": "manual"},
+        )
+        for index, value in enumerate(("text", 42, 0.5, True, [], None))
+    )
+    registered = (labels, *other)
+    dataset.register_annotations(registered)
+    dataset.register_annotations((labels,))
+    dataset.add_task(
+        task=ClassificationTask(
+            id="classification",
+            inputs=(dataset.records[0],),
+            targets=("yes",),
+            target_schema=labels.id,
+        )
+    )
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        occurrences = reader.annotation_table().to_pylist()
+
+    assert [asdict(annotation) for annotation in restored.registered_annotations] == [
+        asdict(annotation) for annotation in registered
+    ]
+    assert restored.annotations == ()
+    assert {annotation.id for annotation in restored.records[0].annotations} == {"opts-yesno"}
+    assert {row["content_id"] for row in occurrences} == {"opts-yesno"}
+    classification = next(task for task in restored.tasks if isinstance(task, ClassificationTask))
+    assert classification.target_schema == restored.registered_annotations[0].id
+    restored.register_annotations((labels,))
+    assert len(restored.registered_annotations) == len(registered)
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        audit_control_database(connection)
+    rewritten = _read(_write(tmp_path / "rewritten", dataset=restored, values_backend=backend))
+    assert [asdict(annotation) for annotation in rewritten.registered_annotations] == [
+        asdict(annotation) for annotation in registered
+    ]
+
+
+def _referenced_annotation_dataset(*, source_id: str | None = None) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="test/referenced-annotation",
@@ -97,6 +173,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
         id="ecg-rec-0-I",
+        source_id=source_id,
     )
     record = dataset.add_record(
         record=Record(

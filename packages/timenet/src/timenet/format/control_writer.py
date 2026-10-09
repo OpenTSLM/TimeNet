@@ -380,7 +380,7 @@ class DuckDBControlWriter:
             annotations,
             tasks,
         )
-        occurrence_keys = self._write_annotations(connection, annotations)
+        occurrence_keys = self._write_annotations(connection, annotations, dataset.registered_annotations)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
         return task_counts
 
@@ -777,6 +777,7 @@ class DuckDBControlWriter:
                 "n_values": signal.n_values,
                 "metadata": _json(signal.metadata),
                 "modality": spec.modality.value,
+                "source_id": signal.source_id,
             }
         )
         return signal_key
@@ -848,6 +849,7 @@ class DuckDBControlWriter:
     def _write_annotations(
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
+        registered_annotations: Iterable[Annotation] = (),
     ) -> dict[str, int]:
         """Insert reusable content once and every occurrence separately, in Arrow batches.
 
@@ -866,16 +868,19 @@ class DuckDBControlWriter:
         occurrence_keys: dict[str, int] = {}
         content_batch = _TableBatch(connection, TABLES["annotation_contents"])
         occurrence_batch = _TableBatch(connection, TABLES["annotation_occurrences"])
+        registered_batch = _TableBatch(connection, TABLES["registered_annotations"])
         content_key_source = _SequenceKeys(connection, "content_key_sequence")
         occurrence_key_source = _SequenceKeys(connection, "occurrence_key_sequence")
-        for object_type, object_key, annotation in annotations:
-            if annotation.occurrence_id is None:
-                raise TimeFValidationError(
-                    f"annotation {annotation.content_id!r} on {object_type} key {object_key} has no occurrence id; "
-                    "attach it with annotate()"
-                )
-            if annotation.occurrence_id in occurrence_keys:
-                raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
+
+        def write_content(annotation: Annotation) -> int:
+            """Store shared annotation content once.
+
+            Returns:
+                The internal content key.
+
+            Raises:
+                TimeFValidationError: If the content ID identifies a different payload.
+            """
             content = annotation._content_fields
             previous = contents.get(annotation.content_id)
             if previous is not None and previous != content:
@@ -899,6 +904,33 @@ class DuckDBControlWriter:
                         "metadata": _json(metadata),
                     }
                 )
+            return content_keys[annotation.content_id]
+
+        for position, annotation in enumerate(registered_annotations):
+            span = annotation.span
+            registered_batch.add(
+                {
+                    "content_key": write_content(annotation),
+                    "position": position,
+                    "occurrence_id": annotation.occurrence_id,
+                    "span_type": str(annotation_type_of(annotation)),
+                    "start_us": None if span is None else span.start_us,
+                    "end_us": None if span is None else span.exclusive_end,
+                    "provenance": None if annotation.source is None else _json(annotation.source),
+                    "confidence": annotation.confidence,
+                    "metadata": _json(annotation.occurrence_metadata),
+                }
+            )
+
+        for object_type, object_key, annotation in annotations:
+            if annotation.occurrence_id is None:
+                raise TimeFValidationError(
+                    f"annotation {annotation.content_id!r} on {object_type} key {object_key} has no occurrence id; "
+                    "attach it with annotate()"
+                )
+            if annotation.occurrence_id in occurrence_keys:
+                raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
+            content_key = write_content(annotation)
             span = annotation.span
             occurrence_key = occurrence_key_source.next()
             occurrence_keys[annotation.occurrence_id] = occurrence_key
@@ -906,7 +938,7 @@ class DuckDBControlWriter:
                 {
                     "occurrence_key": occurrence_key,
                     "occurrence_id": annotation.occurrence_id,
-                    "content_key": content_keys[annotation.content_id],
+                    "content_key": content_key,
                     "object_type": object_type,
                     "object_key": object_key,
                     "span_type": str(annotation_type_of(annotation)),
@@ -918,6 +950,7 @@ class DuckDBControlWriter:
                 }
             )
         content_batch.flush()
+        registered_batch.flush()
         occurrence_batch.flush()
         return occurrence_keys
 
