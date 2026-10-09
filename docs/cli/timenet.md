@@ -1,6 +1,6 @@
 ---
 icon: lucide/terminal
-description: "The timenet consumer CLI: browse a registry and download datasets from the shell."
+description: "The timenet consumer CLI: browse, download, and inspect datasets from the shell."
 tags:
   - cli
 ---
@@ -32,6 +32,7 @@ timenet download chengsenwang/tsqa
 | `timenet search [flags]` | Filter datasets. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). |
 | `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): metadata, schema, and counts. |
 | `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). If a local version already exists, it skips the copy. |
+| `timenet view <id>[@version]` | Launch a local browser viewer for a committed dataset. Requires the `viewer` extra. |
 | `timenet cache info` | List downloaded datasets on disk (location, id, version, size) and the total. |
 | `timenet cache clear` | Remove downloads and the raw cache. It prompts first. `-y` skips the prompt. `--all` also clears built data. |
 
@@ -50,6 +51,21 @@ The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGIS
 
 The build tool has a different final default: it writes to the local registry. Pass the same explicit
 path to both tools when you build and inspect a dataset locally.
+
+## Launching the viewer
+
+The viewer is an optional, local-only browser application for inspecting one committed TimeF
+dataset. Install its dependencies, then launch it with either a dataset id or a local version
+directory:
+
+```bash
+uv sync --extra viewer
+uv run timenet view <org>/<dataset>
+uv run timenet view --path <version-directory>
+```
+
+The command opens the browser and prints the loopback URL. Use `--no-browser` to print the URL
+without opening it or `--port <port>` to choose the loopback port.
 
 ## Pinning versions
 
