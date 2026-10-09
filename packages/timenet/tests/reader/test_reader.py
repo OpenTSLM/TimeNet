@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from fractions import Fraction
 import json
 from pathlib import Path
@@ -10,19 +11,25 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import file_checksum
+from timenet.format.control_audit import audit_control_database
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
+from timenet.manifest import LockedDependency
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import DatasetVersion, LocalRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    DatasetRef,
     Domain,
     License,
     Split,
+    TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -80,7 +87,138 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     assert matches == ([(record.id,)] if subjects else [])
 
 
-def _referenced_annotation_dataset() -> TimeFDataset:
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("source_id", [None, "raw-recording-1"])
+def test_signal_source_id_round_trip(tmp_path, backend, source_id):
+    dataset = _referenced_annotation_dataset(source_id=source_id)
+    record = dataset.records[0]
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        (selected,) = reader.iter_records((record.id,), with_annotations=False)
+
+    assert restored.records[0].signals[0].source_id == source_id
+    assert selected.signals[0].source_id == source_id
+    assert restored.records[0].sources[0].id == record.sources[0].id
+    assert selected.sources[0].id == record.sources[0].id
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_registered_annotation_content_round_trip(tmp_path, backend):
+    dataset = _referenced_annotation_dataset()
+    labels = Annotation(key="labels", value=["yes", "no"], id="z-labels", description="Label vocabulary")
+    other = tuple(
+        Annotation(
+            key=f"registered-{index}",
+            value=value,
+            id=f"content-{index}",
+            unit="second",
+            description="Reusable definition",
+            metadata={"nested": {"aliases": ["definition", None]}},
+            span=TimePoint(start_us=0) if index % 2 == 0 else TimeInterval(start_us=0, end_us=1),
+            source="original definition",
+            confidence=0.75,
+            occurrence_id="retained-id" if index == 0 else None,
+            occurrence_metadata={"method": "manual"},
+        )
+        for index, value in enumerate(("text", 42, 0.5, True, [], None))
+    )
+    registered = (labels, *other)
+    dataset.register_annotations(registered)
+    dataset.register_annotations((labels,))
+    dataset.add_task(
+        task=ClassificationTask(
+            id="classification",
+            inputs=(dataset.records[0],),
+            targets=("yes",),
+            target_schema=labels.id,
+        )
+    )
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        occurrences = reader.annotation_table().to_pylist()
+
+    assert [asdict(annotation) for annotation in restored.registered_annotations] == [
+        asdict(annotation) for annotation in registered
+    ]
+    assert restored.annotations == ()
+    assert {annotation.id for annotation in restored.records[0].annotations} == {"opts-yesno"}
+    assert {row["content_id"] for row in occurrences} == {"opts-yesno"}
+    classification = next(task for task in restored.tasks if isinstance(task, ClassificationTask))
+    assert classification.target_schema == restored.registered_annotations[0].id
+    restored.register_annotations((labels,))
+    assert len(restored.registered_annotations) == len(registered)
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        audit_control_database(connection)
+    rewritten = _read(_write(tmp_path / "rewritten", dataset=restored, values_backend=backend))
+    assert [asdict(annotation) for annotation in rewritten.registered_annotations] == [
+        asdict(annotation) for annotation in registered
+    ]
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("description", [None, "Dedicated description", ""])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"description": "User description", "nested": {"values": [1, None, True]}},
+        {"description": {"language": "en", "text": "User detail"}},
+        {"description": None},
+    ],
+)
+def test_annotation_description_is_separate_from_metadata(tmp_path, backend, description, metadata):
+    dataset = _referenced_annotation_dataset()
+    record = dataset.records[0]
+    owners = (dataset, record, record.sources[0], record.signals[0], dataset.tasks[0])
+    for index, owner in enumerate(owners):
+        owner.annotate(
+            Annotation(
+                id=f"description-{index}",
+                key="description-probe",
+                value="context",
+                description=description,
+                metadata=metadata,
+                occurrence_metadata={"description": "Occurrence description"},
+            )
+        )
+    registered = Annotation(
+        id="registered-description",
+        key="registered-description",
+        value="definition",
+        description=description,
+        metadata=metadata,
+    )
+    dataset.register_annotations((registered,))
+    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        restored = reader.read()
+        rows = [row for row in reader.annotation_table().to_pylist() if row["key"] == "description-probe"]
+
+    assert len(rows) == len(owners)
+    for row in rows:
+        assert row["description"] == description
+        assert json.loads(row["content_metadata"]) == metadata
+    restored_record = restored.records[0]
+    restored_owners = (
+        restored,
+        restored_record,
+        restored_record.sources[0],
+        restored_record.signals[0],
+        restored.tasks[0],
+    )
+    for owner in restored_owners:
+        annotation = next(item for item in owner.annotations if item.key == "description-probe")
+        assert annotation.description == description
+        assert annotation.metadata == metadata
+        assert annotation.occurrence_metadata == {"description": "Occurrence description"}
+    assert asdict(restored.registered_annotations[0]) == asdict(registered)
+
+
+def _referenced_annotation_dataset(*, source_id: str | None = None) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="test/referenced-annotation",
@@ -97,6 +235,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
         id="ecg-rec-0-I",
+        source_id=source_id,
     )
     record = dataset.add_record(
         record=Record(
@@ -190,6 +329,98 @@ def test_iter_records_matches_full_read(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         materialized = {record.record_id for record in reader.read().records}
     assert streamed == materialized
+
+
+def _child_metadata(parent_ref: DatasetRef) -> DatasetMetadata:
+    return DatasetMetadata(
+        dataset_id="test/composed-child",
+        dataset_version=Version(1, 0, 0),
+        name="Composed child",
+        description="Tasks over parent records.",
+        license=License.CC_BY_4_0,
+        parents=(DatasetRef(dataset_id=parent_ref.dataset_id, version=parent_ref.version),),
+    )
+
+
+def _lock(parent_dir: Path, parent_ref: DatasetRef) -> LockedDependency:
+    return LockedDependency(
+        dataset_id=parent_ref.dataset_id,
+        version=parent_ref.version,
+        manifest_checksum=file_checksum(parent_dir / "manifest.json"),
+    )
+
+
+def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
+    parent_dataset = make_dataset()
+    parent_dir = _write(tmp_path, dataset=parent_dataset)
+    parent_ref = DatasetRef(
+        dataset_id=parent_dataset.metadata.dataset_id,
+        version=parent_dataset.metadata.dataset_version,
+    )
+    with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
+        imported = next(parent_reader.iter_records(prefix=f"{parent_ref}::"))
+        child = TimeFDataset(metadata=_child_metadata(parent_ref))
+        with pytest.raises(TimeFValidationError, match="no parent"):
+            child.import_record(imported, parent="other")
+        imported = child.import_record(imported, parent="timenet/hello-world")
+        child.set_dependencies((_lock(parent_dir, parent_ref),))
+        imported.annotate(Annotation(key="reviewed", value=True, id="reviewed"))
+        imported.annotate(Annotation(key="reviewed_at", span=TimePoint.micros(0), id="reviewed-at"))
+        child.add_task(
+            task=AnswerTask(id="child-question", prompt="Is this imported?", targets=("yes",), inputs=(imported,)),
+        )
+        child_dir = _write(tmp_path, dataset=child)
+
+    child_version = DatasetVersion.open_local(child_dir)
+    assert child_version.manifest.files.time_series == ()
+    with LocalRegistry(tmp_path).open_reader("test/composed-child", "1.0.0") as child_reader:
+        restored = child_reader.read()
+        record = restored.records[0]
+        assert restored.tasks[0].inputs == (record,)
+        assert record.task_ids == ("child-question",)
+        assert {"reviewed", "reviewed-at"} <= {annotation.id for annotation in record.annotations}
+        assert record.signals[0].to_arrow().equals(parent_dataset.records[0].signals[0].to_arrow())
+
+
+def test_composed_child_resolves_imports_in_filtered_task_reads_with_one_parent_query(tmp_path, monkeypatch):
+    parent_dataset = make_dataset()
+    parent_dir = _write(tmp_path, dataset=parent_dataset)
+    parent_ref = DatasetRef(
+        dataset_id=parent_dataset.metadata.dataset_id,
+        version=parent_dataset.metadata.dataset_version,
+    )
+    with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
+        child = TimeFDataset(metadata=_child_metadata(parent_ref))
+        child.set_dependencies((_lock(parent_dir, parent_ref),))
+        for index, record in enumerate(parent_reader.iter_records(prefix=f"{parent_ref}::")):
+            imported = child.import_record(record, parent="timenet/hello-world")
+            child.add_task(
+                task=ClassificationTask(
+                    id=f"child-cls-{index}",
+                    inputs=(imported,),
+                    targets=("x",),
+                    split=Split.TEST if index % 2 else Split.TRAIN,
+                ),
+            )
+        _write(tmp_path, dataset=child)
+
+    parent_reads = 0
+    read_records = DuckDBControlReader.read_records
+
+    def counting(self, *args, **kwargs):
+        nonlocal parent_reads
+        parent_reads += self.path.is_relative_to(parent_dir)
+        return read_records(self, *args, **kwargs)
+
+    monkeypatch.setattr(DuckDBControlReader, "read_records", counting)
+    with LocalRegistry(tmp_path).open_reader("test/composed-child", "1.0.0") as child_reader:
+        # A filtered task read hydrates its input records itself, bypassing the reader's record cache.
+        tasks = list(child_reader.iter_tasks(split="test"))
+        assert [task.id for task in tasks] == ["child-cls-1"]
+        assert tasks[0].inputs[0].signals
+        assert parent_reads == 1
+        assert all(record.signals for record in child_reader.read().records)
+        assert parent_reads == 2
 
 
 def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
