@@ -4,9 +4,13 @@
 # derived from the data into manifest.json.
 yaml_schema_version: 1
 dataset_id: chengsenwang/tsqa
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: TSQA
-description: "Time-series question answering: a series plus a question/answer per record."
+description: >-
+  Time-series question answering: a series plus a question/answer per record.
+  Generated 80/10/10 train/validation/test partitions, stratified by question category
+  and grouped by identical parsed series with seed 42. These are TimeNet-generated
+  partitions, not official source splits; achieved sizes may differ to keep groups intact.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/ChengsenWang/TSQA
 domains:
