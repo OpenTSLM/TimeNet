@@ -76,8 +76,7 @@ class _ChildConnector(BaseConnector[str]):
 
     def compose(self, raw_refs: list[str], context: BuildContext) -> TimeFDataset:
         dataset = TimeFDataset(metadata=context.metadata)
-        record = next(context.parent("timenet/hello-world").iter_records(["record-0"]))
-        dataset.import_record(record, parent="timenet/hello-world")
+        (record,) = context.parent("timenet/hello-world").import_records(dataset, ["record-0"])
         dataset.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
         return dataset
 
@@ -86,7 +85,7 @@ class _ForeignImportConnector(_ChildConnector):
     def compose(self, raw_refs: list[str], context: BuildContext) -> TimeFDataset:
         dataset = super().compose(raw_refs, context)
         foreign = make_dataset().records[1]
-        foreign.record_id = "foreign"
+        foreign.record_id = "timenet/hello-world@1.0.0::foreign"
         dataset.import_record(foreign, parent="timenet/hello-world")
         return dataset
 
@@ -121,7 +120,7 @@ def test_run_pipeline_composes_over_a_parent_in_the_root(tmp_path):
     assert [dependency.dataset_id for dependency in manifest.dependencies] == ["timenet/hello-world"]
     assert manifest.counts.records == 1
     with LocalRegistry(tmp_path).open_reader("test/child") as reader:
-        assert [record.id for record in reader.read().tasks[0].inputs] == ["record-0"]
+        assert [record.id for record in reader.read().tasks[0].inputs] == ["timenet/hello-world@1.0.0::record-0"]
 
 
 def test_run_pipeline_requires_compose_for_a_card_with_parents(tmp_path):

@@ -358,11 +358,11 @@ def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
         version=parent_dataset.metadata.dataset_version,
     )
     with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
-        imported = next(parent_reader.iter_records())
+        imported = next(parent_reader.iter_records(prefix=f"{parent_ref}::"))
         child = TimeFDataset(metadata=_child_metadata(parent_ref))
         with pytest.raises(TimeFValidationError, match="no parent"):
             child.import_record(imported, parent="other")
-        child.import_record(imported, parent="timenet/hello-world")
+        imported = child.import_record(imported, parent="timenet/hello-world")
         child.set_dependencies((_lock(parent_dir, parent_ref),))
         imported.annotate(Annotation(key="reviewed", value=True, id="reviewed"))
         imported.annotate(Annotation(key="reviewed_at", span=TimePoint.micros(0), id="reviewed-at"))
@@ -392,12 +392,12 @@ def test_composed_child_resolves_imports_in_filtered_task_reads_with_one_parent_
     with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
         child = TimeFDataset(metadata=_child_metadata(parent_ref))
         child.set_dependencies((_lock(parent_dir, parent_ref),))
-        for index, record in enumerate(parent_reader.iter_records()):
-            child.import_record(record, parent="timenet/hello-world")
+        for index, record in enumerate(parent_reader.iter_records(prefix=f"{parent_ref}::")):
+            imported = child.import_record(record, parent="timenet/hello-world")
             child.add_task(
                 task=ClassificationTask(
                     id=f"child-cls-{index}",
-                    inputs=(record,),
+                    inputs=(imported,),
                     targets=("x",),
                     split=Split.TEST if index % 2 else Split.TRAIN,
                 ),

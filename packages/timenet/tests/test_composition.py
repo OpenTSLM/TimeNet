@@ -34,8 +34,12 @@ def test_build_context_imports_records_and_locks_the_parent(tmp_path):
     with BuildContext.open(_child_metadata(parent), LocalRegistry(tmp_path)) as context:
         dataset = TimeFDataset(metadata=context.metadata)
         record = next(context.parent("timenet/hello-world").iter_records())
-        assert dataset.import_record(record, parent="timenet/hello-world") is record
-        assert dataset.records == (record,)
+        (imported,) = context.parent("timenet/hello-world").import_records(dataset, [record.id])
+        assert imported.id == f"{parent_ref}::{record.id}"
+        with pytest.raises(TimeFValidationError, match="not qualified"):
+            dataset.import_record(record, parent="timenet/hello-world")
+        assert dataset.records == (imported,)
+        context.verify_imports(dataset)
         assert dataset.owned_records == ()
         assert dataset.tasks == ()
         lock = context.dependency_lock()
@@ -47,12 +51,10 @@ def test_build_context_imports_records_and_locks_the_parent(tmp_path):
 def test_build_context_rejects_an_import_the_parent_does_not_hold(tmp_path):
     parent = _write_parent(tmp_path)
     foreign = make_dataset().records[1]
-    foreign.record_id = "foreign"
+    foreign.record_id = f"{parent.metadata.dataset_id}@{parent.metadata.dataset_version}::foreign"
     with BuildContext.open(_child_metadata(parent), LocalRegistry(tmp_path)) as context:
         dataset = TimeFDataset(metadata=context.metadata)
-        dataset.import_record(
-            next(context.parent("timenet/hello-world").iter_records(["record-0"])), parent="timenet/hello-world"
-        )
+        context.parent("timenet/hello-world").import_records(dataset, ["record-0"])
         dataset.import_record(foreign, parent="timenet/hello-world")
         with pytest.raises(TimeFValidationError, match=r"does not hold imported record\(s\) \['foreign'\]"):
             context.verify_imports(dataset)

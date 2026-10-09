@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 
 from timenet.dataset import Record, TimeFDataset
+from timenet.dataset.composition import import_prefix
 from timenet.errors import TimeFValidationError
 from timenet.types import DatasetMetadata, DatasetRef, LockedDependency, Task
 
@@ -49,6 +50,29 @@ class ParentDatasetView:
             Parent Records accepted by :meth:`~timenet.dataset.TimeFDataset.import_record`.
         """
         yield from self._reader.iter_records(record_ids)
+
+    def import_records(self, dataset: TimeFDataset, record_ids: Iterable[str] | None = None) -> tuple[Record, ...]:
+        """Import parent records into a child under IDs qualified by this exact release.
+
+        The parent's reader hydrates the records with the ``org/name@version::`` prefix on every
+        record, source, signal, axis, and annotation ID, and the child registers them as imports.
+        Signal values stay lazy and keep reading the parent's values plane.
+
+        Args:
+            dataset: A child whose card declares this parent.
+            record_ids: Parent record IDs to import in result order, or ``None`` for every record.
+
+        Returns:
+            The imported records as registered in the child, ready for child tasks and overlays.
+
+        Raises:
+            TimeFValidationError: If the child does not declare this release, the parent lacks a
+                requested record, or an imported ID is already registered.
+        """  # noqa: DOC502 - raised by the reader and TimeFDataset.import_record
+        return tuple(
+            dataset.import_record(record, parent=self.dataset_id)
+            for record in self._reader.iter_records(record_ids, prefix=import_prefix(self.reference))
+        )
 
     def iter_tasks(self, records: Iterable[Record] | None = None) -> Iterator[Task]:
         """Explicitly opt in to parent tasks.
@@ -125,8 +149,8 @@ class BuildContext(AbstractContextManager["BuildContext"]):
             TimeFValidationError: If a declared parent lacks an imported record id.
         """
         by_parent: dict[str, list[str]] = defaultdict(list)
-        for record_id, imported in dataset.record_imports.items():
-            by_parent[imported.parent_dataset_id].append(record_id)
+        for imported in dataset.record_imports.values():
+            by_parent[imported.parent_dataset_id].append(imported.parent_record_id)
         for dataset_id, record_ids in by_parent.items():
             missing = sorted(set(record_ids) - set(self.parent(dataset_id).record_ids()))
             if missing:

@@ -396,7 +396,13 @@ class DuckDBControlWriter:
                     "metadata": None,
                 }
             )
-            batches.record_imports.add({"record_key": record_key, "parent_dataset_id": imported.parent_dataset_id})
+            batches.record_imports.add(
+                {
+                    "record_key": record_key,
+                    "parent_dataset_id": imported.parent_dataset_id,
+                    "parent_record_id": imported.parent_record_id,
+                }
+            )
             record_keys[record.id] = record_key
             annotations.extend(("Record", record_key, annotation) for annotation in dataset.owned_annotations(record))
         imported_occurrences = self._write_imported_references(connection, dataset, record_keys, signal_keys)

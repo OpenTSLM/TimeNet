@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from timenet.types import DatasetRef
+
 
 if TYPE_CHECKING:
     from timenet.dataset.record import Record
@@ -19,12 +21,27 @@ _LEAVES = (str, int, float, bool, Fraction, Enum, datetime, type(None))
 """Immutable types retained in a snapshot."""
 
 
+def import_prefix(parent: DatasetRef) -> str:
+    """Return the prefix that qualifies every ID imported from one exact parent release.
+
+    Args:
+        parent: The direct parent's exact release.
+
+    Returns:
+        ``"org/name@version::"``, so ``record-1`` from ``lab/ecg@1.0.0`` is ``lab/ecg@1.0.0::record-1``
+        in the child. Sources, signals, axes, annotations, and their occurrences take the same prefix.
+    """
+    return f"{parent}::"
+
+
 @dataclass(frozen=True)
 class RecordImport:
-    """A record reused from a parent without copying its hierarchy or values."""
+    """A record backed by a parent hierarchy and values."""
 
     parent_dataset_id: str
     """The dataset ID of the parent that owns the record."""
+    parent_record_id: str
+    """The record ID used to look up the original in that parent."""
     inherited_annotation_ids: frozenset[str]
     """Occurrence ids the record carried when imported; they stay in the parent layer."""
     state: Callable[[], object]

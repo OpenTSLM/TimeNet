@@ -13,11 +13,11 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, Record, TimeFDataset
-from timenet.dataset.composition import inherited_state
+from timenet.dataset.composition import import_prefix, inherited_state
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
-from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.control_reader import DuckDBControlReader, RecordImportRef
 from timenet.format.duckdb import ControlSession
 from timenet.types import DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
@@ -321,7 +321,7 @@ class TimeFReader:
 
     def _read_import_states(
         self,
-        references: Mapping[str, str],
+        references: Mapping[str, RecordImportRef],
         loaders: Mapping[str, tuple[Callable[[], pa.Array], Callable[[], pa.Array] | None]],
     ) -> dict[str, object]:
         """Snapshot the parent-owned fields of imported records from a fresh hydration.
@@ -331,16 +331,25 @@ class TimeFReader:
         so an unchanged record compares equal without loading values or offsets.
 
         Returns:
-            Original snapshots keyed by record ID.
+            Original snapshots keyed by child record ID.
+
+        Raises:
+            TimeFFormatError: If an import names a parent the manifest does not declare.
         """
-        by_parent: dict[str, list[str]] = defaultdict(list)
-        for record_id, dataset_id in references.items():
-            by_parent[dataset_id].append(record_id)
+        by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for child_id, reference in references.items():
+            by_parent[reference.parent_dataset_id].append((child_id, reference.parent_record_id))
+        declared = {parent.dataset_id: parent for parent in self.metadata.parents}
         states: dict[str, object] = {}
         snapshots: dict[int, tuple[object, object]] = {}
-        for dataset_id, record_ids in by_parent.items():
-            originals = self._parent_records(dataset_id, record_ids, True)
-            for record_id, original in zip(record_ids, originals, strict=True):
+        for dataset_id, identities in by_parent.items():
+            reference = declared.get(dataset_id)
+            if reference is None:
+                raise TimeFFormatError(f"imported records name undeclared parent {dataset_id!r}")
+            originals = self._parent_records(
+                dataset_id, [parent_id for _, parent_id in identities], True, import_prefix(reference)
+            )
+            for (child_id, _), original in zip(identities, originals, strict=True):
                 callable_ids: dict[int, int] = {}
                 for signal in original.signals:
                     loader, offsets = loaders.get(signal.id, (None, None))
@@ -352,7 +361,7 @@ class TimeFReader:
                     for annotation in original.annotations
                     if annotation.occurrence_id is not None
                 )
-                states[record_id] = inherited_state(original, annotation_ids, memo=snapshots, callable_ids=callable_ids)
+                states[child_id] = inherited_state(original, annotation_ids, memo=snapshots, callable_ids=callable_ids)
         return states
 
     def iter_records(
@@ -360,24 +369,24 @@ class TimeFReader:
         record_ids: Iterable[str] | None = None,
         *,
         with_annotations: bool = True,
+        prefix: str = "",
     ) -> Iterator[Record]:
         """Yield complete records, optionally in a requested ID order.
 
         Args:
             record_ids: IDs to read in result order, or ``None`` for every record.
             with_annotations: Whether to hydrate annotations on the records and descendants.
+            prefix: Namespace applied to every hydrated ID. A child imports this dataset's records
+                under its import prefix, see :func:`timenet.dataset.composition.import_prefix`.
 
         Yields:
             Hydrated records whose Signal values remain lazy.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(record_ids, with_annotations=with_annotations)
+            yield from self._control_reader().read_records(record_ids, with_annotations=with_annotations, prefix=prefix)
 
     def _control_reader(self, *, session: ControlSession | None = None) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
-
-        Args:
-            session: Shared DuckDB instance of the dataset that reads through this reader.
 
         Returns:
             The cached control reader.
@@ -390,6 +399,7 @@ class TimeFReader:
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
                 parent_records=self._parent_records,
+                parent_references={parent.dataset_id: parent for parent in self.metadata.parents},
                 session=self._control_session,
             )
         return self._control
@@ -400,10 +410,13 @@ class TimeFReader:
             self._records = self._control_reader().read_records()
         return self._records
 
-    def _parent_records(self, dataset_id: str, record_ids: Sequence[str], with_annotations: bool) -> Iterator[Record]:
+    def _parent_records(
+        self, dataset_id: str, record_ids: Sequence[str], with_annotations: bool, prefix: str
+    ) -> Iterator[Record]:
         """Read imported records from the direct parent the manifest declares under ``dataset_id``.
 
-        The parent shares this reader's DuckDB session, so a graph of parents opens one instance.
+        Args:
+            prefix: Child-visible namespace applied while hydrating the parent hierarchy.
 
         Yields:
             The parent's Records in the requested order, with lazy values.
@@ -420,7 +433,7 @@ class TimeFReader:
             raise TimeFFormatError(f"parent dataset ID {dataset_id!r} resolved to {actual}, expected {declared}")
         with reader._as_format_error(preserve_validation=True):
             yield from reader._control_reader(session=self._control_session).read_records(
-                record_ids, with_annotations=with_annotations
+                record_ids, with_annotations=with_annotations, prefix=prefix
             )
 
     def _values_reader(self) -> BaseValuesReader:

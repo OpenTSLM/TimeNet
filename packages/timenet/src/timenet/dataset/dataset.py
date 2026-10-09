@@ -9,7 +9,7 @@ from typing import Literal, TextIO, TypeVar, cast, overload
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.composition import RecordImport, captured_state, inherited_state
+from timenet.dataset.composition import RecordImport, captured_state, import_prefix, inherited_state
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -122,29 +122,44 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return record
 
     def import_record(self, record: Record, *, parent: str) -> Record:
-        """Reuse a parent Record by reference instead of taking ownership of its values.
+        """Register a parent record hydrated under this dataset's qualified IDs.
 
-        The record keeps its parent id. This layer stores a proxy row for it plus the record-level
-        annotations added after the import, and the reader resolves the proxy back to the parent's
-        hierarchy and values.
+        :meth:`~timenet.composition.ParentDatasetView.import_records` hydrates and registers in one
+        step. This method is the registration step on its own: the record's IDs must already carry
+        the ``org/name@version::`` prefix of the declared parent, which the parent's reader applies
+        when it hydrates records for import.
 
         Args:
-            record: The hydrated parent record, as yielded by the parent's reader.
+            record: A parent record hydrated under the parent's import prefix.
             parent: Full dataset ID of the matching parent declaration in this dataset's card.
 
         Returns:
-            The same Record instance, ready for child tasks and annotation overlays.
+            The same record, registered and ready for child tasks and annotation overlays.
 
         Raises:
-            TimeFValidationError: If the card declares no parent with that dataset ID.
+            TimeFValidationError: If the parent is undeclared, the record is not qualified by that
+                parent's release, or an imported ID is already registered.
         """
-        if parent not in {declared.dataset_id for declared in self.metadata.parents}:
+        reference = next((declared for declared in self.metadata.parents if declared.dataset_id == parent), None)
+        if reference is None:
             raise TimeFValidationError(f"dataset card declares no parent {parent!r}")
+        prefix = import_prefix(reference)
+        if not record.id.startswith(prefix):
+            raise TimeFValidationError(
+                f"record {record.id!r} is not qualified by parent {reference}; import it through the parent view"
+            )
+        # The parent's tasks are not this layer's tasks.
+        record.task_ids = ()
         self.add_record(record=record)
         inherited = frozenset(
             annotation.occurrence_id for annotation in record.annotations if annotation.occurrence_id is not None
         )
-        self._record_imports[record.id] = RecordImport(parent, inherited, captured_state(record, inherited))
+        self._record_imports[record.id] = RecordImport(
+            parent_dataset_id=parent,
+            parent_record_id=record.id.removeprefix(prefix),
+            inherited_annotation_ids=inherited,
+            state=captured_state(record, inherited),
+        )
         return record
 
     def owned_annotations(self, record: Record) -> tuple[Annotation, ...]:

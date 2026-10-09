@@ -52,21 +52,31 @@ class ChildConnector(BaseConnector[RawRow]):
     def compose(self, raw_refs: list[RawRow], context: BuildContext) -> TimeFDataset:
         dataset = TimeFDataset(metadata=context.metadata)
         parent = context.parent("physionet/ptb-xl")
-        for record in parent.iter_records(required_record_ids(raw_refs)):
-            imported = dataset.import_record(record, parent="physionet/ptb-xl")
+        record_ids = required_record_ids(raw_refs)
+        imported = parent.import_records(dataset, record_ids)
+        for record_id, record in zip(record_ids, imported, strict=True):
             dataset.add_task(
                 task=AnswerTask(
-                    inputs=(imported,),
-                    prompt=question_for(imported.id),
-                    targets=(answer_for(imported.id),),
+                    inputs=(record,),
+                    prompt=question_for(record_id),
+                    targets=(answer_for(record_id),),
                 )
             )
         return dataset
 ```
 
-`ParentDatasetView.iter_records()` keeps signal values lazy. `TimeFDataset.import_record()` keeps
-the record under its parent id and marks it as owned by that parent. It does not transfer the
-parent hierarchy to the child.
+`ParentDatasetView.iter_records()` yields parent records under their original IDs, for inspection.
+`ParentDatasetView.import_records()` hydrates the requested records under qualified IDs and
+registers them in the child in one step; signal values stay lazy. Use the returned records for
+child tasks and annotations. Importing `ptbxl-1` from `physionet/ptb-xl@1.0.0` gives the child ID
+`physionet/ptb-xl@1.0.0::ptbxl-1`. Source, signal, axis, and annotation identities use the same
+prefix. Native raw recording IDs, annotation values, and metadata keep their original values.
+`TimeFDataset.import_record()` is the registration step on its own, for a record the parent's
+reader hydrated with that prefix.
+
+Every import gets a prefix, even when IDs do not collide. Imports through different parents stay
+separate. A grandchild adds its direct parent's prefix to the ID visible in that parent; reading
+or rewriting a dataset preserves its existing IDs. Importing the same parent record twice fails.
 
 A connector can add record annotations after the import. TimeNet stores these annotations as
 child overlays. The parent annotations remain in the parent layer.
@@ -79,8 +89,8 @@ the engine writes the child, it checks that every imported record is held by the
 An import from the wrong parent fails the build.
 
 The child has one `control.duckdb` file. An imported record has a small proxy row in `records` and
-a `record_imports` row that names its parent dataset ID. Child tasks and annotation overlays refer to
-the proxy key.
+a `record_imports` row that names its parent dataset ID and original parent record ID. Child tasks
+and annotation overlays refer to the proxy key.
 
 The child manifest lists its exact direct-parent references under `metadata.parents`, and the
 complete dependency closure under `dependencies`. Each `dependencies` row holds an exact dataset
@@ -96,9 +106,9 @@ contracts therefore cannot be composed into one child.
 `TimeNet.load("physionet/ecg-qa-cot")` resolves the full graph in one registry. The registry checks
 each locked manifest checksum. A cycle, missing parent, or checksum mismatch stops the read.
 
-The reader replaces each child proxy with the parent record, read from the parent in one call per
-parent. It then adds the child record annotations and tasks. Signal loaders continue to read the
-parent values plane.
+The reader resolves imported records through their parents, one read per direct parent, and each
+parent hydrates its hierarchy once under the final qualified IDs. The child then attaches its own
+record annotations and restores its tasks. Signal loaders continue to read the parent values plane.
 
 Reading a composed dataset does not snapshot parent-owned fields. The first write or
 `check_records()` call after a read hydrates the originals from the pinned parents again and

@@ -25,6 +25,9 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 
 
+_PREFIX = "timenet/hello-world@1.0.0::"
+
+
 def store(root, dataset):
     dataset.derive_schema()
     with TimeFWriter(root, dataset) as writer:
@@ -108,7 +111,9 @@ def composition(tmp_path):
     parent = make_dataset()
     child = child_of(parent, store(tmp_path, parent))
     with LocalRegistry(tmp_path).open_reader(parent.metadata.dataset_id) as reader:
-        imported = child.import_record(next(reader.iter_records(["record-0"])), parent="timenet/hello-world")
+        imported = child.import_record(
+            next(reader.iter_records(["record-0"], prefix=_PREFIX)), parent="timenet/hello-world"
+        )
         yield tmp_path, child, imported
 
 
@@ -184,16 +189,16 @@ def test_selected_reads_resolve_imports_before_and_after_a_full_read(tmp_path):
     parent = make_dataset()
     child = child_of(parent, store(tmp_path, parent))
     with LocalRegistry(tmp_path).open_reader(parent.metadata.dataset_id) as reader:
-        for record in reader.iter_records(["record-0", "record-1"]):
+        for record in reader.iter_records(["record-0", "record-1"], prefix=_PREFIX):
             child.import_record(record, parent="timenet/hello-world")
     store(tmp_path, child)
     with LocalRegistry(tmp_path).open_reader("test/child") as reader:
         ids = reader.record_ids()
-        assert ids == ("record-0", "record-1")
+        assert ids == (_PREFIX + "record-0", _PREFIX + "record-1")
         (first,) = reader.iter_records(ids[:1])
         assert first.signals[0].to_arrow().equals(parent.records[0].signals[0].to_arrow())
         (second,) = reader.iter_records(ids[1:])
-        assert second.id == "record-1"
+        assert second.id == _PREFIX + "record-1"
         assert [record.id for record in reader.iter_records()] == list(ids)
         (again,) = reader.iter_records(ids[:1])
         assert again.id == ids[0]
@@ -203,7 +208,7 @@ def test_parent_graph_reopens_after_closing_a_parent_or_pickling(composition):
     root, child, record = composition
     grandchild = grandchild_of(child, store(root, child))
     with LocalRegistry(root).open_reader("test/child") as reader:
-        grandchild.import_record(next(reader.iter_records()), parent="test/child")
+        grandchild.import_record(next(reader.iter_records(prefix="test/child@1.0.0::")), parent="test/child")
         store(root, grandchild)
     with LocalRegistry(root).open_reader("test/grandchild") as reader:
         restored = next(reader.iter_records())
@@ -226,15 +231,15 @@ def test_inherited_signal_annotation_equal_to_a_record_annotation_stays_referenc
     signal_occurrence = parent.records[0].signals[0].annotate(Annotation(key="cohort", value="A", id="cohort-shared"))
     child = child_of(parent, store(tmp_path, parent))
     with LocalRegistry(tmp_path).open_reader(parent.metadata.dataset_id) as reader:
-        imported = child.import_record(next(reader.iter_records(["record-0"])), parent="timenet/hello-world")
-        inherited = next(
-            a for a in imported.signals[0].annotations if a.occurrence_id == signal_occurrence.occurrence_id
+        imported = child.import_record(
+            next(reader.iter_records(["record-0"], prefix=_PREFIX)), parent="timenet/hello-world"
         )
+        inherited = next(a for a in imported.signals[0].annotations if a.key == signal_occurrence.key)
         child.add_task(task=AnswerTask(inputs=(imported,), targets=("x",), input_annotations=(inherited,)))
         store(tmp_path, child)
     with LocalRegistry(tmp_path).open_reader("test/child") as reader:
         restored = reader.read()
-        assert restored.tasks[0].input_annotations[0].occurrence_id == signal_occurrence.occurrence_id
+        assert restored.tasks[0].input_annotations[0].occurrence_id == inherited.occurrence_id
         assert restored.tasks[0].input_annotations[0] is restored.records[0].signals[0].annotations[1]
 
 
@@ -257,6 +262,8 @@ def test_read_write_preserves_parent_ownership_and_overlays(composition):
     with LocalRegistry(root).open_reader("test/child") as reader:
         restored = reader.read()
         assert restored.dependencies == child.dependencies
+        assert restored.records[0].id == record.id
+        assert restored.record_imports[record.id].parent_record_id == "record-0"
         assert restored.owned_records == ()
         assert (
             restored.record_imports[record.id].inherited_annotation_ids
@@ -279,6 +286,7 @@ def test_read_write_preserves_parent_ownership_and_overlays(composition):
 
     with Registry(root).open_reader("test/child") as reader:
         again = reader.read()
+        assert again.records[0].id == record.id
         assert [a.id for a in again.records[0].annotations].count(overlay.id) == 1
         assert again.tasks[0].input_annotations[0].id == overlay.id
         assert again.records[0].signals[0].to_arrow().equals(record.signals[0].to_arrow())
@@ -293,8 +301,8 @@ def test_proxy_row_stores_only_the_record_id(composition):
                FROM records JOIN record_imports USING (record_key)"""
         ).fetchall()
         assert rows == [(record.id, None, None, None, None)]
-        assert connection.execute("SELECT parent_dataset_id FROM record_imports").fetchall() == [
-            ("timenet/hello-world",)
+        assert connection.execute("SELECT parent_dataset_id, parent_record_id FROM record_imports").fetchall() == [
+            ("timenet/hello-world", "record-0")
         ]
         assert connection.execute("SELECT count(*) FROM clocks").fetchone() == (0,)
         audit_control_database(connection)
@@ -320,10 +328,12 @@ def test_annotation_option_reaches_every_parent_layer(composition):
     record.annotate(Annotation(key="reviewed", value=True))
     grandchild = grandchild_of(child, store(root, child))
     with LocalRegistry(root).open_reader("test/child") as reader:
-        grandchild.import_record(next(reader.iter_records()), parent="test/child")
+        grandchild.import_record(next(reader.iter_records(prefix="test/child@1.0.0::")), parent="test/child")
         store(root, grandchild)
     with LocalRegistry(root).open_reader("test/grandchild") as reader:
         without = next(reader.iter_records(with_annotations=False))
+        assert without.id == f"test/child@1.0.0::{record.id}"
+        assert without.signals[0].id == f"test/child@1.0.0::{record.signals[0].id}"
         assert not tuple(without.walk_annotations())
         with_annotations = next(reader.iter_records())
         assert len(tuple(with_annotations.walk_annotations())) == len(tuple(record.walk_annotations()))

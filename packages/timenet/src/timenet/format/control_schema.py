@@ -159,12 +159,12 @@ RECORDS = Table(
 
 RECORD_IMPORTS = Table(
     "record_imports",
-    (_key("record_key"), _required("parent_dataset_id")),
+    (_key("record_key"), _required("parent_dataset_id"), _required("parent_record_id")),
     unique=(("record_key",),),
     foreign_keys=(ForeignKey("record_key", "records", "record_key"),),
 )
-"""Records owned by an exact parent version. The proxy row in ``records`` carries the record id, and
-the dataset ID names the parent in the manifest, which pins its version."""
+"""Original record IDs in exact parents. The proxy row carries the qualified child ID;
+the dataset ID names the parent declaration that pins its version."""
 
 CLOCKS = Table(
     "clocks",

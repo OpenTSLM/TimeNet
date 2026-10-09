@@ -49,7 +49,7 @@ Signals can reference the same immutable `TimeAxis`.
 | --- | --- |
 | `records` | Recording sessions with a clock ID and optional session span. An imported record keeps only its id here. |
 | `clocks` | Shared Record origins with a nullable absolute timestamp. |
-| `record_imports` | Records owned by an exact parent version: the local proxy row and the parent dataset ID. |
+| `record_imports` | Qualified local proxy rows with their parent dataset ID and original parent record ID. |
 | `sources` | Recursive sources, linked to their record and parent source by internal keys. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
