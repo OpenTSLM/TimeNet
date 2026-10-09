@@ -26,12 +26,14 @@ from timenet.errors import (
 from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
 from timenet.refs import split_ref
-from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry import BaseRegistry, LocalRegistry, RemoteRegistry, open_registry
 from timenet.registry.base import ProgressCallback
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
 
 
 if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
+    from timenet.registry.base import ResolvedVersion
     from timenet.torch import TimeFTorchDataset
 
 
@@ -168,15 +170,28 @@ class TimeNet:
 
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
-
-        Raises:
-            TimeFFormatError: If a dependency lock or local manifest differs from the registry.
         """
         dataset_id, version = _resolve_ref(dataset_id, version)
         self._reject_unhosted_access(dataset_id, version)
         closure = self._registry.resolve_versions(dataset_id, version)
-        for node in closure:
-            self._reject_unhosted_access(node.reference.dataset_id, str(node.reference.version))
+        self._check_closure_access(closure)
+        return self._download_closure(closure, force=force, progress_cb=progress_cb)
+
+    def _download_closure(
+        self,
+        closure: tuple[ResolvedVersion, ...],
+        *,
+        force: bool = False,
+        progress_cb: ProgressCallback | None = None,
+    ) -> Path:
+        """Materialize an authorized, pinned closure without resolving its versions again.
+
+        Returns:
+            The root dataset's local version directory.
+
+        Raises:
+            TimeFFormatError: If a materialized manifest differs from the resolved registry copy.
+        """
         for node in closure:
             dataset_id, resolved = node.reference.dataset_id, str(node.reference.version)
             target = self._storage / dataset_id / resolved
@@ -190,6 +205,41 @@ class TimeNet:
                     "remove it or download with force=True"
                 )
         return target
+
+    def open_reader(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        progress_cb: ProgressCallback | None = None,
+    ) -> TimeFReader:
+        """Open a pinned, lazy reader without building a missing dataset.
+
+        Unlike :meth:`load`, this method never invokes a connector.  It resolves and checks the
+        complete dependency closure before opening any reader. HTTP datasets use the normal
+        download cache; local and S3 datasets are read in place.
+
+        Args:
+            dataset_id: A dataset id, optionally with an ``@version`` suffix.
+            version: An explicit version, or ``None`` for the registry's latest version.
+            progress_cb: Called as remote files are materialized.
+
+        Returns:
+            An owned :class:`~timenet.reader.TimeFReader`, usable as a context manager.
+        """
+        dataset_id, version = _resolve_ref(dataset_id, version)
+        closure = self._registry.resolve_versions(dataset_id, version)
+        self._check_closure_access(closure)
+        if not isinstance(self._registry, RemoteRegistry):
+            return self._registry.open_closure(closure)
+        self._download_closure(closure, progress_cb=progress_cb)
+        return LocalRegistry(self._storage).open_closure(closure)
+
+    def _check_closure_access(self, closure: tuple[ResolvedVersion, ...]) -> None:
+        """Apply the registry access policy to every resolved dependency."""
+        for node in closure:
+            reference = node.reference
+            self._reject_unhosted_access(reference.dataset_id, str(reference.version))
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
