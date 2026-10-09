@@ -68,6 +68,82 @@ reused. Each call to `annotate()` creates a separate occurrence for the selected
 
 ---
 
+## Assigning dataset splits
+
+Use `timenet_connectors.splitting` during conversion to assign source samples to partitions.
+Every implementation inherits from `Splitter[T]` and returns `DatasetSplits[T]`. Access partitions
+by `Split` name; iteration over the result yields partition names, not positional train/test values.
+The splitter keeps the source objects unchanged and preserves their order within each partition.
+
+Preserve official partitions when the source provides them by setting `split` on each task
+directly. No splitter is needed:
+
+```python
+from timenet.types.splits import Split
+
+task = make_task(sample, split=Split.TRAIN)
+dataset.add_task(task=task)
+```
+
+Translate source-specific partition names into `Split` values in the connector.
+
+For a dataset without official partitions, explicitly choose a category to balance and a grouping
+key that prevents related samples from crossing partitions:
+
+```python
+from timenet.types.splits import Split
+from timenet_connectors.splitting import StratifiedSplitter
+
+def get_category(sample):
+    return sample.category
+
+def get_signal_id(sample):
+    return sample.signal_id
+
+splitter = StratifiedSplitter(
+    train=0.8,
+    test=0.2,
+    stratify_by=get_category,
+    group_by=get_signal_id,
+    seed=42,
+)
+splits = splitter.split(samples)
+train_samples = splits[Split.TRAIN]
+test_samples = splits[Split.TEST]
+print(splits.counts)
+```
+
+For three partitions, use `train=0.8, validation=0.1, test=0.1`. Omitted validation is absent,
+not an empty placeholder. Configured fractions must be positive, finite, and sum to one.
+
+Stratification targets the same category proportions in each partition. A group can contain several
+categories; all its samples stay together. Without `group_by`, each sample occurrence is independent.
+Use the actual leakage boundary for grouping, such as a patient or source recording, rather than a
+unique question or window ID. For temporal prediction, choose a time-based strategy instead.
+
+The allocator processes larger groups first, using a seeded shuffle for equally sized groups. It
+greedily reduces squared errors against the requested category counts and sample counts, normalized
+by each category's total and the overall sample total. It is approximate: it does not guarantee an
+optimal allocation, exact sizes, or every category in every partition. Small datasets and large
+groups can leave configured partitions empty. Inspect `splits.counts` and category distributions
+before publishing. The same ordered input, callbacks, and seed reproduce the assignment; changing
+input order or adding samples can change it. No global random state is modified.
+
+When constructing TimeNet tasks, copy the partition name onto each task:
+
+```python
+for split_name, samples_in_split in splits.items():
+    for sample in samples_in_split:
+        task = make_task(sample, split=split_name)
+        dataset.add_task(task=task)
+```
+
+Here `make_task` is the connector's own task-construction function. Consumers then select stored
+assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`;
+they do not rerun the splitter.
+
+---
+
 ## Discovery and layout
 
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
