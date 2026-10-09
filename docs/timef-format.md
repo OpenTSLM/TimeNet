@@ -59,6 +59,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `task_dependencies` | Ordered task derivation relationships. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
+| `registered_annotations` | Ordered reusable definitions registered without an object attachment. |
 | `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
 
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
@@ -76,13 +77,17 @@ stored inline:
 
 ```text
 signal_key, signal_id, source_key, name, axis_key, spec_type, spec_name, unit,
-dtype, categories, value_shape, dimension_names, nullable, n_values, metadata
+dtype, categories, value_shape, dimension_names, nullable, n_values, metadata,
+modality, source_id
 ```
 
 There is no separate specification table. The fields are small, typed, directly queryable, and
 compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and `value_shape` is
 `BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
 it between the Signals that use it.
+
+`source_key` identifies the owning Source node. The nullable `source_id` preserves the Signal's
+raw recording ID, which can differ from that node's public ID.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
@@ -105,8 +110,10 @@ WHERE c.name = 'subject_ids'
 ```
 
 An annotation has reusable content and one or more occurrences. `annotation_contents` stores the
-content once: its key (`name`), unit, and value. The value sits in one typed column selected by
-`value_kind`: `text_value`, `integer_value`, `float_value`, `boolean_value`, or `text_list_value`
+content once: its key (`name`), unit, description, metadata, and value. The dedicated `description`
+column is separate from metadata, which can contain its own `description` key. The value sits in
+one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
+`boolean_value`, or `text_list_value`
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
 span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and
@@ -115,6 +122,12 @@ occurrence metadata.
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
 apply to many objects without copying a long value. Each attachment still has its own
 `occurrence_id` and temporal placement.
+
+`register_annotations()` stores reusable definitions, such as the label vocabulary named by a
+classification task's `target_schema`. Their content lives in `annotation_contents`; the
+`registered_annotations` table preserves registration order and any authored span, provenance,
+confidence, or occurrence fields. Registration creates no row in `annotation_occurrences`.
+`TimeFReader.read()` restores them to `TimeFDataset.registered_annotations`.
 
 ## Tasks
 
