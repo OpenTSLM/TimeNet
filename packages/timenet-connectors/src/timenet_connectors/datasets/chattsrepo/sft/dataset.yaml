@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/sft
+dataset_version: 1.0.0
+name: ChatTS SFT
+description: >-
+  ChatTS supervised fine-tuning examples generated with Time Series Evol-Instruct.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, sft, instruction-following, synthetic, time-series, huggingface]

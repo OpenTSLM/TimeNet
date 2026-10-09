@@ -1,0 +1,9 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/ift
+dataset_version: 1.0.0
+name: ChatTS IFT
+description: ChatTS instruction-following training examples over time series.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, instruction-following, synthetic, time-series, huggingface]

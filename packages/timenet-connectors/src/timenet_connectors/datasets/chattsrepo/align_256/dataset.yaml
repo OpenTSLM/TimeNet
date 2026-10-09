@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/align-256
+dataset_version: 1.0.0
+name: ChatTS align_256
+description: >-
+  ChatTS stage-one alignment training examples with 256-step synthetic time-series inputs.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, alignment, synthetic, time-series, huggingface]
