@@ -1,0 +1,9 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/dev
+dataset_version: 1.0.0
+name: ChatTS development set
+description: A small ChatTS development and testing dataset.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, development, synthetic, time-series, huggingface]
