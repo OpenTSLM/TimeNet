@@ -10,19 +10,23 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import file_checksum
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
+from timenet.manifest import LockedDependency
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import DatasetVersion, LocalRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    DatasetRef,
     Domain,
     License,
     Split,
+    TimePoint,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -190,6 +194,98 @@ def test_iter_records_matches_full_read(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         materialized = {record.record_id for record in reader.read().records}
     assert streamed == materialized
+
+
+def _child_metadata(parent_ref: DatasetRef) -> DatasetMetadata:
+    return DatasetMetadata(
+        dataset_id="test/composed-child",
+        dataset_version=Version(1, 0, 0),
+        name="Composed child",
+        description="Tasks over parent records.",
+        license=License.CC_BY_4_0,
+        parents=(DatasetRef(dataset_id=parent_ref.dataset_id, version=parent_ref.version),),
+    )
+
+
+def _lock(parent_dir: Path, parent_ref: DatasetRef) -> LockedDependency:
+    return LockedDependency(
+        dataset_id=parent_ref.dataset_id,
+        version=parent_ref.version,
+        manifest_checksum=file_checksum(parent_dir / "manifest.json"),
+    )
+
+
+def test_composed_child_reuses_parent_record_values_and_adds_tasks(tmp_path):
+    parent_dataset = make_dataset()
+    parent_dir = _write(tmp_path, dataset=parent_dataset)
+    parent_ref = DatasetRef(
+        dataset_id=parent_dataset.metadata.dataset_id,
+        version=parent_dataset.metadata.dataset_version,
+    )
+    with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
+        imported = next(parent_reader.iter_records())
+        child = TimeFDataset(metadata=_child_metadata(parent_ref))
+        with pytest.raises(TimeFValidationError, match="no parent"):
+            child.import_record(imported, parent="other")
+        child.import_record(imported, parent="timenet/hello-world")
+        child.set_dependencies((_lock(parent_dir, parent_ref),))
+        imported.annotate(Annotation(key="reviewed", value=True, id="reviewed"))
+        imported.annotate(Annotation(key="reviewed_at", span=TimePoint.micros(0), id="reviewed-at"))
+        child.add_task(
+            task=AnswerTask(id="child-question", prompt="Is this imported?", targets=("yes",), inputs=(imported,)),
+        )
+        child_dir = _write(tmp_path, dataset=child)
+
+    child_version = DatasetVersion.open_local(child_dir)
+    assert child_version.manifest.files.time_series == ()
+    with LocalRegistry(tmp_path).open_reader("test/composed-child", "1.0.0") as child_reader:
+        restored = child_reader.read()
+        record = restored.records[0]
+        assert restored.tasks[0].inputs == (record,)
+        assert record.task_ids == ("child-question",)
+        assert {"reviewed", "reviewed-at"} <= {annotation.id for annotation in record.annotations}
+        assert record.signals[0].to_arrow().equals(parent_dataset.records[0].signals[0].to_arrow())
+
+
+def test_composed_child_resolves_imports_in_filtered_task_reads_with_one_parent_query(tmp_path, monkeypatch):
+    parent_dataset = make_dataset()
+    parent_dir = _write(tmp_path, dataset=parent_dataset)
+    parent_ref = DatasetRef(
+        dataset_id=parent_dataset.metadata.dataset_id,
+        version=parent_dataset.metadata.dataset_version,
+    )
+    with TimeFReader(DatasetVersion.open_local(parent_dir)) as parent_reader:
+        child = TimeFDataset(metadata=_child_metadata(parent_ref))
+        child.set_dependencies((_lock(parent_dir, parent_ref),))
+        for index, record in enumerate(parent_reader.iter_records()):
+            child.import_record(record, parent="timenet/hello-world")
+            child.add_task(
+                task=ClassificationTask(
+                    id=f"child-cls-{index}",
+                    inputs=(record,),
+                    targets=("x",),
+                    split=Split.TEST if index % 2 else Split.TRAIN,
+                ),
+            )
+        _write(tmp_path, dataset=child)
+
+    parent_reads = 0
+    read_records = DuckDBControlReader.read_records
+
+    def counting(self, *args, **kwargs):
+        nonlocal parent_reads
+        parent_reads += self.path.is_relative_to(parent_dir)
+        return read_records(self, *args, **kwargs)
+
+    monkeypatch.setattr(DuckDBControlReader, "read_records", counting)
+    with LocalRegistry(tmp_path).open_reader("test/composed-child", "1.0.0") as child_reader:
+        # A filtered task read hydrates its input records itself, bypassing the reader's record cache.
+        tasks = list(child_reader.iter_tasks(split="test"))
+        assert [task.id for task in tasks] == ["child-cls-1"]
+        assert tasks[0].inputs[0].signals
+        assert parent_reads == 1
+        assert all(record.signals for record in child_reader.read().records)
+        assert parent_reads == 2
 
 
 def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):

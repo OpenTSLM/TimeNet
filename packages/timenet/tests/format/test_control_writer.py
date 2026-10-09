@@ -229,13 +229,16 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
             loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         )
 
+    records = (
+        Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
+        Record(record_id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
+    )
     dataset = SimpleNamespace(
         metadata=SimpleNamespace(dataset_id="org/dupes"),
         annotations=(),
-        records=(
-            Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
-            Record(record_id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
-        ),
+        records=records,
+        owned_records=records,
+        record_imports={},
         iter_tasks=lambda: iter(()),
     )
 
@@ -254,10 +257,13 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
         time_offsets_loader=lambda: pa.array([0, 1_000, 2_000], type=pa.int64()),
     )
+    records = (Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),)
     dataset = SimpleNamespace(
         metadata=SimpleNamespace(dataset_id="org/irregular"),
         annotations=(),
-        records=(Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),),
+        records=records,
+        owned_records=records,
+        record_imports={},
         iter_tasks=lambda: iter(()),
     )
 
