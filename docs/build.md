@@ -46,14 +46,16 @@ versions used for the build.
 
 ## Pipeline
 
-The engine runs these stages:
+`timenet-build` first builds any exact parent the card declares that the output directory lacks,
+each through its own connector and environment. The engine then runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card.
 2. Download raw artifacts into the build cache.
-3. Convert local artifacts into a `TimeFDataset`.
-4. Derive the dataset schema.
-5. Write or publish the complete TimeF version.
-6. Remove the raw cache after success, unless `--keep-cache` is set.
+3. Open the direct parents and create the dependency lock.
+4. Convert local artifacts into a `TimeFDataset`.
+5. Derive the dataset schema.
+6. Write or publish the complete TimeF version.
+7. Remove the raw cache after success, unless `--keep-cache` is set.
 
 `--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
 returns the committed version and skips expensive work.
