@@ -148,6 +148,15 @@ def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
     assert not (storage / "timenet/hello-world").exists()  # nothing fetched into the download cache
 
 
+def test_open_reader_is_pinned_without_materializing_values(registry_root, tmp_path):
+    """Opening a reader does not materialize its values plane."""
+    storage = tmp_path / "store"
+    client = TimeNet(registry_root, storage_path=storage)
+    with client.open_reader("timenet/hello-world") as reader:
+        assert reader.record_ids() == ("record-0", "record-1", "record-2")
+    assert not (storage / "timenet/hello-world").exists()
+
+
 def test_load_torch(registry_root, tmp_path):
     torch = pytest.importorskip("torch")
     from torch.utils.data import Dataset  # noqa: PLC0415
