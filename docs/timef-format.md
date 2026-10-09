@@ -91,6 +91,19 @@ once regardless of how many Signals use that timeline.
 
 ## Annotations
 
+Subject IDs use a list-valued record annotation with the key `subject_ids`. DuckDB can filter
+records by subject through the annotation tables:
+
+```sql
+SELECT DISTINCT r.record_id
+FROM records r
+JOIN annotation_occurrences o
+  ON o.object_type = 'Record' AND o.object_key = r.record_key
+JOIN annotation_contents c USING (content_key)
+WHERE c.name = 'subject_ids'
+  AND list_contains(c.text_list_value, 'patient-1');
+```
+
 An annotation has reusable content and one or more occurrences. `annotation_contents` stores the
 content once: its key (`name`), unit, and value. The value sits in one typed column selected by
 `value_kind`: `text_value`, `integer_value`, `float_value`, `boolean_value`, or `text_list_value`

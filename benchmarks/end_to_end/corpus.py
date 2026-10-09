@@ -12,7 +12,6 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
-from timenet.json import JsonMapping
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -66,7 +65,6 @@ def _add_record(
     record_id: str,
     source_name: str,
     signals: tuple[Signal, ...],
-    metadata: JsonMapping | None = None,
 ) -> Record:
     """Add one explicit benchmark hierarchy.
 
@@ -82,7 +80,6 @@ def _add_record(
                 signals=signals,
             ),
         ),
-        metadata={} if metadata is None else metadata,
     )
     dataset.add_record(record=record)
     return record
@@ -300,8 +297,8 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             record_id=f"record-ecg-question-{index:03d}",
             source_name="Synthetic ECG monitor",
             signals=signals,
-            metadata={"subject_id": "subject-ecg"},
         )
+        record.annotate(Annotation(key="subject_ids", value=["subject-ecg"], id=f"{record.id}-subjects"))
         record.annotate(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
         dataset.add_task(
             task=AnswerTask(
@@ -409,8 +406,8 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             record_id=f"record-rich-{name}",
             source_name="Rich signal generator",
             signals=(tensor(values, spec, name),),
-            metadata={"subject_id": f"subject-rich-{name}"},
         )
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-rich-{name}"], id=f"{record.id}-subjects"))
         record.annotate(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
 
 
@@ -430,8 +427,8 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
         record_id="record-nonfloat",
         source_name="Non-float signal generator",
         signals=series,
-        metadata={"subject_id": "subject-nonfloat"},
     )
+    record.annotate(Annotation(key="subject_ids", value=["subject-nonfloat"], id=f"{record.id}-subjects"))
     record.annotate(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
 
 
@@ -475,8 +472,8 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             record_id=f"record-{scenario.name}",
             source_name=scenario.name.replace("-", " ").title(),
             signals=series,
-            metadata={"subject_id": f"subject-{scenario.name}"},
         )
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-{scenario.name}"], id=f"{record.id}-subjects"))
         annotations = [
             Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),
             Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event"),

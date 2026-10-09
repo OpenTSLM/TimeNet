@@ -225,7 +225,6 @@ class TimeFWriter:
         values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
         for record in self._dataset.records:
             values["record_id"].append(record.record_id)
-            values["subject_id"].extend(record.subject_ids)
             for ts in record.signals:
                 values["time_series_id"].append(ts.id)
                 if ts.source_id is not None:

@@ -203,6 +203,12 @@ def test_one_record_for_each_recording(release, monkeypatch):
     assert {record.record_id for record in dataset.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
 
 
+def test_subject_ids_are_record_annotations(release, monkeypatch):
+    dataset = _convert(release, monkeypatch)
+    for record in dataset.records:
+        assert _annotations(dataset, record.record_id, "subject_ids")[0].value == ["sleep-cassette-90"]
+
+
 def test_every_record_carries_the_same_study_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     study = [_annotations(dataset, record.record_id, "study")[0] for record in dataset.records]

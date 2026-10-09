@@ -34,8 +34,6 @@ class Record(SupportsAnnotate):
     """The common relative zero, with an optional absolute timestamp."""
     record_id: str = field(default_factory=new_id)
     """Unique id for the record (default: an auto-generated uuid7)."""
-    subject_ids: tuple[str, ...] = ()
-    """Subjects this record belongs to (empty for subject-less domains)."""
     task_ids: tuple[str, ...] = ()
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()

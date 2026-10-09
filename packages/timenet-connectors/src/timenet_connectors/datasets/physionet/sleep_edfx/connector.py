@@ -33,7 +33,7 @@ from typing import ClassVar
 
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
+from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
@@ -314,9 +314,9 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
                     ),
                 ),
                 time_span=TimeInterval.micros(0, session_end),
-                metadata={"subject_id": recording.subject_id},
             )
             dataset.add_record(record=record)
+            record.annotate(Annotation(key="subject_ids", value=[recording.subject_id], id=f"{record_id}-subject-ids"))
             annotations.attach(record_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 
