@@ -93,6 +93,7 @@ class _SignalRow(NamedTuple):
     n_values: int
     metadata: str
     modality: str
+    source_id: str | None
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
@@ -132,6 +133,7 @@ class _OccurrenceRow(NamedTuple):
     boolean_value: bool | None
     text_list_value: list[str] | None
     unit: str | None
+    description: str | None
     content_metadata: str | None
     content_key: int
     object_key: int | None
@@ -260,7 +262,7 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
         SELECT o.occurrence_key, o.occurrence_id, o.object_type, objects.object_id, o.span_type,
                o.start_us, o.end_us, o.provenance, o.confidence,
                o.metadata, c.content_id, c.name, c.value_kind, c.text_value, c.integer_value,
-               c.float_value, c.boolean_value, c.text_list_value, c.unit, c.metadata,
+               c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata,
                o.content_key, objects.object_key
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_key)
@@ -344,24 +346,26 @@ def _decode_json(value: str | None, *, default: Any = None) -> Any:
         raise TimeFFormatError(f"control.duckdb contains invalid JSON: {value!r}") from exc
 
 
-def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
-    """Rebuild the span of one annotation occurrence.
+def _annotation_span(
+    span_type: str, start_us: int | None, end_us: int | None, annotation_id: str
+) -> TimePoint | TimeInterval | None:
+    """Rebuild an annotation's stored span.
 
     Returns:
         The point or interval span, or ``None`` for a static occurrence.
 
     Raises:
-        TimeFFormatError: If the occurrence has an unknown span type or lacks a required bound.
+        TimeFFormatError: If the annotation has an unknown span type or lacks a required bound.
     """
-    if row.span_type == "static":
+    if span_type == "static":
         return None
-    start_us = _required(row.start_us, f"the start of annotation occurrence {row.occurrence_id!r}")
-    if row.span_type == "point":
+    start_us = _required(start_us, f"the start of annotation {annotation_id!r}")
+    if span_type == "point":
         return TimePoint(start_us=start_us)
-    if row.span_type == "interval":
-        end_us = _required(row.end_us, f"the end of annotation occurrence {row.occurrence_id!r}")
+    if span_type == "interval":
+        end_us = _required(end_us, f"the end of annotation {annotation_id!r}")
         return TimeInterval(start_us=start_us, end_us=end_us)
-    raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
+    raise TimeFFormatError(f"annotation {annotation_id!r} has unknown span type {span_type!r}")
 
 
 def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
@@ -522,6 +526,7 @@ class DuckDBControlReader:
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get(("Signal", signal_row.signal_id), ()),
                     metadata=_decode_json(signal_row.metadata, default={}),
+                    source_id=signal_row.source_id,
                 )
             )
 
@@ -661,6 +666,55 @@ class DuckDBControlReader:
         if row is None:
             return ()
         return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
+
+    def read_registered_annotations(self) -> tuple[Annotation, ...]:
+        """Return reusable annotations in registration order, without creating attachments.
+
+        Returns:
+            The registered annotations with their authored fields restored.
+
+        Raises:
+            TimeFFormatError: If a registration refers to missing content.
+        """
+        rows = (
+            self.connection.execute(
+                """SELECT r.*, c.content_id, c.name, c.value_kind, c.text_value,
+                      c.integer_value, c.float_value, c.boolean_value, c.text_list_value,
+                      c.unit, c.description, c.metadata AS content_metadata
+               FROM registered_annotations r
+               LEFT JOIN annotation_contents c USING (content_key)
+               ORDER BY r.position"""
+            )
+            .to_arrow_table()
+            .to_pylist()
+        )
+        annotations: list[Annotation] = []
+        for row in rows:
+            if row["content_id"] is None or row["name"] is None:
+                raise TimeFFormatError(f"registered annotation refers to missing content key {row['content_key']!r}")
+            annotations.append(
+                Annotation(
+                    id=row["content_id"],
+                    key=row["name"],
+                    value=decode_annotation_value(
+                        row["value_kind"],
+                        row["text_value"],
+                        row["integer_value"],
+                        row["float_value"],
+                        row["boolean_value"],
+                        row["text_list_value"],
+                    ),
+                    unit=row["unit"],
+                    description=row["description"],
+                    metadata=_decode_json(row["content_metadata"], default={}),
+                    span=_annotation_span(row["span_type"], row["start_us"], row["end_us"], row["content_id"]),
+                    source=_decode_json(row["provenance"]),
+                    confidence=row["confidence"],
+                    occurrence_id=row["occurrence_id"],
+                    occurrence_metadata=_decode_json(row["metadata"], default={}),
+                )
+            )
+        return tuple(annotations)
 
     def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
@@ -895,7 +949,7 @@ class DuckDBControlReader:
             f"""WITH object_ids AS ({object_ids})
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
-                       c.text_list_value, c.unit, o.span_type, o.start_us, o.end_us,
+                       c.text_list_value, c.unit, c.description, o.span_type, o.start_us, o.end_us,
                        o.confidence, o.provenance, c.metadata AS content_metadata, o.metadata
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_key)
@@ -1384,9 +1438,7 @@ class DuckDBControlReader:
                     f"annotation occurrence {row.occurrence_id!r} refers to missing {row.object_type} key"
                 )
         for row in rows:
-            span = _occurrence_span(row)
-            content_metadata = _decode_json(row.content_metadata, default={})
-            description = content_metadata.pop("description", None)
+            span = _annotation_span(row.span_type, row.start_us, row.end_us, row.occurrence_id)
             # The first pass over ``rows`` already rejected NULL content and object columns.
             content_id = _required(row.content_id, "annotation content")
             name = _required(row.name, "annotation name")
@@ -1404,8 +1456,8 @@ class DuckDBControlReader:
                     row.text_list_value,
                 ),
                 unit=row.unit,
-                description=description,
-                metadata=content_metadata,
+                description=row.description,
+                metadata=_decode_json(row.content_metadata, default={}),
                 span=span,
                 source=_decode_json(row.provenance),
                 confidence=row.confidence,
