@@ -16,7 +16,7 @@ from timenet.connectors import BaseConnector
 from timenet.errors import TimeNetDatasetNotFoundError
 
 
-_BATCH_ROWS = 65536  # parquet rows decoded per batch
+_BATCH_ROWS = 65536  # Parquet rows decoded per batch.
 
 
 class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
@@ -26,6 +26,79 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
     # The Hub auto-converts every public dataset to parquet on this ref, whatever the source format
     # (CSV, JSON, ...). Reading it keeps this base format-agnostic and needs no heavy ``datasets`` dep.
     PARQUET_REVISION: ClassVar[str] = "refs/convert/parquet"
+
+    def _hub_functions(self) -> tuple[Any, Any]:
+        """Import and return the Hub file-listing and download functions.
+
+        Returns:
+            The ``hf_hub_download`` and ``list_repo_files`` functions, in that order.
+
+        Raises:
+            ImportError: If the connector-local ``huggingface_hub`` dependency is unavailable.
+        """
+        try:
+            from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                f"reading {self.HF_REPO!r} needs huggingface_hub, declared in this connector's "
+                "requirements.txt. Run the build without --no-isolation, or install it yourself"
+            ) from exc
+        return hf_hub_download, list_repo_files
+
+    def _parquet_filenames(self) -> list[str]:
+        """List Parquet filenames at the configured Hub revision.
+
+        Returns:
+            Every Parquet filename in stable order.
+        """
+        _, list_repo_files = self._hub_functions()
+        return [
+            filename
+            for filename in sorted(list_repo_files(self.HF_REPO, repo_type="dataset", revision=self.PARQUET_REVISION))
+            if filename.endswith(".parquet")
+        ]
+
+    def _read_parquet_rows(self, cache_dir: Path, filenames: list[str]) -> list[dict[str, Any]]:
+        """Download selected Parquet files and decode their rows.
+
+        Args:
+            cache_dir: Directory where the connector caches Hub files.
+            filenames: Parquet filenames at :attr:`PARQUET_REVISION` to download.
+
+        Returns:
+            One dict per decoded row, in filename and source-row order.
+        """
+        import pyarrow.parquet as pq  # noqa: PLC0415
+
+        rows: list[dict[str, Any]] = []
+        for path in self._download_parquet_files(cache_dir, filenames):
+            for batch in pq.ParquetFile(path).iter_batches(batch_size=_BATCH_ROWS):
+                rows.extend(batch.to_pylist())
+        return rows
+
+    def _download_parquet_files(self, cache_dir: Path, filenames: list[str]) -> list[Path]:
+        """Download selected Parquet files and return their cached paths.
+
+        Args:
+            cache_dir: Directory where the connector caches Hub files.
+            filenames: Parquet filenames at :attr:`PARQUET_REVISION` to download.
+
+        Returns:
+            Cached local paths in ``filenames`` order.
+        """
+        hf_hub_download, _ = self._hub_functions()
+        return [
+            Path(
+                hf_hub_download(
+                    self.HF_REPO,
+                    filename,
+                    repo_type="dataset",
+                    revision=self.PARQUET_REVISION,
+                    cache_dir=str(cache_dir),
+                )
+            )
+            for filename in filenames
+        ]
 
     def download(self, cache_dir: Path) -> list[dict[str, Any]]:
         """Download the repo's auto-converted parquet file(s) and return their rows.
@@ -40,36 +113,16 @@ class BaseHuggingFaceConnector(BaseConnector[dict[str, Any]], ABC):
             One dict per row across all parquet files.
 
         Raises:
-            ImportError: If ``huggingface_hub``, declared in this connector's requirements, is missing.
             TimeNetDatasetNotFoundError: If the revision holds no parquet files, or they hold no rows.
         """
-        try:
-            from huggingface_hub import hf_hub_download, list_repo_files  # noqa: PLC0415
-        except ImportError as exc:
-            raise ImportError(
-                f"reading {self.HF_REPO!r} needs huggingface_hub, declared in this connector's "
-                "requirements.txt. Run the build without --no-isolation, or install it yourself"
-            ) from exc
-        import pyarrow.parquet as pq  # noqa: PLC0415
-
         revision = self.PARQUET_REVISION
-        filenames = [
-            f
-            for f in sorted(list_repo_files(self.HF_REPO, repo_type="dataset", revision=revision))
-            if f.endswith(".parquet")
-        ]
+        filenames = self._parquet_filenames()
         if not filenames:
             raise TimeNetDatasetNotFoundError(
                 f"{self.HF_REPO!r} has no parquet files on {revision!r}; the Hub publishes that ref only "
                 "for public and gated datasets, not fully private ones"
             )
-        rows: list[dict[str, Any]] = []
-        for filename in filenames:
-            path = hf_hub_download(
-                self.HF_REPO, filename, repo_type="dataset", revision=revision, cache_dir=str(cache_dir)
-            )
-            for batch in pq.ParquetFile(path).iter_batches(batch_size=_BATCH_ROWS):
-                rows.extend(batch.to_pylist())
+        rows = self._read_parquet_rows(cache_dir, filenames)
         if not rows:
             raise TimeNetDatasetNotFoundError(
                 f"{self.HF_REPO!r} returned no rows from {len(filenames)} parquet file(s)"
