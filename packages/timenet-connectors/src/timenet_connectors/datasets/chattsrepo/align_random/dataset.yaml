@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: chattsrepo/align-random
+dataset_version: 1.0.0
+name: ChatTS align_random
+description: >-
+  ChatTS stage-one alignment training examples with synthetic time-series inputs from 64 to 1024 steps.
+license: MIT
+source_url: https://huggingface.co/datasets/ChatTSRepo/ChatTS-Training-Dataset
+domains: [general]
+tags: [chatts, alignment, synthetic, time-series, huggingface]

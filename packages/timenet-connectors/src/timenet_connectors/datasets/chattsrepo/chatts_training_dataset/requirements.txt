@@ -1,0 +1,2 @@
+# Download the source configurations from the Hugging Face Hub in isolated builds.
+huggingface_hub>=0.24
