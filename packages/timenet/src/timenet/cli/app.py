@@ -14,7 +14,9 @@ from timenet.cache import CachedDataset, cached_datasets, clear_cache, human_byt
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui
 from timenet.client import TimeNet
+from timenet.config import settings
 from timenet.types import DatasetMetadata, Domain, License, TaskType
+from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.tasks import TASKS
 
 
@@ -154,6 +156,43 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
         for task_type, count in sorted(counts.tasks.items()):
             tasks.add_row(task_type, str(count))
         console.print(tasks)
+
+
+@app.command()
+def view(  # noqa: PLR0913, PLR0917
+    dataset_id: str | None = typer.Argument(None, help="Dataset id, optionally pinned with @version."),
+    version: str | None = typer.Option(None, "--version", help="Dataset version."),
+    registry: str | None = _registry_option,
+    path: Path | None = typer.Option(None, "--path", exists=True, file_okay=False, help="Version directory."),
+    port: int = typer.Option(0, "--port", min=0, max=65535, help="Loopback port (0 chooses one)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Print URL without opening a browser."),
+) -> None:
+    """Inspect one committed TimeF dataset in a local browser application.
+
+    Raises:
+        BadParameter: If selection or optional viewer dependencies are invalid.
+        ModuleNotFoundError: If an unrelated viewer import fails.
+    """
+    if (dataset_id is None) == (path is None):
+        raise typer.BadParameter("provide exactly one dataset ID or --path")
+    if dataset_id is not None:
+        try:
+            validate_dataset_id(dataset_id.partition("@")[0])
+        except ValueError as exc:
+            raise typer.BadParameter(
+                "expected org/name or org/name@version; for a local registry use "
+                "'timenet view org/name --registry ./registry', or use "
+                "'timenet view --path <version-directory>'",
+                param_hint="DATASET_ID",
+            ) from exc
+    try:
+        from timenet.viewer.launch import open_reader, serve  # noqa: PLC0415
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in {"fastapi", "uvicorn"}:
+            raise
+        raise typer.BadParameter("the viewer needs: pip install 'timenet[viewer]'") from exc
+    source = registry or settings().registry or "timenet://" if path is None else f"local path: {path.resolve()}"
+    serve(open_reader(dataset_id, version, registry, path), port=port, open_browser=not no_browser, registry=source)
 
 
 @app.command()
