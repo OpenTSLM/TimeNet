@@ -440,6 +440,7 @@ class DuckDBControlReader:
         self._record_keys: dict[str, int] = {}
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._task_facts: _TaskFacts | None = None
+        self._registered_ids: frozenset[str] | None = None
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -572,7 +573,7 @@ class DuckDBControlReader:
         read_all = requested is None
         rows = self._read_rows(_RecordRow, requested)
         by_id = self._index_rows(rows, "record", key=lambda row: row.record_id, id_of=lambda row: row.record_id)
-        self._record_keys.update((row.record_id, row.record_key) for row in rows)
+        self._record_keys.update((prefix + row.record_id, row.record_key) for row in rows)
         order = tuple(by_id) if requested is None else requested
         missing = [record_id for record_id in order if record_id not in by_id]
         if missing:
@@ -856,8 +857,12 @@ class DuckDBControlReader:
                 children[row.parent_source_key].append(row.source_key)
         return children, roots
 
-    def read_dataset_annotations(self, dataset_id: str) -> tuple[Annotation, ...]:
+    def read_dataset_annotations(self, dataset_id: str, *, prefix: str = "") -> tuple[Annotation, ...]:
         """Return annotations attached directly to a dataset.
+
+        Args:
+            dataset_id: The dataset whose occurrences to read.
+            prefix: Namespace prefix applied to content and occurrence IDs.
 
         Returns:
             Dataset-level annotation occurrences in stable occurrence-ID order.
@@ -868,10 +873,13 @@ class DuckDBControlReader:
         ).fetchone()
         if row is None:
             return ()
-        return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
+        return self._read_annotations((row[0],), prefix=prefix).get(("Dataset", prefix + dataset_id), ())
 
-    def read_registered_annotations(self) -> tuple[Annotation, ...]:
+    def read_registered_annotations(self, *, prefix: str = "") -> tuple[Annotation, ...]:
         """Return reusable annotations in registration order, without creating attachments.
+
+        Args:
+            prefix: Namespace prefix applied to content and occurrence IDs.
 
         Returns:
             The registered annotations with their authored fields restored.
@@ -897,7 +905,7 @@ class DuckDBControlReader:
                 raise TimeFFormatError(f"registered annotation refers to missing content key {row['content_key']!r}")
             annotations.append(
                 Annotation(
-                    id=row["content_id"],
+                    id=prefix + row["content_id"],
                     key=row["name"],
                     value=decode_annotation_value(
                         row["value_kind"],
@@ -913,11 +921,20 @@ class DuckDBControlReader:
                     span=_annotation_span(row["span_type"], row["start_us"], row["end_us"], row["content_id"]),
                     source=_decode_json(row["provenance"]),
                     confidence=row["confidence"],
-                    occurrence_id=row["occurrence_id"],
+                    occurrence_id=None if row["occurrence_id"] is None else prefix + row["occurrence_id"],
                     occurrence_metadata=_decode_json(row["metadata"], default={}),
                 )
             )
         return tuple(annotations)
+
+    def registered_annotation_ids(self) -> frozenset[str]:
+        """Return the content IDs of every registered annotation, read once per reader."""
+        if self._registered_ids is None:
+            rows = self.connection.execute(
+                "SELECT c.content_id FROM registered_annotations r JOIN annotation_contents c USING (content_key)"
+            ).fetchall()
+            self._registered_ids = frozenset(row[0] for row in rows)
+        return self._registered_ids
 
     def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
@@ -973,13 +990,19 @@ class DuckDBControlReader:
         ]
 
     def read_tasks(
-        self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
+        self,
+        records: Iterable[Record] | None = None,
+        *,
+        cached_records: Iterable[Record] = (),
+        prefix: str = "",
     ) -> tuple[Task, ...]:
         """Hydrate every task attached to ``records`` and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             cached_records: Hydrated Records to reuse without restricting the selection.
+            prefix: Namespace prefix the reused Records were hydrated with, applied to every task
+                ID and reference. A registered vocabulary named by ``target_schema`` takes it too.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -987,7 +1010,9 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
         """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(self, None if records is None else tuple(records), cached_records=cached_records)
+        hydration = _TaskHydration(
+            self, None if records is None else tuple(records), cached_records=cached_records, prefix=prefix
+        )
         return tuple(hydration.read_all())
 
     def iter_tasks(
@@ -1696,8 +1721,12 @@ class _TaskHydration:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        prefix: str = "",
     ) -> None:
         """Index the caller's Records and decide whether the task table needs filtering.
+
+        Args:
+            prefix: Namespace prefix the caller's Records were hydrated with.
 
         Raises:
             TimeFValidationError: If one of ``records`` is not stored in the control database.
@@ -1706,6 +1735,8 @@ class _TaskHydration:
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
         self.split = split
+        self.prefix = prefix
+        self.registered_ids = reader.registered_annotation_ids() if prefix else frozenset()
         self.connection = reader.connection
         self.records_by_id: dict[str, Record] = {record.id: record for record in cached_records}
         self.records_by_id.update((record.id, record) for record in records or ())
@@ -1722,14 +1753,15 @@ class _TaskHydration:
         unknown = [record_id for record_id in self.records_by_id if record_id not in reader._record_keys]
         if unknown:
             # Records hydrated by another reader instance: look their keys up once.
+            stored = [record_id.removeprefix(prefix) for record_id in unknown]
             rows = self.connection.execute(
                 "SELECT record_key, record_id FROM records WHERE record_id IN (SELECT unnest(?))",
-                [unknown],
+                [stored],
             ).fetchall()
             if len(rows) != len(unknown):
-                missing = sorted(set(unknown) - {record_id for _, record_id in rows})
+                missing = sorted(set(stored) - {record_id for _, record_id in rows})
                 raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
-            reader._record_keys.update((record_id, record_key) for record_key, record_id in rows)
+            reader._record_keys.update((prefix + record_id, record_key) for record_key, record_id in rows)
         for record_id, record in list(self.records_by_id.items()):
             self._index_record(reader._record_keys[record_id], record)
         self.record_keys: list[int] | None = (
@@ -1840,17 +1872,22 @@ class _TaskHydration:
         record_refs = reader._task_relationships("task_record_refs", "record_key", task_keys)
         annotation_refs = reader._task_relationships("task_annotation_refs", "occurrence_key", task_keys)
         target_rows = reader._target_rows(task_keys)
-        task_annotations = reader._read_annotations(task_keys, object_type="Task") if self.tasks_annotated else {}
+        task_annotations = (
+            reader._read_annotations(task_keys, object_type="Task", prefix=self.prefix) if self.tasks_annotated else {}
+        )
 
         self._ensure_records(
             {key for refs in record_refs.values() for keys in refs.values() for key in keys}
             | {row.record_key for row in target_rows if row.record_key is not None}
         )
         signals_by_key = self._signals_by_key({row.signal_key for row in target_rows if row.signal_key is not None})
-        signal_ids_by_key = reader._signal_ids_by_key(
-            [key for row in target_rows for key in (row.signal_keys or ())]
-            + [key for row in task_rows for key in (row.scope_signal_keys or ())]
-        )
+        signal_ids_by_key = {
+            key: self.prefix + signal_id
+            for key, signal_id in reader._signal_ids_by_key(
+                [key for row in target_rows for key in (row.signal_keys or ())]
+                + [key for row in task_rows for key in (row.scope_signal_keys or ())]
+            ).items()
+        }
         annotations_by_occurrence = self._annotations_by_occurrence(
             {key for refs in annotation_refs.values() for keys in refs.values() for key in keys}
         )
@@ -1887,8 +1924,12 @@ class _TaskHydration:
             except (ValueError, KeyError) as exc:
                 raise TimeFFormatError(f"task {row.task_id!r} has unknown type {row.task_type!r}") from exc
             refs = record_refs.get(row.task_key, {})
+            payload = decode_task_payload(task_type, row.payload_columns)
+            schema = payload.get("target_schema")
+            if isinstance(schema, str) and schema in self.registered_ids:
+                payload["target_schema"] = self.prefix + schema
             kwargs: dict[str, Any] = {
-                "id": row.task_id,
+                "id": self.prefix + row.task_id,
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
                 "prompt": row.prompt,
@@ -1901,9 +1942,9 @@ class _TaskHydration:
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
                 "rationale": row.rationale,
-                "annotations": task_annotations.get(("Task", row.task_id), ()),
+                "annotations": task_annotations.get(("Task", self.prefix + row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
-                **decode_task_payload(task_type, row.payload_columns),
+                **payload,
             }
             if "candidate_records" in cls.__dataclass_fields__:
                 kwargs["candidate_records"] = reader._resolve(
@@ -1964,7 +2005,7 @@ class _TaskHydration:
             unknown = sorted(set(missing) - {key for key, _ in rows})
             raise TimeFFormatError(f"task refers to missing record key {unknown[0]!r}")
         ids_by_key = dict(rows)
-        hydrated = self.reader.read_records([ids_by_key[key] for key in missing])
+        hydrated = self.reader.read_records([ids_by_key[key] for key in missing], prefix=self.prefix)
         for record_key, record in zip(missing, hydrated, strict=True):
             self._index_record(record_key, record)
 
@@ -1985,7 +2026,7 @@ class _TaskHydration:
         self._records_without_signal_index.clear()
         resolved: dict[int, Signal] = {}
         for signal_key, signal_id in self.reader._signal_ids_by_key(signal_keys).items():
-            signal = self.signals_by_id.get(signal_id)
+            signal = self.signals_by_id.get(self.prefix + signal_id)
             if signal is None:
                 raise TimeFFormatError(
                     f"task target refers to Signal {signal_id!r} on a Record outside the hydrated set"
@@ -2010,10 +2051,10 @@ class _TaskHydration:
         ).fetchall()
         resolved: dict[int, Annotation] = {}
         for occurrence_key, occurrence_id in rows:
-            annotation = self.annotations_by_id.get(occurrence_id)
+            annotation = self.annotations_by_id.get(self.prefix + occurrence_id)
             if annotation is None and not self._dataset_annotations_indexed:
                 self._index_dataset_annotations()
-                annotation = self.annotations_by_id.get(occurrence_id)
+                annotation = self.annotations_by_id.get(self.prefix + occurrence_id)
             if annotation is None:
                 raise TimeFFormatError(
                     f"task refers to annotation occurrence {occurrence_id!r} that no hydrated object carries"
@@ -2025,7 +2066,7 @@ class _TaskHydration:
         """Add the Dataset-level annotation occurrences to the lookups, once."""
         self._dataset_annotations_indexed = True
         for (dataset_key,) in self.connection.execute("SELECT dataset_key FROM datasets").fetchall():
-            for annotations in self.reader._read_annotations((dataset_key,)).values():
+            for annotations in self.reader._read_annotations((dataset_key,), prefix=self.prefix).values():
                 for annotation in annotations:
                     if annotation.occurrence_id is not None:
                         self.annotations_by_id[annotation.occurrence_id] = annotation

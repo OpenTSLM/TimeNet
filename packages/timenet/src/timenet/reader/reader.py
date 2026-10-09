@@ -19,7 +19,7 @@ from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader, RecordImportRef
 from timenet.format.duckdb import ControlSession
-from timenet.types import DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import Annotation, DatasetMetadata, DatasetRef, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -173,19 +173,54 @@ class TimeFReader:
         with self._as_format_error():
             return self._control_reader().record_ids()
 
-    def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:
+    def read_tasks(
+        self,
+        records: Iterable[Record] | None = None,
+        *,
+        cached_records: Iterable[Record] = (),
+        prefix: str = "",
+    ) -> tuple[Task, ...]:
         """Hydrate the tasks attached to ``records`` in one pass.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
+            cached_records: Hydrated Records to reuse as task references without restricting the
+                selection, such as the records a child imported from this dataset.
+            prefix: Namespace applied to every hydrated ID. It must match the prefix the reused
+                records were hydrated with.
 
         Returns:
             Concrete tasks in stable ID order.
         """
+        reuse = tuple(cached_records)
+        if records is None and not reuse and not prefix:
+            reuse = self._all_records()
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
-            )
+            return self._control_reader().read_tasks(records, cached_records=reuse, prefix=prefix)
+
+    def read_dataset_annotations(self, *, prefix: str = "") -> tuple[Annotation, ...]:
+        """Return dataset annotation occurrences without loading records or tasks.
+
+        Args:
+            prefix: Namespace applied to every hydrated ID.
+
+        Returns:
+            The occurrences in stable occurrence-ID order.
+        """
+        with self._as_format_error():
+            return self._control_reader().read_dataset_annotations(self._manifest.dataset_id, prefix=prefix)
+
+    def read_registered_annotations(self, *, prefix: str = "") -> tuple[Annotation, ...]:
+        """Return reusable annotation definitions without loading records or tasks.
+
+        Args:
+            prefix: Namespace applied to every hydrated ID.
+
+        Returns:
+            The definitions in registration order.
+        """
+        with self._as_format_error():
+            return self._control_reader().read_registered_annotations(prefix=prefix)
 
     def iter_tasks(
         self,
@@ -313,8 +348,8 @@ class TimeFReader:
             records=records,
             tasks=tasks,
             schema=self.schema,
-            annotations=control.read_dataset_annotations(self._manifest.dataset_id),
-            registered_annotations=control.read_registered_annotations(),
+            annotations=self.read_dataset_annotations(),
+            registered_annotations=self.read_registered_annotations(),
             record_imports=control.read_record_imports(records, state_loader=states.get),
             dependencies=self._manifest.dependencies,
         )

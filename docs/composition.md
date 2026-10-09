@@ -124,5 +124,17 @@ The producer API imports complete records. This boundary covers shared signal va
 record-level task datasets. A finer import, such as one source or signal, would add a kind column
 to `record_imports`.
 
-Parent tasks require an explicit `ParentDatasetView.iter_tasks()` call. TimeNet never merges them
-automatically. This rule prevents task duplication and split conflicts.
+To import an entire parent, use `ParentDatasetView.import_into()`:
+
+```python
+parent = context.parent("yang_ai_lab/hearts_cgmacros")
+parent.import_into(dataset, include_tasks=True)
+```
+
+This imports all records, reusable annotation definitions, and dataset annotation occurrences.
+`include_tasks` defaults to `False`. Setting it to `True` also hydrates the parent's tasks under
+the same prefix: task IDs and their record, signal, annotation, span, and derivation references
+all point at the imported objects. Parent objects remain unchanged. The child still stores no
+copied parent signal values.
+
+`iter_tasks()` remains available for connectors that create their own child tasks from parent data.

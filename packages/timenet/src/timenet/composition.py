@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from timenet.dataset import Record, TimeFDataset
 from timenet.dataset.composition import import_prefix
 from timenet.errors import TimeFValidationError
-from timenet.types import DatasetMetadata, DatasetRef, LockedDependency, Task
+from timenet.types import Annotation, DatasetMetadata, DatasetRef, LockedDependency, Task
 
 
 if TYPE_CHECKING:
@@ -91,6 +91,42 @@ class ParentDatasetView:
     def close(self) -> None:
         """Close the parent reader."""
         self._reader.close()
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return the parent's dataset annotation occurrences under their original IDs."""
+        return self._reader.read_dataset_annotations()
+
+    @property
+    def registered_annotations(self) -> tuple[Annotation, ...]:
+        """Return the parent's reusable annotation definitions under their original IDs."""
+        return self._reader.read_registered_annotations()
+
+    def import_into(self, dataset: TimeFDataset, *, include_tasks: bool = False) -> None:
+        """Import this parent's records and annotation collections into a child.
+
+        Records, reusable annotation definitions, and dataset annotation occurrences are hydrated
+        under this release's prefix and registered in the child. With ``include_tasks``, every
+        parent task is hydrated under the same prefix, with its record, signal, annotation, span,
+        and derivation references pointing at the imported objects, so the child reproduces the
+        parent's tasks over the imported records. Signal values stay in the parent.
+
+        Args:
+            dataset: A child whose card declares this exact parent release.
+            include_tasks: Also reproduce the parent's tasks. By default the child creates its own.
+
+        Raises:
+            TimeFValidationError: If the child does not declare this release, or an imported ID is
+                already registered.
+        """
+        if self.reference not in dataset.metadata.parents:
+            raise TimeFValidationError(f"dataset card declares no parent release {self.reference}")
+        prefix = import_prefix(self.reference)
+        records = self.import_records(dataset)
+        dataset.register_annotations(self._reader.read_registered_annotations(prefix=prefix))
+        dataset.import_annotations(self._reader.read_dataset_annotations(prefix=prefix))
+        if include_tasks:
+            dataset.add_tasks(tasks=self._reader.read_tasks(cached_records=records, prefix=prefix))
 
 
 class BuildContext(AbstractContextManager["BuildContext"]):
