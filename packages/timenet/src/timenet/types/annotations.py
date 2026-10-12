@@ -11,6 +11,7 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from typing import Annotated, Any, Protocol
@@ -147,6 +148,15 @@ def annotation_type_of(annotation: Annotation) -> AnnotationType:
     if annotation.span is None:
         return AnnotationType.STATIC
     return AnnotationType.POINT if annotation.span.is_point else AnnotationType.INTERVAL
+
+
+def occurrence_ids(annotations: Iterable[Annotation]) -> frozenset[str]:
+    """Return the occurrence IDs of ``annotations``, skipping any that were never attached.
+
+    Returns:
+        The ``occurrence_id`` of every annotation that has one.
+    """
+    return frozenset(annotation.occurrence_id for annotation in annotations if annotation.occurrence_id is not None)
 
 
 class SupportsAnnotate(Protocol):
