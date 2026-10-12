@@ -21,7 +21,6 @@ LOGICAL_IDS: tuple[str, ...] = (
     "time_series_id",
     "annotation_id",
     "task_id",
-    "source_id",
 )
 
 #: The compact on-disk form for a canonical-UUID id column: 16 raw bytes.
