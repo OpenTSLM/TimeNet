@@ -278,6 +278,7 @@ class TimeFReader:
             tasks=tasks,
             schema=self.schema,
             annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
+            registered_annotations=self._control_reader().read_registered_annotations(),
         )
 
     def iter_records(
