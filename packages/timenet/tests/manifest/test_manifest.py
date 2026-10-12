@@ -6,7 +6,7 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, LockedDependency, Manifest, ManifestCounts, ManifestFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -14,6 +14,7 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    DatasetRef,
     DatasetSchema,
     Domain,
     InputModality,
@@ -141,8 +142,8 @@ def test_manifest_rejects_unknown_domain():
         Manifest.model_validate(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
+def test_nullable_schema_roundtrips_at_current_format_version():
+    # Reading nullable artifacts still requires an SDK
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = _replace(
         _manifest(),
@@ -490,3 +491,42 @@ def test_serialization_revalidates_mutable_nested_values(mutate, method):
     mutate(manifest)
     with pytest.raises(ValidationError):
         getattr(manifest, method)()
+
+
+def _lock(parent: DatasetRef) -> LockedDependency:
+    return LockedDependency(
+        dataset_id=parent.dataset_id, version=parent.version, manifest_checksum="sha256:" + "a" * 64
+    )
+
+
+def _with_parent(manifest: Manifest, parent: DatasetRef) -> Manifest:
+    return _replace(
+        manifest,
+        metadata=_replace(
+            manifest.metadata,
+            parents=(DatasetRef(dataset_id=parent.dataset_id, version=parent.version),),
+        ),
+    )
+
+
+def test_dependency_lock_round_trips():
+    parent = DatasetRef(dataset_id="physionet/ptb-xl", version=Version(1, 0, 0))
+    manifest = _with_parent(
+        _replace(_manifest(), dependencies=(_lock(parent),), files=ManifestFiles(control=_CONTROL)),
+        parent,
+    )
+
+    assert Manifest.model_validate_json(manifest.to_json()) == manifest
+    jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
+
+
+def test_dependency_lock_rejects_duplicate_dataset_versions():
+    parent = DatasetRef(dataset_id="physionet/ptb-xl", version=Version(1, 0, 0))
+    with pytest.raises(ValidationError, match="twice"):
+        _replace(_manifest(), dependencies=(_lock(parent), _lock(parent)))
+
+
+def test_manifest_requires_a_lock_row_for_every_declared_parent():
+    parent = DatasetRef(dataset_id="physionet/ptb-xl", version=Version(1, 0, 0))
+    with pytest.raises(ValidationError, match="absent from the dependency lock"):
+        _with_parent(_manifest(), parent)
