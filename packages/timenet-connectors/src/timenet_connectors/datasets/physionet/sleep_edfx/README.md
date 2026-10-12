@@ -121,9 +121,9 @@ where the recording came from.
 
 ### How the connector writes them
 
-**The connector registers the label vocabularies, and does not attach them.** Three closed sets
-exist: the eight sleep stages, the two sexes and the two conditions. Each becomes one annotation
-that no record carries, and `target_schema` on a task names the set that its target draws from. A
+**The connector attaches the label vocabularies to the dataset, not to a record.** Three closed
+sets exist: the eight sleep stages, the two sexes and the two conditions. Each becomes one
+dataset annotation, and `target_schema` on a task names the set that its target draws from. A
 name alone tells a consumer nothing about what is in the set.
 
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for

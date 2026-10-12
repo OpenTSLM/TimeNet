@@ -77,8 +77,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._tasks: list[Task] = []
         self._task_ids: set[str] = set()
         self._annotations: list[Annotation] = []
-        # Reusable annotation content that no hierarchy object carries, deduplicated by content ID.
-        self._registered_annotations: dict[str, Annotation] = {}
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
         self._task_stream: Callable[[], Iterator[Task]] | None = None
@@ -234,27 +232,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         batch = tuple(tasks)
         return self._register_batch(batch)
 
-    def register_annotations(self, annotations: Iterable[Annotation]) -> None:
-        """Register annotations that tasks reference but no record carries.
-
-        The content is deduplicated by ID. This supports shared vocabularies and other reusable
-        metadata without attaching an occurrence to a hierarchy object.
-
-        Args:
-            annotations: The annotations to register. A repeated id must map to an equal annotation.
-
-        Raises:
-            TimeFValidationError: If two annotations share an id but are not equal.
-        """
-        for annotation in annotations:
-            existing = self._registered_annotations.get(annotation.id)
-            if existing is not None and existing != annotation:
-                raise TimeFValidationError(
-                    f"annotation id {annotation.id!r} is registered twice with different values: "
-                    f"{existing!r} and {annotation!r}"
-                )
-            self._registered_annotations[annotation.id] = annotation
-
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach a static annotation to the dataset.
 
@@ -274,9 +251,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records and
-        registered annotations, then hands the tasks over through ``source``; the writer streams them to
-        disk without a list. Streamed tasks do not populate ``Record.task_ids``.
+        every task in memory is the scaling wall. A streaming connector builds the bounded records, then
+        hands the tasks over through ``source``; the writer streams them to disk without a list. Streamed
+        tasks do not populate ``Record.task_ids``.
 
         Args:
             task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
@@ -577,9 +554,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 unit=cast("str | None", annotation.unit),
                 description=annotation.description,
             )
-            # Registered (task-referenced) annotations carry descriptors too, so their key/type reach
-            # the schema even though no record carries them.
-            for annotation in (*record_annotations, *self._registered_annotations.values())
+            for annotation in record_annotations
         )
         by_key: dict[str, AnnotationDescriptor] = {}
         for descriptor in annotations:
@@ -602,14 +577,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(  # noqa: PLR0913 - reader reconstruction names each stored component
+    def from_parts(
         cls,
         *,
         metadata: DatasetMetadata,
         records: Iterable[Record],
         tasks: Iterable[Task],
         schema: DatasetSchema,
-        registered_annotations: Iterable[Annotation] = (),
         annotations: Iterable[Annotation] = (),
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
@@ -621,8 +595,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             records: Fully built records. Their loaders pull data from disk.
             tasks: Fully built tasks, with their ``from_tasks`` references resolved.
             schema: The schema reconstructed from the manifest.
-            registered_annotations: Annotations that tasks reference but no record carries (see
-                :meth:`register_annotations`).
             annotations: Annotations attached directly to the dataset.
 
         Returns:
@@ -633,7 +605,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             dataset.add_record(record=record)
         dataset._tasks = list(tasks)
         dataset._task_ids = {task.id for task in dataset._tasks}
-        dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._annotations = list(annotations)
         dataset._schema = schema
         return dataset
@@ -663,7 +634,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         records: tuple[Record, ...],
         index: _TaskValidationIndex,
     ) -> None:
-        """Reject an input or target annotation id that no target record carries and none is registered.
+        """Reject a referenced annotation occurrence that neither the dataset nor a target record carries.
 
         Args:
             task: The task to register.
@@ -671,8 +642,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             index: Reusable dataset identity and annotation lookups.
 
         Raises:
-            TimeFValidationError: If a referenced annotation id is neither attached to a target
-                record nor registered with :meth:`register_annotations`.
+            TimeFValidationError: If a referenced annotation occurrence is attached neither to the
+                dataset nor to a target record.
         """
         record_occurrences = tuple(index.annotation_ids_for(record) for record in records)
         for field_name in ("input_annotations", "target_annotations"):
@@ -758,11 +729,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def tasks(self) -> tuple[Task, ...]:
         """All tasks in insertion order."""
         return tuple(self._tasks)
-
-    @property
-    def registered_annotations(self) -> tuple[Annotation, ...]:
-        """Annotations registered for tasks to reference, which no record carries (registration order)."""
-        return tuple(self._registered_annotations.values())
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:

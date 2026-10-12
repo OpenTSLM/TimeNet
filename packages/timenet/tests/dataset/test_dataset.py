@@ -400,13 +400,6 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
 
 
-def test_register_annotations_rejects_an_inconsistent_duplicate_id():
-    dataset = _dataset()
-    dataset.register_annotations([Annotation(key="answer_options", value=["yes"], id="opts-0")])
-    with pytest.raises(TimeFValidationError, match="registered twice with different values"):
-        dataset.register_annotations([Annotation(key="answer_options", value=["no"], id="opts-0")])
-
-
 def test_set_task_stream_rejects_after_add_task(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))

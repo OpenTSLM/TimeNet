@@ -66,7 +66,6 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         for record in dataset.records
         if record.record_id not in remove
     }
-    registered = dataset.registered_annotations
     dataset_annotation_ids = frozenset(
         annotation.occurrence_id for annotation in dataset.annotations if annotation.occurrence_id is not None
     )
@@ -106,7 +105,6 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         records=records,
         tasks=tasks,
         schema=DatasetSchema(),
-        registered_annotations=registered,
         annotations=dataset.annotations,
     )
     edited.derive_schema()
@@ -324,7 +322,6 @@ def edit_version(
             records=edited.records,
             tasks=edited.tasks,
             schema=DatasetSchema(),
-            registered_annotations=edited.registered_annotations,
             annotations=edited.annotations,
         )
         edited.derive_schema()

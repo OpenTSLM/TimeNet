@@ -1,7 +1,6 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
 from collections.abc import Callable, Iterable
-from itertools import chain
 from pathlib import Path
 import shutil
 import types as _types
@@ -229,8 +228,6 @@ class TimeFWriter:
                 values["time_series_id"].append(ts.id)
             for ann in record.walk_annotations():
                 values["annotation_id"].append(ann.id)
-        for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
-            values["annotation_id"].append(ann.id)
         if not self._dataset.has_task_stream:
             for task in self._dataset.tasks:
                 values["task_id"].append(task.id)
@@ -410,22 +407,14 @@ class TimeFWriter:
     # ---- helpers -------------------------------------------------------------------------------
 
     def _validate_shared_annotations(self) -> None:
-        """Check shared content before writing values, and keep registered IDs separate.
+        """Check that shared annotation content agrees before writing values.
 
         Raises:
-            TimeFValidationError: If one content ID has different payloads, or an ID is both
-                registered and carried by a record.
+            TimeFValidationError: If one content ID has different payloads.
         """
-        record_ann_ids = {ann.id for record in self._dataset.records for ann in record.walk_annotations()}
-        overlap = sorted(record_ann_ids & {ann.id for ann in self._dataset.registered_annotations})
-        if overlap:
-            raise TimeFValidationError(
-                f"annotation id(s) {overlap} are both registered and carried by a record; a registered "
-                f"annotation must be one no record carries"
-            )
         seen: dict[str, tuple[object, ...]] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
-        for ann in chain(record_annotations, self._dataset.registered_annotations):
+        for ann in record_annotations:
             content = ann._content_fields
             if ann.content_id in seen and seen[ann.content_id] != content:
                 raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")

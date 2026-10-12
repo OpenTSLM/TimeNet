@@ -220,10 +220,6 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """
     assert expected.metadata == actual.metadata, "metadata differs"
 
-    exp_registered = sorted(expected.registered_annotations, key=lambda a: a.id)
-    act_registered = sorted(actual.registered_annotations, key=lambda a: a.id)
-    assert exp_registered == act_registered, "registered annotations differ"
-
     exp_records = {s.record_id: s for s in expected.records}
     act_records = {s.record_id: s for s in actual.records}
     assert exp_records.keys() == act_records.keys(), "record ids differ"

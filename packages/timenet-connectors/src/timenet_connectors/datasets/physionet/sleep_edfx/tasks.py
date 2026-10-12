@@ -6,7 +6,7 @@ values and gives tasks.
 No task names its own id. Nothing resolves one by id: the writer fills ``Record.task_ids`` from
 the task itself, and no task here states a lineage. Every task takes the generated id.
 
-A ``target_schema`` is a different thing. It must equal the id of the registered annotation that
+A ``target_schema`` is a different thing. It must equal the id of the dataset annotation that
 holds the set, so ``name_vocabulary`` builds both from one string.
 
 No task carries a prompt. The release states no question in words.
@@ -82,7 +82,7 @@ def name_vocabulary(id_prefix: str, key: AnnotationKey) -> str:
 def build_vocabularies(id_prefix: str) -> list[Annotation]:
     """Give one annotation for each closed set a task draws its target from.
 
-    These belong to no record, so the caller registers them rather than attaching them.
+    These belong to no record, so the caller attaches them to the dataset.
 
     A set is one annotation and not one for each member. One annotation for each member states
     that the values exist without stating that they are the whole set.
