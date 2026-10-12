@@ -88,23 +88,6 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-@pytest.mark.parametrize("source_id", [None, "raw-recording-1"])
-def test_signal_source_id_round_trip(tmp_path, backend, source_id):
-    dataset = _referenced_annotation_dataset(source_id=source_id)
-    record = dataset.records[0]
-    version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
-
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read()
-        (selected,) = reader.iter_records((record.id,), with_annotations=False)
-
-    assert restored.records[0].signals[0].source_id == source_id
-    assert selected.signals[0].source_id == source_id
-    assert restored.records[0].sources[0].id == record.sources[0].id
-    assert selected.sources[0].id == record.sources[0].id
-
-
-@pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_registered_annotation_content_round_trip(tmp_path, backend):
     dataset = _referenced_annotation_dataset()
     labels = Annotation(key="labels", value=["yes", "no"], id="z-labels", description="Label vocabulary")
@@ -218,7 +201,7 @@ def test_annotation_description_is_separate_from_metadata(tmp_path, backend, des
     assert asdict(restored.registered_annotations[0]) == asdict(registered)
 
 
-def _referenced_annotation_dataset(*, source_id: str | None = None) -> TimeFDataset:
+def _referenced_annotation_dataset() -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="test/referenced-annotation",
@@ -235,7 +218,6 @@ def _referenced_annotation_dataset(*, source_id: str | None = None) -> TimeFData
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
         id="ecg-rec-0-I",
-        source_id=source_id,
     )
     record = dataset.add_record(
         record=Record(

@@ -80,13 +80,12 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-def _series(spec, signal, n, time_series_id, source_id, phase=0.0):  # noqa: PLR0913, PLR0917
+def _series(spec, signal, n, time_series_id, phase=0.0):
     return Signal.from_loader(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
-        source_id=source_id,
         id=time_series_id,
         n_values=n,
     )
@@ -116,7 +115,7 @@ def make_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    shared = _series(_SINE, "a", 16, "ts-shared", "rec-0")
+    shared = _series(_SINE, "a", 16, "ts-shared")
     cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
     record0 = dataset.add_record(
@@ -127,7 +126,7 @@ def make_dataset() -> TimeFDataset:
                 Source(
                     id="source-record-0",
                     name="Synthetic monitor",
-                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0", "rec-0")),
+                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0")),
                 ),
             ),
         )
@@ -181,8 +180,8 @@ def make_dataset() -> TimeFDataset:
                     id="source-record-1",
                     name="Synthetic monitor",
                     signals=(
-                        _series(_SINE, "a", 16, "ts-short-1", "rec-1"),
-                        _series(_SINE, "a", 512, "ts-long-1", "rec-1", phase=1.0),
+                        _series(_SINE, "a", 16, "ts-short-1"),
+                        _series(_SINE, "a", 512, "ts-long-1", phase=1.0),
                     ),
                 ),
             ),
@@ -190,7 +189,7 @@ def make_dataset() -> TimeFDataset:
     )
     record1.annotate(cohort)  # A new occurrence shares the cohort content across both records.
 
-    window = _series(_SINE, "a", 8, "ts-window-2", "rec-0")
+    window = _series(_SINE, "a", 8, "ts-window-2")
     record2 = dataset.add_record(
         record=Record(
             record_id="record-2",

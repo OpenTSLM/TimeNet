@@ -129,7 +129,6 @@ def _scalar_series(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(Fraction(scenario.sampling_rate_hz)),
-        source_id=f"{scenario.name}-recording",
         id=f"{scenario.name}-{signal}",
         n_values=len(values),
     )
@@ -174,7 +173,6 @@ def _nonfloat_series(
         spec=spec,
         name=name,
         time_axis=RegularAxis.from_rate_hz(Fraction(1)),
-        source_id=f"{name}-recording",
         id=f"portable-{name}",
         n_values=len(array),
     )
@@ -320,7 +318,6 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 spec=finance_spec,
                 name=f"c{signal}",
                 time_axis=OrdinalAxis(),
-                source_id=f"tsqa-row-{index:04d}",
                 id=f"tsqa-row-{index:04d}-c{signal}",
                 n_values=length,
             )
@@ -351,7 +348,6 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             spec=vibration_spec,
             name="signal",
             time_axis=RegularAxis.from_rate_hz(16),
-            source_id=f"mean-recording-{index:04d}",
             id=f"mean-series-{index:04d}",
             n_values=len(values),
         )

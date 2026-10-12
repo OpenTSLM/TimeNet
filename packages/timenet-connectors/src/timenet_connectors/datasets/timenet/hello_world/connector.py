@@ -128,7 +128,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
-            source_id="rec-0",
             id="ts-shared",
         )
         # An annotation shared across two records. This uses the dedupe-by-id path.
@@ -140,7 +139,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_COSINE,
             name="b",
             time_axis=_AXIS,
-            source_id="rec-0",
             id="ts-cos-0",
         )
         record0 = Record(
@@ -218,7 +216,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             name="a",
             time_axis=_AXIS,
             loader=_wave(np.sin, raw_refs[1].n_values, phase=1.0),
-            source_id="rec-1",
             id="ts-long-1",
             n_values=raw_refs[1].n_values,
         )
@@ -234,7 +231,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                             spec=_SINE,
                             name="a",
                             time_axis=_AXIS,
-                            source_id="rec-1",
                             id="ts-short-1",
                         ),
                         long_series,
@@ -259,7 +255,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS.at_index(window_start),
-            source_id="rec-0",
             id="ts-window-2",
         )
         record2 = Record(
