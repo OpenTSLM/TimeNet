@@ -27,8 +27,8 @@ class TimeNetSettings(BaseSettings):
     isolation: Literal["on", "off"] = "on"
     """Whether a build runs in an environment built from the connector's requirements.
 
-    ``"off"`` runs it in the current interpreter. The isolated child sets this to ``"off"`` in its own
-    environment, which is what stops it re-execing forever.
+    ``"off"`` runs it in the current interpreter. Isolated workers use a CLI flag for their own
+    invocation and keep this setting enabled for builds of missing parent datasets.
     """
 
     @property

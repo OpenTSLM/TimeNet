@@ -24,6 +24,6 @@ class ManifestCounts(TimeFModel):
     tasks: dict[StrictStr, StrictNonNegativeInt] = Field(default_factory=dict)
     """Count of tasks keyed by task type."""
     signal_chunks: StrictNonNegativeInt = 0
-    """Number of Signal chunk placements in the values plane."""
+    """Number of physical Signal chunk placements owned by this layer, excluding parent chunks."""
     signals_by_spec: dict[StrictStr, StrictNonNegativeInt] = Field(default_factory=dict)
     """Signal count keyed by specification type."""

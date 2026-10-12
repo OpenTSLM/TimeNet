@@ -145,20 +145,45 @@ RECORDS = Table(
     (
         _key("record_key"),
         _required("record_id"),
-        _key("clock_id"),
+        Column("clock_id", ColumnType.BIGINT),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
-        _required("metadata", ColumnType.JSON),
+        Column("metadata", ColumnType.JSON),
     ),
     unique=(("record_key",), ("record_id",)),
     foreign_keys=(ForeignKey("clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
 )
+"""One row per record. Imported records store only their id, with NULL clock, span, and metadata.
+``record_imports`` identifies their parent."""
+
+RECORD_IMPORTS = Table(
+    "record_imports",
+    (_key("record_key"), _required("parent_dataset_id"), _required("parent_record_id")),
+    unique=(("record_key",),),
+    foreign_keys=(ForeignKey("record_key", "records", "record_key"),),
+)
+"""Original record IDs in exact parents. The proxy row carries the qualified child ID;
+the dataset ID names the parent declaration that pins its version."""
 
 CLOCKS = Table(
     "clocks",
     (_key("clock_id"), Column("start_time_us", ColumnType.BIGINT)),
     unique=(("clock_id",),),
+)
+
+IMPORTED_SIGNALS = Table(
+    "imported_signals",
+    (_key("signal_key"), _required("signal_id"), _key("record_key")),
+    unique=(("signal_key",), ("signal_id",)),
+    foreign_keys=(ForeignKey("record_key", "record_imports", "record_key"),),
+)
+
+IMPORTED_ANNOTATIONS = Table(
+    "imported_annotations",
+    (_key("occurrence_key"), _required("occurrence_id"), _key("record_key")),
+    unique=(("occurrence_key",), ("occurrence_id",)),
+    foreign_keys=(ForeignKey("record_key", "record_imports", "record_key"),),
 )
 
 SOURCES = Table(
@@ -222,6 +247,7 @@ SIGNALS = Table(
         _key("n_values"),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
+        Column("source_id", ColumnType.VARCHAR),
     ),
     unique=(("signal_key",), ("signal_id",)),
     foreign_keys=(
@@ -258,6 +284,7 @@ ANNOTATION_CONTENTS = Table(
         Column("boolean_value", ColumnType.BOOLEAN),
         Column("text_list_value", ColumnType.VARCHAR_LIST),
         Column("unit", ColumnType.VARCHAR),
+        Column("description", ColumnType.VARCHAR),
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("content_key",), ("content_id",)),
@@ -282,6 +309,23 @@ ANNOTATION_OCCURRENCES = Table(
     unique=(("occurrence_key",), ("occurrence_id",)),
     foreign_keys=(ForeignKey("content_key", "annotation_contents", "content_key"),),
     key_sequence=OCCURRENCE_KEYS,
+)
+
+REGISTERED_ANNOTATIONS = Table(
+    "registered_annotations",
+    (
+        _key("content_key"),
+        _key("position"),
+        Column("occurrence_id", ColumnType.VARCHAR),
+        _required("span_type"),
+        Column("start_us", ColumnType.BIGINT),
+        Column("end_us", ColumnType.BIGINT),
+        Column("provenance", ColumnType.JSON),
+        Column("confidence", ColumnType.DOUBLE),
+        _required("metadata", ColumnType.JSON),
+    ),
+    unique=(("content_key",), ("position",)),
+    foreign_keys=(ForeignKey("content_key", "annotation_contents", "content_key"),),
 )
 
 TASKS = Table(
@@ -329,7 +373,7 @@ TASK_TARGETS = Table(
     foreign_keys=(
         ForeignKey("task_key", "tasks", "task_key"),
         ForeignKey("record_key", "records", "record_key"),
-        ForeignKey("signal_key", "signals", "signal_key"),
+        ForeignKey("signal_key", "signal_refs", "signal_key"),
     ),
 )
 
@@ -349,7 +393,7 @@ TASK_ANNOTATION_REFS = Table(
     unique=(("task_key", "field", "position"),),
     foreign_keys=(
         ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("occurrence_key", "annotation_occurrences", "occurrence_key"),
+        ForeignKey("occurrence_key", "annotation_refs", "occurrence_key"),
     ),
 )
 
@@ -367,6 +411,9 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     DATASETS,
     RECORDS,
+    RECORD_IMPORTS,
+    IMPORTED_SIGNALS,
+    IMPORTED_ANNOTATIONS,
     CLOCKS,
     SOURCES,
     AXES,
@@ -375,6 +422,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,
     ANNOTATION_OCCURRENCES,
+    REGISTERED_ANNOTATIONS,
     TASKS,
     TASK_TARGETS,
     TASK_RECORD_REFS,
@@ -394,4 +442,12 @@ def schema_ddl() -> str:
         DDL for :func:`timenet.format.duckdb.create_control_schema`.
     """
     sequences = [f"CREATE SEQUENCE {name} START 1;" for name in SEQUENCES]
-    return "\n\n".join([*sequences, *(table.ddl() for table in CONTROL_TABLES)]) + "\n"
+    views = [
+        """CREATE VIEW signal_refs AS
+           SELECT signal_key, signal_id, record_key FROM signals JOIN sources USING (source_key)
+           UNION ALL SELECT signal_key, signal_id, record_key FROM imported_signals;""",
+        """CREATE VIEW annotation_refs AS
+           SELECT occurrence_key, occurrence_id FROM annotation_occurrences
+           UNION ALL SELECT occurrence_key, occurrence_id FROM imported_annotations;""",
+    ]
+    return "\n\n".join([*sequences, *(table.ddl() for table in CONTROL_TABLES), *views]) + "\n"

@@ -4,7 +4,7 @@ import pytest
 
 from timenet.errors import TimeNetInvalidCardError
 from timenet.schemas import DATASET_CARD_SCHEMA
-from timenet.types import DatasetMetadata, Domain, License, Version
+from timenet.types import DatasetMetadata, DatasetRef, Domain, License, Version
 
 
 _VALID_CARD = """\
@@ -51,7 +51,47 @@ def test_from_yaml_loads_a_valid_card(tmp_path):
 
 def test_from_yaml_applies_defaults_for_optional_fields(tmp_path):
     m = DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD))
-    assert (m.domains, m.tags, m.source_url, m.yaml_schema_version) == ((), (), None, 1)
+    assert (m.domains, m.tags, m.source_url, m.parents, m.yaml_schema_version) == (
+        (),
+        (),
+        None,
+        (),
+        1,
+    )
+
+
+def test_from_yaml_loads_exact_parent_references(tmp_path):
+    card = (
+        _VALID_CARD
+        + """\
+source_revision: upstream-r7
+parents:
+  - physionet/ptb-xl@1.0.0
+"""
+    )
+    metadata = DatasetMetadata.from_yaml(_write(tmp_path, card))
+    assert metadata.source_revision == "upstream-r7"
+    assert metadata.parents == (
+        DatasetRef(
+            dataset_id="physionet/ptb-xl",
+            version=Version(1, 0, 0),
+        ),
+    )
+    assert metadata.model_dump(mode="json")["parents"] == ["physionet/ptb-xl@1.0.0"]
+    jsonschema.validate(metadata.model_dump(mode="json"), DATASET_CARD_SCHEMA)
+
+
+@pytest.mark.parametrize("second", ["1.0.0", "2.0.0"])
+def test_card_rejects_two_direct_versions_of_the_same_parent(tmp_path, second):
+    card = _VALID_CARD + f"parents:\n  - physionet/ptb-xl@1.0.0\n  - physionet/ptb-xl@{second}\n"
+    with pytest.raises(ValidationError, match="parent dataset IDs must be unique"):
+        DatasetMetadata.from_yaml(_write(tmp_path, card))
+
+
+def test_card_distinguishes_parents_with_the_same_name_in_different_organizations(tmp_path):
+    card = _VALID_CARD + "parents:\n  - first/recordings@1.0.0\n  - second/recordings@1.0.0\n"
+    metadata = DatasetMetadata.from_yaml(_write(tmp_path, card))
+    assert [parent.dataset_id for parent in metadata.parents] == ["first/recordings", "second/recordings"]
 
 
 @pytest.mark.parametrize(
