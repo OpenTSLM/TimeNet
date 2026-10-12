@@ -67,7 +67,6 @@ class TestMeanConnector(BaseConnector[None]):
                 spec=_SIGNAL,
                 name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
-                source_id=f"rec-{index}",
                 id=f"ts-{index}",
             )
             record = Record(

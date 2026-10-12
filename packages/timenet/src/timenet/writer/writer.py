@@ -227,8 +227,6 @@ class TimeFWriter:
             values["record_id"].append(record.record_id)
             for ts in record.signals:
                 values["time_series_id"].append(ts.id)
-                if ts.source_id is not None:
-                    values["source_id"].append(ts.source_id)
             for ann in record.walk_annotations():
                 values["annotation_id"].append(ann.id)
         for ann in self._dataset.registered_annotations:  # task-referenced, carried by no record
@@ -282,11 +280,13 @@ class TimeFWriter:
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
                     series_to_records.setdefault(ts.id, []).append(record.record_id)
-        # Group a recording's series together (source_id) before splitting by signal, so all leads of
-        # one record are contiguous: the writer reads the record's source once, and a reader pulls a
-        # record's series from one place instead of scattered across signal-ordered shards. Falls back
-        # to signal order when source_id is unset (one series per record), matching the prior layout.
-        ordered = sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, ts.source_id or "", ts.name, ts.id))
+        # Group a record's series together before splitting by signal, so all leads of one record are
+        # contiguous: the writer reads the record's source once, and a reader pulls a record's series
+        # from one place instead of scattered across signal-ordered shards. A series shared by several
+        # records sorts under the first record that references it.
+        ordered = sorted(
+            unique.values(), key=lambda ts: (ts.spec.spec_type, series_to_records[ts.id][0], ts.name, ts.id)
+        )
         return ordered, series_to_records
 
     def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
@@ -503,7 +503,7 @@ def _series_identity(ts: Signal) -> tuple:
     Returns:
         The identifying fields, suitable for equality comparison and for error messages.
     """
-    return (ts.spec.spec_type, ts.name, ts.time_axis, ts.source_id, ts.n_values)
+    return (ts.spec.spec_type, ts.name, ts.time_axis, ts.n_values)
 
 
 def _ordered_unique(items: Iterable[str]) -> list[str]:
