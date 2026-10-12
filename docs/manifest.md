@@ -9,7 +9,7 @@ tags:
 # Manifest
 
 The **Dataset Manifest** (`manifest.json`) is the entry point for a TimeF version. It contains the
-card metadata, derived schema, counts, and file descriptors. The
+card metadata, derived schema, counts, file descriptors, and dependency lock. The
 [writer](timef-writer.md) writes it last, so its presence marks a committed version. The
 [reader](timef-reader.md) reads it before opening `control.duckdb` or Signal values. Manifest types
 live in `timenet.manifest`.
@@ -40,6 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=None,             # environment provenance (see below)
+    dependencies=(),            # exact parent versions, pinned by manifest checksum
     timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
@@ -56,6 +57,10 @@ selected. The field is empty for a backend that has no such choice.
 `build_env` records the environment that produced the version. It gives the interpreter version and
 every installed package with its version. `timenet.provenance.build_env` collects this data. Like
 `value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+
+`metadata.parents` contains exact `org/name@version` references. `dependencies`
+contains the complete dependency closure. Each row pins one exact version by the SHA-256 checksum
+of its manifest.
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
