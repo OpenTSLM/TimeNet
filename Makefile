@@ -59,6 +59,17 @@ build:
 	uv build --package timenet
 	uv build --package timenet-connectors
 
+.PHONY: viewer-build viewer-test
+viewer-build:
+	uv run python scripts/viewer/gen_contract.py
+	npm --prefix frontend ci
+	npm --prefix frontend run contract
+	npm --prefix frontend run build
+
+viewer-test: viewer-build
+	npm --prefix frontend exec -- playwright install chromium
+	npm --prefix frontend test
+
 check: schemas-check
 	uv run ruff format .
 	uv run ruff check .

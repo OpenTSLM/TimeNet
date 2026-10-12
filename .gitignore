@@ -20,6 +20,9 @@ dist/
 .ruff_cache/
 .ty/
 .hypothesis/
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
 .coverage
 .coverage.*
 
