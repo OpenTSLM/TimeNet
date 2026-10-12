@@ -1,7 +1,7 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -9,6 +9,7 @@ from typing import Literal, TextIO, TypeVar, cast, overload
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import RecordImport, captured_state, import_prefix, inherited_state
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -21,6 +22,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    LockedDependency,
     StepSpan,
     SupportsAnnotate,
     Task,
@@ -71,6 +73,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._metadata = metadata
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
+        self._record_imports: dict[str, RecordImport] = {}
         self._sources_by_id: dict[str, Source] = {}
         self._signals_by_id: dict[str, Signal] = {}
         self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
@@ -84,6 +87,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        self._dependencies: tuple[LockedDependency, ...] = ()
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -116,6 +120,91 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._signals_by_id.update(record_signals)
         self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
         return record
+
+    def import_record(self, record: Record, *, parent: str) -> Record:
+        """Register a parent record hydrated under this dataset's qualified IDs.
+
+        :meth:`~timenet.composition.ParentDatasetView.import_records` hydrates and registers in one
+        step. This method is the registration step on its own: the record's IDs must already carry
+        the ``org/name@version::`` prefix of the declared parent, which the parent's reader applies
+        when it hydrates records for import.
+
+        Args:
+            record: A parent record hydrated under the parent's import prefix.
+            parent: Full dataset ID of the matching parent declaration in this dataset's card.
+
+        Returns:
+            The same record, registered and ready for child tasks and annotation overlays.
+
+        Raises:
+            TimeFValidationError: If the parent is undeclared, the record is not qualified by that
+                parent's release, or an imported ID is already registered.
+        """
+        reference = next((declared for declared in self.metadata.parents if declared.dataset_id == parent), None)
+        if reference is None:
+            raise TimeFValidationError(f"dataset card declares no parent {parent!r}")
+        prefix = import_prefix(reference)
+        if not record.id.startswith(prefix):
+            raise TimeFValidationError(
+                f"record {record.id!r} is not qualified by parent {reference}; import it through the parent view"
+            )
+        # The parent's tasks are not this layer's tasks.
+        record.task_ids = ()
+        self.add_record(record=record)
+        inherited = frozenset(
+            annotation.occurrence_id for annotation in record.annotations if annotation.occurrence_id is not None
+        )
+        self._record_imports[record.id] = RecordImport(
+            parent_dataset_id=parent,
+            parent_record_id=record.id.removeprefix(prefix),
+            inherited_annotation_ids=inherited,
+            state=captured_state(record, inherited),
+        )
+        return record
+
+    def owned_annotations(self, record: Record) -> tuple[Annotation, ...]:
+        """Return the annotation occurrences this layer owns on one record.
+
+        Owned records include all hierarchy annotations. Imported records include only new record annotations.
+
+        Args:
+            record: A record registered in this dataset.
+
+        Returns:
+            The occurrences this layer serializes for the record.
+        """
+        imported = self._record_imports.get(record.id)
+        if imported is None:
+            return tuple(record.walk_annotations())
+        return tuple(
+            annotation
+            for annotation in record.annotations
+            if annotation.occurrence_id not in imported.inherited_annotation_ids
+        )
+
+    def check_records(self) -> None:
+        """Check registered record ids and imported parent-owned fields.
+
+        Raises:
+            TimeFValidationError: If a record id or an imported parent-owned field changed.
+        """
+        for record in self._records:
+            if self._records_by_id.get(record.id) is not record:
+                raise TimeFValidationError(f"record {record.id!r} changed its registered ID")
+            imported = self._record_imports.get(record.id)
+            if imported is not None and inherited_state(record, imported.inherited_annotation_ids) != imported.state():
+                raise TimeFValidationError(
+                    f"imported record {record.id!r} changes parent-owned fields; "
+                    "only new record annotations and child tasks may be added"
+                )
+
+    def set_dependencies(self, dependencies: Iterable[LockedDependency]) -> None:
+        """Attach the dependency lock for the manifest.
+
+        Args:
+            dependencies: Exact dependency versions and their manifest checksums.
+        """
+        self._dependencies = tuple(dependencies)
 
     @staticmethod
     def _duplicate_ids(ids: Iterable[str]) -> list[str]:
@@ -269,6 +358,28 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         attached = annotation._new_occurrence()
         self._annotations.append(attached)
         return attached
+
+    def import_annotations(self, annotations: Iterable[Annotation]) -> None:
+        """Attach dataset annotation occurrences imported from a parent as they are.
+
+        Unlike :meth:`annotate`, this keeps each occurrence ID, which imported tasks refer to.
+
+        Args:
+            annotations: Occurrences hydrated under the parent's import prefix.
+
+        Raises:
+            TimeFValidationError: If an occurrence has a time span, has no ID, or is already attached.
+        """
+        attached = {annotation.occurrence_id for annotation in self._annotations}
+        for annotation in annotations:
+            if annotation.span is not None:
+                raise TimeFValidationError("dataset annotations cannot have a time span")
+            if annotation.occurrence_id is None or annotation.occurrence_id in attached:
+                raise TimeFValidationError(
+                    f"dataset annotation occurrence {annotation.occurrence_id!r} is missing or already attached"
+                )
+            self._annotations.append(annotation)
+            attached.add(annotation.occurrence_id)
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
@@ -611,6 +722,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         schema: DatasetSchema,
         registered_annotations: Iterable[Annotation] = (),
         annotations: Iterable[Annotation] = (),
+        record_imports: Mapping[str, RecordImport] | None = None,
+        dependencies: Iterable[LockedDependency] = (),
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -624,6 +737,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             registered_annotations: Annotations that tasks reference but no record carries (see
                 :meth:`register_annotations`).
             annotations: Annotations attached directly to the dataset.
+            record_imports: Parent ownership and inherited annotation state of imported records.
+            dependencies: The manifest's complete dependency lock.
 
         Returns:
             The dataset, built from these parts.
@@ -636,6 +751,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         dataset._registered_annotations = {annotation.id: annotation for annotation in registered_annotations}
         dataset._annotations = list(annotations)
         dataset._schema = schema
+        dataset._record_imports = dict(record_imports or {})
+        dataset.set_dependencies(dependencies)
         return dataset
 
     @staticmethod
@@ -753,6 +870,21 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def records(self) -> tuple[Record, ...]:
         """All records in insertion order."""
         return tuple(self._records)
+
+    @property
+    def owned_records(self) -> tuple[Record, ...]:
+        """Records stored by this layer, excluding parent imports."""
+        return tuple(record for record in self._records if record.id not in self._record_imports)
+
+    @property
+    def record_imports(self) -> dict[str, RecordImport]:
+        """Imported records keyed by their public ID."""
+        return dict(self._record_imports)
+
+    @property
+    def dependencies(self) -> tuple[LockedDependency, ...]:
+        """The resolved dependency lock the manifest will publish."""
+        return self._dependencies
 
     @property
     def tasks(self) -> tuple[Task, ...]:

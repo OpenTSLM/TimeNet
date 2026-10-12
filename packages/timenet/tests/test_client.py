@@ -6,7 +6,7 @@ import pytest
 from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
@@ -57,6 +57,17 @@ def test_list(registry_root, tmp_path):
 def test_get_returns_manifest(registry_root, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     assert isinstance(client.get("timenet/hello-world"), Manifest)
+
+
+def test_download_rejects_a_stale_local_copy(registry_root, tmp_path):
+    client = TimeNet(registry_root, storage_path=tmp_path / "store")
+    target = client.download("timenet/hello-world")
+    manifest = target / "manifest.json"
+    manifest.write_text(manifest.read_text() + "\n")
+    with pytest.raises(TimeFFormatError, match="does not match the registry"):
+        client.download("timenet/hello-world")
+    assert client.download("timenet/hello-world", force=True) == target
+    assert manifest.read_text() == (registry_root / "timenet/hello-world/1.0.0/manifest.json").read_text()
 
 
 def test_search(registry_root, tmp_path):
