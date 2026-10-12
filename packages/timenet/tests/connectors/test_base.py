@@ -8,10 +8,9 @@ from timenet.dataset import TimeFDataset
 from timenet.testing import make_dataset
 
 
-def test_base_connector_is_abstract():
+def test_base_connector_has_no_abstract_methods():
     assert issubclass(BaseConnector, ABC)
-    # download() is concrete now (it bridges to download_async); only convert() stays abstract.
-    assert BaseConnector.__abstractmethods__ == frozenset({"convert"})
+    assert BaseConnector.__abstractmethods__ == frozenset()
 
 
 def test_base_connector_cannot_instantiate():
@@ -71,3 +70,16 @@ def test_connector_implementing_neither_download_raises(tmp_path):
 
     with pytest.raises(TypeError, match="download"):
         NoDownload()
+
+
+def test_connector_implementing_neither_convert_nor_compose_raises(tmp_path):
+    card = _write_card(tmp_path)
+
+    class NoConvert(BaseConnector[str]):
+        CARD = card
+
+        def download(self, cache_dir: Path) -> list[str]:
+            return ["ref"]
+
+    with pytest.raises(TypeError, match="convert"):
+        NoConvert()

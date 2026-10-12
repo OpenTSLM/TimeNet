@@ -56,7 +56,7 @@ lead_i = Signal(
 storage loader, so reading the hierarchy does not load the arrays.
 
 Irregular Signals also provide `time_offsets_loader`. Regular axes calculate their offsets from
-their cadence, and ordinal axes describe order without a clock.
+their cadence and `offset_us`, and ordinal axes describe order without a clock.
 
 Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 
