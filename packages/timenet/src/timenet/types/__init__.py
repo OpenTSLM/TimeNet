@@ -7,6 +7,7 @@ from timenet.types.annotations import (
     AnnotationType,
     SupportsAnnotate,
     annotation_type_of,
+    occurrence_ids,
     value_type_of,
 )
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
@@ -87,6 +88,7 @@ __all__ = [
     "annotation_type_of",
     "new_id",
     "normalize_unit",
+    "occurrence_ids",
     "offset_us",
     "parse_split",
     "seconds_to_us",
