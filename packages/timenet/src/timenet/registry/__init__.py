@@ -1,6 +1,6 @@
 """Dataset registries: serve compiled TimeF versions and search over metadata."""
 
-from timenet.registry.base import BaseRegistry
+from timenet.registry.base import BaseRegistry, ResolvedVersion
 from timenet.registry.factory import (
     TIMENET_REGISTRY_URL,
     default_registry_path,
@@ -21,6 +21,7 @@ __all__ = [
     "DatasetVersion",
     "LocalRegistry",
     "RemoteRegistry",
+    "ResolvedVersion",
     "S3Registry",
     "WritableRegistry",
     "default_registry_path",
