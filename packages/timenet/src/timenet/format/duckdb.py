@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from threading import RLock
 
 import duckdb
 
@@ -28,6 +29,67 @@ def connect_control(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyCo
         An open DuckDB connection owned by the caller.
     """
     return duckdb.connect(str(path), read_only=read_only)
+
+
+class ControlSession:
+    """Share one DuckDB instance across read-only control databases."""
+
+    def __init__(self) -> None:
+        self._connection: duckdb.DuckDBPyConnection | None = None
+        self._databases: dict[Path, str] = {}
+        self._readers = 0
+        self._lock = RLock()
+
+    def __getstate__(self) -> dict:
+        return {}
+
+    def __setstate__(self, _state: dict) -> None:
+        self.__init__()
+
+    def open(self, path: Path) -> duckdb.DuckDBPyConnection:
+        """Open an independent cursor whose default database is ``path``.
+
+        Returns:
+            A read-only cursor to release with :meth:`close`.
+
+        Raises:
+            duckdb.Error: If the database cannot be opened or attached.
+        """
+        path = path.resolve()
+        with self._lock:
+            if self._connection is None:
+                # A private instance keeps attachments separate from other readers of the same file.
+                self._connection = connect_control(Path(":memory:"))
+            connection = None
+            try:
+                if path not in self._databases:
+                    database = f"timenet_parent_{len(self._databases)}"
+                    escaped = str(path).replace("'", "''")
+                    self._connection.execute(f"ATTACH '{escaped}' AS {database} (READ_ONLY)")
+                    self._databases[path] = database
+                connection = self._connection.cursor()
+                connection.execute(f"USE {self._databases[path]}")
+            except duckdb.Error:
+                if connection is not None:
+                    connection.close()
+                self._close_idle_connection()
+                raise
+            self._readers += 1
+            return connection
+
+    def close(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Release a cursor and close the instance after its last reader."""
+        with self._lock:
+            connection.close()
+            self._readers -= 1
+            self._close_idle_connection()
+
+    def _close_idle_connection(self) -> None:
+        """Release the instance when no reader holds a cursor."""
+        if self._readers == 0 and self._connection is not None:
+            self._connection.close()
+            self._connection = None
+            self._databases.clear()
 
 
 def create_control_schema(connection: duckdb.DuckDBPyConnection) -> None:
