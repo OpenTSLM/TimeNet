@@ -7,6 +7,7 @@ from timenet.types.annotations import (
     AnnotationType,
     SupportsAnnotate,
     annotation_type_of,
+    occurrence_ids,
     value_type_of,
 )
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
@@ -15,6 +16,7 @@ from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
+from timenet.types.references import DatasetRef, LockedDependency
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -55,12 +57,14 @@ __all__ = [
     "AnswerTask",
     "ClassificationTask",
     "DatasetMetadata",
+    "DatasetRef",
     "DatasetSchema",
     "Domain",
     "ForecastingTask",
     "InputModality",
     "License",
     "LocalizationMode",
+    "LockedDependency",
     "ScalarPredictionTask",
     "Span",
     "Split",
@@ -84,6 +88,7 @@ __all__ = [
     "annotation_type_of",
     "new_id",
     "normalize_unit",
+    "occurrence_ids",
     "offset_us",
     "parse_split",
     "seconds_to_us",
