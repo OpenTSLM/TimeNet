@@ -639,6 +639,27 @@ class DuckDBControlReader:
             return ()
         return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
 
+    def read_signal(self, record_id: str, signal_id: str) -> Signal:
+        """Read one lazy Signal without hydrating its Record or siblings.
+
+        Returns:
+            A Signal whose loaders borrow this control reader's lifetime.
+
+        Raises:
+            TimeFValidationError: If the signal is not owned by the selected record.
+        """
+        row = self.connection.execute(
+            """SELECT signals.* REPLACE ('{}' AS metadata) FROM signals JOIN sources USING (source_key)
+               JOIN records USING (record_key) WHERE record_id = ? AND signal_id = ?""",
+            [record_id, signal_id],
+        ).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"record {record_id!r} has no signal {signal_id!r}")
+        stored = _SignalRow(*row)
+        return self._make_signal(
+            stored, self._read_axes([stored.axis_key])[stored.axis_key], self._spec_from_row(stored)
+        )
+
     def _make_signal(
         self,
         signal_row: _SignalRow,
