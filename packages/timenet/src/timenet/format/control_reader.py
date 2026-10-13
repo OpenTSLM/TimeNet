@@ -436,7 +436,7 @@ class DuckDBControlReader:
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
 
-    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
+    def read_records(  # noqa: PLR0914, PLR0915 - related row sets stay together
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -494,36 +494,12 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing axis key {signal_row.axis_key!r}"
                 )
-            axis = loaded_axis.axis
             spec = specs.get(signal_row.spec_fields)
             if spec is None:
                 spec = self._spec_from_row(signal_row)
                 specs[signal_row.spec_fields] = spec
-            offsets_loader = None
-            if isinstance(axis, IrregularAxis):
-                if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
-                offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
-                    if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
-                )
             signals_by_source[signal_row.source_key].append(
-                Signal.from_loader(
-                    id=signal_row.signal_id,
-                    name=signal_row.name,
-                    spec=spec,
-                    time_axis=axis,
-                    n_values=signal_row.n_values,
-                    loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
-                        if self._value_loader_factory is not None
-                        else partial(self._value_loader, signal_row.signal_id, spec)
-                    ),
-                    time_offsets_loader=offsets_loader,
-                    annotations=annotations.get(("Signal", signal_row.signal_id), ()),
-                    metadata=_decode_json(signal_row.metadata, default={}),
-                )
+                self._make_signal(signal_row, loaded_axis, spec, annotations.get(("Signal", signal_row.signal_id), ()))
             )
 
         missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
@@ -662,6 +638,44 @@ class DuckDBControlReader:
         if row is None:
             return ()
         return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
+
+    def _make_signal(
+        self,
+        signal_row: _SignalRow,
+        loaded_axis: _LoadedAxis,
+        spec: TimeSeriesSpec,
+        annotations: tuple[Annotation, ...] = (),
+    ) -> Signal:
+        """Return a lazy signal through the shared hydration path.
+
+        Raises:
+            TimeFFormatError: If an irregular axis has no persisted length.
+        """
+        axis = loaded_axis.axis
+        offsets_loader = None
+        if isinstance(axis, IrregularAxis):
+            if loaded_axis.n_values is None:
+                raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
+            offsets_loader = (
+                partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
+                if self._offsets_loader is not None
+                else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
+            )
+        return Signal.from_loader(
+            id=signal_row.signal_id,
+            name=signal_row.name,
+            spec=spec,
+            time_axis=axis,
+            n_values=signal_row.n_values,
+            loader=(
+                self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
+                if self._value_loader_factory is not None
+                else partial(self._value_loader, signal_row.signal_id, spec)
+            ),
+            time_offsets_loader=offsets_loader,
+            annotations=annotations,
+            metadata=_decode_json(signal_row.metadata, default={}),
+        )
 
     def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
