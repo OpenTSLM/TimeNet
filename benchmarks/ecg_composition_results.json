@@ -1,0 +1,235 @@
+{
+  "hardware": {
+    "cpu": "Apple M5 Max",
+    "memory_bytes": 68719476736
+  },
+  "dependencies": {
+    "duckdb": "1.5.5",
+    "pyarrow": "24.0.0",
+    "numpy": "2.5.0",
+    "wfdb": "4.3.1",
+    "pydantic": "2.13.4"
+  },
+  "baseline_revision": "34e2b55f0d62a610be8176bb7d3e3f4b9e289f7f",
+  "method": {
+    "build_runs": 1,
+    "read_runs": 3,
+    "filesystem_cache": "warm",
+    "read_processes": "fresh",
+    "read_order": [
+      "before",
+      "after",
+      "before",
+      "after",
+      "before",
+      "after"
+    ],
+    "initial_read_pair_excluded_from_timings": "core tests ran concurrently",
+    "bytes": "decimal",
+    "raw_downloads_timed": false
+  },
+  "builds": {
+    "baseline": {
+      "variant": "standalone-before",
+      "convert_seconds": 6.826399833022151,
+      "schema_seconds": 0.10265566594898701,
+      "write_seconds": 150.99658137501683,
+      "records": 16024,
+      "artifact_path": "before/physionet/ecg-qa-cot/1.0.0",
+      "artifact_bytes": 990320162,
+      "catalog_bytes": 117977088,
+      "peak_rss_bytes": 2247753728,
+      "owned_signal_bytes": 872331157,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 192288,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    },
+    "parent": {
+      "variant": "ptb-xl-parent",
+      "convert_seconds": 7.915693291986827,
+      "schema_seconds": 0.35200654104119167,
+      "write_seconds": 183.96206395799527,
+      "records": 21799,
+      "artifact_path": "after/physionet/ptb-xl/1.0.0",
+      "artifact_bytes": 1197202748,
+      "catalog_bytes": 25178112,
+      "peak_rss_bytes": 2022195200,
+      "owned_signal_bytes": 1172009277,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 21799,
+        "sources": 21799,
+        "signals": 261588,
+        "axes": 21799,
+        "annotation_contents": 204116,
+        "annotation_occurrences": 204116,
+        "tasks": {},
+        "signal_chunks": 261588,
+        "signals_by_spec": {
+          "ecg": 261588
+        }
+      }
+    },
+    "child": {
+      "variant": "ecg-qa-child",
+      "stored_payload_reads": 0,
+      "convert_seconds": 14.677942999987863,
+      "schema_seconds": 0.10120750003261492,
+      "write_seconds": 18.389448041969445,
+      "records": 16024,
+      "artifact_path": "after/physionet/ecg-qa-cot/1.1.0",
+      "artifact_bytes": 127158703,
+      "catalog_bytes": 127152128,
+      "peak_rss_bytes": 3407167488,
+      "owned_signal_bytes": 0,
+      "owned_text_bytes": 0,
+      "physical_owners": [
+        {
+          "dataset": "physionet/ptb-xl@1.0.0",
+          "manifest_checksum": "sha256:fef3d3366db1eda12c5b61fa551ddc15dc807929b298a781762604e389c49631"
+        }
+      ],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 0,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    }
+  },
+  "reads": {
+    "before": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 11.051896249991842,
+          "catalog_fingerprint_seconds": 2.7624792080023326,
+          "waveform_read_and_hash_seconds": 8.610684582963586,
+          "task_read_and_hash_seconds": 8.537777792022098,
+          "peak_rss_bytes": 2573139968
+        },
+        {
+          "load_seconds": 11.105120167019777,
+          "catalog_fingerprint_seconds": 2.769627458998002,
+          "waveform_read_and_hash_seconds": 8.500014250050299,
+          "task_read_and_hash_seconds": 8.820483041985426,
+          "peak_rss_bytes": 2574893056
+        },
+        {
+          "load_seconds": 11.341700666001998,
+          "catalog_fingerprint_seconds": 2.7560373329906724,
+          "waveform_read_and_hash_seconds": 8.75122483301675,
+          "task_read_and_hash_seconds": 8.867329375003465,
+          "peak_rss_bytes": 2573975552
+        }
+      ],
+      "median": {
+        "load_seconds": 11.105120167019777,
+        "catalog_fingerprint_seconds": 2.7624792080023326,
+        "waveform_read_and_hash_seconds": 8.610684582963586,
+        "task_read_and_hash_seconds": 8.820483041985426,
+        "peak_rss_bytes": 2573975552
+      }
+    },
+    "after": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 15.187119542039,
+          "catalog_fingerprint_seconds": 2.790757749986369,
+          "waveform_read_and_hash_seconds": 10.686795749992598,
+          "task_read_and_hash_seconds": 8.92937929101754,
+          "peak_rss_bytes": 3193208832
+        },
+        {
+          "load_seconds": 14.463160415994935,
+          "catalog_fingerprint_seconds": 2.7289135419996455,
+          "waveform_read_and_hash_seconds": 10.461947207979392,
+          "task_read_and_hash_seconds": 8.742805292014964,
+          "peak_rss_bytes": 3189899264
+        },
+        {
+          "load_seconds": 15.364480208023451,
+          "catalog_fingerprint_seconds": 2.844002416008152,
+          "waveform_read_and_hash_seconds": 10.96582149999449,
+          "task_read_and_hash_seconds": 9.011719791975338,
+          "peak_rss_bytes": 3187851264
+        }
+      ],
+      "median": {
+        "load_seconds": 15.187119542039,
+        "catalog_fingerprint_seconds": 2.790757749986369,
+        "waveform_read_and_hash_seconds": 10.686795749992598,
+        "task_read_and_hash_seconds": 8.92937929101754,
+        "peak_rss_bytes": 3189899264
+      }
+    }
+  },
+  "fidelity": {
+    "fidelity": "equal",
+    "descriptive_metadata": {
+      "dataset_id": "physionet/ecg-qa-cot",
+      "source_revision": null,
+      "name": "ECG-QA CoT",
+      "description": "12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought rationales for reasoning fine-tuning.",
+      "license": "CC-BY-4.0",
+      "domains": [
+        "cardiology",
+        "health"
+      ],
+      "tags": [
+        "ecg",
+        "qa",
+        "cot",
+        "physionet"
+      ],
+      "source_url": "https://physionet.org/content/ptb-xl/",
+      "license_url": null,
+      "citation": null,
+      "access": "open",
+      "access_url": null,
+      "yaml_schema_version": 1
+    },
+    "records": 16024,
+    "signals": 192288,
+    "samples": 961440000,
+    "null_samples": 0,
+    "tasks": 231543,
+    "axis_groups": 16024,
+    "catalog_sha256": "e890d6b370cc5182fb2c718039dd418fe075900416b6dc370ab11b85618a4c69",
+    "waveforms_sha256": "c829bf2cf023fb3986e0a6d386e62369abdfc54c2e83f942a33925b68b9e25ce",
+    "tasks_sha256": "82d114294bafcf283dd2ada9d51b6c04cc2927b5881960c0c9f77c885e8f61bd"
+  }
+}
