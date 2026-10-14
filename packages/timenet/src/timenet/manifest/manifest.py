@@ -46,7 +46,7 @@ class Manifest(TimeFModel):
     """``spec_type`` to the values-column encoding used by its shards."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
-    timef_format_version: Annotated[int, Field(strict=True, ge=2, le=2)]
+    timef_format_version: Annotated[int, Field(strict=True, ge=3, le=3)]
     """The TimeF manifest format version."""
 
     @model_validator(mode="after")

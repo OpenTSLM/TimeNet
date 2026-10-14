@@ -1,6 +1,6 @@
 ---
 icon: lucide/database
-description: "TimeF format 2: independent catalogs and immutable payloads."
+description: "TimeF format 3: independent catalogs and immutable payloads."
 tags:
   - reference
   - format
@@ -8,7 +8,7 @@ tags:
 
 # TimeF format
 
-Format 2 separates a complete DuckDB catalog from immutable payload files. The catalog contains
+Format 3 separates a complete DuckDB catalog from immutable payload files. The catalog contains
 object definitions and relationships. Signal values, irregular timestamps, and large text live
 outside DuckDB. See [Dataset composition](composition.md) for import and storage policies.
 
@@ -44,14 +44,16 @@ physical owner directly; they do not name a parent Signal or require a parent ca
 | `task_dependencies` | Task derivations by identity. |
 | `annotation_contents` | Reusable content descriptors and inline typed values. |
 | `annotation_occurrences` | Attachments, spans, confidence, and occurrence metadata. |
-| `payloads` | Physical descriptors and references by object, field, and position. |
+| `dataset_refs` | Exact release identities shared by payload stores and lineage. |
+| `payload_stores`, `payload_files` | Shared owner pins, codecs, prefixes, and file paths. |
+| `payload_descriptors` | Shared content contracts. |
+| `payloads`, `payload_chunks` | Object fields and ordered typed chunk coordinates. |
 | `origins` | Typed source-object provenance, independent of payload ownership. |
 | `signal_chunks` | Placements generated for newly written signal arrays. |
 
 Object and relationship tables use internal integer keys and public IDs. Small fixed fields stay
-queryable. Free-form metadata, physical descriptors, references, and classification schema
-references
-use JSON. An external body leaves its native value column null and has an explicit `payloads` row.
+queryable. Free-form metadata, shared physical descriptors, and classification schema references use JSON.
+Release identities, file references, chunk coordinates, and lineage use typed columns. An external body leaves its native value column null and has an explicit `payloads` row.
 
 The payload key is `(object_type, object_id, field, position)`. Signal values use the Signal ID;
 timestamps use the axis ID; annotation values use the content ID. Prompts, rationales, and text
@@ -80,6 +82,6 @@ checksums. It publishes the directory atomically. `audit_control_database()` che
 relationships. `TimeFReader.verify()` checks owned files and required foreign payload artifacts.
 Foreign catalogs are not needed for payload reads or verification.
 
-Format 1 artifacts must be rebuilt. Artifact parsers raise `TimeFFormatError` for unsupported
+Format 1 and 2 artifacts must be rebuilt. Artifact parsers raise `TimeFFormatError` for unsupported
 formats
 or corrupt manifests. There is no legacy artifact reader or automatic converter.

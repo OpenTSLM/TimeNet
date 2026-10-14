@@ -40,15 +40,19 @@ class PayloadResolver:
         self.version = version
         self._source: PayloadSource | None = None
         self._versions: dict[PayloadSource, DatasetVersion] = {}
+        self._owners: dict[int, tuple[PayloadSource, DatasetVersion]] = {}
+        self._files: dict[str, frozenset[str]] = {}
+        self._roots: dict[tuple[str, str], DatasetVersion] = {}
         self._text_cache: OrderedDict[tuple[str, str, int], pa.Array] = OrderedDict()
         self._text_bytes = 0
-        self._offset_cache: OrderedDict[str, pa.Array] = OrderedDict()
+        self._offset_cache: OrderedDict[tuple[PayloadDescriptor, str], pa.Array] = OrderedDict()
         self._offset_bytes = 0
         self._readers: dict[tuple[str, str], BaseValuesReader] = {}
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
         state["_readers"] = {}
+        state["_owners"] = {}
         state["_offset_cache"] = OrderedDict()
         state["_offset_bytes"] = 0
         state["_text_cache"] = OrderedDict()
@@ -81,6 +85,11 @@ class PayloadResolver:
         Raises:
             TimeFFormatError: If the owner is missing, undeclared, or has a different manifest pin.
         """
+        if source is None:
+            return self.version
+        cached = self._owners.get(id(source))
+        if cached is not None and cached[0] is source:
+            return cached[1]
         version = self.version
         if source is not None and source != self.source():
             if source not in self.version.manifest.payload_sources:
@@ -106,6 +115,7 @@ class PayloadResolver:
                     manifest, self.version.filesystem, root, self.version.payload_root
                 )
             version = self._versions[source]
+        self._owners[id(source)] = (source, version)
         return version
 
     def resolve(self, reference: PayloadReference) -> DatasetVersion:
@@ -118,13 +128,21 @@ class PayloadResolver:
             TimeFFormatError: If the source is unavailable or a locator is absent from its manifest.
         """
         version = self.owner(reference.source)
-        owned = {part.path for part in version.manifest.files.all_files()}
+        owned = self._files.get(version.root)
+        if owned is None:
+            owned = frozenset(part.path for part in version.manifest.files.all_files())
+            self._files[version.root] = owned
         prefix = f"{reference.prefix}/" if reference.prefix else ""
         for chunk in reference.chunks:
             path = prefix + (f"{chunk.path}/zarr.json" if reference.codec == "zarr" else chunk.path)
             if path not in owned:
                 raise TimeFFormatError(f"payload locator {path!r} is absent from its owner's manifest")
-        return replace(version, root=version.root + (f"/{reference.prefix}" if reference.prefix else ""))
+        if not reference.prefix:
+            return version
+        key = (version.root, reference.prefix)
+        if key not in self._roots:
+            self._roots[key] = replace(version, root=f"{version.root}/{reference.prefix}")
+        return self._roots[key]
 
     def payload(self, descriptor: PayloadDescriptor, reference: PayloadReference) -> Payload[Any]:
         """Create an explicit payload handle and bind local ownership to this release.
@@ -234,19 +252,17 @@ class StoredPayloadLoader:
         """
         if self.descriptor.kind != "array":
             return self.resolver.text(self.reference, self.descriptor)
-        key = self.reference.model_dump_json()
         offsets = self.descriptor.first_us is not None
-        if offsets and key in self.resolver._offset_cache:
+        key = (self.descriptor, self.reference.model_dump_json()) if offsets else None
+        if key is not None and key in self.resolver._offset_cache:
             self.resolver._offset_cache.move_to_end(key)
-            values = self.resolver._offset_cache[key]
-            validate_offsets(values, self.descriptor)
-            return values
+            return self.resolver._offset_cache[key]
         version = self.resolver.resolve(self.reference)
         rows = [chunk.as_backend_row() for chunk in self.reference.chunks]
         values = self.resolver.reader(version, self.reference.codec).load(version, rows, self._spec())
         if len(values) != self.descriptor.length:
             raise TimeFFormatError("array payload has a different length from its descriptor")
-        if offsets:
+        if key is not None:
             validate_offsets(values, self.descriptor)
             self.resolver._offset_cache[key] = values
             self.resolver._offset_bytes += values.nbytes

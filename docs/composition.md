@@ -168,9 +168,9 @@ Registry stores accept the same policy. With reuse, publishing requires matching
 in the destination registry. Publish those owners first, or explicitly select copy mode. A
 connector can set `payload_policy = "copy"` to produce standalone output.
 
-## Migration from format 1
+## Migration from formats 1 and 2
 
-Format 2 is a breaking change. Rebuild old artifacts with the new writer; there is no legacy reader
+Format 3 is a breaking change. Rebuild old artifacts with the new writer; there is no legacy reader
 or automatic converter. Update connector signatures to accept `context`, read annotation and task
 content explicitly, and replace parent Task objects with `TaskRef` where identities are needed.
 

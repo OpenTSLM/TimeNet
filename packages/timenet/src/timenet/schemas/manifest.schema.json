@@ -641,8 +641,8 @@
       "$ref": "#/$defs/BuildEnvironment"
     },
     "timef_format_version": {
-      "maximum": 2,
-      "minimum": 2,
+      "maximum": 3,
+      "minimum": 3,
       "title": "Timef Format Version",
       "type": "integer"
     }

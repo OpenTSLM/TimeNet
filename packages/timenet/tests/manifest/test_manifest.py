@@ -84,7 +84,7 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
             ),
         ),
         values_backend=cast("ValuesBackend", values_backend),
-        timef_format_version=2,
+        timef_format_version=3,
     )
 
 
@@ -97,7 +97,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_format_version():
-    assert _manifest().timef_format_version == 2
+    assert _manifest().timef_format_version == 3
 
 
 def test_unknown_spec_unit_is_null_in_manifest():
@@ -154,9 +154,9 @@ def test_nullable_schema_roundtrips_at_format_version_2():
         metadata=base.metadata,
         files=base.files,
         dataset_schema=_replace(base.dataset_schema, time_series_specs=(spec,)),
-        timef_format_version=2,
+        timef_format_version=3,
     )
-    assert manifest.timef_format_version == 2
+    assert manifest.timef_format_version == 3
     assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
@@ -169,7 +169,7 @@ def test_missing_nullable_defaults_to_false():
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.model_validate(data)
-    assert restored.timef_format_version == 2
+    assert restored.timef_format_version == 3
     assert restored.dataset_schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
@@ -222,7 +222,7 @@ def test_model_validate_json_exposes_pydantic_json_error():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 2
+    assert d["timef_format_version"] == 3
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
@@ -275,7 +275,7 @@ def test_dataset_id_must_match_metadata():
             dataset_id="other/dataset",
             metadata=_manifest().metadata,
             files=_manifest().files,
-            timef_format_version=2,
+            timef_format_version=3,
         )
 
 
@@ -423,7 +423,7 @@ def test_codec_roundtrip_property(version, records, task_counts):
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(control=_CONTROL),
-        timef_format_version=2,
+        timef_format_version=3,
     )
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
 

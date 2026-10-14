@@ -19,6 +19,7 @@ from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.reference_catalog import ReferenceCatalogReader
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -42,7 +43,7 @@ from timenet.types import (
 )
 from timenet.types.payload_references import PayloadReference
 from timenet.types.payloads import Payload, PayloadDescriptor
-from timenet.types.references import ObjectRef, TaskRef, validate_task_graph
+from timenet.types.references import TaskRef, validate_task_graph
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
@@ -428,6 +429,7 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self._references = ReferenceCatalogReader(self.connection)
         self._payload_loader = payload_loader
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
@@ -461,18 +463,10 @@ class DuckDBControlReader:
         Returns:
             Descriptors and locators keyed by local object ID.
         """
-        result = {}
-        for identity, descriptor, reference in self.connection.execute(
-            "SELECT object_id, descriptor, reference FROM payloads WHERE object_type=? AND field=? "
-            "AND object_id IN (SELECT unnest(?)) AND position=0",
-            [kind, field, identities],
-        ).fetchall():
-            fields = _decode_json(descriptor)
-            for name in ("shape", "categories", "dimension_names"):
-                if name in fields:
-                    fields[name] = tuple(fields[name])
-            result[identity] = (PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference))
-        return result
+        return {
+            identity: (descriptor, reference)
+            for identity, _, _, descriptor, reference in self._references.payloads(kind, identities, field)
+        }
 
     def payload_handles(self, kind: str, identities: list[str]) -> dict[tuple[str, str, int], Payload[Any]]:
         """Hydrate content handles in one bounded metadata query.
@@ -483,34 +477,19 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If no physical resolver is attached.
         """
-        rows = self.connection.execute(
-            "SELECT object_id, field, position, descriptor, reference FROM payloads "
-            "WHERE object_type=? AND object_id IN (SELECT unnest(?))",
-            [kind, identities],
-        ).fetchall()
+        rows = self._references.payloads(kind, identities)
         if rows and self._payload_loader is None:
             raise TimeFFormatError("external text requires a payload resolver")
-        result = {}
-        for identity, field, position, descriptor, reference in rows:
-            fields = _decode_json(descriptor)
-            for name in ("shape", "categories", "dimension_names"):
-                fields[name] = tuple(fields[name])
-            if self._payload_loader is None:
-                raise TimeFFormatError("external text requires a payload resolver")
-            result[identity, field, position] = self._payload_loader(
-                PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference)
-            )
-        return result
+        if self._payload_loader is None:
+            return {}
+        return {
+            (identity, field, position): self._payload_loader(descriptor, reference)
+            for identity, field, position, descriptor, reference in rows
+        }
 
     def _hydrate_origins(self, slots: Iterable[tuple[str, str, Any, str]]) -> None:
         slots = list(slots)
-        origins = {
-            (kind, identity): ObjectRef.model_validate_json(reference)
-            for kind, identity, reference in self.connection.execute(
-                "SELECT object_type, object_id, reference FROM origins WHERE object_id IN (SELECT unnest(?))",
-                [[identity for _, identity, _, _ in slots]],
-            ).fetchall()
-        }
+        origins = self._references.origins([identity for _, identity, _, _ in slots])
         set_field = object.__setattr__
         for kind, identity, obj, field in slots:
             if (kind, identity) in origins:

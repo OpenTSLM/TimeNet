@@ -21,9 +21,11 @@ from timenet.format.constants import (
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     MANIFEST_FILE,
+    TIMEF_FORMAT_VERSION,
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
+from timenet.format.reference_catalog import ReferenceCatalogReader
 from timenet.format.schemas import (
     LOGICAL_IDS,
     UUID16,
@@ -456,12 +458,9 @@ class TimeFWriter:
 
     def _foreign_sources(self) -> tuple[PayloadSource, ...]:
         with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
-            rows = connection.execute(
-                "SELECT DISTINCT json_extract(reference, '$.source') FROM payloads WHERE json_extract_string(reference, '$.source.dataset') IS NOT NULL"
-            ).fetchall()
+            stores = ReferenceCatalogReader(connection).stores
         sources: dict[DatasetRef, PayloadSource] = {}
-        for (encoded,) in rows:
-            source = PayloadSource.model_validate_json(encoded)
+        for source, _, _ in stores.values():
             if source is not None:
                 if source.dataset in sources and sources[source.dataset] != source:
                     raise TimeFValidationError(f"conflicting owner pins for {source.dataset}")
@@ -499,7 +498,7 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
-            timef_format_version=2,
+            timef_format_version=TIMEF_FORMAT_VERSION,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
