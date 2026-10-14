@@ -109,7 +109,7 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
         def exists(self, dataset_id: str, version: str) -> bool:
             return False
 
-        def store(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
+        def store(self, dataset, *, force: bool, values_backend: str, payload_policy: str, progress_cb) -> None:
             self.values_backend = values_backend
 
     class _ZarrConnector(_DemoConnector):

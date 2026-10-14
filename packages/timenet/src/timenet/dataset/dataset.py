@@ -182,6 +182,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         *,
         path: str | Path,
         values_backend: ValuesBackend = ValuesBackend.PARQUET,
+        payload_policy: Literal["reuse", "copy"] = "reuse",
     ) -> Path:
         """Write this dataset as one immutable TimeF version.
 
@@ -197,7 +198,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         root = Path(path)
         if self.schema is None:
             self.derive_schema()
-        with TimeFWriter(root, self, values_backend=values_backend) as writer:
+        with TimeFWriter(root, self, values_backend=values_backend, payload_policy=payload_policy) as writer:
             writer.write()
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 

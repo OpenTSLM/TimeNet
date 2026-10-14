@@ -3,12 +3,24 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, cast
 
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
 from timenet.types.payload_references import PayloadReference
+
+
+if TYPE_CHECKING:
+    from timenet.registry.version import DatasetVersion
+
+
+class PayloadStorage(Protocol):
+    """A picklable binding that locates immutable physical artifacts."""
+
+    def resolve(self, reference: PayloadReference) -> "DatasetVersion":
+        """Resolve the actual physical owner and validate its locators."""
+        ...
 
 
 T = TypeVar("T")
@@ -41,6 +53,7 @@ class Payload(Generic[T]):
     _value: Any = field(default=None, repr=False)
     _loader: Callable[[], T] | None = field(default=None, repr=False)
     reference: PayloadReference | None = None
+    _storage: PayloadStorage | None = field(default=None, repr=False)
 
     @classmethod
     def from_value(cls, value: T, *, storage: StoragePolicy = "auto") -> "Payload[T]":
