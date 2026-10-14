@@ -139,7 +139,7 @@ item = dataset[0]
 signal = item["series"][0]
 mask = item["series_masks"][0]
 task = item["tasks"][0]
-print(task.prompt, task.targets)
+print(task.read_prompt(), task.read_targets())
 ```
 
 Each item also contains `record_id` and record-level `annotations`. Signal lengths and task objects
