@@ -5,7 +5,7 @@ from typing import cast
 import pytest
 
 from timenet.config import settings
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
 from timenet.errors import TimeFValidationError
@@ -52,7 +52,7 @@ class _DemoConnector(BaseConnector[str]):
     def download(self, cache_dir: Path) -> list[str]:
         return ["ref"]
 
-    def convert(self, raw_refs: list[str]) -> TimeFDataset:
+    def convert(self, raw_refs: list[str], *, context: BuildContext | None = None) -> TimeFDataset:
         return make_dataset()
 
 
@@ -221,7 +221,7 @@ def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
             (cache_dir / "source.bin").write_bytes(b"raw")
             return ["ref"]
 
-        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+        def convert(self, raw_refs: list[str], *, context: BuildContext | None = None) -> TimeFDataset:
             raise RuntimeError("convert blew up")
 
     with pytest.raises(RuntimeError, match="convert blew up"):
