@@ -14,6 +14,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.manifest import FilePart
 from timenet.payloads.reader import PayloadResolver
 from timenet.types import Annotation, DatasetMetadata, DatasetSchema, InputModality, Task
 from timenet.types.splits import Split
@@ -79,10 +80,17 @@ class TimeFReader:
 
         Raises:
             TimeFFormatError: If a listed artifact is missing or does not match its manifest entry.
-        """
-        for part in sorted(self._manifest.files.all_files(), key=lambda item: item.path):
+        """  # noqa: DOC502 - raised by artifact verification
+        self._verify_files(self._version, self._manifest.files.all_files())
+        for source in self._manifest.payload_sources:
+            owner = self._payload_resolver.owner(source)
+            self._verify_files(owner, (*owner.manifest.files.time_series, *owner.manifest.files.payloads))
+
+    @staticmethod
+    def _verify_files(version: DatasetVersion, parts: Iterable[FilePart]) -> None:
+        for part in sorted(parts, key=lambda item: item.path):
             try:
-                handle = self._fs.open_input_file(self._version.path(part.path))
+                handle = version.filesystem.open_input_file(version.path(part.path))
             except FileNotFoundError as exc:
                 raise TimeFFormatError(f"manifest lists a missing file: {part.path}") from exc
             with handle:
