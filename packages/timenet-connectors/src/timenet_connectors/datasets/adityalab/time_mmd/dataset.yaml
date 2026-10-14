@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: adityalab/time-mmd
+dataset_version: 0.1.0
+name: Time-MMD Economy and Energy
+description: >-
+  US goods trade and weekly gasoline prices from a pinned Time-MMD snapshot,
+  with all numerical channels and original processed report/search text.
+  Text coverage dates do not establish publication or historical availability.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
+domains:
+  - economics
+  - energy
+tags:
+  - time-series
+  - multimodal
+  - time-mmd
+source_url: https://github.com/AdityaLab/Time-MMD
+citation: >-
+  Liu et al., Time-MMD: Multi-Domain Multimodal Dataset for Time Series Analysis,
+  NeurIPS 2024 Datasets and Benchmarks. https://arxiv.org/abs/2406.08627
