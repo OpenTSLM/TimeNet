@@ -186,7 +186,11 @@ class Signal(SupportsAnnotate):
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
-        """Set and validate fields shared by eager and lazy construction."""
+        """Set and validate fields shared by eager and lazy construction.
+
+        Raises:
+            TimeFValidationError: If a reused payload has a different array contract.
+        """
         set_field = object.__setattr__
         set_field(self, "spec", spec)
         set_field(self, "name", name)
@@ -198,6 +202,7 @@ class Signal(SupportsAnnotate):
             shape=spec.value_shape,
             nullable=spec.nullable,
             categories=spec.categories,
+            dimension_names=spec.dimension_names,
         )
         values = (
             loader
@@ -215,6 +220,26 @@ class Signal(SupportsAnnotate):
                 )
             )
         )
+        expected = (
+            descriptor.kind,
+            descriptor.dtype,
+            descriptor.shape,
+            descriptor.length,
+            descriptor.nullable,
+            descriptor.categories,
+            descriptor.dimension_names,
+        )
+        actual = values.descriptor
+        if (
+            actual.kind,
+            actual.dtype,
+            actual.shape,
+            actual.length,
+            actual.nullable,
+            actual.categories,
+            actual.dimension_names,
+        ) != expected:
+            raise TimeFValidationError(f"signal {id!r} cannot reuse a payload with a different array contract")
         set_field(self, "values", values)
         set_field(self, "time_offsets", offsets)
         set_field(self, "loader", values.read)

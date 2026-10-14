@@ -420,7 +420,9 @@ def _is_target_item(value: object) -> bool:
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    return isinstance(value, (str, int, float, bool, Record, Signal, Span, Payload))
+    if isinstance(value, Payload):
+        return value.descriptor.kind == "str"
+    return isinstance(value, (str, int, float, bool, Record, Signal, Span))
 
 
 def _concrete_task_classes() -> list[type[Task]]:
