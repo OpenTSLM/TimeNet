@@ -20,12 +20,11 @@ from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
-from timenet.values_backends.reader import BaseValuesReader
+from timenet.values_backends.reader import ArrayEncoding, BaseValuesReader
 
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
-    from timenet.types import TimeSeriesSpec
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
@@ -59,7 +58,7 @@ class ZarrValuesReader(BaseValuesReader):
         self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: list[dict], spec: ArrayEncoding) -> pa.Array:
         """Read a series' values. ``chunk_major_idx`` is the element start, and ``n_values`` is the length.
 
         Args:
@@ -73,7 +72,7 @@ class ZarrValuesReader(BaseValuesReader):
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
 
-    def _read_validity(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> np.ndarray | None:
+    def _read_validity(self, version: DatasetVersion, rows: list[dict], spec: ArrayEncoding) -> np.ndarray | None:
         """Read the validity mask covering a series' index rows, or ``None`` when not nullable.
 
         Args:
@@ -93,7 +92,7 @@ class ZarrValuesReader(BaseValuesReader):
         return combined.astype(bool, copy=False)
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: ArrayEncoding
     ) -> pa.Array:
         """Read only the storage chunks that intersect a temporal step range.
 
@@ -237,7 +236,7 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
 
 
 def _to_arrow(
-    values: Shaped[np.ndarray, " time *value"], spec: TimeSeriesSpec, validity: np.ndarray | None = None
+    values: Shaped[np.ndarray, " time *value"], spec: ArrayEncoding, validity: np.ndarray | None = None
 ) -> pa.Array:
     """Wrap a backend NumPy buffer in the spec's canonical Arrow representation.
 

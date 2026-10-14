@@ -28,6 +28,8 @@ class PayloadDescriptor:
     nullable: bool = False
     categories: tuple[str, ...] = ()
     dimension_names: tuple[str, ...] = ()
+    first_us: int | None = None
+    last_us: int | None = None
 
 
 @dataclass(frozen=True, eq=False)
