@@ -253,7 +253,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
-    assert state["_values"] is None
+    assert state["_payload_resolver"].__getstate__()["_readers"] == {}
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
