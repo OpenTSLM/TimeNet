@@ -22,6 +22,7 @@ from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
+from timenet.types.payloads import Payload
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -36,7 +37,7 @@ class AnnotationType(StrEnum):
     INTERVAL = "interval"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, init=False)
 class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
@@ -52,8 +53,8 @@ class Annotation:
 
     key: str
     """Name identifying the annotation."""
-    value: Any = None
-    """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
+    value: Payload[Any] | None = None
+    """An explicit Payload handle after construction. ``None`` makes it a pure marker, which needs a ``span`` to
     mark something."""
     span: TimePoint | TimeInterval | None = None
     """Where on the Record timeline this annotation applies. Its owner determines its scope.
@@ -79,11 +80,43 @@ class Annotation:
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
 
+    def __init__(  # noqa: PLR0913 - annotation content and occurrence fields
+        self,
+        *,
+        key: str,
+        value: Any = None,
+        span: TimePoint | TimeInterval | None = None,
+        unit: str | pint.Unit | None = None,
+        description: str | None = None,
+        source: str | None = None,
+        id: str | None = None,
+        occurrence_id: str | None = None,
+        metadata: JsonMapping | None = None,
+        confidence: float | None = None,
+        occurrence_metadata: JsonMapping | None = None,
+    ) -> None:
+        values = {
+            "key": key,
+            "value": value,
+            "span": span,
+            "unit": unit,
+            "description": description,
+            "source": source,
+            "id": id or new_id(),
+            "occurrence_id": occurrence_id,
+            "metadata": {} if metadata is None else metadata,
+            "confidence": confidence,
+            "occurrence_metadata": {} if occurrence_metadata is None else occurrence_metadata,
+        }
+        for name, content in values.items():
+            object.__setattr__(self, name, content)
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
+        """Wrap native values in immutable payloads and normalize the unit.
 
         ``value_type`` is ``"list"`` for any sequence, and the manifest stores it as a JSON array that
-        decodes back to a list. This method converts a tuple to a list and the unit to a string. That
+        decodes back to a list. Payload reads return a list, and construction normalizes the unit to a string. That
         keeps an in-memory annotation equal to its read-back form, the reader's field-for-field
         guarantee.
 
@@ -91,8 +124,8 @@ class Annotation:
             TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
                 the annotation has neither a value nor a span.
         """
-        if isinstance(self.value, tuple):
-            object.__setattr__(self, "value", list(self.value))
+        if self.value is not None and not isinstance(self.value, Payload):
+            object.__setattr__(self, "value", Payload.from_value(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         object.__setattr__(
@@ -114,6 +147,14 @@ class Annotation:
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
+
+    def read_value(self) -> Any:
+        """Resolve the native value, or return None for a pure marker.
+
+        Returns:
+            The annotation value.
+        """
+        return None if self.value is None else self.value.read()
 
     @property
     def content_id(self) -> str:
@@ -201,6 +242,10 @@ def value_type_of(value: Any) -> ValueType | None:
     """
     if value is None:
         return None
+    if isinstance(value, Payload):
+        if value.descriptor.kind == "array":
+            raise TimeFValidationError("annotation values cannot contain array payloads")
+        return value.descriptor.kind
     # bool before int, since bool is an int subclass.
     tags: tuple[tuple[type | object, str], ...] = (
         (bool, "bool"),
