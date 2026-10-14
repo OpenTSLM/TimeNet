@@ -15,6 +15,7 @@ from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
 from timenet.types.payloads import ArrayPayload, PayloadDescriptor
+from timenet.types.references import ObjectRef
 
 
 def _validate_enum_values(
@@ -113,6 +114,8 @@ class Signal(SupportsAnnotate):
     """
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached directly to this signal."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible signal metadata."""
 
