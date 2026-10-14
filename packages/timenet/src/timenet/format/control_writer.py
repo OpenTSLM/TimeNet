@@ -33,7 +33,7 @@ from timenet.types import (
     annotation_type_of,
 )
 from timenet.types.payload_references import PayloadChunk, PayloadReference
-from timenet.types.payloads import PayloadDescriptor
+from timenet.types.payloads import Payload, PayloadDescriptor
 from timenet.types.splits import parse_split
 
 
@@ -259,7 +259,7 @@ class _HierarchyBatches:
 class DuckDBControlWriter:
     """Serialize the relational part of one immutable TimeF version."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, inline_bytes: int = 4096) -> None:
         """Configure a new local control database.
 
         Args:
@@ -269,6 +269,7 @@ class DuckDBControlWriter:
             FileExistsError: If ``path`` already exists.
         """
         self.path = Path(path)
+        self.inline_bytes = inline_bytes
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
 
@@ -297,11 +298,12 @@ class DuckDBControlWriter:
                 that its axis offsets or value chunks do not match.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._payload_store = PayloadStore(self.path.parent)
+        self._payload_store = PayloadStore(self.path.parent, inline_bytes=self.inline_bytes)
         self._payloads = dict(payloads or {})
         try:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
+                self._text_batch = _TableBatch(connection, TABLES["payloads"])
                 with transaction(connection):
                     task_counts = self._write_objects(
                         connection,
@@ -310,6 +312,7 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements)
                     self._write_payloads(connection, dataset, placements, self._payloads)
+                    self._text_batch.flush()
                     self._check_source_tree(connection)
                 self._payload_store.close()
                 connection.execute("CHECKPOINT")
@@ -493,6 +496,23 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
+    def _text_value(self, kind: str, identity: str, field: str, payload: Payload | None, position: int = 0) -> object:
+        if payload is None:
+            return None
+        value, reference = self._payload_store.text(payload)
+        if reference is not None:
+            self._text_batch.add(
+                {
+                    "object_type": kind,
+                    "object_id": identity,
+                    "field": field,
+                    "position": position,
+                    "descriptor": json.dumps(asdict(payload.descriptor), allow_nan=False),
+                    "reference": reference.model_dump_json(),
+                }
+            )
+        return value
+
     def _write_tasks(
         self,
         connection: duckdb.DuckDBPyConnection,
@@ -531,19 +551,20 @@ class DuckDBControlWriter:
                         "task_key": task_key,
                         "task_id": task.id,
                         "task_type": task_type,
-                        "prompt": task.prompt(),
+                        "prompt": self._text_value("Task", task.id, "prompt", task.prompt_handle()),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_keys),
                         "has_inline_targets": task.targets_handle() is not None,
                         **encode_task_payload(task),
-                        "rationale": task.rationale(),
+                        "rationale": self._text_value("Task", task.id, "rationale", task.rationale_handle()),
                         "metadata": _json(task.metadata),
                     }
                 )
                 target_rows.extend(
                     self._target_row(
                         task_key=task_key,
+                        task_id=task.id,
                         position=position,
                         target_label=f"task {task.id!r} target {position}",
                         target=target,
@@ -625,10 +646,11 @@ class DuckDBControlWriter:
             "scope_signal_keys": None if signal_ids is None else [signal_keys[item] for item in signal_ids],
         }
 
-    @staticmethod
     def _target_row(  # noqa: PLR0913 - one target projects onto keys from two lookups
+        self,
         *,
         task_key: int,
+        task_id: str,
         position: int,
         target_label: str,
         target: object,
@@ -643,7 +665,12 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
-        row = encode_target(target)
+        if isinstance(target, Payload):
+            value = self._text_value("Task", task_id, "target", target, position)
+            row = encode_target("")
+            row["text_value"] = value
+        else:
+            row = encode_target(target)
         record_id = cast("str | None", row["record_id"])
         signal_id = cast("str | None", row["signal_id"])
         if record_id is not None and record_id not in record_keys:
@@ -905,8 +932,8 @@ class DuckDBControlWriter:
             return None
         assert_never(axis)
 
-    @staticmethod
     def _write_annotations(
+        self,
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
     ) -> dict[str, int]:
@@ -947,12 +974,19 @@ class DuckDBControlWriter:
                 contents[annotation.content_id] = content
                 content_key = content_key_source.next()
                 content_keys[annotation.content_id] = content_key
+                value = annotation.handle()
+                encoded = encode_annotation_value(
+                    self._text_value("AnnotationContent", annotation.content_id, "value", value),
+                    label=f"annotation {annotation.content_id!r}",
+                )
+                if encoded["value_kind"] is None and value is not None:
+                    encoded["value_kind"] = {"str": "text", "list": "text_list"}[value.descriptor.kind]
                 content_batch.add(
                     {
                         "content_key": content_key,
                         "content_id": annotation.content_id,
                         "name": annotation.name,
-                        **encode_annotation_value(annotation.handle(), label=f"annotation {annotation.content_id!r}"),
+                        **encoded,
                         "unit": annotation.unit,
                         "description": annotation.description,
                         "metadata": _json(annotation.metadata),
