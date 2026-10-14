@@ -58,3 +58,41 @@ class ObjectRef(TimeFModel):
     dataset: DatasetRef
     kind: ObjectKind
     id: NonEmptyText
+
+
+class TaskRef(TimeFModel):
+    """The identity of a task in the same catalog, without retaining its body."""
+
+    id: NonEmptyText
+
+
+class AnnotationContentRef(TimeFModel):
+    """An explicit reference to annotation content in the same catalog."""
+
+    id: NonEmptyText
+
+
+def validate_task_graph(parents: dict[str, set[str]]) -> None:
+    """Reject missing parents and cycles using only task identities.
+
+    Raises:
+        TimeFValidationError: If a derivation graph contains a cycle or missing task.
+    """
+    children: dict[str, set[str]] = {identity: set() for identity in parents}
+    counts = {identity: len(values) for identity, values in parents.items()}
+    for identity, values in parents.items():
+        for parent in values:
+            if parent == identity:
+                raise TimeFValidationError(f"task {identity!r} depends on itself")
+            if parent not in parents:
+                raise TimeFValidationError(f"task {identity!r} depends on missing task {parent!r}")
+            children[parent].add(identity)
+    ready = [identity for identity, count in counts.items() if count == 0]
+    while ready:
+        for child in children[ready.pop()]:
+            counts[child] -= 1
+            if counts[child] == 0:
+                ready.append(child)
+    cyclic = [identity for identity, count in counts.items() if count]
+    if cyclic:
+        raise TimeFValidationError(f"task dependencies contain a cycle through {sorted(cyclic)}")

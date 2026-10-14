@@ -4,6 +4,7 @@ from timenet.errors import TimeFFormatError
 from timenet.types import (
     US_PER_S,
     Annotation,
+    AnnotationContentRef,
     ClassificationTask,
     LocalizationMode,
     ScalarPredictionTask,
@@ -140,7 +141,7 @@ def test_a_label_that_names_no_sleep_stage_still_becomes_a_task():
 
 def test_every_task_names_the_stage_vocabulary():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage 2", 0, 60)]))
-    assert {one.target_schema for one in built} == {"sleep-edfx-vocabulary-sleep_stage"}
+    assert {one.target_schema for one in built} == {AnnotationContentRef(id="sleep-edfx-vocabulary-sleep_stage")}
 
 
 def test_no_task_carries_a_prompt():
@@ -221,13 +222,21 @@ _CASSETTE_FACTS = [
 def _pick(built, kind, schema=None):
     # A task id is generated, so a task is found by its type and the set it draws from. The
     # builder yields Task, so narrow the type before you read a subclass field.
-    task = next(one for one in built if isinstance(one, kind) and (schema is None or one.target_schema == schema))
+    task = next(
+        one
+        for one in built
+        if isinstance(one, kind) and (schema is None or one.target_schema == AnnotationContentRef(id=schema))
+    )
     assert isinstance(task, kind)
     return task
 
 
 def _schemas(built):
-    return {one.target_schema for one in built if isinstance(one, ClassificationTask)}
+    return {
+        one.target_schema.id if isinstance(one.target_schema, AnnotationContentRef) else one.target_schema
+        for one in built
+        if isinstance(one, ClassificationTask)
+    }
 
 
 def test_age_is_a_scalar_with_a_unit():
@@ -243,7 +252,7 @@ def test_sex_carries_the_decoded_letter():
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, _CASSETTE_FACTS, []))
     sex = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex")
     assert sex.read_targets() == ("F",)
-    assert sex.target_schema == "sleep-edfx-vocabulary-sex"
+    assert sex.target_schema == AnnotationContentRef(id="sleep-edfx-vocabulary-sex")
     assert sex.scope is None
 
 
