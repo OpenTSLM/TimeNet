@@ -1,12 +1,15 @@
 """Pack owned bulk content into bounded Parquet row groups."""
 
 from pathlib import Path
+from typing import Any
+from weakref import WeakKeyDictionary
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.errors import TimeFValidationError
 from timenet.types.payload_references import PayloadChunk, PayloadReference
+from timenet.types.payloads import Payload
 
 
 _ROW_GROUP_BYTES = 16 * 2**20
@@ -16,13 +19,44 @@ _ARRAY_CHUNK_VALUES = 32_768
 class PayloadStore:
     """Own the payload artifacts generated alongside one control database."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, inline_bytes: int = 4096) -> None:
         self.root = root
+        self.inline_bytes = inline_bytes
+        self._text_refs: WeakKeyDictionary[Payload[Any], PayloadReference] = WeakKeyDictionary()
         self.files: list[str] = []
         self._writers: dict[str, pq.ParquetWriter] = {}
         self._buffers: dict[str, list[pa.Array]] = {}
         self._bytes: dict[str, int] = {}
         self._groups: dict[str, int] = {}
+
+    def text(self, payload: Payload[Any]) -> tuple[Any, PayloadReference | None]:
+        """Keep small content inline and pack larger text into shared artifacts.
+
+        Returns:
+            The inline value or a physical reference.
+
+        Raises:
+            TimeFValidationError: If a producer disagrees with its descriptor.
+        """
+        if payload in self._text_refs:
+            return None, self._text_refs[payload]
+        value = payload.read()
+        actual = Payload.from_value(value).descriptor
+        declared = payload.descriptor
+        if actual.kind != declared.kind or any(
+            getattr(declared, field) is not None and getattr(actual, field) != getattr(declared, field)
+            for field in ("length", "encoded_size")
+        ):
+            raise TimeFValidationError("produced text does not match its payload descriptor")
+        if actual.kind not in {"str", "list"} or (
+            payload.storage == "auto" and (actual.encoded_size or 0) <= self.inline_bytes
+        ):
+            return value, None
+        kind = pa.string() if actual.kind == "str" else pa.list_(pa.string())
+        chunk = self._cell(actual.kind, pa.array([value], type=kind), 1)
+        reference = PayloadReference(codec="text", chunks=(chunk,))
+        self._text_refs[payload] = reference
+        return None, reference
 
     def _cell(self, name: str, value: pa.Array, n_values: int) -> PayloadChunk:
         path = f"payloads/{name}.parquet"

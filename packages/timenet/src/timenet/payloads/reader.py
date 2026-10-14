@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from timenet.errors import TimeFFormatError
 from timenet.format.checksums import stream_checksum
@@ -36,6 +37,8 @@ class PayloadResolver:
     def __init__(self, version: DatasetVersion) -> None:
         self.version = version
         self._source: PayloadSource | None = None
+        self._text_cache: OrderedDict[tuple[str, str, int], pa.Array] = OrderedDict()
+        self._text_bytes = 0
         self._offset_cache: OrderedDict[str, pa.Array] = OrderedDict()
         self._offset_bytes = 0
         self._readers: dict[tuple[str, str], BaseValuesReader] = {}
@@ -45,6 +48,8 @@ class PayloadResolver:
         state["_readers"] = {}
         state["_offset_cache"] = OrderedDict()
         state["_offset_bytes"] = 0
+        state["_text_cache"] = OrderedDict()
+        state["_text_bytes"] = 0
         return state
 
     def source(self) -> PayloadSource:
@@ -112,6 +117,45 @@ class PayloadResolver:
             self._readers[key] = make_values_reader(codec)
         return self._readers[key]
 
+    def text(self, reference: PayloadReference, descriptor: PayloadDescriptor) -> Any:
+        """Decode a packed text cell without consulting its catalog.
+
+        Returns:
+            The native text value.
+
+        Raises:
+            TimeFFormatError: If the locator or content disagrees with its descriptor.
+        """
+        if reference.codec != "text" or len(reference.chunks) != 1:
+            raise TimeFFormatError("text payload requires one text-codec locator")
+        version = self.resolve(reference)
+        chunk = reference.chunks[0]
+        key = (version.root, chunk.path, chunk.major)
+        if key in self._text_cache:
+            self._text_cache.move_to_end(key)
+            values = self._text_cache[key]
+        else:
+            with version.filesystem.open_input_file(version.path(chunk.path)) as handle:
+                values = (
+                    pq.ParquetFile(handle).read_row_group(chunk.major, columns=["values"]).column(0).combine_chunks()
+                )
+            if values.nbytes <= _OFFSET_CACHE_BYTES:
+                self._text_cache[key] = values
+                self._text_bytes += values.nbytes
+                while self._text_bytes > _OFFSET_CACHE_BYTES:
+                    _, evicted = self._text_cache.popitem(last=False)
+                    self._text_bytes -= evicted.nbytes
+        if chunk.minor is None or chunk.minor >= len(values):
+            raise TimeFFormatError("text payload has an invalid cell index")
+        value = values[chunk.minor].as_py()
+        actual = Payload.from_value(value).descriptor
+        if actual.kind != descriptor.kind or any(
+            getattr(descriptor, field) is not None and getattr(actual, field) != getattr(descriptor, field)
+            for field in ("length", "encoded_size")
+        ):
+            raise TimeFFormatError("stored text does not match its payload descriptor")
+        return value
+
     def close(self) -> None:
         """Close cached artifacts while retaining reusable source configuration."""
         for reader in self._readers.values():
@@ -119,6 +163,8 @@ class PayloadResolver:
         self._readers.clear()
         self._offset_cache.clear()
         self._offset_bytes = 0
+        self._text_cache.clear()
+        self._text_bytes = 0
 
 
 @dataclass(frozen=True)
@@ -146,6 +192,8 @@ class StoredPayloadLoader:
         Raises:
             TimeFFormatError: If the stored length or timestamp values are inconsistent.
         """
+        if self.descriptor.kind != "array":
+            return self.resolver.text(self.reference, self.descriptor)
         key = self.reference.model_dump_json()
         offsets = self.descriptor.first_us is not None
         if offsets and key in self.resolver._offset_cache:
