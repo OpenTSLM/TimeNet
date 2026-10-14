@@ -216,7 +216,14 @@ class Signal(SupportsAnnotate):
                 time_offsets_loader
                 if isinstance(time_offsets_loader, ArrayPayload)
                 else ArrayPayload.from_loader(
-                    time_offsets_loader, descriptor=PayloadDescriptor("array", length=n_values, dtype="int64")
+                    time_offsets_loader,
+                    descriptor=PayloadDescriptor(
+                        "array",
+                        length=n_values,
+                        dtype="int64",
+                        first_us=time_axis.first_us if isinstance(time_axis, IrregularAxis) else None,
+                        last_us=time_axis.last_us if isinstance(time_axis, IrregularAxis) else None,
+                    ),
                 )
             )
         )
