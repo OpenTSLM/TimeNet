@@ -13,6 +13,7 @@ from timenet.manifest.files import ManifestFiles
 from timenet.types import DatasetMetadata, DatasetSchema
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
+from timenet.types.payload_references import PayloadSource
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
@@ -35,6 +36,8 @@ class Manifest(TimeFModel):
     """Descriptor for every data artifact, grouped by kind."""
     dataset_schema: Annotated[DatasetSchema, Field(alias="schema")] = Field(default_factory=DatasetSchema)
     """Structural schema: time-series specs, annotations, and tasks."""
+    payload_sources: tuple[PayloadSource, ...] = ()
+    """Flat pinned physical owners needed by this catalog, independent of build inputs."""
     counts: ManifestCounts = Field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
     values_backend: ValuesBackend = ValuesBackend.PARQUET
@@ -53,6 +56,14 @@ class Manifest(TimeFModel):
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
+        sources = [source.dataset for source in self.payload_sources]
+        if len(sources) != len(set(sources)):
+            raise ValueError("payload sources must have unique release identities")
+        if any(
+            source.dataset.dataset_id == self.dataset_id and source.dataset.version == self.metadata.dataset_version
+            for source in self.payload_sources
+        ):
+            raise ValueError("a release cannot depend on itself as a foreign payload source")
         return self
 
     @classmethod
