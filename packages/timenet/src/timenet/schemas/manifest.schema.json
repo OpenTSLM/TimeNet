@@ -475,6 +475,26 @@
       "title": "ManifestFiles",
       "type": "object"
     },
+    "PayloadSource": {
+      "additionalProperties": false,
+      "description": "An immutable physical owner pinned by its manifest digest.",
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "manifest_checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Checksum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset",
+        "manifest_checksum"
+      ],
+      "title": "PayloadSource",
+      "type": "object"
+    },
     "TimeSeriesSpec": {
       "additionalProperties": false,
       "description": "Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.\n\nThe spec carries no unit for time or for a sampling rate. Time offsets are integer microseconds and\na cadence is a Fraction of them, so those units can only be ``second`` and ``hertz``.",
@@ -589,6 +609,14 @@
     },
     "schema": {
       "$ref": "#/$defs/DatasetSchema"
+    },
+    "payload_sources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PayloadSource"
+      },
+      "title": "Payload Sources",
+      "type": "array"
     },
     "counts": {
       "$ref": "#/$defs/ManifestCounts"
