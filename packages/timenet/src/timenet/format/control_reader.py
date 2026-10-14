@@ -36,6 +36,8 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.types.payload_references import PayloadReference
+from timenet.types.payloads import Payload, PayloadDescriptor
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
@@ -383,6 +385,7 @@ class DuckDBControlReader:
         *,
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
+        payload_loader: Callable[[PayloadDescriptor, PayloadReference], Payload] | None = None,
         offsets_loader: OffsetsLoader | None = None,
     ) -> None:
         """Open and validate an immutable control database.
@@ -391,7 +394,8 @@ class DuckDBControlReader:
             path: Local path to ``control.duckdb``.
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
-            offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            payload_loader: Callable[[PayloadDescriptor, PayloadReference], Payload] | None = None,
+        offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -402,6 +406,7 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self._payload_loader = payload_loader
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
@@ -425,6 +430,27 @@ class DuckDBControlReader:
     def __exit__(self, *_: object) -> None:
         """Close the connection when leaving a context manager."""
         self.close()
+
+    def payloads(
+        self, kind: str, identities: list[str], field: str
+    ) -> dict[str, tuple[PayloadDescriptor, PayloadReference]]:
+        """Read physical descriptors for a bounded set of objects.
+
+        Returns:
+            Descriptors and locators keyed by local object ID.
+        """
+        result = {}
+        for identity, descriptor, reference in self.connection.execute(
+            "SELECT object_id, descriptor, reference FROM payloads WHERE object_type=? AND field=? "
+            "AND object_id IN (SELECT unnest(?)) AND position=0",
+            [kind, field, identities],
+        ).fetchall():
+            fields = _decode_json(descriptor)
+            for name in ("shape", "categories", "dimension_names"):
+                if name in fields:
+                    fields[name] = tuple(fields[name])
+            result[identity] = (PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference))
+        return result
 
     def record_ids(self) -> tuple[str, ...]:
         """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
@@ -486,6 +512,7 @@ class DuckDBControlReader:
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
         axes = self._read_axes({row.axis_key for row in signal_rows})
 
+        stored_payloads = self.payloads("Signal", [row.signal_id for row in signal_rows], "values")
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for signal_row in signal_rows:
@@ -516,7 +543,9 @@ class DuckDBControlReader:
                     time_axis=axis,
                     n_values=signal_row.n_values,
                     loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
+                        self._payload_loader(*stored_payloads[signal_row.signal_id])
+                        if self._payload_loader is not None and signal_row.signal_id in stored_payloads
+                        else self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
                         if self._value_loader_factory is not None
                         else partial(self._value_loader, signal_row.signal_id, spec)
                     ),
