@@ -49,7 +49,7 @@ def test_add_record_registers_and_returns(make_series):
     ds.add_record(record=record)
     assert isinstance(record, Record)
     assert ds.records == (record,)
-    assert record.annotations[0].value == ["p1"]
+    assert record.annotations[0].read_value() == ["p1"]
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
@@ -471,7 +471,7 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     task = dataset.add_task(
         task=ForecastingTask(inputs=(context,), targets=(target,)),
     )
-    assert task.targets == (target,)
+    assert task.read_targets() == (target,)
 
 
 def test_tasks_of_filters_by_type(make_series):
@@ -695,7 +695,7 @@ def test_add_tasks_registers_all_in_order_and_links(make_series):
             ClassificationTask(inputs=(record,), targets=("b",)),
         ]
     )
-    assert tuple(t.targets for t in tasks) == (("a",), ("b",))
+    assert tuple(t.read_targets() for t in tasks) == (("a",), ("b",))
     assert ds.tasks == tasks
     assert record.task_ids == tuple(t.id for t in tasks)
 
@@ -796,7 +796,7 @@ def test_add_task_accepts_a_time_series_ref_on_the_record(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
     task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(signal,)))
-    assert task.targets == (signal,)
+    assert task.read_targets() == (signal,)
 
 
 def test_add_task_accepts_mixed_targets(make_series):
@@ -804,7 +804,7 @@ def test_add_task_accepts_mixed_targets(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
     task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(record, signal, "match")))
-    assert task.targets == (record, signal, "match")
+    assert task.read_targets() == (record, signal, "match")
 
 
 def _record(dataset, make_series, record_id=None):
