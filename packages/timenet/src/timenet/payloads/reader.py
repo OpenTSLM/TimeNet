@@ -2,14 +2,16 @@
 
 from collections import OrderedDict
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.errors import TimeFFormatError
-from timenet.format.checksums import stream_checksum
+from timenet.format.checksums import CHECKSUM_PREFIX, stream_checksum
 from timenet.format.constants import MANIFEST_FILE
+from timenet.manifest import Manifest
 from timenet.payloads.offsets import validate_offsets
 from timenet.registry.version import DatasetVersion
 from timenet.types.payload_references import PayloadReference, PayloadSource
@@ -37,6 +39,7 @@ class PayloadResolver:
     def __init__(self, version: DatasetVersion) -> None:
         self.version = version
         self._source: PayloadSource | None = None
+        self._versions: dict[PayloadSource, DatasetVersion] = {}
         self._text_cache: OrderedDict[tuple[str, str, int], pa.Array] = OrderedDict()
         self._text_bytes = 0
         self._offset_cache: OrderedDict[str, pa.Array] = OrderedDict()
@@ -78,15 +81,39 @@ class PayloadResolver:
         Raises:
             TimeFFormatError: If the source is unavailable or a locator is absent from its manifest.
         """
+        version = self.version
         if reference.source is not None and reference.source != self.source():
-            raise TimeFFormatError(f"no payload source resolver is attached for {reference.source.dataset}")
-        owned = {part.path for part in self.version.manifest.files.all_files()}
+            source = reference.source
+            if source not in self.version.manifest.payload_sources:
+                raise TimeFFormatError(f"undeclared payload source {source.dataset}")
+            if source not in self._versions:
+                if self.version.payload_root is None:
+                    raise TimeFFormatError(f"no payload root configured for {source.dataset}")
+                root = f"{self.version.payload_root}/{source.dataset.dataset_id}/{source.dataset.version}"
+                try:
+                    with self.version.filesystem.open_input_file(f"{root}/{MANIFEST_FILE}") as handle:
+                        content = handle.read()
+                except OSError as exc:
+                    raise TimeFFormatError(f"cannot open payload owner {source.dataset}: {exc}") from exc
+                manifest = Manifest.from_artifact(content)
+                if CHECKSUM_PREFIX + sha256(content).hexdigest() != source.manifest_checksum:
+                    raise TimeFFormatError(f"payload owner manifest checksum mismatch for {source.dataset}")
+                if (
+                    manifest.dataset_id != source.dataset.dataset_id
+                    or manifest.metadata.dataset_version != source.dataset.version
+                ):
+                    raise TimeFFormatError(f"payload owner identity mismatch for {source.dataset}")
+                self._versions[source] = DatasetVersion(
+                    manifest, self.version.filesystem, root, self.version.payload_root
+                )
+            version = self._versions[source]
+        owned = {part.path for part in version.manifest.files.all_files()}
         prefix = f"{reference.prefix}/" if reference.prefix else ""
         for chunk in reference.chunks:
             path = prefix + (f"{chunk.path}/zarr.json" if reference.codec == "zarr" else chunk.path)
             if path not in owned:
                 raise TimeFFormatError(f"payload locator {path!r} is absent from its owner's manifest")
-        return replace(self.version, root=self.version.root + (f"/{reference.prefix}" if reference.prefix else ""))
+        return replace(version, root=version.root + (f"/{reference.prefix}" if reference.prefix else ""))
 
     def payload(self, descriptor: PayloadDescriptor, reference: PayloadReference) -> Payload[Any]:
         """Create an explicit payload handle and bind local ownership to this release.
