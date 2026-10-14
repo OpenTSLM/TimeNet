@@ -1,5 +1,6 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
@@ -32,6 +33,7 @@ from timenet.format.schemas import (
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.payload_references import PayloadChunk, PayloadReference
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -190,10 +192,31 @@ class TimeFWriter:
             self._dataset,
             placements,
             tasks=tasks,
+            payloads=self._array_references(unique_series, placements),
         )
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
         self._written = True
+
+    def _array_references(self, signals: list[Signal], placements: dict[tuple[str, int], ChunkPlacement]) -> dict:
+        chunks: dict[str, list[PayloadChunk]] = defaultdict(list)
+        for (identity, _), value in sorted(placements.items()):
+            chunks[identity].append(
+                PayloadChunk(
+                    path=value.chunk_file,
+                    major=value.data_index.major_idx,
+                    minor=value.data_index.minor_idx,
+                    n_values=value.n_values,
+                )
+            )
+        codec = "parquet" if self._values_backend_name == ValuesBackend.PARQUET else "zarr"
+        return {
+            ("Signal", signal.id, "values", 0): (
+                signal.values.descriptor,
+                PayloadReference(codec=codec, chunks=tuple(chunks[signal.id])),
+            )
+            for signal in signals
+        }
 
     def close(self) -> None:
         """Write the manifest and atomically publish the staging directory.
@@ -400,7 +423,7 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
-            timef_format_version=1,
+            timef_format_version=2,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
