@@ -17,7 +17,6 @@ from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
-from timenet.registry.local import LocalRegistry
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
@@ -328,17 +327,7 @@ def edit_version(
         )
         edited.derive_schema()
 
-        # An output in another registry needs the pinned owners alongside its new catalog.
-        if version.payload_root is None:
-            raise TimeFEditError("editing a release requires a registry-rooted version directory")
-        if Path(version.payload_root).resolve() != out_root.resolve():
-            registry = LocalRegistry(Path(version.payload_root))
-            releases = [(version.manifest.dataset_id, base_version)]
-            releases.extend(
-                (source.dataset.dataset_id, str(source.dataset.version)) for source in version.manifest.payload_sources
-            )
-            for dataset_id, release in releases:
-                registry.download_version(dataset_id, release, out_root / dataset_id / release)
+        writer_kwargs.setdefault("payload_policy", "copy")
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()
