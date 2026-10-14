@@ -9,6 +9,7 @@ from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    Payload,
     TimeInterval,
     TimePoint,
     annotation_type_of,
@@ -30,7 +31,7 @@ def test_a_span_alone_is_enough():
 
 def test_static_with_value():
     ann = Annotation(key="age", value=64, unit="years")
-    assert ann.value == 64
+    assert ann.read_value() == 64
     assert ann.unit == "years"  # a recognized unit string is kept as written
 
 
@@ -86,8 +87,8 @@ def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.
     ann = Annotation(key="labels", value=("a", "b"))
-    assert ann.value == ["a", "b"]
-    assert isinstance(ann.value, list)
+    assert ann.read_value() == ["a", "b"]
+    assert isinstance(ann.read_value(), list)
 
 
 def test_frozen():
@@ -107,10 +108,10 @@ def test_subclass_with_field_defaults_authoring():
         key: str = "age"
         unit: str | None = "years"
 
-    age = Age(value=64)
+    age = Age(value=Payload.from_value(64))
     assert age.key == "age"
     assert age.unit == "years"
-    assert age.value == 64
+    assert age.read_value() == 64
     assert annotation_type_of(age) is AnnotationType.STATIC
 
 

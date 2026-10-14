@@ -20,7 +20,7 @@ def _record(signals, **kwargs):
 def test_add_static_annotation(make_series):
     record = _record((make_series(),))
     ann = record.annotate(Annotation(key="age", value=64))
-    assert ann.value == 64
+    assert ann.read_value() == 64
     assert record.annotations == (ann,)
 
 
