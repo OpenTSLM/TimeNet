@@ -3,8 +3,8 @@
 The control database carries no persisted constraints: ART indexes on the large
 ``signal_chunks`` tables would slow every write and bloat the file. The writer instead keeps the
 invariants while it streams rows, from key sequences it owns and from ID sets it checks in Python.
-This module holds the SQL form of the same invariants. It scans every table, so it is not part of
-the write path. Tests run it after each round trip, and tooling can run it over a published version.
+This module holds the SQL form of the same invariants. The writer scans the finished catalog
+before publication. Tooling can also audit an external or published version.
 """
 
 import duckdb
@@ -122,6 +122,46 @@ _TASK_RECORD_SCOPE = """
     LIMIT 1
 """
 
+_PAYLOAD_INTEGRITY = """
+    SELECT 'payload chunks' AS problem
+    FROM payload_chunks c JOIN payloads p USING (payload_key)
+    JOIN payload_files f USING (file_key)
+    WHERE c.major < 0 OR c.minor < 0 OR c.n_values <= 0 OR c.position < 0
+       OR p.store_key <> f.store_key
+    UNION ALL
+    SELECT 'payload coverage' FROM payloads p
+    JOIN payload_descriptors d USING (descriptor_key)
+    LEFT JOIN (
+        SELECT payload_key, count(*) n, min(position) lo, max(position) hi, sum(n_values) total
+        FROM payload_chunks GROUP BY payload_key
+    ) c USING (payload_key)
+    WHERE p.position < 0 OR c.n IS NULL OR c.lo <> 0 OR c.hi <> c.n - 1
+       OR (json_extract_string(d.descriptor, '$.kind') = 'array'
+           AND c.total <> CAST(json_extract_string(d.descriptor, '$.length') AS BIGINT))
+    UNION ALL
+    SELECT 'payload store' FROM payload_stores
+    WHERE (dataset_key IS NULL) <> (manifest_checksum IS NULL)
+       OR codec NOT IN ('parquet', 'zarr', 'text')
+    UNION ALL
+    SELECT 'object lineage' FROM origins
+    WHERE origin_id = '' OR origin_kind NOT IN (
+        'record', 'source', 'signal', 'axis', 'annotation_content', 'annotation_occurrence', 'task'
+    )
+    LIMIT 1
+"""
+
+_PAYLOAD_OBJECTS = """
+    WITH objects AS (
+        SELECT 'Signal' AS kind, signal_id AS id FROM signals
+        UNION ALL SELECT 'Axis', axis_id FROM axes
+        UNION ALL SELECT 'AnnotationContent', content_id FROM annotation_contents
+        UNION ALL SELECT 'Task', task_id FROM tasks
+    )
+    SELECT p.object_type, p.object_id FROM payloads p
+    LEFT JOIN objects o ON p.object_type = o.kind AND p.object_id = o.id
+    WHERE o.id IS NULL LIMIT 1
+"""
+
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
     """Scan every control table and raise on the first violated invariant.
@@ -182,6 +222,13 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
         bad_chunks = connection.execute(_CHUNK_COVERAGE).fetchone()
         if bad_chunks is not None:
             raise TimeFFormatError(f"signal {bad_chunks[0]!r} has value chunks whose lengths do not match n_values")
+
+    invalid = connection.execute(_PAYLOAD_INTEGRITY).fetchone()
+    if invalid is not None:
+        raise TimeFFormatError(f"control database contains invalid {invalid[0]}")
+    invalid = connection.execute(_PAYLOAD_OBJECTS).fetchone()
+    if invalid is not None:
+        raise TimeFFormatError(f"payload refers to absent {invalid[0]} {invalid[1]!r}")
 
 
 def _audit_unique_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> None:

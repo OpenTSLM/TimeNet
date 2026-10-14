@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 import uuid
 
 import numpy as np
@@ -13,7 +13,7 @@ import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
@@ -49,6 +49,10 @@ from timenet.values_backends.writer import (
 )
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
+
+
+if TYPE_CHECKING:
+    from timenet.payloads.reader import PayloadResolver
 
 
 class TimeFWriter:
@@ -195,6 +199,7 @@ class TimeFWriter:
         self._resolve_id_types()
 
         self._payload_copier = PayloadCopier(self._staging_dir)
+        self._preflight_resolvers: dict[int, PayloadResolver] = {}
         unique_series, _series_to_records = self._dedupe_series()
         placements = self._write_values([signal for signal in unique_series if signal.values.reference is None])
         tasks = (
@@ -216,8 +221,27 @@ class TimeFWriter:
         self._written = True
 
     def _stored_reference(self, payload: Payload) -> PayloadReference:
+        from timenet.payloads.reader import PayloadResolver  # noqa: PLC0415 - registry/writer import cycle
+
         if payload.reference is None or payload.reference.source is None:
             raise TimeFValidationError("stored references require a pinned physical owner")
+        if payload._storage is None:
+            raise TimeFValidationError("stored references require bound physical storage")
+        # Validate the owner pin and file placement, without reading inherited content.
+        try:
+            storage = payload._storage
+            if isinstance(storage, PayloadResolver):
+                # Start a fresh validation session for this write, even when the consumer
+                # previously cached an owner before its files changed.
+                resolver = self._preflight_resolvers.get(id(storage))
+                if resolver is None:
+                    resolver = PayloadResolver(storage.version)
+                    self._preflight_resolvers[id(storage)] = resolver
+                resolver.resolve(payload.reference)
+            else:
+                storage.resolve(payload.reference)
+        except TimeFFormatError as exc:
+            raise TimeFValidationError(f"invalid shared payload placement: {exc}") from exc
         return self._payload_copier.reference(payload) if self.payload_policy == "copy" else payload.reference
 
     def _array_references(self, signals: list[Signal], placements: dict[tuple[str, int], ChunkPlacement]) -> dict:

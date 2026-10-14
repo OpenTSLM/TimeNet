@@ -18,7 +18,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.duckdb import CATALOG_VALIDATION_VERSION, check_control_schema, connect_control
 from timenet.format.reference_catalog import ReferenceCatalogReader
 from timenet.format.task_codec import (
     decode_input_modalities,
@@ -26,6 +26,7 @@ from timenet.format.task_codec import (
     decode_split,
     decode_target,
     decode_task_payload,
+    hydrate_validated_task,
 )
 from timenet.payloads.offsets import validate_offsets
 from timenet.types import (
@@ -402,7 +403,7 @@ def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
 class DuckDBControlReader:
     """Keep one read-only DuckDB connection and hydrate requested records from it."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - separate structural and physical loaders
         self,
         path: Path,
         *,
@@ -410,6 +411,7 @@ class DuckDBControlReader:
         value_loader_factory: ValueLoaderFactory | None = None,
         payload_loader: Callable[[PayloadDescriptor, PayloadReference], Payload] | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        verified: bool = False,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -429,6 +431,10 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        validation = self.connection.execute(
+            "SELECT value FROM control_metadata WHERE key='validation_version'"
+        ).fetchone()
+        self._validated = verified and validation == (CATALOG_VALIDATION_VERSION,)
         self._references = ReferenceCatalogReader(self.connection)
         self._payload_loader = payload_loader
         self._value_loader = value_loader or _missing_values
@@ -1789,11 +1795,14 @@ class _TaskHydration:
                 annotations_by_occurrence,
                 "annotation occurrence",
             )
-            task = cls(**kwargs)
-            try:
-                TimeFDataset._check_task_record_scope(task)
-            except TimeFValidationError as exc:
-                raise TimeFFormatError(f"stored task {task.id!r} has an invalid Record scope: {exc}") from exc
+            if reader._validated:
+                task = hydrate_validated_task(cls, kwargs)
+            else:
+                task = cls(**kwargs)
+                try:
+                    TimeFDataset._check_task_record_scope(task)
+                except TimeFValidationError as exc:
+                    raise TimeFFormatError(f"stored task {task.id!r} has an invalid Record scope: {exc}") from exc
             tasks[row.task_key] = task
         reader._hydrate_origins(origin_slots(tasks=tasks.values()))
         return tasks

@@ -76,10 +76,18 @@ Range reads select intersecting chunks. Each payload selects its own codec.
 
 ## Integrity and migration
 
-The writer stages a release, writes catalog rows in a transaction, flushes payload files, and
-records
-checksums. It publishes the directory atomically. `audit_control_database()` checks catalog
-relationships. `TimeFReader.verify()` checks owned files and required foreign payload artifacts.
+The writer stages a release, writes catalog rows in a transaction, and audits the completed catalog.
+The audit checks relationships, task scopes, typed chunk coverage, and store ownership. A successful
+full write records its audit revision in `control_metadata`. The writer then flushes payload files,
+records checksums, and publishes the directory atomically.
+
+The reader verifies the control checksum for local and downloaded catalogs. For verified catalogs
+with the supported audit revision, it restores task objects without repeating public constructor
+validation. Unverified catalogs retain constructor checks. Public constructors still validate new
+caller input. Shared owners and file placements pass a fresh preflight at each write, without reads
+of inherited payload bodies. Runtime owner pins and decoded payload lengths remain checked.
+
+`audit_control_database()` also checks external catalogs. `TimeFReader.verify()` checks owned files and required foreign payload artifacts.
 Foreign catalogs are not needed for payload reads or verification.
 
 Format 1 and 2 artifacts must be rebuilt. Artifact parsers raise `TimeFFormatError` for unsupported

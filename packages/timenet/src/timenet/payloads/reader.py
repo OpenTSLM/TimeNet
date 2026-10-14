@@ -91,7 +91,9 @@ class PayloadResolver:
         if cached is not None and cached[0] is source:
             return cached[1]
         version = self.version
-        if source is not None and source != self.source():
+        if source != self.source():
+            if source.dataset == self.source().dataset:
+                raise TimeFFormatError(f"payload owner manifest checksum mismatch for {source.dataset}")
             if source not in self.version.manifest.payload_sources:
                 raise TimeFFormatError(f"undeclared payload source {source.dataset}")
             if source not in self._versions:
