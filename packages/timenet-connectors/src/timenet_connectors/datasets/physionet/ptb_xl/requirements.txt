@@ -1,0 +1,3 @@
+# wfdb is the fallback for uncommon WFDB encodings. boto3 reads the public PhysioNet S3 bucket.
+wfdb>=4.1
+boto3>=1.34
