@@ -7,7 +7,7 @@ from fractions import Fraction
 from functools import partial
 import json
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar, cast
+from typing import Any, Literal, NamedTuple, TypeVar, cast
 
 import duckdb
 import pyarrow as pa
@@ -195,6 +195,7 @@ class _TargetRow(NamedTuple):
     """One ``task_targets`` row, without its position, which the query orders by."""
 
     task_key: int
+    position: int
     target_kind: str
     text_value: str | None
     integer_value: int | None
@@ -469,6 +470,34 @@ class DuckDBControlReader:
                 if name in fields:
                     fields[name] = tuple(fields[name])
             result[identity] = (PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference))
+        return result
+
+    def payload_handles(self, kind: str, identities: list[str]) -> dict[tuple[str, str, int], Payload[Any]]:
+        """Hydrate content handles in one bounded metadata query.
+
+        Returns:
+            Handles keyed by object ID, field, and position.
+
+        Raises:
+            TimeFFormatError: If no physical resolver is attached.
+        """
+        rows = self.connection.execute(
+            "SELECT object_id, field, position, descriptor, reference FROM payloads "
+            "WHERE object_type=? AND object_id IN (SELECT unnest(?))",
+            [kind, identities],
+        ).fetchall()
+        if rows and self._payload_loader is None:
+            raise TimeFFormatError("external text requires a payload resolver")
+        result = {}
+        for identity, field, position, descriptor, reference in rows:
+            fields = _decode_json(descriptor)
+            for name in ("shape", "categories", "dimension_names"):
+                fields[name] = tuple(fields[name])
+            if self._payload_loader is None:
+                raise TimeFFormatError("external text requires a payload resolver")
+            result[identity, field, position] = self._payload_loader(
+                PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference)
+            )
         return result
 
     def record_ids(self) -> tuple[str, ...]:
@@ -855,10 +884,46 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(frozenset(parent_keys), annotated > 0)
         return self._task_facts
 
+    def _export_payloads(
+        self,
+        table: pa.Table,
+        kind: str,
+        id_column: str,
+        fields: dict[str, str],
+        mode: Literal["references", "materialize"],
+    ) -> pa.Table:
+        if mode not in {"references", "materialize"}:
+            raise TimeFValidationError(f"unknown payload export mode {mode!r}")
+        identities = table.column(id_column).to_pylist()
+        handles = self.payload_handles(kind, identities)
+        positions = table.column("position").to_pylist() if "position" in table.column_names else [0] * len(table)
+        for field, column in fields.items():
+            selected = [
+                handles.get((identity, field, position))
+                for identity, position in zip(identities, positions, strict=True)
+            ]
+            references = [
+                None if handle is None or handle.reference is None else handle.reference.model_dump_json()
+                for handle in selected
+            ]
+            descriptors = [None if handle is None else json.dumps(handle.descriptor.__dict__) for handle in selected]
+            table = table.append_column(f"{column}_reference", pa.array(references, type=pa.string()))
+            table = table.append_column(f"{column}_descriptor", pa.array(descriptors, type=pa.string()))
+            if mode == "materialize":
+                values = table.column(column).to_pylist()
+                for index, handle in enumerate(selected):
+                    if handle is not None:
+                        values[index] = handle.read()
+                table = table.set_column(
+                    table.schema.get_field_index(column), column, pa.array(values, type=table.schema.field(column).type)
+                )
+        return table
+
     def task_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -877,7 +942,7 @@ class DuckDBControlReader:
             The tasks in task ID order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH {_signal_ids_cte("scope_ids", "tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")},
                 inputs AS (
                     SELECT task_key, list(record_id ORDER BY position) AS input_record_ids
@@ -905,11 +970,13 @@ class DuckDBControlReader:
                 ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
             parameters,
         ).to_arrow_table()
+        return self._export_payloads(table, "Task", "task_id", {"prompt": "prompt", "rationale": "rationale"}, payloads)
 
     def target_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -924,7 +991,7 @@ class DuckDBControlReader:
             Targets in task ID and position order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH {_signal_ids_cte("span_ids", "task_targets", "signal_keys", ("task_key", "position"), "span_signal_ids")}
                 SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
                        x.boolean_value, records.record_id, signals.signal_id,
@@ -938,8 +1005,11 @@ class DuckDBControlReader:
                 ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
             parameters,
         ).to_arrow_table()
+        return self._export_payloads(table, "Task", "task_id", {"target": "text_value"}, payloads)
 
-    def annotation_table(self, object_type: str | None = None) -> pa.Table:
+    def annotation_table(
+        self, object_type: str | None = None, *, payloads: Literal["references", "materialize"] = "references"
+    ) -> pa.Table:
         """Return every annotation occurrence joined with its content as Arrow.
 
         Args:
@@ -951,12 +1021,13 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If ``object_type`` is not an annotated object type.
+            TimeFValidationError: If the payload export mode is unknown.
         """
         if object_type is not None and object_type not in _OBJECT_ID_SELECTS:
             raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
         object_ids = " UNION ALL ".join(_OBJECT_ID_SELECTS.values())
         where = "" if object_type is None else "WHERE o.object_type = ?"
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH object_ids AS ({object_ids})
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
@@ -970,6 +1041,26 @@ class DuckDBControlReader:
                 ORDER BY o.object_type, objects.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
             [] if object_type is None else [object_type],
         ).to_arrow_table()
+        handles = self.payload_handles("AnnotationContent", table.column("content_id").to_pylist())
+        for field in ("text_value", "text_list_value"):
+            selected_kind = "str" if field == "text_value" else "list"
+            filtered = {key: value for key, value in handles.items() if value.descriptor.kind == selected_kind}
+            values = table.column(field).to_pylist()
+            if payloads == "materialize":
+                for index, identity in enumerate(table.column("content_id").to_pylist()):
+                    if (identity, "value", 0) in filtered:
+                        values[index] = filtered[identity, "value", 0].read()
+                table = table.set_column(
+                    table.schema.get_field_index(field), field, pa.array(values, type=table.schema.field(field).type)
+                )
+        table = self._export_payloads(table, "AnnotationContent", "content_id", {"value": "text_value"}, "references")
+        names = [
+            name.replace("text_value_reference", "value_reference").replace("text_value_descriptor", "value_descriptor")
+            for name in table.column_names
+        ]
+        if payloads not in {"references", "materialize"}:
+            raise TimeFValidationError(f"unknown payload export mode {payloads!r}")
+        return table.rename_columns(names)
 
     @staticmethod
     def _record_filter(record_ids: Iterable[str] | None) -> tuple[str, list[object]]:
@@ -1451,6 +1542,9 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing {row.object_type} key"
                 )
+        handles = self.payload_handles(
+            "AnnotationContent", [row.content_id for row in rows if row.content_id is not None]
+        )
         for row in rows:
             span = _occurrence_span(row)
             # The first pass over ``rows`` already rejected NULL content and object columns.
@@ -1461,7 +1555,9 @@ class DuckDBControlReader:
                 occurrence_id=row.occurrence_id,
                 id=content_id,
                 key=name,
-                value=decode_annotation_value(
+                value=handles[content_id, "value", 0]
+                if (content_id, "value", 0) in handles
+                else decode_annotation_value(
                     row.value_kind,
                     row.text_value,
                     row.integer_value,
@@ -1659,6 +1755,8 @@ class _TaskHydration:
             {key for refs in annotation_refs.values() for keys in refs.values() for key in keys}
         )
 
+        handles = reader.payload_handles("Task", [row.task_id for row in task_rows])
+        task_ids = {row.task_key: row.task_id for row in task_rows}
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         for target in target_rows:
             span_signal_ids = (
@@ -1680,7 +1778,9 @@ class _TaskHydration:
                 "span_signal_ids": span_signal_ids,
             }
             targets_by_task[target.task_key].append(
-                decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
+                handles[task_ids[target.task_key], "target", target.position]
+                if (task_ids[target.task_key], "target", target.position) in handles
+                else decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
         tasks: dict[int, Task] = {}
@@ -1695,7 +1795,7 @@ class _TaskHydration:
                 "id": row.task_id,
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
-                "prompt": row.prompt,
+                "prompt": handles.get((row.task_id, "prompt", 0), row.prompt),
                 "input_modalities": decode_input_modalities(row.input_modalities),
                 "split": decode_split(row.split),
                 "scope": decode_span(
@@ -1704,7 +1804,7 @@ class _TaskHydration:
                     row.scope_end,
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
-                "rationale": row.rationale,
+                "rationale": handles.get((row.task_id, "rationale", 0), row.rationale),
                 "annotations": task_annotations.get(("Task", row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
