@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import asdict
 from hashlib import sha256
 from itertools import islice
 import json
@@ -20,9 +19,11 @@ from timenet.dataset.axis import to_time_offsets_us
 from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
+from timenet.format.batches import TableBatch as _TableBatch, _insert_rows
 from timenet.format.checksums import CHECKSUM_PREFIX
-from timenet.format.control_schema import TABLES, Table
+from timenet.format.control_schema import TABLES
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
+from timenet.format.reference_catalog import ReferenceCatalogWriter
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
 from timenet.payloads.writer import PayloadStore
@@ -149,21 +150,6 @@ def _reserve_hierarchy_keys(
     return iter(object_keys), iter(axis_keys)
 
 
-def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: list[dict[str, object]]) -> None:
-    """Insert one Arrow batch, typed by the table's schema, into a control table."""
-    if not rows:
-        return
-    relation_name = f"_timenet_{table.name}_batch"
-    names = ", ".join(table.column_names)
-    connection.register(relation_name, pa.Table.from_pylist(rows, schema=table.arrow_schema))
-    try:
-        connection.execute(
-            f"INSERT INTO {table.name} ({names}) SELECT {names} FROM {relation_name}"  # noqa: S608
-        )
-    finally:
-        connection.unregister(relation_name)
-
-
 class _SequenceKeys:
     """Hand out keys from a control-schema sequence, reserving them in blocks."""
 
@@ -182,26 +168,6 @@ class _SequenceKeys:
             return key
         self._reserved = iter(_reserve_keys(self.connection, self.sequence, _ROW_BATCH_SIZE))
         return next(self._reserved)
-
-
-class _TableBatch:
-    """Insert bounded Arrow batches into one control table."""
-
-    def __init__(self, connection: duckdb.DuckDBPyConnection, table: Table) -> None:
-        self.connection = connection
-        self.table = table
-        self.rows: list[dict[str, object]] = []
-
-    def add(self, row: dict[str, object]) -> None:
-        """Add one row and write the batch when it reaches the size limit."""
-        self.rows.append(row)
-        if len(self.rows) >= _ROW_BATCH_SIZE:
-            self.flush()
-
-    def flush(self) -> None:
-        """Write all buffered rows and clear the buffer."""
-        _insert_rows(self.connection, self.table, self.rows)
-        self.rows.clear()
 
 
 class _HierarchyKeys(NamedTuple):
@@ -313,8 +279,7 @@ class DuckDBControlWriter:
         try:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
-                self._text_batch = _TableBatch(connection, TABLES["payloads"])
-                self._origin_batch = _TableBatch(connection, TABLES["origins"])
+                self._references = ReferenceCatalogWriter(connection)
                 self._origin_ids: set[tuple[str, str]] = set()
                 with transaction(connection):
                     task_counts = self._write_objects(
@@ -324,9 +289,8 @@ class DuckDBControlWriter:
                     )
                     self._write_origins(origin_slots(dataset.records, annotations=dataset.annotations))
                     self._write_chunks(connection, placements)
-                    self._write_payloads(connection, dataset, placements, self._payloads)
-                    self._text_batch.flush()
-                    self._origin_batch.flush()
+                    self._write_payloads(dataset, placements, self._payloads)
+                    self._references.flush()
                     self._check_source_tree(connection)
                 self._payload_store.close()
                 connection.execute("CHECKPOINT")
@@ -419,9 +383,8 @@ class DuckDBControlWriter:
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
         return task_counts
 
-    @staticmethod
     def _write_payloads(
-        connection: duckdb.DuckDBPyConnection,
+        self,
         dataset: TimeFDataset,
         placements: dict | None,
         payloads: dict[tuple[str, str, str, int], tuple[PayloadDescriptor, PayloadReference]] | None,
@@ -446,19 +409,8 @@ class DuckDBControlWriter:
                             signal.values.descriptor,
                             PayloadReference(codec="parquet", chunks=tuple(chunks[signal.id])),
                         )
-        batch = _TableBatch(connection, TABLES["payloads"])
         for (kind, identity, field, position), (descriptor, reference) in entries.items():
-            batch.add(
-                {
-                    "object_type": kind,
-                    "object_id": identity,
-                    "field": field,
-                    "position": position,
-                    "descriptor": json.dumps(asdict(descriptor), allow_nan=False),
-                    "reference": reference.model_dump_json(),
-                }
-            )
-        batch.flush()
+            self._references.payload(kind, identity, field, position, descriptor, reference)
 
     def _write_chunks(
         self,
@@ -517,25 +469,14 @@ class DuckDBControlWriter:
             reference = getattr(obj, field)
             if reference is not None and (kind, identity) not in self._origin_ids:
                 self._origin_ids.add((kind, identity))
-                self._origin_batch.add(
-                    {"object_type": kind, "object_id": identity, "reference": reference.model_dump_json()}
-                )
+                self._references.origin(kind, identity, reference)
 
     def _text_value(self, kind: str, identity: str, field: str, payload: Payload | None, position: int = 0) -> object:
         if payload is None:
             return None
         value, reference = self._payload_store.text(payload)
         if reference is not None:
-            self._text_batch.add(
-                {
-                    "object_type": kind,
-                    "object_id": identity,
-                    "field": field,
-                    "position": position,
-                    "descriptor": json.dumps(asdict(payload.descriptor), allow_nan=False),
-                    "reference": reference.model_dump_json(),
-                }
-            )
+            self._references.payload(kind, identity, field, position, payload.descriptor, reference)
         return value
 
     def _write_tasks(

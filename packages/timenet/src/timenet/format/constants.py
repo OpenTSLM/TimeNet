@@ -73,5 +73,5 @@ def part_path(template: str, index: int, **fields: str) -> str:
     return template.format(index, **fields)
 
 
-TIMEF_FORMAT_VERSION = 2
+TIMEF_FORMAT_VERSION = 3
 """The supported immutable artifact format."""

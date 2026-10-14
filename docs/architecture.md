@@ -119,4 +119,4 @@ can read it directly.
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: use `TimeNet.load()` for lazy access or `timenet download` for a local copy.
 
-See [Dataset composition](composition.md) for editable child catalogs, shared payloads, and format 2 migration.
+See [Dataset composition](composition.md) for editable child catalogs, shared payloads, and format 3 migration.

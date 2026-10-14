@@ -75,7 +75,7 @@ _AXIS_LENGTH = """
     JOIN axes USING (axis_key)
     LEFT JOIN (
         SELECT object_id AS axis_id, CAST(json_extract_string(descriptor, '$.length') AS BIGINT) AS offset_count
-        FROM payloads WHERE object_type='Axis' AND field='offsets'
+        FROM payloads JOIN payload_descriptors USING (descriptor_key) WHERE object_type='Axis' AND field='offsets'
     ) offsets USING (axis_id)
     WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
        OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
@@ -90,8 +90,10 @@ _CHUNK_COVERAGE = """
         FROM signal_chunks GROUP BY signal_key
     ) chunks USING (signal_key)
     LEFT JOIN payloads p ON p.object_type='Signal' AND p.object_id=signals.signal_id AND p.field='values' AND p.position=0
-    WHERE CASE WHEN json_extract_string(p.reference, '$.source.dataset') IS NOT NULL OR coalesce(json_extract_string(p.reference, '$.prefix'), '') <> ''
-        THEN CAST(json_extract_string(p.descriptor, '$.length') AS BIGINT) <> signals.n_values
+    LEFT JOIN payload_stores store USING (store_key)
+    LEFT JOIN payload_descriptors descriptor USING (descriptor_key)
+    WHERE CASE WHEN store.dataset_key IS NOT NULL OR store.prefix <> ''
+        THEN CAST(json_extract_string(descriptor.descriptor, '$.length') AS BIGINT) <> signals.n_values
         ELSE coalesce(stored_values, 0) <> signals.n_values END
     LIMIT 1
 """

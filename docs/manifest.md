@@ -40,7 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env={},             # environment provenance (see below)
-    timef_format_version=2,     # required; format 1 needs a rebuild
+    timef_format_version=3,     # required; formats 1 and 2 need a rebuild
 )
 ```
 

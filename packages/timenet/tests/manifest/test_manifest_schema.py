@@ -72,7 +72,7 @@ def _manifest() -> Manifest:
                 ),
             ),
         ),
-        timef_format_version=2,
+        timef_format_version=3,
     )
 
 

@@ -34,4 +34,4 @@ loads datasets with lazy Signal values. Consumer code never runs a connector.
 - [Architecture](architecture.md): how the packages, registries, and build flow fit together.
 - [Datasets](catalog/datasets.md): the datasets already built into the registry.
 
-See [Dataset composition](composition.md) for editable child catalogs, shared payloads, and format 2 migration.
+See [Dataset composition](composition.md) for editable child catalogs, shared payloads, and format 3 migration.

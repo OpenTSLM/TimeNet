@@ -39,4 +39,4 @@ A [registry](../registry.md) serves committed TimeF versions to the [SDK](../cli
 local directory, an S3 prefix, or a remote service. A registry never runs connector code. A local
 [build](../build.md) output is also a registry, so the SDK can read it directly.
 
-See [Dataset composition](../composition.md) for editable child catalogs, shared payloads, and format 2 migration.
+See [Dataset composition](../composition.md) for editable child catalogs, shared payloads, and format 3 migration.

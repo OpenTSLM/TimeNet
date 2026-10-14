@@ -3,9 +3,9 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 2 of the control schema. Object tables carry ``BIGINT`` keys drawn from sequences and
+Version 3 of the control schema. Object tables carry ``BIGINT`` keys drawn from sequences and
 store public IDs once, on their owning rows. Fixed-shape fields are typed columns so they can
-be filtered in SQL; metadata, payload descriptors, and typed references use JSON. The database carries no
+be filtered in SQL; metadata and shared payload descriptors use JSON. Payload coordinates and lineage use typed columns. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
 while streaming and what :func:`timenet.format.control_audit.audit_control_database` re-checks.
 """
@@ -358,28 +358,94 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+DATASET_REFS = Table(
+    "dataset_refs",
+    (_key("dataset_key"), _required("dataset_id"), _required("version")),
+    unique=(("dataset_key",), ("dataset_id", "version")),
+)
+
+PAYLOAD_STORES = Table(
+    "payload_stores",
+    (
+        _key("store_key"),
+        Column("dataset_key", ColumnType.BIGINT),
+        Column("manifest_checksum", ColumnType.VARCHAR),
+        _required("codec"),
+        _required("prefix"),
+    ),
+    unique=(("store_key",),),
+    foreign_keys=(ForeignKey("dataset_key", "dataset_refs", "dataset_key"),),
+)
+
+PAYLOAD_FILES = Table(
+    "payload_files",
+    (_key("file_key"), _key("store_key"), _required("path")),
+    unique=(("file_key",), ("store_key", "path")),
+    foreign_keys=(ForeignKey("store_key", "payload_stores", "store_key"),),
+)
+
+PAYLOAD_DESCRIPTORS = Table(
+    "payload_descriptors",
+    (_key("descriptor_key"), _required("descriptor", ColumnType.JSON)),
+    unique=(("descriptor_key",),),
+)
+
 PAYLOADS = Table(
     "payloads",
     (
+        _key("payload_key"),
         _required("object_type"),
         _required("object_id"),
         _required("field"),
         _key("position"),
-        _required("descriptor", ColumnType.JSON),
-        _required("reference", ColumnType.JSON),
+        _key("descriptor_key"),
+        _key("store_key"),
     ),
-    unique=(("object_type", "object_id", "field", "position"),),
+    unique=(("payload_key",), ("object_type", "object_id", "field", "position")),
+    foreign_keys=(
+        ForeignKey("descriptor_key", "payload_descriptors", "descriptor_key"),
+        ForeignKey("store_key", "payload_stores", "store_key"),
+    ),
 )
-"""Physical references for stored object content, without payload bodies."""
+"""Logical content fields with shared contracts and physical stores."""
+
+PAYLOAD_CHUNKS = Table(
+    "payload_chunks",
+    (
+        _key("payload_key"),
+        _key("position"),
+        _key("file_key"),
+        _key("major"),
+        Column("minor", ColumnType.BIGINT),
+        _key("n_values"),
+    ),
+    unique=(("payload_key", "position"),),
+    foreign_keys=(
+        ForeignKey("payload_key", "payloads", "payload_key"),
+        ForeignKey("file_key", "payload_files", "file_key"),
+    ),
+)
 
 ORIGINS = Table(
     "origins",
-    (_required("object_type"), _required("object_id"), _required("reference", ColumnType.JSON)),
+    (
+        _required("object_type"),
+        _required("object_id"),
+        _key("dataset_key"),
+        _required("origin_kind"),
+        _required("origin_id"),
+    ),
     unique=(("object_type", "object_id"),),
+    foreign_keys=(ForeignKey("dataset_key", "dataset_refs", "dataset_key"),),
 )
-"""Source provenance for independently editable catalog objects."""
+"""Source provenance with each exact release stored once."""
 
 CONTROL_TABLES: tuple[Table, ...] = (
+    DATASET_REFS,
+    PAYLOAD_STORES,
+    PAYLOAD_FILES,
+    PAYLOAD_DESCRIPTORS,
+    PAYLOAD_CHUNKS,
     ORIGINS,
     CONTROL_METADATA,
     PAYLOADS,
