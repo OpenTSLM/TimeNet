@@ -67,6 +67,7 @@ class TimeFWriter:
         inline_bytes: int = 4096,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
+        row_group_layout: Literal["packed", "record", "auto"] = "packed",
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int | None = None,
@@ -82,6 +83,9 @@ class TimeFWriter:
             dataset: The populated dataset. The writer derives the schema automatically if needed.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
+            row_group_layout: Parquet grouping. ``packed`` combines recordings, ``record``
+                separates recordings, and ``auto`` separates recordings with at least 128 KiB
+                of numeric signal values. The byte cap still bounds each group. Zarr ignores it.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned compression level, or ``None`` for the backend default.
@@ -126,6 +130,9 @@ class TimeFWriter:
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
+        if row_group_layout not in {"packed", "record", "auto"}:
+            raise TimeFValidationError(f"unsupported row-group layout {row_group_layout!r}")
+        self._row_group_layout = row_group_layout
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -200,8 +207,20 @@ class TimeFWriter:
 
         self._payload_copier = PayloadCopier(self._staging_dir)
         self._preflight_resolvers: dict[int, PayloadResolver] = {}
-        unique_series, _series_to_records = self._dedupe_series()
-        placements = self._write_values([signal for signal in unique_series if signal.values.reference is None])
+        unique_series, series_to_records = self._dedupe_series()
+        owned = [signal for signal in unique_series if signal.values.reference is None]
+        groups = self._record_groups(owned, series_to_records)
+        if groups:
+            owned.sort(
+                key=lambda signal: (
+                    signal.spec.spec_type,
+                    signal.id in groups,
+                    series_to_records[signal.id][0],
+                    signal.name,
+                    signal.id,
+                )
+            )
+        placements = self._write_values(owned, groups)
         tasks = (
             self._dataset.iter_streamed_tasks_validated()
             if self._dataset.has_task_stream
@@ -382,7 +401,23 @@ class TimeFWriter:
         )
         return ordered, series_to_records
 
-    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _record_groups(self, signals: list[Signal], records: dict[str, list[str]]) -> dict[str, str]:
+        if self._values_backend_name != ValuesBackend.PARQUET or self._row_group_layout == "packed":
+            return {}
+        sizes: dict[str, int] = defaultdict(int)
+        for signal in signals:
+            if signal.spec.dtype not in {"str", "enum"}:
+                sizes[records[signal.id][0]] += signal.n_values * np.dtype(signal.spec.dtype).itemsize
+        minimum_bytes = 128 * 2**10
+        return {
+            signal.id: records[signal.id][0]
+            for signal in signals
+            if self._row_group_layout == "record" or sizes[records[signal.id][0]] >= minimum_bytes
+        }
+
+    def _write_values(
+        self, unique_series: list[Signal], groups: dict[str, str]
+    ) -> dict[tuple[str, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -402,6 +437,7 @@ class TimeFWriter:
                 "compression": self._compression,
                 "data_page_size": self._data_page_size,
                 "value_encoding": self._forced_value_encoding,
+                "series_groups": groups,
             }
             if self._compression_level is not None:
                 parquet_kwargs["compression_level"] = self._compression_level
