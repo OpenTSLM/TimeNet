@@ -15,6 +15,7 @@ from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_o
 from timenet.types.ids import new_id
 from timenet.types.modalities import InputModality
 from timenet.types.payloads import Payload
+from timenet.types.references import AnnotationContentRef, TaskRef
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
 from timenet.types.units import normalize_unit
@@ -105,7 +106,7 @@ class TaskArguments(TypedDict, total=False):
     scope: Span | None
     input_annotations: Iterable[Annotation]
     target_annotations: Iterable[Annotation]
-    from_tasks: Iterable["Task"]
+    from_tasks: Iterable["Task | TaskRef"]
     annotations: Iterable[Annotation]
     metadata: JsonMapping
 
@@ -146,7 +147,7 @@ class Task(SupportsAnnotate, ABC):
     """Existing annotation occurrences that form the expected output."""
     _rationale: Payload[str] | None = field(default=None, repr=False)
     """Optional explanation associated with the answer."""
-    from_tasks: tuple["Task", ...] = field(default=(), compare=False)
+    from_tasks: tuple[TaskRef, ...] = field(default=(), compare=False)
     """Tasks from which this task was derived."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations describing this task itself."""
@@ -174,6 +175,11 @@ class Task(SupportsAnnotate, ABC):
             setattr(self, item.name, value)
         self.__post_init__()
 
+    @property
+    def ref(self) -> TaskRef:
+        """Return this task's lightweight catalog identity."""
+        return TaskRef(id=self.id)
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name in {"prompt", "rationale", "targets"}:
             raise TimeFValidationError(f"use set_{name}() to update task {name}")
@@ -183,6 +189,11 @@ class Task(SupportsAnnotate, ABC):
             value = tuple(Payload.from_value(item) if isinstance(item, str) else item for item in value)
         if name in {"_prompt", "_rationale"} and isinstance(value, Payload) and value.descriptor.kind != "str":
             raise TimeFValidationError(f"task {name.removeprefix('_')} requires a text payload")
+        if name == "from_tasks":
+            value = tuple(
+                item if isinstance(item, TaskRef) else TaskRef(id=item.id)
+                for item in cast("Iterable[Task | TaskRef]", value)
+            )
         super().__setattr__(name, value)
 
     def __post_init__(self) -> None:
@@ -343,10 +354,12 @@ class ClassificationTask(Task):
     """Classify the inputs, optionally using a named label vocabulary."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
-    target_schema: str | None = None
+    target_schema: str | AnnotationContentRef | None = None
     """Optional name of the label vocabulary."""
 
-    def __init__(self, *, target_schema: str | None = None, **kwargs: Unpack[TaskArguments]) -> None:
+    def __init__(
+        self, *, target_schema: str | AnnotationContentRef | None = None, **kwargs: Unpack[TaskArguments]
+    ) -> None:
         self._initialize({**kwargs, "target_schema": target_schema})
 
 

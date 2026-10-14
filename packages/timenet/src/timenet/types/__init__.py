@@ -16,7 +16,7 @@ from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
 from timenet.types.payloads import ArrayPayload, Payload, PayloadDescriptor
-from timenet.types.references import DatasetRef, ObjectRef
+from timenet.types.references import AnnotationContentRef, DatasetRef, ObjectRef, TaskRef
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -52,6 +52,7 @@ __all__ = [
     "US_PER_S",
     "Access",
     "Annotation",
+    "AnnotationContentRef",
     "AnnotationDescriptor",
     "AnnotationType",
     "AnswerTask",
@@ -80,6 +81,7 @@ __all__ = [
     "TSGenerationTask",
     "TargetItem",
     "Task",
+    "TaskRef",
     "TaskType",
     "TemporalLocalizationTask",
     "TimeInterval",

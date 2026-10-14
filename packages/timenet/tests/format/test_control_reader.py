@@ -360,8 +360,8 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     assert [task.id for task in tasks] == ["task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"]
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = tasks[0]
-    assert answer.from_tasks == (tasks[1],)
-    assert answer.from_tasks[0] is tasks[1]
+    assert answer.from_tasks == (tasks[1].ref,)
+    assert answer.from_tasks[0].id == tasks[1].id
 
 
 @pytest.mark.parametrize("materialize", [False, True])
@@ -376,7 +376,7 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
 
     by_id = {task.id: task for task in tasks}
     assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
-    assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
+    assert by_id["task-answer-0"].from_tasks[0].id == by_id["task-cls-0"].id
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 

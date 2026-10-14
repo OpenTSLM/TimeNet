@@ -34,6 +34,7 @@ from timenet.types import (
 )
 from timenet.types.payload_references import PayloadChunk, PayloadReference
 from timenet.types.payloads import Payload, PayloadDescriptor
+from timenet.types.references import AnnotationContentRef, validate_task_graph
 from timenet.types.splits import parse_split
 
 
@@ -207,6 +208,11 @@ class _HierarchyKeys(NamedTuple):
 
     sources: dict[str, int]
     signals: dict[str, int]
+
+
+def _schema_content_ids(task: Task) -> tuple[str, ...]:
+    reference = getattr(task, "target_schema", None)
+    return (reference.id,) if isinstance(reference, AnnotationContentRef) else ()
 
 
 class _OffsetSignature(NamedTuple):
@@ -532,6 +538,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If a task refers to an object outside the dataset or derives from itself.
         """
         task_ids: set[str] = set()
+        self._schema_content_ids: set[str] = set()
         dependency_rows: list[tuple[str, int, str]] = []
         annotation_refs: list[tuple[int, str, int, str]] = []
         task_keys: dict[str, int] = {}
@@ -545,6 +552,7 @@ class DuckDBControlWriter:
                 if task.id in task_ids:
                     raise TimeFValidationError(f"task id {task.id!r} is not unique")
                 task_ids.add(task.id)
+                self._schema_content_ids.update(_schema_content_ids(task))
                 task_keys[task.id] = task_key
                 task_type = str(task.task_type)
                 task_counts[task_type] = task_counts.get(task_type, 0) + 1
@@ -606,14 +614,12 @@ class DuckDBControlWriter:
             _insert_rows(connection, TABLES["tasks"], task_rows)
             _insert_rows(connection, TABLES["task_targets"], target_rows)
             _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+        graph: dict[str, set[str]] = {identity: set() for identity in task_ids}
+        for task_id, _, parent_id in dependency_rows:
+            graph[task_id].add(parent_id)
+        validate_task_graph(graph)
         stored_dependencies: list[dict[str, object]] = []
         for task_id, position, parent_id in dependency_rows:
-            if parent_id == task_id:
-                raise TimeFValidationError(f"task {task_id!r} depends on itself")
-            if parent_id not in task_ids:
-                raise TimeFValidationError(
-                    f"task {task_id!r} depends on task {parent_id!r}, which is not in the dataset"
-                )
             stored_dependencies.append(
                 {
                     "task_key": task_keys[task_id],
@@ -1033,6 +1039,9 @@ class DuckDBControlWriter:
                     "metadata": _json(annotation.occurrence_metadata),
                 }
             )
+        missing = self._schema_content_ids - contents.keys()
+        if missing:
+            raise TimeFValidationError(f"task schemas refer to unknown annotation content {sorted(missing)}")
         content_batch.flush()
         occurrence_batch.flush()
         return occurrence_keys

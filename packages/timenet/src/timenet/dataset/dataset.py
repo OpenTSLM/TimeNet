@@ -2,6 +2,7 @@
 
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from itertools import chain
 from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -80,7 +81,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._annotations: list[Annotation] = []
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
-        self._task_stream: Callable[[], Iterator[Task]] | None = None
+        self._task_sources: list[Callable[[], Iterator[Task]]] = []
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
@@ -249,31 +250,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
-        """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
+        """Append a replayable task source. Prefer :meth:`add_task_stream` for new code."""
+        self.add_task_stream(task_types, source)
 
-        For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records, then
-        hands the tasks over through ``source``; the writer streams them to disk without a list. Streamed
-        tasks do not populate ``Record.task_ids``.
-
-        Args:
-            task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
-                Every yielded task must be one of these types.
-            source: A callable returning a fresh iterator over the tasks each time it is called. The
-                writer calls it more than once (a peek for id storage, then the write), so it must
-                re-read its source rather than exhaust a one-shot generator.
-
-        Raises:
-            TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
-                streams its tasks or materializes them, never both, or the writer would drop one set.
-        """
-        if self._tasks:
-            raise TimeFValidationError(
-                "set_task_stream cannot follow add_task/add_tasks: a dataset either streams its tasks or "
-                "materializes them, not both"
-            )
-        self._streamed_task_types = tuple(task_types)
-        self._task_stream = source
+    def add_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
+        """Append a replayable task source alongside local tasks and other sources."""
+        self._streamed_task_types = tuple(self._ordered_unique((*self._streamed_task_types, *task_types)))
+        self._task_sources.append(source)
+        self._schema = None
 
     def iter_tasks(
         self,
@@ -297,7 +281,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
         wanted = None if split is None else parse_splits(split)
-        source = self._task_stream() if self._task_stream is not None else self._tasks
+        source = chain(self._tasks, chain.from_iterable(source() for source in self._task_sources))
         for task in source:
             if wanted is not None and task.split not in wanted:
                 continue
@@ -326,7 +310,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a streamed task fails one of the per-task checks.
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
-        declared = set(self._streamed_task_types)
+        declared = {*self._streamed_task_types, *(type(task) for task in self._tasks)}
         for task in self.iter_tasks():
             self._validate_streamed_task(task, index, declared)
             yield task
@@ -384,11 +368,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
-        """
-        if self._task_stream is not None:
-            raise TimeFValidationError(
-                "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
-            )
+        """  # noqa: DOC502 - raised by batch validation
         self._validate_task_batch(batch)
         # Extend each record's task_ids once per batch rather than once per task, so a record with
         # thousands of tasks does not copy its tuple thousands of times.
@@ -433,7 +413,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 parent_id = parent.id
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
-                if parent_id not in known_task_ids:
+                if parent_id not in known_task_ids and not self.has_task_stream:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {task.id!r} derives from task {parent_id!r}, which is not "
                         f"registered in this dataset or part of the batch"
@@ -569,7 +549,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         # A streamed dataset declares its task types up front, so the schema records them without
         # draining the stream just to collect them.
         streamed = self._ordered_unique(self._streamed_task_types)
-        tasks = streamed if self._task_stream is not None else self._ordered_unique(type(task) for task in self._tasks)
+        tasks = self._ordered_unique((*streamed, *(type(task) for task in self._tasks)))
         self._schema = DatasetSchema(
             time_series_specs=tuple(specs),
             annotations=tuple(annotations),
@@ -739,7 +719,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     @property
     def has_task_stream(self) -> bool:
         """Whether tasks stream from a source (see :meth:`set_task_stream`) rather than the ``_tasks`` list."""
-        return self._task_stream is not None
+        return bool(self._task_sources)
 
     @property
     def schema(self) -> DatasetSchema | None:

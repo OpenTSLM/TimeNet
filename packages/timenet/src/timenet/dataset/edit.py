@@ -273,7 +273,7 @@ def _rebuild_tasks(
     for task in dataset.tasks:
         if task.id in rebuilt:
             rebuilt[task.id].from_tasks = tuple(
-                rebuilt[parent.id] for parent in task.from_tasks if parent.id in rebuilt
+                rebuilt[parent.id].ref for parent in task.from_tasks if parent.id in rebuilt
             )
     return list(rebuilt.values())
 

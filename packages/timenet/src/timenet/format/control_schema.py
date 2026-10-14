@@ -293,7 +293,7 @@ TASKS = Table(
         Column("scope_end", ColumnType.BIGINT),
         Column("scope_signal_keys", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
-        Column("target_schema", ColumnType.VARCHAR),
+        Column("target_schema", ColumnType.JSON),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),
         Column("mode", ColumnType.VARCHAR),
