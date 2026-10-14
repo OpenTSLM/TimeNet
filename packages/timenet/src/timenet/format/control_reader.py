@@ -1603,8 +1603,8 @@ class _TaskHydration:
     """State for one :meth:`DuckDBControlReader.iter_tasks` call.
 
     It holds the caller's Records and the lookups built from them, loads Records and Signals a
-    task refers to outside that set on demand, and keeps every task that another task derives
-    from until its dependants are built.
+    task refers to outside that set on demand, and keeps derivation identities without retaining
+    parent task bodies.
     """
 
     def __init__(  # noqa: PLR0913 - one argument per task selection axis

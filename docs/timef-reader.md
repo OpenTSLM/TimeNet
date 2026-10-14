@@ -38,7 +38,8 @@ chunk caches.
 Creating the reader does not open the control database. The first request for records, tasks, or
 annotations opens `control.duckdb` in read-only mode.
 
-Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
+Records load with their Sources, Signals, axes, and annotations. External signal, timestamp,
+annotation, and task text bodies stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
@@ -62,9 +63,9 @@ The manifest describes the dataset schema and its files. The DuckDB control data
 object hierarchy and relationships. The reader combines both sources to rebuild standard TimeNet
 types.
 
-Annotation values return with their stored types. Spans return as `TimePoint`, `TimeInterval`,
+Annotation values are explicit `Payload` handles. Call `read_value()` to get their native types. Spans return as `TimePoint`, `TimeInterval`,
 `StepPoint`, or `StepInterval`. The task type selects a built-in task class, and `from_tasks`
-contains resolved Task objects.
+contains lightweight `TaskRef` identities. Parent task bodies are not hydrated.
 
 ## Value reads
 
@@ -111,3 +112,16 @@ also restores task relationships and Signal values with their original dtype and
 are the durable references. Python object identity from the writer process is not preserved.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
+
+## Payload references and exports
+
+Inspect `payload.descriptor` and `payload.reference` without loading content. Read with
+`annotation.read_value()`, `task.read_prompt()`, `task.read_rationale()`, `task.read_targets()`, or
+`signal.values.read()`.
+
+Arrow table methods default to `payloads="references"`. External fields have null native values
+and explicit descriptor and reference columns. `payloads="materialize"` resolves the bodies into
+native columns. Metadata filters do not search external text. `verify()` checks the flat physical
+owner list, including payload files, without requiring foreign control databases.
+
+See [Dataset composition](composition.md) for ownership and migration.

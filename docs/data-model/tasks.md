@@ -41,7 +41,7 @@ Every Task supports these fields:
 | `input_annotations` | Attached Annotation occurrences supplied as context. |
 | `target_annotations` | Attached Annotation occurrences used as the answer. |
 | `rationale` | Optional explanation associated with the answer. |
-| `from_tasks` | Parent Tasks from which this Task derives. |
+| `from_tasks` | TaskRef identities of parent tasks. |
 | `annotations` | Annotations that describe the Task itself. |
 | `metadata` | JSON-compatible Task details. |
 
@@ -123,9 +123,9 @@ the Task ID to each input Record.
 
 Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in the same batch.
 
-For a large task corpus, use `set_task_stream()`. The writer validates each streamed Task before it
-writes the Task. A stream does not keep the complete task set in memory. TimeNet therefore cannot
-check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
+For a large task corpus, use `add_task_stream()`. Local tasks and multiple replayable sources can
+coexist. The writer checks duplicate IDs, missing parents, and cycles across the complete output
+using task identities. It does not retain parent task bodies.
 
 ## Scope an input
 
@@ -276,9 +276,14 @@ answer = AnswerTask(
     inputs=(record,),
     prompt="Is this machine healthy?",
     targets=("No",),
-    from_tasks=(label,),
+    from_tasks=(label.ref,),
 )
 dataset.add_tasks(tasks=(label, answer))
 ```
 
 TimeNet rejects missing parents, self-references, and derivation cycles.
+
+Large prompts, rationales, and text targets use explicit payload handles. Native constructor inputs
+remain convenient. Read content with `read_prompt()`, `read_rationale()`, and `read_targets()`.
+Use `AnnotationContentRef(id=content_id)` for an annotation-backed classification vocabulary.
+A plain `target_schema` string names a schema. See [Dataset composition](../composition.md).
