@@ -17,12 +17,13 @@ import pyarrow as pa
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.dataset.origins import origin_slots
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.batches import TableBatch as _TableBatch, _insert_rows
 from timenet.format.checksums import CHECKSUM_PREFIX
+from timenet.format.control_audit import audit_control_database
 from timenet.format.control_schema import TABLES
-from timenet.format.duckdb import connect_control, create_control_schema, transaction
+from timenet.format.duckdb import CATALOG_VALIDATION_VERSION, connect_control, create_control_schema, transaction
 from timenet.format.reference_catalog import ReferenceCatalogWriter
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
@@ -291,7 +292,15 @@ class DuckDBControlWriter:
                     self._write_chunks(connection, placements)
                     self._write_payloads(dataset, placements, self._payloads)
                     self._references.flush()
-                    self._check_source_tree(connection)
+                    try:
+                        audit_control_database(connection, require_chunks=placements is not None)
+                    except TimeFFormatError as exc:
+                        raise TimeFValidationError(f"finished catalog failed publication audit: {exc}") from exc
+                    if placements is not None:
+                        connection.execute(
+                            "INSERT INTO control_metadata VALUES ('validation_version', ?)",
+                            [CATALOG_VALIDATION_VERSION],
+                        )
                 self._payload_store.close()
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
@@ -507,6 +516,9 @@ class DuckDBControlWriter:
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
             for task, task_key in zip(batch, batch_task_keys, strict=True):
+                task.__post_init__()
+                task.check_against_scope()
+                TimeFDataset._check_task_record_scope(task)
                 if task.id in task_ids:
                     raise TimeFValidationError(f"task id {task.id!r} is not unique")
                 task_ids.add(task.id)
@@ -1002,41 +1014,3 @@ class DuckDBControlWriter:
         content_batch.flush()
         occurrence_batch.flush()
         return occurrence_keys
-
-    @staticmethod
-    def _check_source_tree(connection: duckdb.DuckDBPyConnection) -> None:
-        """Confirm the stored Sources form one tree per Record.
-
-        The writer walks each Record's Source tree recursively, so both conditions hold by
-        construction. They are checked in SQL anyway because ``sources`` is small and the recursive
-        query is the clearest statement of the invariant.
-
-        Raises:
-            TimeFValidationError: If a Source and its parent belong to different Records, or the
-                parent relationship contains a cycle.
-        """
-        wrong_parent = connection.execute(
-            """SELECT child.source_id
-               FROM sources child
-               JOIN sources parent ON parent.source_key = child.parent_source_key
-               WHERE child.record_key <> parent.record_key
-               LIMIT 1"""
-        ).fetchone()
-        if wrong_parent is not None:
-            raise TimeFValidationError(f"source {wrong_parent[0]!r} and its parent belong to different records")
-
-        cycle = connection.execute(
-            """WITH RECURSIVE ancestors(source_key, parent_source_key, path, cyclic) AS (
-                   SELECT source_key, parent_source_key, [source_key], false FROM sources
-                   UNION ALL
-                   SELECT parent.source_key, parent.parent_source_key,
-                          list_append(ancestors.path, parent.source_key),
-                          list_contains(ancestors.path, parent.source_key)
-                   FROM ancestors
-                   JOIN sources parent ON parent.source_key = ancestors.parent_source_key
-                   WHERE NOT ancestors.cyclic
-               )
-               SELECT source_key FROM ancestors WHERE cyclic LIMIT 1"""
-        ).fetchone()
-        if cycle is not None:
-            raise TimeFValidationError(f"source hierarchy contains a cycle at {cycle[0]!r}")

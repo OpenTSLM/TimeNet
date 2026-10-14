@@ -10,7 +10,9 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.control_reader import DuckDBControlReader
 import timenet.payloads.reader as reader_module
+from timenet.payloads.reader import PayloadResolver
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
@@ -308,10 +310,13 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axes SET last_us = last_us + 1000 WHERE axis_type = 'irregular'")
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        DuckDBControlReader(
+            version_dir / "control.duckdb",
+            payload_loader=PayloadResolver(DatasetVersion.open_local(version_dir)).payload,
+        ) as reader,
         pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"),
     ):
-        next(reader.iter_records())
+        reader.read_records()
 
 
 def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path):
@@ -336,10 +341,13 @@ def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path)
         connection.execute("UPDATE signals SET n_values = 4 WHERE name = 'humidity'")
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        DuckDBControlReader(
+            version_dir / "control.duckdb",
+            payload_loader=PayloadResolver(DatasetVersion.open_local(version_dir)).payload,
+        ) as reader,
         pytest.raises(TimeFFormatError, match="shared by Signals with different lengths"),
     ):
-        next(reader.iter_records())
+        reader.read_records()
 
 
 def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):

@@ -6,6 +6,8 @@ public IDs here; the writer and reader swap them for internal keys at the table 
 """
 
 from collections.abc import Iterable
+from dataclasses import MISSING, fields
+from functools import cache
 import json
 from typing import Any, cast
 
@@ -29,6 +31,7 @@ from timenet.types import (
 )
 from timenet.types.payloads import Payload
 from timenet.types.references import AnnotationContentRef
+from timenet.types.units import normalize_unit
 
 
 TARGET_VALUE_COLUMNS = (
@@ -321,3 +324,37 @@ def _tuple_or_none(value: object) -> tuple[str, ...] | None:
         The immutable sequence, or ``None``.
     """
     return None if value is None else tuple(cast("Iterable[str]", value))
+
+
+@cache
+def _catalog_task_defaults(cls: type[Task]) -> tuple[dict[str, Any], dict[str, Any]]:
+    defaults = {item.name: item.default for item in fields(cls) if item.default is not MISSING}
+    factories = {item.name: item.default_factory for item in fields(cls) if item.default_factory is not MISSING}
+    return defaults, factories
+
+
+def hydrate_validated_task(cls: type[Task], values: dict[str, Any]) -> Task:
+    """Restore a task from an audited catalog whose exact bytes passed checksum verification.
+
+    Public constructors still validate caller input. This internal path only wraps decoded
+    native content and restores defaults. It retains the same mutable and lazy public objects.
+
+    Returns:
+        The restored concrete task.
+    """
+    defaults, factories = _catalog_task_defaults(cls)
+    data = {**defaults, **{name: factory() for name, factory in factories.items()}, **values}
+    for field in ("prompt", "rationale"):
+        value = data.pop(field)
+        data[f"_{field}"] = value if value is None or isinstance(value, Payload) else Payload.from_value(value)
+    targets = data.pop("targets")
+    data["_targets"] = (
+        None
+        if targets is None
+        else tuple(Payload.from_value(item) if isinstance(item, str) else item for item in targets)
+    )
+    if issubclass(cls, ScalarPredictionTask):
+        data["unit"] = normalize_unit(data["unit"])
+    task = cls.__new__(cls)
+    task.__dict__.update(data)
+    return task

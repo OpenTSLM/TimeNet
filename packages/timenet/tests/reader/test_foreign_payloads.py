@@ -4,7 +4,7 @@ import pickle
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.payloads.reader import StoredPayloadLoader
 from timenet.reader import TimeFReader
@@ -82,3 +82,10 @@ def test_child_and_grandchild_share_pinned_payloads_without_body_reads(tmp_path,
     with pytest.raises(TimeFFormatError, match="checksum mismatch"):
         signal.values.read()
     assert source is not None
+
+    broken = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "timenet/broken"}))
+    for record in deepcopy(loaded.records):
+        broken.add_record(record=record)
+    with pytest.raises(TimeFValidationError, match="manifest checksum mismatch"):
+        broken.write(path=tmp_path)
+    assert not (tmp_path / "timenet/broken/1.0.0/manifest.json").exists()

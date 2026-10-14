@@ -308,6 +308,7 @@ class TimeFReader:
             self._control = DuckDBControlReader(
                 materialize_control(self._version),
                 payload_loader=self._payload_resolver.payload,
+                verified=True,
             )
         return self._control
 
