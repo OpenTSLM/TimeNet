@@ -17,6 +17,7 @@ from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
+from timenet.registry.local import LocalRegistry
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
@@ -309,7 +310,8 @@ def edit_version(
     # values. If the reader's `with` block exits first, the write happens through a closed
     # reader. That only worked because close() silently reopened the shards and leaked the
     # handles.
-    with TimeFReader(DatasetVersion.open_local(base_dir)) as reader:
+    version = DatasetVersion.open_local(base_dir)
+    with TimeFReader(version) as reader:
         base_version = str(reader.metadata.dataset_version)
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
@@ -325,6 +327,18 @@ def edit_version(
             annotations=edited.annotations,
         )
         edited.derive_schema()
+
+        # An output in another registry needs the pinned owners alongside its new catalog.
+        if version.payload_root is None:
+            raise TimeFEditError("editing a release requires a registry-rooted version directory")
+        if Path(version.payload_root).resolve() != out_root.resolve():
+            registry = LocalRegistry(Path(version.payload_root))
+            releases = [(version.manifest.dataset_id, base_version)]
+            releases.extend(
+                (source.dataset.dataset_id, str(source.dataset.version)) for source in version.manifest.payload_sources
+            )
+            for dataset_id, release in releases:
+                registry.download_version(dataset_id, release, out_root / dataset_id / release)
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()

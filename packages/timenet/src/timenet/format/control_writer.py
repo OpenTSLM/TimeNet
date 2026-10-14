@@ -446,8 +446,8 @@ class DuckDBControlWriter:
             )
         batch.flush()
 
-    @staticmethod
     def _write_chunks(
+        self,
         connection: duckdb.DuckDBPyConnection,
         placements: dict[tuple[str, int], ChunkPlacement] | None,
     ) -> None:
@@ -478,7 +478,9 @@ class DuckDBControlWriter:
                 raise TimeFValidationError(f"chunk {chunk_index} of signal {signal_id!r} is empty")
             stored_values[signal_id] += placement.n_values
         for signal_id, (_, n_values) in signals.items():
-            if stored_values[signal_id] != n_values:
+            payload = self._payloads.get(("Signal", signal_id, "values", 0))
+            foreign = payload is not None and payload[1].source is not None
+            if stored_values[signal_id] != n_values and not foreign:
                 raise TimeFValidationError(
                     f"signal {signal_id!r} declares {n_values} values but its chunks store {stored_values[signal_id]}"
                 )
@@ -831,8 +833,13 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets != existing.offsets_loader:
-                candidate = _validated_irregular_offsets(signal)
-                candidate_signature = _offset_signature(candidate)
+                if signal.time_offsets is not None and signal.time_offsets.reference is not None:
+                    candidate_signature = _OffsetSignature(
+                        signal.n_values, signal.time_offsets.reference.model_dump_json()
+                    )
+                else:
+                    candidate = _validated_irregular_offsets(signal)
+                    candidate_signature = _offset_signature(candidate)
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -909,12 +916,28 @@ class DuckDBControlWriter:
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-            offsets = _validated_irregular_offsets(signal)
             if signal.time_offsets is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no timestamp payload")
-            reference = batches.store.offsets(pa.array(offsets, type=pa.int64()))
-            batches.payloads["Axis", axis.axis_id, "offsets", 0] = (signal.time_offsets.descriptor, reference)
-            return _offset_signature(offsets)
+            payload = signal.time_offsets
+            descriptor = payload.descriptor
+            if (descriptor.length, descriptor.first_us, descriptor.last_us, descriptor.dtype) != (
+                signal.n_values,
+                axis.first_us,
+                axis.last_us,
+                "int64",
+            ):
+                raise TimeFValidationError(f"axis {axis.axis_id!r} has an incompatible timestamp payload")
+            if payload.reference is not None:
+                reference = payload.reference
+                if reference.source is None:
+                    raise TimeFValidationError("reused timestamp references must name a pinned owner")
+                signature = _OffsetSignature(signal.n_values, reference.model_dump_json())
+            else:
+                offsets = _validated_irregular_offsets(signal)
+                reference = batches.store.offsets(pa.array(offsets, type=pa.int64()))
+                signature = _offset_signature(offsets)
+            batches.payloads["Axis", axis.axis_id, "offsets", 0] = (descriptor, reference)
+            return signature
         if isinstance(axis, OrdinalAxis):
             batches.axes.add(
                 {
