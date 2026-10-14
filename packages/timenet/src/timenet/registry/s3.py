@@ -153,7 +153,12 @@ class S3Registry(WritableRegistry):
         if (cached / MANIFEST_FILE).exists():
             return DatasetVersion.open_local(cached)
         root = self._key(dataset_id, resolved)
-        return DatasetVersion(manifest=manifest, filesystem=self._s3_filesystem(), root=f"{self._bucket}/{root}")
+        return DatasetVersion(
+            manifest=manifest,
+            filesystem=self._s3_filesystem(),
+            root=f"{self._bucket}/{root}",
+            payload_root=f"{self._bucket}/{self._key(_DATASETS_PREFIX)}",
+        )
 
     def store(
         self,
