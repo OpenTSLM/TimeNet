@@ -72,18 +72,17 @@ class PayloadResolver:
             )
         return self._source
 
-    def resolve(self, reference: PayloadReference) -> DatasetVersion:
-        """Resolve the reference's physical root without opening any control database.
+    def owner(self, source: PayloadSource | None) -> DatasetVersion:
+        """Open an exact pinned physical owner without consulting its catalog.
 
         Returns:
-            The physical source handle.
+            The immutable owner handle.
 
         Raises:
-            TimeFFormatError: If the source is unavailable or a locator is absent from its manifest.
+            TimeFFormatError: If the owner is missing, undeclared, or has a different manifest pin.
         """
         version = self.version
-        if reference.source is not None and reference.source != self.source():
-            source = reference.source
+        if source is not None and source != self.source():
             if source not in self.version.manifest.payload_sources:
                 raise TimeFFormatError(f"undeclared payload source {source.dataset}")
             if source not in self._versions:
@@ -107,6 +106,18 @@ class PayloadResolver:
                     manifest, self.version.filesystem, root, self.version.payload_root
                 )
             version = self._versions[source]
+        return version
+
+    def resolve(self, reference: PayloadReference) -> DatasetVersion:
+        """Resolve the reference's physical root without opening any control database.
+
+        Returns:
+            The physical source handle.
+
+        Raises:
+            TimeFFormatError: If the source is unavailable or a locator is absent from its manifest.
+        """
+        version = self.owner(reference.source)
         owned = {part.path for part in version.manifest.files.all_files()}
         prefix = f"{reference.prefix}/" if reference.prefix else ""
         for chunk in reference.chunks:
