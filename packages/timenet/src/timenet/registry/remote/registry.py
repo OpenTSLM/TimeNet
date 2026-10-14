@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 import tempfile
-from typing import BinaryIO, cast
+from typing import BinaryIO, Literal, cast
 
 import httpx
 
@@ -179,6 +179,7 @@ class RemoteRegistry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and publish it to the remote registry.
@@ -207,8 +208,15 @@ class RemoteRegistry(WritableRegistry):
             return version
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
-            with TimeFWriter(staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging_root,
+                dataset,
+                values_backend=values_backend,
+                payload_policy=payload_policy,
+                progress_cb=progress_cb,
+            ) as writer:
                 writer.write()
+                self.validate_payload_sources(writer.payload_sources)
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
