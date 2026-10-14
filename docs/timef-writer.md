@@ -62,6 +62,8 @@ A failed operation publishes nothing.
 
 | Argument | Purpose |
 | --- | --- |
+| `payload_policy` | `"reuse"` keeps stored references; `"copy"` makes stored payloads local. |
+| `inline_bytes` | Text and text-list inline limit; default 4096 bytes. |
 | `values_backend` | `"parquet"` or `"zarr"`. |
 | `chunk_max_bytes` | Maximum logical Signal chunk size. |
 | `shard_target_bytes` | Approximate value-shard rotation target. |
@@ -72,7 +74,7 @@ A failed operation publishes nothing.
 | `value_encoding` | Parquet values-column encoding, or `"auto"`. |
 
 Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve nullable
-timesteps. Irregular-axis offsets live in `control.duckdb`, not in either values backend.
+timesteps. Irregular-axis offsets live in packed int64 payload files. DuckDB keeps their descriptors and references.
 
 ## Validation
 
@@ -107,3 +109,10 @@ materialized in Python.
 Pass `progress_cb` to receive `WriteProgressEvent` objects. Events report schema work, completed
 Signals, finalized value shards, and the final commit. The callback is observational: an exception
 from it aborts the write like any other failure.
+
+## Stored content
+
+The default reuse policy writes a complete catalog and preserves pinned physical references.
+It does not decode stored arrays, timestamps, or text. Required owners must remain available under
+the configured registry root. Copy mode transfers each required artifact once and preserves its
+codec. It can copy unused cells in shared artifacts. See [Dataset composition](composition.md).

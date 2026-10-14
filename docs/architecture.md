@@ -118,3 +118,5 @@ can read it directly.
 3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: use `TimeNet.load()` for lazy access or `timenet download` for a local copy.
+
+See [Dataset composition](composition.md) for editable child catalogs, shared payloads, and format 2 migration.
