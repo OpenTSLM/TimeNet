@@ -99,10 +99,11 @@ def _declared_names(requirements):
     ("dataset_id", "expected"),
     [
         ("chengsenwang/tsqa", {"huggingface-hub"}),
-        ("physionet/ecg-qa-cot", {"wfdb", "boto3"}),
+        ("physionet/ptb-xl", {"wfdb", "boto3"}),
+        ("physionet/ecg-qa-cot", set()),
     ],
 )
 def test_connectors_declare_their_own_requirements(dataset_id, expected):
     path = requirements_for(dataset_id)
     assert path is not None
-    assert expected <= _declared_names(path.read_text())
+    assert expected == _declared_names(path.read_text())

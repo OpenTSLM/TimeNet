@@ -1,16 +1,9 @@
-"""The ECG-QA CoT connector: PTB-XL 12-lead ECGs with chain-of-thought question answering.
+"""Add ECG-QA CoT questions and rationales to the stored PTB-XL recording catalog.
 
-Each record is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
-an :class:`~timenet.types.AnswerTask` on that recording, whose ``prompt`` is the question, ``target``
-is the short evaluation answer, and ``rationale`` is the reasoning target. So a recording carries many
-QA tasks; there is no record per question. Per-question metadata (question type, template, answer
-options, clinical context) is stored once as value-deduped annotations the tasks reference, and each
-recording carries its dataset split. The ~230k tasks stream to disk, so they never all live in memory.
-
-Sources come from three places. The signals come from PhysioNet PTB-XL. The per-template answer options
-come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows (question, answer, rationale,
-template) come from the OpenTSLM release, the only public source for the rationales. Real build needs
-the network and a multi-GB PTB-XL download.
+Each record retains its original ID, 12 leads at 500 Hz, and ECG-QA split annotation.
+Waveform payloads remain in the exact PTB-XL input release. Question metadata,
+answers, and rationales retain the standalone connector's consumer representation.
+The replayable task stream avoids holding every question in memory.
 """
 
 import ast
@@ -18,27 +11,21 @@ import asyncio
 from collections.abc import Iterator, Mapping
 import csv
 from dataclasses import dataclass
-from fractions import Fraction
 import hashlib
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.connectors import BuildContext
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.connectors import BaseConnector, BuildContext
+from timenet.dataset import Record, TimeFDataset
+from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
     AnswerTask,
-    TimeSeriesSpec,
-    ureg,
+    DatasetRef,
 )
-from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
 
 
-# PTB-XL 500 Hz records from PhysioNet's open S3 bucket. ``_hr`` means high-rate (500 Hz) recordings.
-# Fetched with boto3, which resolves AWS credentials itself (anonymous access works for this open bucket).
-PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
 # The per-template answer options (the multiple-choice candidates), keyed by template_id.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
     "https://raw.githubusercontent.com/Jwoo5/ecg-qa/master/ecgqa/ptbxl/answers_for_each_template.csv"
@@ -47,11 +34,6 @@ ECG_QA_TEMPLATE_ANSWERS_URL = (
 # public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
-_ECG = TimeSeriesSpec(
-    spec_type="ecg",
-    name="12-lead ECG",
-    unit_value=ureg.millivolt,
-)
 _DEFAULT_CONTEXT = "12-lead ECG recording."
 
 
@@ -63,7 +45,6 @@ class EcgQaCotSource:
     lazily during ``convert`` and the task stream, never materialized as a list.
     """
 
-    records_root: Path
     answers_path: Path
     cot_csvs: tuple[tuple[str, Path], ...]  # (split, csv_path) for train / validation / test
 
@@ -78,19 +59,6 @@ def _parse_ecg_id(raw: object) -> int:
         The integer ecg_id.
     """
     return int(str(raw).strip().strip("[]").strip())
-
-
-def _record_base(records_root: Path, ecg_id: int) -> Path:
-    """Resolve a recording's path in the PTB-XL ``records500/<bucket>/`` layout.
-
-    Args:
-        records_root: The ``records500`` directory.
-        ecg_id: The recording id.
-
-    Returns:
-        The record path without the ``.dat`` / ``.hea`` extension.
-    """
-    return records_root / f"{ecg_id // 1000 * 1000:05d}" / f"{ecg_id:05d}_hr"
 
 
 def _clinical_context(row: Mapping[str, str]) -> str:
@@ -153,7 +121,7 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[dict[str, str]]:
         yield from csv.DictReader(handle)
 
 
-class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
+class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
     """Connector for the ECG-QA CoT dataset (PTB-XL signals + OpenTSLM chain-of-thought QA)."""
 
     _COT_CSVS: ClassVar[tuple[tuple[str, str], ...]] = (
@@ -163,11 +131,11 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
     )
 
     async def download_async(self, cache_dir: Path) -> list[EcgQaCotSource]:
-        """Fetch PTB-XL, the template answers, and the CoT CSVs, and return one lightweight handle.
+        """Fetch the template answers and CoT CSVs, and return one lightweight handle.
 
-        PTB-XL is an S3 archive fetched synchronously (boto3 parallelizes the transfer internally). The
-        two HTTP artifacts, the template-answers CSV and the CoT archive, download concurrently. No CoT
-        row is read here; ``convert`` and the task stream read them lazily.
+        The PTB-XL input owns the waveform download. This connector fetches only
+        question metadata. Both HTTP artifacts download concurrently, and conversion
+        reads their rows lazily.
 
         Args:
             cache_dir: The directory that holds downloaded archives.
@@ -175,8 +143,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         Returns:
             A single-element list holding the :class:`EcgQaCotSource` handle.
         """
-        # PTB-XL is an S3 archive. Fetch it first (boto3 blocks the loop but parallelizes the transfer).
-        ptbxl_root = find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
@@ -186,25 +152,36 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         cot_csvs = tuple(
             (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
         )
-        return [EcgQaCotSource(records_root=ptbxl_root / "records500", answers_path=answers_path, cot_csvs=cot_csvs)]
+        return [EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)]
 
-    def convert(self, raw_refs: list[EcgQaCotSource], *, context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002 - raw connectors use no stored inputs
+    def convert(self, raw_refs: list[EcgQaCotSource], *, context: BuildContext | None = None) -> TimeFDataset:
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
-        A first pass over the CoT CSVs collects each recording's split and the distinct question
-        metadata. It then builds a record per recording (its 12 leads with lazy loaders) and registers
-        the deduped metadata annotations. The tasks themselves stream from :meth:`_iter_tasks`, so the
-        ~230k questions never all live in memory.
+        Import the needed PTB-XL catalog records without reading waveform values.
+        Retain their IDs and share stored payloads. Replace clinical annotations with
+        the original ECG-QA split annotations, then add the unchanged QA task stream.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.
 
         Returns:
             The dataset: recording records plus a task stream.
+
+        Raises:
+            TimeFValidationError: If the declared PTB-XL input is missing or has another release.
         """
+        if context is None or "ptbxl" not in context.inputs:
+            raise TimeFValidationError(
+                "ECG-QA requires the opened 'ptbxl' input; build through the engine or pass BuildContext"
+            )
+        parent = context.inputs["ptbxl"]
+        metadata = self.metadata()
+        actual = DatasetRef(dataset_id=parent.metadata.dataset_id, version=parent.metadata.dataset_version)
+        if actual != metadata.inputs["ptbxl"]:
+            raise TimeFValidationError(f"ECG-QA requires {metadata.inputs['ptbxl']}, got {actual}")
         source = raw_refs[0]
         answers = _load_template_answers(source.answers_path)
-        dataset = TimeFDataset(metadata=self.metadata())
+        dataset = TimeFDataset(metadata=metadata)
 
         split_of_ecg: dict[int, str] = {}
         question_types: set[str] = set()
@@ -217,20 +194,13 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                 template_ids.add(int(float(row["template_id"])))
                 contexts.add(_clinical_context(row))
 
+        imported = dataset.copy_from(parent, record_ids=[f"ptbxl-{ecg_id}" for ecg_id in sorted(split_of_ecg)])
         records: dict[int, Record] = {}
         for ecg_id, split in sorted(split_of_ecg.items()):
-            record_base = _record_base(source.records_root, ecg_id)
-            record = Record(
-                record_id=f"ptbxl-{ecg_id}",
-                sources=(
-                    Source(
-                        id=f"ptbxl-{ecg_id}-source",
-                        name="PTB-XL ECG",
-                        signals=self._leads_for(ecg_id, record_base),
-                    ),
-                ),
-            )
-            dataset.add_record(record=record)
+            record = imported.records[f"ptbxl-{ecg_id}"]
+            # The child preserves ECG-QA's consumer view, including its own split.
+            # PTB-XL's clinical context remains available in the parent dataset.
+            record.annotations = ()
             record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
             records[ecg_id] = record
 
@@ -243,30 +213,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             lambda: self._iter_tasks(source, answers, records, task_annotations),
         )
         return dataset
-
-    def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[Signal, ...]:
-        """Build the 12 lead :class:`Signal` for one recording with lazy per-lead loaders.
-
-        Args:
-            ecg_id: The recording id.
-            record_base: The record path without the ``.dat`` / ``.hea`` extension.
-
-        Returns:
-            One :class:`Signal` per lead, sharing the ECG spec and a per-recording source id.
-        """
-        header = self._read_header(record_base)
-        axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-        return tuple(
-            Signal.from_loader(
-                spec=_ECG,
-                name=name,
-                time_axis=axis,
-                loader=self._lead_loader(record_base, header, lead_idx),
-                id=f"ecg-{ecg_id}-{name}",
-                n_values=int(header.sig_len),
-            )
-            for lead_idx, name in enumerate(header.sig_name)
-        )
 
     @staticmethod
     def _metadata_annotations(
