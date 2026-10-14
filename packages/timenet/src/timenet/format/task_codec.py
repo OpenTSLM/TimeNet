@@ -6,6 +6,7 @@ public IDs here; the writer and reader swap them for internal keys at the table 
 """
 
 from collections.abc import Iterable
+import json
 from typing import Any, cast
 
 from timenet.dataset.record import Record
@@ -27,6 +28,7 @@ from timenet.types import (
     TimePoint,
 )
 from timenet.types.payloads import Payload
+from timenet.types.references import AnnotationContentRef
 
 
 TARGET_VALUE_COLUMNS = (
@@ -171,7 +173,15 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
     """
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
     if isinstance(task, ClassificationTask):
-        columns["target_schema"] = task.target_schema
+        columns["target_schema"] = (
+            None
+            if task.target_schema is None
+            else json.dumps(
+                task.target_schema.model_dump()
+                if isinstance(task.target_schema, AnnotationContentRef)
+                else task.target_schema
+            )
+        )
     elif isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name
@@ -187,7 +197,9 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
         Keyword arguments for the concrete Task constructor.
     """
     if task_type is TaskType.CLASSIFICATION:
-        return {"target_schema": columns.get("target_schema")}
+        value = columns.get("target_schema")
+        decoded = None if value is None else json.loads(value)
+        return {"target_schema": AnnotationContentRef.model_validate(decoded) if isinstance(decoded, dict) else decoded}
     if task_type is TaskType.SCALAR_PREDICTION:
         return {"unit": columns.get("unit"), "target_name": columns.get("target_name")}
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
