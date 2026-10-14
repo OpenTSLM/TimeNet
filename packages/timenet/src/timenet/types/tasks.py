@@ -15,7 +15,7 @@ from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_o
 from timenet.types.ids import new_id
 from timenet.types.modalities import InputModality
 from timenet.types.payloads import Payload
-from timenet.types.references import AnnotationContentRef, TaskRef
+from timenet.types.references import AnnotationContentRef, ObjectRef, TaskRef
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
 from timenet.types.units import normalize_unit
@@ -106,6 +106,7 @@ class TaskArguments(TypedDict, total=False):
     scope: Span | None
     input_annotations: Iterable[Annotation]
     target_annotations: Iterable[Annotation]
+    origin: ObjectRef | None
     from_tasks: Iterable["Task | TaskRef"]
     annotations: Iterable[Annotation]
     metadata: JsonMapping
@@ -147,6 +148,8 @@ class Task(SupportsAnnotate, ABC):
     """Existing annotation occurrences that form the expected output."""
     _rationale: Payload[str] | None = field(default=None, repr=False)
     """Optional explanation associated with the answer."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     from_tasks: tuple[TaskRef, ...] = field(default=(), compare=False)
     """Tasks from which this task was derived."""
     annotations: tuple[Annotation, ...] = ()

@@ -17,6 +17,7 @@ import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
+from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
@@ -310,15 +311,19 @@ class DuckDBControlWriter:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
                 self._text_batch = _TableBatch(connection, TABLES["payloads"])
+                self._origin_batch = _TableBatch(connection, TABLES["origins"])
+                self._origin_ids: set[tuple[str, str]] = set()
                 with transaction(connection):
                     task_counts = self._write_objects(
                         connection,
                         dataset,
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
+                    self._write_origins(origin_slots(dataset.records, annotations=dataset.annotations))
                     self._write_chunks(connection, placements)
                     self._write_payloads(connection, dataset, placements, self._payloads)
                     self._text_batch.flush()
+                    self._origin_batch.flush()
                     self._check_source_tree(connection)
                 self._payload_store.close()
                 connection.execute("CHECKPOINT")
@@ -504,6 +509,15 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
+    def _write_origins(self, slots: Iterable[tuple[str, str, object, str]]) -> None:
+        for kind, identity, obj, field in slots:
+            reference = getattr(obj, field)
+            if reference is not None and (kind, identity) not in self._origin_ids:
+                self._origin_ids.add((kind, identity))
+                self._origin_batch.add(
+                    {"object_type": kind, "object_id": identity, "reference": reference.model_dump_json()}
+                )
+
     def _text_value(self, kind: str, identity: str, field: str, payload: Payload | None, position: int = 0) -> object:
         if payload is None:
             return None
@@ -552,6 +566,7 @@ class DuckDBControlWriter:
                 if task.id in task_ids:
                     raise TimeFValidationError(f"task id {task.id!r} is not unique")
                 task_ids.add(task.id)
+                self._write_origins(origin_slots(tasks=(task,)))
                 self._schema_content_ids.update(_schema_content_ids(task))
                 task_keys[task.id] = task_key
                 task_type = str(task.task_type)

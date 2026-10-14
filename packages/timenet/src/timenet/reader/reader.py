@@ -15,7 +15,7 @@ from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.payloads.reader import PayloadResolver
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task
+from timenet.types import Annotation, DatasetMetadata, DatasetSchema, InputModality, Task
 from timenet.types.splits import Split
 
 
@@ -236,6 +236,11 @@ class TimeFReader:
         """
         with self._as_format_error():
             return self._control_reader().annotation_table(object_type, payloads=payloads)
+
+    @property
+    def annotations(self) -> tuple[Annotation, ...]:
+        """Return dataset context without hydrating tasks or reading content bodies."""
+        return self._control_reader().read_dataset_annotations(self._manifest.dataset_id)
 
     @property
     def values_backend(self) -> str:

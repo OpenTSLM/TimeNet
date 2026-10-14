@@ -9,6 +9,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, new_id
+from timenet.types.references import ObjectRef
 
 
 if TYPE_CHECKING:
@@ -29,6 +30,8 @@ class Source(SupportsAnnotate):
     """Signals produced directly by this source."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to this source."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
 
