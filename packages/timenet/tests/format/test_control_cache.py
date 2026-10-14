@@ -19,7 +19,7 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         files=ManifestFiles(
             control=(FilePart(path=path.name, checksum=file_checksum(path), size=path.stat().st_size),),
         ),
-        timef_format_version=1,
+        timef_format_version=2,
     )
     version = DatasetVersion(
         manifest=manifest,

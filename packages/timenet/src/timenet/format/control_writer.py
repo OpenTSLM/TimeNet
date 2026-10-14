@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
+from dataclasses import asdict
 from hashlib import sha256
 from itertools import islice
 import json
@@ -29,6 +31,8 @@ from timenet.types import (
     TSCorrespondenceTask,
     annotation_type_of,
 )
+from timenet.types.payload_references import PayloadChunk, PayloadReference
+from timenet.types.payloads import PayloadDescriptor
 from timenet.types.splits import parse_split
 
 
@@ -273,6 +277,7 @@ class DuckDBControlWriter:
         placements: dict[tuple[str, int], ChunkPlacement] | None = None,
         *,
         tasks: Iterable[Task] | None = None,
+        payloads: dict[tuple[str, str, str, int], tuple[PayloadDescriptor, PayloadReference]] | None = None,
     ) -> dict[str, int]:
         """Write records, sources, signals, axes, and their annotations atomically.
 
@@ -301,6 +306,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_payloads(connection, dataset, placements, payloads)
                     self._check_source_tree(connection)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
@@ -384,6 +390,47 @@ class DuckDBControlWriter:
         occurrence_keys = self._write_annotations(connection, annotations)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
         return task_counts
+
+    @staticmethod
+    def _write_payloads(
+        connection: duckdb.DuckDBPyConnection,
+        dataset: TimeFDataset,
+        placements: dict | None,
+        payloads: dict[tuple[str, str, str, int], tuple[PayloadDescriptor, PayloadReference]] | None,
+    ) -> None:
+        entries = dict(payloads or {})
+        chunks: dict[str, list[PayloadChunk]] = defaultdict(list)
+        if placements is not None:
+            for (identity, _), value in sorted(placements.items()):
+                chunks[identity].append(
+                    PayloadChunk(
+                        path=value.chunk_file,
+                        major=value.data_index.major_idx,
+                        minor=value.data_index.minor_idx,
+                        n_values=value.n_values,
+                    )
+                )
+            for record in dataset.records:
+                for signal in record.signals:
+                    key = ("Signal", signal.id, "values", 0)
+                    if key not in entries and chunks[signal.id]:
+                        entries[key] = (
+                            signal.values.descriptor,
+                            PayloadReference(codec="parquet", chunks=tuple(chunks[signal.id])),
+                        )
+        batch = _TableBatch(connection, TABLES["payloads"])
+        for (kind, identity, field, position), (descriptor, reference) in entries.items():
+            batch.add(
+                {
+                    "object_type": kind,
+                    "object_id": identity,
+                    "field": field,
+                    "position": position,
+                    "descriptor": json.dumps(asdict(descriptor), allow_nan=False),
+                    "reference": reference.model_dump_json(),
+                }
+            )
+        batch.flush()
 
     @staticmethod
     def _write_chunks(
