@@ -188,12 +188,14 @@ class TimeFWriter:
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+        control_writer = DuckDBControlWriter(self._staging_dir / CONTROL_FILE)
+        self._task_type_counts = control_writer.write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
             payloads=self._array_references(unique_series, placements),
         )
+        self._payload_files = control_writer.payload_files
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
         self._written = True
@@ -419,6 +421,7 @@ class TimeFWriter:
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
+                payloads=self._file_parts(self._payload_files),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,

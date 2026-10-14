@@ -1,20 +1,33 @@
 """Resolve payloads through immutable physical locators without catalog lookups."""
 
+from collections import OrderedDict
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any
 
 import pyarrow as pa
 
 from timenet.errors import TimeFFormatError
 from timenet.format.checksums import stream_checksum
 from timenet.format.constants import MANIFEST_FILE
+from timenet.payloads.offsets import validate_offsets
 from timenet.registry.version import DatasetVersion
 from timenet.types.payload_references import PayloadReference, PayloadSource
 from timenet.types.payloads import ArrayPayload, Payload, PayloadDescriptor
 from timenet.types.references import DatasetRef
-from timenet.types.specs import TimeSeriesSpec
-from timenet.types.wire import ValueDtype
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
+
+
+_OFFSET_CACHE_BYTES = 64 * 2**20
+_OFFSET_CACHE_ENTRIES = 64
+
+
+@dataclass(frozen=True)
+class _ArrayEncoding:
+    dtype: str
+    value_shape: tuple[int, ...]
+    dimension_names: tuple[str, ...]
+    nullable: bool
+    categories: tuple[str, ...]
 
 
 class PayloadResolver:
@@ -23,11 +36,15 @@ class PayloadResolver:
     def __init__(self, version: DatasetVersion) -> None:
         self.version = version
         self._source: PayloadSource | None = None
+        self._offset_cache: OrderedDict[str, pa.Array] = OrderedDict()
+        self._offset_bytes = 0
         self._readers: dict[tuple[str, str], BaseValuesReader] = {}
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
         state["_readers"] = {}
+        state["_offset_cache"] = OrderedDict()
+        state["_offset_bytes"] = 0
         return state
 
     def source(self) -> PayloadSource:
@@ -100,6 +117,8 @@ class PayloadResolver:
         for reader in self._readers.values():
             reader.close()
         self._readers.clear()
+        self._offset_cache.clear()
+        self._offset_bytes = 0
 
 
 @dataclass(frozen=True)
@@ -110,17 +129,12 @@ class StoredPayloadLoader:
     descriptor: PayloadDescriptor
     reference: PayloadReference
 
-    def _spec(self) -> TimeSeriesSpec:
+    def _spec(self) -> _ArrayEncoding:
         descriptor = self.descriptor
-        return TimeSeriesSpec(
-            spec_type="payload",
-            name="Payload",
-            unit_value=None,
-            dtype=cast("ValueDtype", descriptor.dtype),
-            value_shape=descriptor.shape,
-            dimension_names=descriptor.dimension_names,
-            nullable=descriptor.nullable,
-            categories=descriptor.categories,
+        if descriptor.dtype is None:
+            raise TimeFFormatError("array payload has no physical dtype")
+        return _ArrayEncoding(
+            descriptor.dtype, descriptor.shape, descriptor.dimension_names, descriptor.nullable, descriptor.categories
         )
 
     def __call__(self) -> Any:
@@ -128,10 +142,33 @@ class StoredPayloadLoader:
 
         Returns:
             The decoded content.
+
+        Raises:
+            TimeFFormatError: If the stored length or timestamp values are inconsistent.
         """
+        key = self.reference.model_dump_json()
+        offsets = self.descriptor.first_us is not None
+        if offsets and key in self.resolver._offset_cache:
+            self.resolver._offset_cache.move_to_end(key)
+            values = self.resolver._offset_cache[key]
+            validate_offsets(values, self.descriptor)
+            return values
         version = self.resolver.resolve(self.reference)
         rows = [chunk.as_backend_row() for chunk in self.reference.chunks]
-        return self.resolver.reader(version, self.reference.codec).load(version, rows, self._spec())
+        values = self.resolver.reader(version, self.reference.codec).load(version, rows, self._spec())
+        if len(values) != self.descriptor.length:
+            raise TimeFFormatError("array payload has a different length from its descriptor")
+        if offsets:
+            validate_offsets(values, self.descriptor)
+            self.resolver._offset_cache[key] = values
+            self.resolver._offset_bytes += values.nbytes
+            while len(self.resolver._offset_cache) > 1 and (
+                len(self.resolver._offset_cache) > _OFFSET_CACHE_ENTRIES
+                or self.resolver._offset_bytes > _OFFSET_CACHE_BYTES
+            ):
+                _, evicted = self.resolver._offset_cache.popitem(last=False)
+                self.resolver._offset_bytes -= evicted.nbytes
+        return values
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a bounded array range from its actual physical owner.
