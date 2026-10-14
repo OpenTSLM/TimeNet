@@ -141,8 +141,10 @@ class PayloadResolver:
             if sum(chunk.n_values for chunk in bound.chunks) != descriptor.length:
                 raise TimeFFormatError("array payload chunks do not match its declared length")
             loader._spec()
-            return ArrayPayload(descriptor, _loader=loader, _read_range=loader.read_steps, reference=bound)
-        return Payload(descriptor, _loader=loader, reference=bound)
+            return ArrayPayload(
+                descriptor, _loader=loader, _read_range=loader.read_steps, reference=bound, _storage=self
+            )
+        return Payload(descriptor, _loader=loader, reference=bound, _storage=self)
 
     def reader(self, version: DatasetVersion, codec: str) -> BaseValuesReader:
         """Return the source-specific cached array backend.

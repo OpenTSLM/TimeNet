@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, cast
+from typing import Any, Literal, cast
 import uuid
 
 import numpy as np
@@ -31,9 +31,11 @@ from timenet.format.schemas import (
     IdTypes,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.payloads.copy import PayloadCopier
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
 from timenet.types.payload_references import PayloadChunk, PayloadReference, PayloadSource
+from timenet.types.payloads import Payload
 from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -55,6 +57,7 @@ class TimeFWriter:
         root: Path,
         dataset: TimeFDataset,
         *,
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         inline_bytes: int = 4096,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
@@ -90,6 +93,9 @@ class TimeFWriter:
                 ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
                 that cannot apply it.
         """
+        if payload_policy not in {"reuse", "copy"}:
+            raise TimeFValidationError(f"unknown payload_policy {payload_policy!r}")
+        self.payload_policy = payload_policy
         if inline_bytes < 0:
             raise TimeFValidationError("inline_bytes must be non-negative")
         self.inline_bytes = inline_bytes
@@ -186,6 +192,7 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
+        self._payload_copier = PayloadCopier(self._staging_dir)
         unique_series, _series_to_records = self._dedupe_series()
         placements = self._write_values([signal for signal in unique_series if signal.values.reference is None])
         tasks = (
@@ -199,11 +206,17 @@ class TimeFWriter:
             placements,
             tasks=tasks,
             payloads=self._array_references(unique_series, placements),
+            reference_transform=self._stored_reference,
         )
         self._payload_files = control_writer.payload_files
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
         self._written = True
+
+    def _stored_reference(self, payload: Payload) -> PayloadReference:
+        if payload.reference is None or payload.reference.source is None:
+            raise TimeFValidationError("stored references require a pinned physical owner")
+        return self._payload_copier.reference(payload) if self.payload_policy == "copy" else payload.reference
 
     def _array_references(self, signals: list[Signal], placements: dict[tuple[str, int], ChunkPlacement]) -> dict:
         chunks: dict[str, list[PayloadChunk]] = defaultdict(list)
@@ -245,7 +258,9 @@ class TimeFWriter:
         return {
             ("Signal", signal.id, "values", 0): (
                 signal.values.descriptor,
-                signal.values.reference or PayloadReference(codec=codec, chunks=tuple(chunks[signal.id])),
+                self._stored_reference(signal.values)
+                if signal.values.reference is not None
+                else PayloadReference(codec=codec, chunks=tuple(chunks[signal.id])),
             )
             for signal in signals
         }
@@ -441,10 +456,12 @@ class TimeFWriter:
 
     def _foreign_sources(self) -> tuple[PayloadSource, ...]:
         with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
-            rows = connection.execute("SELECT DISTINCT reference FROM payloads").fetchall()
+            rows = connection.execute(
+                "SELECT DISTINCT json_extract(reference, '$.source') FROM payloads WHERE json_extract_string(reference, '$.source.dataset') IS NOT NULL"
+            ).fetchall()
         sources: dict[DatasetRef, PayloadSource] = {}
         for (encoded,) in rows:
-            source = PayloadReference.model_validate_json(encoded).source
+            source = PayloadSource.model_validate_json(encoded)
             if source is not None:
                 if source.dataset in sources and sources[source.dataset] != source:
                     raise TimeFValidationError(f"conflicting owner pins for {source.dataset}")
@@ -452,6 +469,17 @@ class TimeFWriter:
         return tuple(
             sorted(sources.values(), key=lambda source: (source.dataset.dataset_id, str(source.dataset.version)))
         )
+
+    @property
+    def payload_sources(self) -> tuple[PayloadSource, ...]:
+        """The exact physical owners used by the completed output catalog.
+
+        Raises:
+            TimeFValidationError: If the output has not been written.
+        """
+        if not self._written:
+            raise TimeFValidationError("write the output before inspecting its payload sources")
+        return self._foreign_sources()
 
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
@@ -466,7 +494,7 @@ class TimeFWriter:
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
-                payloads=self._file_parts(self._payload_files),
+                payloads=(*self._file_parts(self._payload_files), *self._payload_copier.parts),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
