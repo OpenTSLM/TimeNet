@@ -19,6 +19,7 @@ from timenet.errors import TimeFFormatError
 from timenet.types import (
     US_PER_S,
     Annotation,
+    AnnotationContentRef,
     ClassificationTask,
     LocalizationMode,
     ScalarPredictionTask,
@@ -162,7 +163,7 @@ def build_epoch_tasks(
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
                 targets=(stage.read_value(),),
-                target_schema=schema,
+                target_schema=AnnotationContentRef(id=schema),
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
 
@@ -214,14 +215,14 @@ def build_record_tasks(
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
         targets=(_one_of(record_id, stated, AnnotationKey.SEX, SEX_LABELS),),
-        target_schema=name_vocabulary(id_prefix, AnnotationKey.SEX),
+        target_schema=AnnotationContentRef(id=name_vocabulary(id_prefix, AnnotationKey.SEX)),
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
             targets=(_one_of(record_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
-            target_schema=name_vocabulary(id_prefix, AnnotationKey.CONDITION),
+            target_schema=AnnotationContentRef(id=name_vocabulary(id_prefix, AnnotationKey.CONDITION)),
         )
 
     night = find_sleep_period(span_annotations)
