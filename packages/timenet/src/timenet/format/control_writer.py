@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict
 from hashlib import sha256
 from itertools import islice
@@ -287,6 +287,7 @@ class DuckDBControlWriter:
         *,
         tasks: Iterable[Task] | None = None,
         payloads: dict[tuple[str, str, str, int], tuple[PayloadDescriptor, PayloadReference]] | None = None,
+        reference_transform: Callable[[Payload], PayloadReference] | None = None,
     ) -> dict[str, int]:
         """Write records, sources, signals, axes, and their annotations atomically.
 
@@ -305,7 +306,9 @@ class DuckDBControlWriter:
                 that its axis offsets or value chunks do not match.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._payload_store = PayloadStore(self.path.parent, inline_bytes=self.inline_bytes)
+        self._payload_store = PayloadStore(
+            self.path.parent, inline_bytes=self.inline_bytes, reference_transform=reference_transform
+        )
         self._payloads = dict(payloads or {})
         try:
             with connect_control(self.path) as connection:
@@ -490,8 +493,8 @@ class DuckDBControlWriter:
             stored_values[signal_id] += placement.n_values
         for signal_id, (_, n_values) in signals.items():
             payload = self._payloads.get(("Signal", signal_id, "values", 0))
-            foreign = payload is not None and payload[1].source is not None
-            if stored_values[signal_id] != n_values and not foreign:
+            referenced = payload is not None and sum(chunk.n_values for chunk in payload[1].chunks) == n_values
+            if stored_values[signal_id] != n_values and not referenced:
                 raise TimeFValidationError(
                     f"signal {signal_id!r} declares {n_values} values but its chunks store {stored_values[signal_id]}"
                 )
@@ -949,9 +952,7 @@ class DuckDBControlWriter:
             ):
                 raise TimeFValidationError(f"axis {axis.axis_id!r} has an incompatible timestamp payload")
             if payload.reference is not None:
-                reference = payload.reference
-                if reference.source is None:
-                    raise TimeFValidationError("reused timestamp references must name a pinned owner")
+                reference = batches.store.reference(payload)
                 signature = _OffsetSignature(signal.n_values, reference.model_dump_json())
             else:
                 offsets = _validated_irregular_offsets(signal)

@@ -84,3 +84,19 @@ def test_computed_text_descriptor_mismatch_aborts_the_artifact(tmp_path):
     with pytest.raises(TimeFValidationError, match="descriptor"), TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     assert not (tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)).exists()
+
+
+def test_forced_external_storage_does_not_override_an_equal_inline_label(tmp_path):
+    dataset = make_dataset()
+    dataset.annotate(
+        Annotation(id="external-label", key="external-label", value=Payload.from_value("normal", storage="external"))
+    )
+    dataset.annotate(Annotation(id="inline-label", key="inline-label", value="normal"))
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    path = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        rows = {row["key"]: row for row in reader.annotation_table("Dataset").to_pylist()}
+        assert rows["external-label"]["value_reference"] is not None
+        assert rows["inline-label"]["text_value"] == "normal"
+        assert rows["inline-label"]["value_reference"] is None
