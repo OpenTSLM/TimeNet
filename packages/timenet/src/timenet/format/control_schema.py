@@ -364,8 +364,23 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+PAYLOADS = Table(
+    "payloads",
+    (
+        _required("object_type"),
+        _required("object_id"),
+        _required("field"),
+        _key("position"),
+        _required("descriptor", ColumnType.JSON),
+        _required("reference", ColumnType.JSON),
+    ),
+    unique=(("object_type", "object_id", "field", "position"),),
+)
+"""Physical references for stored object content, without payload bodies."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
+    PAYLOADS,
     DATASETS,
     RECORDS,
     CLOCKS,
