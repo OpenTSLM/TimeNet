@@ -372,7 +372,15 @@ PAYLOADS = Table(
 )
 """Physical references for stored object content, without payload bodies."""
 
+ORIGINS = Table(
+    "origins",
+    (_required("object_type"), _required("object_id"), _required("reference", ColumnType.JSON)),
+    unique=(("object_type", "object_id"),),
+)
+"""Source provenance for independently editable catalog objects."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
+    ORIGINS,
     CONTROL_METADATA,
     PAYLOADS,
     DATASETS,
