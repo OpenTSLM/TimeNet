@@ -1,7 +1,7 @@
 """Canonical codecs between Task fields and the typed columns of the ``tasks`` and ``task_targets`` tables.
 
-Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
-filter on them and the reader builds objects straight from row values. Object references travel as
+Spans and literal targets use typed columns. Classification schema identifiers and annotation-content
+references use JSON. The reader builds objects directly from these rows. Object references travel as
 public IDs here; the writer and reader swap them for internal keys at the table boundary.
 """
 

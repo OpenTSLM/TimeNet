@@ -3,9 +3,9 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
-stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
-be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
+Version 2 of the control schema. Object tables carry ``BIGINT`` keys drawn from sequences and
+store public IDs once, on their owning rows. Fixed-shape fields are typed columns so they can
+be filtered in SQL; metadata, payload descriptors, and typed references use JSON. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
 while streaming and what :func:`timenet.format.control_audit.audit_control_database` re-checks.
 """
