@@ -21,6 +21,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    Payload,
     StepSpan,
     SupportsAnnotate,
     Task,
@@ -1000,7 +1001,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
-            inline = matched[0].targets
+            inline = matched[0].read_targets()
             if inline is None or len(inline) != 1 or not isinstance(inline[0], (str, int, float, bool)):
                 raise TimeFValidationError(
                     f"{resolved.__name__} {matched[0].id!r} needs exactly one scalar target to use as y"
@@ -1031,7 +1032,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             for task in self._tasks
             if task.targets is not None
             and len(task.targets) == 1
-            and isinstance(task.targets[0], (str, int, float, bool))
+            and (
+                isinstance(task.targets[0], (str, int, float, bool))
+                or (isinstance(task.targets[0], Payload) and task.targets[0].descriptor.kind == "str")
+            )
         }
         if len(kinds) == 1:
             return kinds.pop()

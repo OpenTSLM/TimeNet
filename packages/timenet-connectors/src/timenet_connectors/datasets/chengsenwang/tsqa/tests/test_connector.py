@@ -72,8 +72,8 @@ def test_qa_tasks_match_fixture():
     rows = _fixture_rows()
     qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
-    assert {t.prompt for t in qa} == {r["Question"] for r in rows}
-    assert {t.targets[0] for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
+    assert {t.read_prompt() for t in qa} == {r["Question"] for r in rows}
+    assert {targets[0] for t in qa if (targets := t.read_targets()) is not None} == {r["Answer"] for r in rows}
 
 
 def test_series_values_parsed_from_fixture():
