@@ -74,6 +74,19 @@ Parquet array references identify files, row groups, and rows. Zarr references i
 ranges. Stored handles read these locations directly, including after their catalog reader closes.
 Range reads select intersecting chunks. Each payload selects its own codec.
 
+## Parquet recording groups
+
+`TimeFWriter(..., row_group_layout="record")` finishes each recording's row group before the
+next recording. A selected child then reads its recording without decoding its neighbors. Large
+recordings still split at the configured byte cap. `row_group_layout="auto"` separates numeric
+recordings of at least 128 KiB and packs smaller recordings together. The default, `packed`,
+preserves the prior layout.
+
+Grouped writes collect the same bounded encoding sample across recordings and reuse those decoded
+arrays during writing. A short first recording does not force a different values encoding. Each
+producer runs once. Recording groups can increase file sizes and storage request counts, so choose
+a layout from measured consumer reads. The reader uses ordinary Parquet row-group metadata.
+
 ## Integrity and migration
 
 The writer stages a release, writes catalog rows in a transaction, and audits the completed catalog.
