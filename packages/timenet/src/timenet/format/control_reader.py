@@ -15,6 +15,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
@@ -41,7 +42,7 @@ from timenet.types import (
 )
 from timenet.types.payload_references import PayloadReference
 from timenet.types.payloads import Payload, PayloadDescriptor
-from timenet.types.references import TaskRef, validate_task_graph
+from timenet.types.references import ObjectRef, TaskRef, validate_task_graph
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
@@ -501,6 +502,20 @@ class DuckDBControlReader:
             )
         return result
 
+    def _hydrate_origins(self, slots: Iterable[tuple[str, str, Any, str]]) -> None:
+        slots = list(slots)
+        origins = {
+            (kind, identity): ObjectRef.model_validate_json(reference)
+            for kind, identity, reference in self.connection.execute(
+                "SELECT object_type, object_id, reference FROM origins WHERE object_id IN (SELECT unnest(?))",
+                [[identity for _, identity, _, _ in slots]],
+            ).fetchall()
+        }
+        set_field = object.__setattr__
+        for kind, identity, obj, field in slots:
+            if (kind, identity) in origins:
+                set_field(obj, field, origins[kind, identity])
+
     def record_ids(self) -> tuple[str, ...]:
         """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
 
@@ -676,6 +691,7 @@ class DuckDBControlReader:
             raise TimeFFormatError(
                 f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
             )
+        self._hydrate_origins(origin_slots(records))
         return tuple(records)
 
     def _read_rows(
@@ -1577,6 +1593,9 @@ class DuckDBControlReader:
             grouped[row.object_type, object_id].append(annotation)
             if annotations_by_occurrence is not None:
                 annotations_by_occurrence[row.occurrence_key] = annotation
+        self._hydrate_origins(
+            origin_slots(annotations=(annotation for values in grouped.values() for annotation in values))
+        )
         return {key: tuple(value) for key, value in grouped.items()}
 
 
@@ -1797,6 +1816,7 @@ class _TaskHydration:
             except TimeFValidationError as exc:
                 raise TimeFFormatError(f"stored task {task.id!r} has an invalid Record scope: {exc}") from exc
             tasks[row.task_key] = task
+        reader._hydrate_origins(origin_slots(tasks=tasks.values()))
         return tasks
 
     def _index_record(self, record_key: int, record: Record) -> None:
