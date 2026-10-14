@@ -38,6 +38,10 @@ class PayloadStore:
         Raises:
             TimeFValidationError: If a producer disagrees with its descriptor.
         """
+        if payload.reference is not None:
+            if payload.reference.source is None:
+                raise TimeFValidationError("reused payload references must name a pinned owner")
+            return None, payload.reference
         if payload in self._text_refs:
             return None, self._text_refs[payload]
         value = payload.read()
