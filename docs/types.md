@@ -203,3 +203,15 @@ without losing the TimeNet-specific error type.
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
 See the [API reference for `timenet.types`](api/types.md) for all symbols.
+
+## Explicit content reads
+
+Annotation values and task text use immutable `Payload` handles. Constructors still accept native
+Python values. Read content explicitly with `annotation.value.read()`, `task.prompt.read()`, or
+`task.rationale.read()`. Pure marker annotations have no value.
+
+`Annotation.read_value()` returns the native value or `None` for a marker. Task methods
+`read_prompt()`, `read_rationale()`, and `read_targets()` provide equivalent explicit conveniences.
+Signal methods `to_arrow()`, `to_numpy()`, and `read_steps()` retain their existing behavior.
+
+Descriptors, schema derivation, and modality selection do not read payload bodies.
