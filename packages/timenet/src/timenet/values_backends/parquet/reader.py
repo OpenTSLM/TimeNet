@@ -14,12 +14,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.values_backends.reader import BaseValuesReader
+from timenet.values_backends.reader import ArrayEncoding, BaseValuesReader
 
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
-    from timenet.types import TimeSeriesSpec
 
 
 _ROW_GROUP_CACHE_SIZE = 64
@@ -41,7 +40,7 @@ class _DecodedGroup:
     """The group's ``values`` column, one list per stored chunk."""
 
 
-def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
+def _target_type(spec: ArrayEncoding) -> pa.DataType:
     """Return the Arrow type a spec's values should come back as.
 
     A ``"str"`` reads back as plain text. An ``"enum"`` reads back as a dictionary array (the shard
@@ -72,7 +71,7 @@ class ParquetValuesReader(BaseValuesReader):
         self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
         self._target_types: dict[str, pa.DataType] = {}
 
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: list[dict], spec: ArrayEncoding) -> pa.Array:
         """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
 
         This method copies each chunk into a new array. A caller that keeps the values therefore
@@ -94,7 +93,7 @@ class ParquetValuesReader(BaseValuesReader):
         ]
         return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
 
-    def _target(self, spec: TimeSeriesSpec) -> pa.DataType:
+    def _target(self, spec: ArrayEncoding) -> pa.DataType:
         """Return the spec's canonical Arrow type, resolved once per dtype.
 
         Args:
@@ -110,7 +109,7 @@ class ParquetValuesReader(BaseValuesReader):
         return target
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: ArrayEncoding
     ) -> pa.Array:
         """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
 
