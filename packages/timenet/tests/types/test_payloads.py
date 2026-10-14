@@ -70,3 +70,26 @@ def test_array_payload_uses_bounded_reads_without_calling_full_loader():
     )
     assert payload.read_steps(1, 3).to_pylist() == [2.0, 3.0]
     assert calls == [(1, 3)]
+
+
+def test_signal_rejects_reuse_of_a_different_array_contract_without_reading():
+    from timenet.errors import TimeFValidationError  # noqa: PLC0415
+
+    calls = []
+
+    def load():
+        calls.append("read")
+        return pa.array([1, 2], type=pa.int64())
+
+    payload = ArrayPayload.from_loader(load, descriptor=PayloadDescriptor("array", length=2, dtype="int64"))
+    import pytest  # noqa: PLC0415
+
+    with pytest.raises(TimeFValidationError, match="different array contract"):
+        Signal.from_loader(
+            loader=payload,
+            n_values=2,
+            name="ECG",
+            time_axis=RegularAxis.from_rate_hz(100),
+            spec=TimeSeriesSpec(spec_type="ecg", name="ECG", unit_value=None),
+        )
+    assert calls == []
