@@ -23,6 +23,7 @@ from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
 from timenet.registry.base import ProgressCallback
+from timenet.registry.integrity import check_manifest, verify_owned
 from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
 
 
@@ -37,6 +38,8 @@ def download_version_files(  # noqa: PLR0913
     dest_dir: Path,
     *,
     force: bool = False,
+    manifest_content: bytes | None = None,
+    expected_manifest_checksum: str | None = None,
     max_concurrency: int = 8,
     progress_cb: ProgressCallback | None = None,
 ) -> Path:
@@ -55,8 +58,12 @@ def download_version_files(  # noqa: PLR0913
     Returns:
         ``dest_dir``.
     """
+    content = manifest.to_json().encode("utf-8") if manifest_content is None else manifest_content
+    check_manifest(content, manifest, expected_manifest_checksum)
     dest_dir = Path(dest_dir)
     if (dest_dir / "manifest.json").exists() and not force:
+        check_manifest((dest_dir / "manifest.json").read_bytes(), manifest, expected_manifest_checksum)
+        verify_owned(dest_dir, manifest)
         return dest_dir
     files = list(manifest.files.all_files())
     parent = dest_dir.parent
@@ -68,7 +75,8 @@ def download_version_files(  # noqa: PLR0913
     staging = parent / f"{dest_dir.name}.tmp-{uuid.uuid4().hex}"
     try:
         _run(_download_all(http, dataset_id, version, files, staging, max_concurrency, progress_cb))
-        (staging / "manifest.json").write_text(manifest.to_json())  # already parsed; no extra round trip
+        (staging / "manifest.json").write_bytes(content)
+        verify_owned(staging, manifest)
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
         staging.replace(dest_dir)
