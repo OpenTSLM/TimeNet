@@ -2,7 +2,7 @@ import jsonschema
 from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeNetInvalidCardError
+from timenet.errors import TimeFValidationError, TimeNetInvalidCardError
 from timenet.schemas import DATASET_CARD_SCHEMA
 from timenet.types import DatasetMetadata, Domain, License, Version
 
@@ -78,3 +78,24 @@ def test_from_yaml_rejects_non_mapping(tmp_path):
 def test_from_yaml_rejects_missing_file(tmp_path):
     with pytest.raises(TimeNetInvalidCardError):
         DatasetMetadata.from_yaml(tmp_path / "does_not_exist.yaml")
+
+
+def test_exact_inputs_are_independent_of_upstream_revision(tmp_path):
+    card = _MINIMAL_CARD + "source_revision: upstream-v7\ninputs:\n  ecg: physionet/ptb-xl@1.2.3\n"
+    metadata = DatasetMetadata.from_yaml(_write(tmp_path, card))
+    encoded = metadata.model_dump(mode="json")
+    jsonschema.validate(encoded, DATASET_CARD_SCHEMA)
+    assert encoded["source_revision"] == "upstream-v7"
+    assert encoded["inputs"] == {"ecg": "physionet/ptb-xl@1.2.3"}
+    assert DatasetMetadata.model_validate(encoded) == metadata
+
+
+@pytest.mark.parametrize("reference", ["physionet/ptb-xl", "physionet/ptb-xl@latest", "physionet/ptb-xl@1.2"])
+def test_inputs_reject_floating_or_incomplete_releases(tmp_path, reference):
+    with pytest.raises(ValidationError):
+        DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD + f"inputs:\n  ecg: {reference}\n"))
+
+
+def test_card_rejects_duplicate_input_aliases(tmp_path):
+    with pytest.raises(TimeFValidationError, match="duplicate mapping key"):
+        DatasetMetadata.from_yaml(_write(tmp_path, _MINIMAL_CARD + "inputs:\n  ecg: lab/a@1.0.0\n  ecg: lab/b@1.0.0\n"))
