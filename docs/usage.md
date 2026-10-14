@@ -97,7 +97,7 @@ item = torch_dataset[0]
 
 values = item["series"][0]
 present = item["series_masks"][0]
-targets = item["tasks"][0].targets
+targets = item["tasks"][0].read_targets()
 ```
 
 The adapter preserves the Signal dtype and per-timestep shape. Each mask has one Boolean value per

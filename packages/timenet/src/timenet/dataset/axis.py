@@ -2,7 +2,7 @@
 
 TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
 offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
-placements that no formula produces. Its shared control-plane object stores every time offset once.
+placements that no formula produces. Its axis descriptor references an immutable external timestamp payload.
 :class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
 one does not type-check.
 
