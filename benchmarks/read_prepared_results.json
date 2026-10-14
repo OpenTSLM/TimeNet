@@ -1,0 +1,586 @@
+{
+  "hardware": {
+    "cpu": "Apple M5 Max",
+    "memory_bytes": 68719476736
+  },
+  "base_revision": "f24b2ce84a607df379ae3e67d47e7146797f3835",
+  "method": {
+    "runs_per_variant": 3,
+    "filesystem_cache": "warm",
+    "fresh_processes": true,
+    "final_comparison": "three alternating standalone/LZ4 pairs with no concurrent writers or checks",
+    "initial_sweep": "four variants alternated; a brief lint/type pass overlapped part of the sweep; all full tests and builds finished before it",
+    "fidelity_full_snapshots": 21
+  },
+  "reads": {
+    "standalone": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 10.251071167003829,
+          "catalog_fingerprint_seconds": 2.7845432079629973,
+          "waveform_read_and_hash_seconds": 8.112886916962452,
+          "task_read_and_hash_seconds": 8.968406083004083,
+          "peak_rss_bytes": 2545647616
+        },
+        {
+          "load_seconds": 10.379732500005048,
+          "catalog_fingerprint_seconds": 2.828136958007235,
+          "waveform_read_and_hash_seconds": 8.33860487502534,
+          "task_read_and_hash_seconds": 9.13696895900648,
+          "peak_rss_bytes": 2528215040
+        },
+        {
+          "load_seconds": 10.455795041983947,
+          "catalog_fingerprint_seconds": 2.7990180420456454,
+          "waveform_read_and_hash_seconds": 8.812415749998763,
+          "task_read_and_hash_seconds": 9.059072166041005,
+          "peak_rss_bytes": 2543288320
+        }
+      ],
+      "median": {
+        "load_seconds": 10.379732500005048,
+        "catalog_fingerprint_seconds": 2.7990180420456454,
+        "waveform_read_and_hash_seconds": 8.33860487502534,
+        "task_read_and_hash_seconds": 9.059072166041005,
+        "peak_rss_bytes": 2543288320
+      }
+    },
+    "packed-child": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 10.120194333023392,
+          "catalog_fingerprint_seconds": 2.786210124962963,
+          "waveform_read_and_hash_seconds": 9.787833041977137,
+          "task_read_and_hash_seconds": 8.880761582986452,
+          "peak_rss_bytes": 2700935168
+        },
+        {
+          "load_seconds": 10.44270916696405,
+          "catalog_fingerprint_seconds": 2.870057041000109,
+          "waveform_read_and_hash_seconds": 9.985075457952917,
+          "task_read_and_hash_seconds": 9.192668000003323,
+          "peak_rss_bytes": 2685812736
+        },
+        {
+          "load_seconds": 10.325066833000164,
+          "catalog_fingerprint_seconds": 2.830683375010267,
+          "waveform_read_and_hash_seconds": 10.073520083038602,
+          "task_read_and_hash_seconds": 8.99846787500428,
+          "peak_rss_bytes": 2681995264
+        }
+      ],
+      "median": {
+        "load_seconds": 10.325066833000164,
+        "catalog_fingerprint_seconds": 2.830683375010267,
+        "waveform_read_and_hash_seconds": 9.985075457952917,
+        "task_read_and_hash_seconds": 8.99846787500428,
+        "peak_rss_bytes": 2685812736
+      }
+    },
+    "record-child": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 10.063461832993198,
+          "catalog_fingerprint_seconds": 2.817748041008599,
+          "waveform_read_and_hash_seconds": 9.73248029104434,
+          "task_read_and_hash_seconds": 9.058259041979909,
+          "peak_rss_bytes": 2441789440
+        },
+        {
+          "load_seconds": 10.607465457986109,
+          "catalog_fingerprint_seconds": 2.985592207987793,
+          "waveform_read_and_hash_seconds": 10.070954750000965,
+          "task_read_and_hash_seconds": 9.05869375000475,
+          "peak_rss_bytes": 2441461760
+        },
+        {
+          "load_seconds": 10.212964957987424,
+          "catalog_fingerprint_seconds": 2.8736797089804895,
+          "waveform_read_and_hash_seconds": 9.925174791947939,
+          "task_read_and_hash_seconds": 8.878396124986466,
+          "peak_rss_bytes": 2441494528
+        }
+      ],
+      "median": {
+        "load_seconds": 10.212964957987424,
+        "catalog_fingerprint_seconds": 2.8736797089804895,
+        "waveform_read_and_hash_seconds": 9.925174791947939,
+        "task_read_and_hash_seconds": 9.058259041979909,
+        "peak_rss_bytes": 2441494528
+      }
+    },
+    "record-bss-child": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 10.011960708012339,
+          "catalog_fingerprint_seconds": 2.7940623750328086,
+          "waveform_read_and_hash_seconds": 11.262407625035848,
+          "task_read_and_hash_seconds": 8.902894624974579,
+          "peak_rss_bytes": 2449063936
+        },
+        {
+          "load_seconds": 10.296718917030375,
+          "catalog_fingerprint_seconds": 2.808525209024083,
+          "waveform_read_and_hash_seconds": 11.418430500023533,
+          "task_read_and_hash_seconds": 9.19125004200032,
+          "peak_rss_bytes": 2465628160
+        },
+        {
+          "load_seconds": 10.09349249996012,
+          "catalog_fingerprint_seconds": 2.8122238339856267,
+          "waveform_read_and_hash_seconds": 11.494295042008162,
+          "task_read_and_hash_seconds": 9.081686582998373,
+          "peak_rss_bytes": 2438905856
+        }
+      ],
+      "median": {
+        "load_seconds": 10.09349249996012,
+        "catalog_fingerprint_seconds": 2.808525209024083,
+        "waveform_read_and_hash_seconds": 11.418430500023533,
+        "task_read_and_hash_seconds": 9.081686582998373,
+        "peak_rss_bytes": 2449063936
+      }
+    },
+    "record-lz4-child": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 9.980586040997878,
+          "catalog_fingerprint_seconds": 2.8101049580145627,
+          "waveform_read_and_hash_seconds": 7.751947416982148,
+          "task_read_and_hash_seconds": 8.953333084005862,
+          "peak_rss_bytes": 2449080320
+        },
+        {
+          "load_seconds": 10.082115374971181,
+          "catalog_fingerprint_seconds": 2.7846021659788676,
+          "waveform_read_and_hash_seconds": 7.5913787499885075,
+          "task_read_and_hash_seconds": 8.98737433302449,
+          "peak_rss_bytes": 2451046400
+        },
+        {
+          "load_seconds": 10.07860004104441,
+          "catalog_fingerprint_seconds": 2.80224637495121,
+          "waveform_read_and_hash_seconds": 7.600156000000425,
+          "task_read_and_hash_seconds": 9.022997416963335,
+          "peak_rss_bytes": 2442641408
+        }
+      ],
+      "median": {
+        "load_seconds": 10.07860004104441,
+        "catalog_fingerprint_seconds": 2.80224637495121,
+        "waveform_read_and_hash_seconds": 7.600156000000425,
+        "task_read_and_hash_seconds": 8.98737433302449,
+        "peak_rss_bytes": 2449080320
+      }
+    },
+    "final-standalone": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 10.148345125024207,
+          "catalog_fingerprint_seconds": 2.773462917015422,
+          "waveform_read_and_hash_seconds": 8.006325124995783,
+          "task_read_and_hash_seconds": 8.812510000017937,
+          "peak_rss_bytes": 2522202112
+        },
+        {
+          "load_seconds": 10.277602082991507,
+          "catalog_fingerprint_seconds": 2.7734504580148496,
+          "waveform_read_and_hash_seconds": 8.005500624945853,
+          "task_read_and_hash_seconds": 8.74200412502978,
+          "peak_rss_bytes": 2533703680
+        },
+        {
+          "load_seconds": 10.261356041999534,
+          "catalog_fingerprint_seconds": 2.7911727919708937,
+          "waveform_read_and_hash_seconds": 8.046785334008746,
+          "task_read_and_hash_seconds": 8.9649589160108,
+          "peak_rss_bytes": 2536620032
+        }
+      ],
+      "median": {
+        "load_seconds": 10.261356041999534,
+        "catalog_fingerprint_seconds": 2.773462917015422,
+        "waveform_read_and_hash_seconds": 8.006325124995783,
+        "task_read_and_hash_seconds": 8.812510000017937,
+        "peak_rss_bytes": 2533703680
+      }
+    },
+    "final-record-lz4-child": {
+      "environment": {
+        "python": "3.13.15",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64"
+      },
+      "runs": [
+        {
+          "load_seconds": 9.978523541998584,
+          "catalog_fingerprint_seconds": 2.761868166970089,
+          "waveform_read_and_hash_seconds": 7.554208540997934,
+          "task_read_and_hash_seconds": 8.930669041990768,
+          "peak_rss_bytes": 2447376384
+        },
+        {
+          "load_seconds": 10.059240916976705,
+          "catalog_fingerprint_seconds": 2.767889041977469,
+          "waveform_read_and_hash_seconds": 7.582915375009179,
+          "task_read_and_hash_seconds": 8.944654291961342,
+          "peak_rss_bytes": 2445770752
+        },
+        {
+          "load_seconds": 10.030151290993672,
+          "catalog_fingerprint_seconds": 2.7953798749949783,
+          "waveform_read_and_hash_seconds": 7.626982332963962,
+          "task_read_and_hash_seconds": 8.885469375003595,
+          "peak_rss_bytes": 2462744576
+        }
+      ],
+      "median": {
+        "load_seconds": 10.030151290993672,
+        "catalog_fingerprint_seconds": 2.767889041977469,
+        "waveform_read_and_hash_seconds": 7.582915375009179,
+        "task_read_and_hash_seconds": 8.930669041990768,
+        "peak_rss_bytes": 2447376384
+      }
+    }
+  },
+  "builds": {
+    "standalone": {
+      "variant": "before",
+      "convert_seconds": 6.592167416994926,
+      "schema_seconds": 0.10036937502445653,
+      "write_seconds": 150.78801945905434,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 982980130,
+      "catalog_bytes": 110637056,
+      "peak_rss_bytes": 2281504768,
+      "artifact_path": "ecg-read-prepared-default/before/physionet/ecg-qa-cot/1.0.0",
+      "owned_signal_bytes": 872331157,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 192288,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    },
+    "packed-parent": {
+      "variant": "parent",
+      "convert_seconds": 8.906929040967952,
+      "schema_seconds": 0.3640387919731438,
+      "write_seconds": 195.2601336670341,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 1189338428,
+      "catalog_bytes": 17313792,
+      "peak_rss_bytes": 1876983808,
+      "artifact_path": "ecg-read-prepared-default/after/physionet/ptb-xl/1.0.0",
+      "owned_signal_bytes": 1172009277,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 21799,
+        "sources": 21799,
+        "signals": 261588,
+        "axes": 21799,
+        "annotation_contents": 204116,
+        "annotation_occurrences": 204116,
+        "tasks": {},
+        "signal_chunks": 261588,
+        "signals_by_spec": {
+          "ecg": 261588
+        }
+      }
+    },
+    "packed-child": {
+      "variant": "after",
+      "convert_seconds": 15.96726150001632,
+      "schema_seconds": 0.11075962497852743,
+      "write_seconds": 18.292146416031756,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 113265071,
+      "catalog_bytes": 113258496,
+      "peak_rss_bytes": 3201581056,
+      "artifact_path": "ecg-read-prepared-default/after/physionet/ecg-qa-cot/1.1.0",
+      "owned_signal_bytes": 0,
+      "owned_text_bytes": 0,
+      "physical_owners": [
+        {
+          "dataset": "physionet/ptb-xl@1.0.0",
+          "manifest_checksum": "sha256:c7a55e400a1a326a8d3faf64b782a4592c34b047ed59c456fc24c3e58659341c"
+        }
+      ],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 0,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    },
+    "record-parent": {
+      "variant": "parent",
+      "convert_seconds": 9.172393292014021,
+      "schema_seconds": 0.37450833298498765,
+      "write_seconds": 164.72667241597082,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 1357530403,
+      "catalog_bytes": 18100224,
+      "peak_rss_bytes": 1888518144,
+      "artifact_path": "ecg-read-prepared-record/after/physionet/ptb-xl/1.0.0",
+      "owned_signal_bytes": 1339414820,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 21799,
+        "sources": 21799,
+        "signals": 261588,
+        "axes": 21799,
+        "annotation_contents": 204116,
+        "annotation_occurrences": 204116,
+        "tasks": {},
+        "signal_chunks": 261588,
+        "signals_by_spec": {
+          "ecg": 261588
+        }
+      }
+    },
+    "record-child": {
+      "variant": "after",
+      "convert_seconds": 15.783336042019073,
+      "schema_seconds": 0.10531574999913573,
+      "write_seconds": 17.739904166024644,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 114575791,
+      "catalog_bytes": 114569216,
+      "peak_rss_bytes": 3192127488,
+      "artifact_path": "ecg-read-prepared-record/after/physionet/ecg-qa-cot/1.1.0",
+      "owned_signal_bytes": 0,
+      "owned_text_bytes": 0,
+      "physical_owners": [
+        {
+          "dataset": "physionet/ptb-xl@1.0.0",
+          "manifest_checksum": "sha256:52982196d8bfbcaf7da3e48d26e5bb832ed7a9311a1e2d8f4e76830017c4abc9"
+        }
+      ],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 0,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    },
+    "record-bss-parent": {
+      "variant": "parent",
+      "convert_seconds": 8.77725633297814,
+      "schema_seconds": 0.35749929200392216,
+      "write_seconds": 583.5492408340215,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 2244000703,
+      "catalog_bytes": 17313792,
+      "peak_rss_bytes": 1882898432,
+      "artifact_path": "ecg-read-prepared-record-bss/after/physionet/ptb-xl/1.0.0",
+      "owned_signal_bytes": 2226671545,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 21799,
+        "sources": 21799,
+        "signals": 261588,
+        "axes": 21799,
+        "annotation_contents": 204116,
+        "annotation_occurrences": 204116,
+        "tasks": {},
+        "signal_chunks": 261588,
+        "signals_by_spec": {
+          "ecg": 261588
+        }
+      }
+    },
+    "record-bss-child": {
+      "variant": "after",
+      "convert_seconds": 15.779300040972885,
+      "schema_seconds": 0.10569970804499462,
+      "write_seconds": 18.287687083007768,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 115624367,
+      "catalog_bytes": 115617792,
+      "peak_rss_bytes": 3189932032,
+      "artifact_path": "ecg-read-prepared-record-bss/after/physionet/ecg-qa-cot/1.1.0",
+      "owned_signal_bytes": 0,
+      "owned_text_bytes": 0,
+      "physical_owners": [
+        {
+          "dataset": "physionet/ptb-xl@1.0.0",
+          "manifest_checksum": "sha256:88bd1a92b4980bf6e53befca616d656a40fda61cf503f31eb797c1fc4506d6b2"
+        }
+      ],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 0,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    },
+    "record-lz4-parent": {
+      "variant": "parent",
+      "convert_seconds": 8.913158667040989,
+      "schema_seconds": 0.3830094580189325,
+      "write_seconds": 40.463535583985504,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 1694892508,
+      "catalog_bytes": 17313792,
+      "peak_rss_bytes": 1884307456,
+      "artifact_path": "ecg-read-prepared-record-lz4/after/physionet/ptb-xl/1.0.0",
+      "owned_signal_bytes": 1677563357,
+      "owned_text_bytes": 0,
+      "physical_owners": [],
+      "counts": {
+        "records": 21799,
+        "sources": 21799,
+        "signals": 261588,
+        "axes": 21799,
+        "annotation_contents": 204116,
+        "annotation_occurrences": 204116,
+        "tasks": {},
+        "signal_chunks": 261588,
+        "signals_by_spec": {
+          "ecg": 261588
+        }
+      }
+    },
+    "record-lz4-child": {
+      "variant": "after",
+      "convert_seconds": 15.950427290983498,
+      "schema_seconds": 0.10591570899123326,
+      "write_seconds": 17.738416332984343,
+      "stored_payload_reads": 0,
+      "artifact_bytes": 114837935,
+      "catalog_bytes": 114831360,
+      "peak_rss_bytes": 3190243328,
+      "artifact_path": "ecg-read-prepared-record-lz4/after/physionet/ecg-qa-cot/1.1.0",
+      "owned_signal_bytes": 0,
+      "owned_text_bytes": 0,
+      "physical_owners": [
+        {
+          "dataset": "physionet/ptb-xl@1.0.0",
+          "manifest_checksum": "sha256:23aed70b0d76514e7104bfe558fd0aa4bbc116a3a334573cd036c9e0959bd260"
+        }
+      ],
+      "counts": {
+        "records": 16024,
+        "sources": 16024,
+        "signals": 192288,
+        "axes": 16024,
+        "annotation_contents": 17295,
+        "annotation_occurrences": 17295,
+        "tasks": {
+          "answer": 231543
+        },
+        "signal_chunks": 0,
+        "signals_by_spec": {
+          "ecg": 192288
+        }
+      }
+    }
+  },
+  "fidelity": {
+    "fidelity": "equal",
+    "descriptive_metadata": {
+      "dataset_id": "physionet/ecg-qa-cot",
+      "source_revision": null,
+      "name": "ECG-QA CoT",
+      "description": "12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought rationales for reasoning fine-tuning.",
+      "license": "CC-BY-4.0",
+      "domains": [
+        "cardiology",
+        "health"
+      ],
+      "tags": [
+        "ecg",
+        "qa",
+        "cot",
+        "physionet"
+      ],
+      "source_url": "https://physionet.org/content/ptb-xl/",
+      "license_url": null,
+      "citation": null,
+      "access": "open",
+      "access_url": null,
+      "yaml_schema_version": 1
+    },
+    "records": 16024,
+    "signals": 192288,
+    "samples": 961440000,
+    "null_samples": 0,
+    "tasks": 231543,
+    "axis_groups": 16024,
+    "catalog_sha256": "e890d6b370cc5182fb2c718039dd418fe075900416b6dc370ab11b85618a4c69",
+    "waveforms_sha256": "c829bf2cf023fb3986e0a6d386e62369abdfc54c2e83f942a33925b68b9e25ce",
+    "tasks_sha256": "82d114294bafcf283dd2ada9d51b6c04cc2927b5881960c0c9f77c885e8f61bd"
+  }
+}
