@@ -176,6 +176,8 @@ class Task(SupportsAnnotate, ABC):
             value = Payload.from_value(value)
         elif name == "targets" and value is not None:
             value = tuple(Payload.from_value(item) if isinstance(item, str) else item for item in value)
+        if name in {"prompt", "rationale"} and isinstance(value, Payload) and value.descriptor.kind != "str":
+            raise TimeFValidationError(f"task {name} requires a text payload")
         super().__setattr__(name, value)
 
     def __post_init__(self) -> None:
