@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -32,6 +32,11 @@ from timenet.types import (
 )
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.dataset.composition import ImportedDataset
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -84,6 +89,24 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_sources: list[Callable[[], Iterator[Task]]] = []
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        self._import_namespaces: set[str] = set()
+
+    def copy_from(
+        self,
+        parent: "TimeFDataset | TimeFReader",
+        *,
+        namespace: str,
+        record_ids: Iterable[str] | None = None,
+        include_tasks: bool = False,
+    ) -> "ImportedDataset":
+        """Copy editable metadata while sharing immutable parent payloads.
+
+        Returns:
+            Imported objects indexed by their parent identities.
+        """
+        from timenet.dataset.composition import copy_from  # noqa: PLC0415
+
+        return copy_from(self, parent, namespace=namespace, record_ids=record_ids, include_tasks=include_tasks)
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
