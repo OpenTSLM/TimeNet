@@ -113,8 +113,8 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert record.annotations[0].content_id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
     assert task.inputs[0] is record
-    assert task.prompt == "Alive?"
-    assert task.targets == ("Yes",)
+    assert task.read_prompt() == "Alive?"
+    assert task.read_targets() == ("Yes",)
     assert task.annotations[0].name == "task_kind"
 
 
@@ -247,7 +247,9 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
         (task,) = reader.read_tasks(records)
 
     assert task.targets is not None
-    text, integer, floating, boolean, target_record, target_signal, target_point = task.targets
+    resolved = task.read_targets()
+    assert resolved is not None
+    text, integer, floating, boolean, target_record, target_signal, target_point = resolved
     assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
@@ -283,7 +285,7 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
         )
         (task,) = reader.read_tasks(records)
 
-    assert task.targets == ("Yes",)
+    assert task.read_targets() == ("Yes",)
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
@@ -426,8 +428,8 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
         .fetchone()
     )
 
-    assert back.value == value
-    assert type(back.value) is type(value)
+    assert back.read_value() == value
+    assert type(back.read_value()) is type(value)
     assert stored == (kind,)
 
 

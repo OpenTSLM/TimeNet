@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from hashlib import sha256
 from itertools import islice
 import json
@@ -24,6 +24,7 @@ from timenet.format.task_codec import encode_span, encode_target, encode_task_pa
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
+    ArrayPayload,
     Task,
     TSCorrespondenceTask,
     annotation_type_of,
@@ -226,7 +227,7 @@ class _StoredAxis(NamedTuple):
     axis: TimeAxis
     key: int
     offsets: _OffsetSignature | None
-    offsets_loader: Callable[[], pa.Array] | None
+    offsets_loader: ArrayPayload | None
 
 
 class _HierarchyBatches:
@@ -472,13 +473,13 @@ class DuckDBControlWriter:
                         "task_key": task_key,
                         "task_id": task.id,
                         "task_type": task_type,
-                        "prompt": task.prompt,
+                        "prompt": None if task.prompt is None else task.prompt.read(),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_keys),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
-                        "rationale": task.rationale,
+                        "rationale": None if task.rationale is None else task.rationale.read(),
                         "metadata": _json(task.metadata),
                     }
                 )
@@ -733,7 +734,7 @@ class DuckDBControlWriter:
         if existing is None:
             axis_key = next(axis_keys)
             offsets = self._write_axis(signal, axis_key, batches)
-            axes[axis.axis_id] = _StoredAxis(axis, axis_key, offsets, signal.time_offsets_loader)
+            axes[axis.axis_id] = _StoredAxis(axis, axis_key, offsets, signal.time_offsets)
         elif existing.axis != axis:
             raise TimeFValidationError(f"axis id {axis.axis_id!r} is reused with different definitions")
         else:
@@ -744,7 +745,7 @@ class DuckDBControlWriter:
             stored_offsets = existing.offsets
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
-            if signal.time_offsets_loader is not existing.offsets_loader:
+            if signal.time_offsets != existing.offsets_loader:
                 candidate = _validated_irregular_offsets(signal)
                 candidate_signature = _offset_signature(candidate)
                 if candidate_signature != stored_offsets:

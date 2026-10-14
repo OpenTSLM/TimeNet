@@ -58,9 +58,9 @@ def test_a_vocabulary_is_one_annotation_for_each_set():
 
 def test_a_vocabulary_holds_the_whole_set_and_not_one_member():
     stages, sexes, conditions = tasks.build_vocabularies(_PREFIX)
-    assert stages.value == list(tasks.STAGE_LABELS)
-    assert sexes.value == ["F", "M"]
-    assert conditions.value == ["placebo", "temazepam"]
+    assert stages.read_value() == list(tasks.STAGE_LABELS)
+    assert sexes.read_value() == ["F", "M"]
+    assert conditions.read_value() == ["placebo", "temazepam"]
 
 
 def test_a_vocabulary_carries_no_span():
@@ -75,7 +75,7 @@ def test_two_builds_give_one_set_of_vocabularies():
     first = tasks.build_vocabularies(_PREFIX)
     second = tasks.build_vocabularies(_PREFIX)
     assert [one.id for one in first] == [one.id for one in second]
-    assert [one.value for one in first] == [one.value for one in second]
+    assert [one.read_value() for one in first] == [one.read_value() for one in second]
 
 
 def _scope(task) -> TimeInterval:
@@ -96,7 +96,7 @@ def _stage(label, onset_s, end_s):
 def test_a_run_expands_into_one_task_for_each_epoch():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage W", 0, 900)]))
     assert len(built) == 30
-    assert {one.targets for one in built} == {("Sleep stage W",)}
+    assert {one.read_targets() for one in built} == {("Sleep stage W",)}
 
 
 def test_an_entry_of_one_epoch_gives_one_task():
@@ -130,12 +130,12 @@ def test_an_epoch_is_placed_from_the_onset_it_is_given():
 
 def test_the_label_is_kept_as_the_scorer_wrote_it():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage 4", 0, 30)]))
-    assert built[0].targets == ("Sleep stage 4",)
+    assert built[0].read_targets() == ("Sleep stage 4",)
 
 
 def test_a_label_that_names_no_sleep_stage_still_becomes_a_task():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Movement time", 0, 30)]))
-    assert built[0].targets == ("Movement time",)
+    assert built[0].read_targets() == ("Movement time",)
 
 
 def test_every_task_names_the_stage_vocabulary():
@@ -233,7 +233,7 @@ def _schemas(built):
 def test_age_is_a_scalar_with_a_unit():
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, _CASSETTE_FACTS, []))
     age = _pick(built, ScalarPredictionTask)
-    assert age.targets == pytest.approx((33.0,))
+    assert age.read_targets() == pytest.approx((33.0,))
     assert age.unit == "year"
     assert age.target_name == "age"
     assert age.scope is None
@@ -242,7 +242,7 @@ def test_age_is_a_scalar_with_a_unit():
 def test_sex_carries_the_decoded_letter():
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, _CASSETTE_FACTS, []))
     sex = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex")
-    assert sex.targets == ("F",)
+    assert sex.read_targets() == ("F",)
     assert sex.target_schema == "sleep-edfx-vocabulary-sex"
     assert sex.scope is None
 
@@ -252,14 +252,14 @@ def test_the_same_sheet_code_decodes_to_the_other_letter_elsewhere():
     # decoder gave.
     telemetry = [_fact("sex", "M"), _fact("age", 40)]
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, telemetry, []))
-    assert _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex").targets == ("M",)
+    assert _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex").read_targets() == ("M",)
 
 
 def test_a_telemetry_night_carries_its_condition():
     facts = [*_CASSETTE_FACTS, _fact("condition", "placebo")]
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, facts, []))
     condition = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-condition")
-    assert condition.targets == ("placebo",)
+    assert condition.read_targets() == ("placebo",)
     assert condition.scope is None
 
 
@@ -337,7 +337,7 @@ def test_the_localization_task_is_sparse_and_names_no_series():
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, _CASSETTE_FACTS, stages))
     night = _pick(built, TemporalLocalizationTask)
     assert night.mode == LocalizationMode.SPARSE
-    assert night.targets == (TimeInterval.micros(3600 * US_PER_S, 25200 * US_PER_S),)
+    assert night.read_targets() == (TimeInterval.micros(3600 * US_PER_S, 25200 * US_PER_S),)
     assert night.scope is None
 
 
@@ -352,7 +352,7 @@ _SESSION = TimeInterval.micros(0, 86400 * US_PER_S)
 def test_the_lights_off_moment_becomes_a_localization_task():
     built = tasks.build_lights_off_task(_RECORD_ID, _SESSION, [_fact(AnnotationKey.LIGHTS_OFF, "22:30:00", 1800)])
     assert built is not None
-    assert built.targets == (TimePoint.micros(1800 * US_PER_S),)
+    assert built.read_targets() == (TimePoint.micros(1800 * US_PER_S),)
     assert built.mode == LocalizationMode.SPARSE
     assert built.scope is None
 

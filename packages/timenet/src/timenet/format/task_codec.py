@@ -26,6 +26,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.payloads import Payload
 
 
 TARGET_VALUE_COLUMNS = (
@@ -203,6 +204,8 @@ def encode_target(target: object) -> dict[str, object | None]:
     Raises:
         TimeFFormatError: If the target type is unsupported.
     """
+    if isinstance(target, Payload):
+        target = target.read()
     row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
     if isinstance(target, bool):
         row.update(target_kind="boolean", boolean_value=target)
