@@ -16,7 +16,7 @@ from jaxtyping import Float, Float64
 import numpy as np
 import pyarrow as pa
 
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
@@ -109,7 +109,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         """
         return [HelloWorldRecording(index=0, n_values=16), HelloWorldRecording(index=1, n_values=512)]
 
-    def convert(self, raw_refs: list[HelloWorldRecording]) -> TimeFDataset:
+    def convert(self, raw_refs: list[HelloWorldRecording], *, context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002 - raw connectors use no stored inputs
         """Build the complete dataset from the recording descriptions.
 
         The dataset includes every TimeF feature.
