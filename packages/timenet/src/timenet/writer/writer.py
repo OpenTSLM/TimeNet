@@ -54,6 +54,7 @@ class TimeFWriter:
         root: Path,
         dataset: TimeFDataset,
         *,
+        inline_bytes: int = 4096,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
@@ -88,6 +89,9 @@ class TimeFWriter:
                 ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
                 that cannot apply it.
         """
+        if inline_bytes < 0:
+            raise TimeFValidationError("inline_bytes must be non-negative")
+        self.inline_bytes = inline_bytes
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
         if values_backend not in SUPPORTED_VALUES_BACKENDS:
@@ -188,7 +192,7 @@ class TimeFWriter:
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        control_writer = DuckDBControlWriter(self._staging_dir / CONTROL_FILE)
+        control_writer = DuckDBControlWriter(self._staging_dir / CONTROL_FILE, inline_bytes=self.inline_bytes)
         self._task_type_counts = control_writer.write_hierarchy(
             self._dataset,
             placements,

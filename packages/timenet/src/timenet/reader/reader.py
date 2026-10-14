@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 import types as _types
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
@@ -172,6 +172,7 @@ class TimeFReader:
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -189,6 +190,7 @@ class TimeFReader:
         with self._as_format_error():
             return self._control_reader().task_table(
                 record_ids,
+                payloads=payloads,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
@@ -198,6 +200,7 @@ class TimeFReader:
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -214,12 +217,15 @@ class TimeFReader:
         with self._as_format_error():
             return self._control_reader().target_table(
                 record_ids,
+                payloads=payloads,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
             )
 
-    def annotation_table(self, object_type: str | None = None) -> pa.Table:
+    def annotation_table(
+        self, object_type: str | None = None, *, payloads: Literal["references", "materialize"] = "references"
+    ) -> pa.Table:
         """Return every annotation occurrence with its content as an Arrow table.
 
         Args:
@@ -229,7 +235,7 @@ class TimeFReader:
             One row per occurrence.
         """
         with self._as_format_error():
-            return self._control_reader().annotation_table(object_type)
+            return self._control_reader().annotation_table(object_type, payloads=payloads)
 
     @property
     def values_backend(self) -> str:
