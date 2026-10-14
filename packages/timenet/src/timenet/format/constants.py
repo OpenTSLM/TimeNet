@@ -71,3 +71,7 @@ def part_path(template: str, index: int, **fields: str) -> str:
             f"{PART_INDEX_DIGITS}-digit lexical ordering of {template!r}"
         )
     return template.format(index, **fields)
+
+
+TIMEF_FORMAT_VERSION = 2
+"""The supported immutable artifact format."""

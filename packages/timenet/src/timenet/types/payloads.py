@@ -8,6 +8,7 @@ from typing import Any, Generic, Literal, TypeVar, cast
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
+from timenet.types.payload_references import PayloadReference
 
 
 T = TypeVar("T")
@@ -26,6 +27,7 @@ class PayloadDescriptor:
     shape: tuple[int, ...] = ()
     nullable: bool = False
     categories: tuple[str, ...] = ()
+    dimension_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -36,6 +38,7 @@ class Payload(Generic[T]):
     storage: StoragePolicy = "auto"
     _value: Any = field(default=None, repr=False)
     _loader: Callable[[], T] | None = field(default=None, repr=False)
+    reference: PayloadReference | None = None
 
     @classmethod
     def from_value(cls, value: T, *, storage: StoragePolicy = "auto") -> "Payload[T]":
@@ -88,12 +91,22 @@ class Payload(Generic[T]):
             return cast("T", list(cast("Any", value)))
         return cast("T", value)
 
+    def __call__(self) -> T:
+        """Read content through the producer callback interface.
+
+        Returns:
+            The native value.
+        """
+        return self.read()
+
     def __deepcopy__(self, memo: dict[int, object]) -> "Payload[T]":
         return self
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Payload) or self.descriptor != other.descriptor:
             return False
+        if self.reference is not None or other.reference is not None:
+            return self.reference == other.reference
         if self._loader is not None or other._loader is not None:
             return self._loader is other._loader
         if isinstance(self._value, pa.Array):
@@ -101,7 +114,11 @@ class Payload(Generic[T]):
         return self._value == other._value
 
     def __hash__(self) -> int:
-        backing = id(self._loader) if self._loader is not None else self._value
+        backing = (
+            self.reference.model_dump_json()
+            if self.reference is not None
+            else (id(self._loader) if self._loader is not None else self._value)
+        )
         if isinstance(backing, pa.Array):
             backing = id(backing)
         return hash((self.descriptor, backing))
