@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 from urllib.parse import urlparse
 import uuid
 
@@ -166,6 +166,7 @@ class S3Registry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
@@ -195,8 +196,11 @@ class S3Registry(WritableRegistry):
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
-            with TimeFWriter(staging, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging, dataset, values_backend=values_backend, payload_policy=payload_policy, progress_cb=progress_cb
+            ) as writer:
                 writer.write()
+                self.validate_payload_sources(writer.payload_sources)
             version_dir = staging / dataset_id / version
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
             files = sorted(path for path in version_dir.rglob("*") if path.is_file())

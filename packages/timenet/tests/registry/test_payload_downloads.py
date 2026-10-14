@@ -5,7 +5,7 @@ from _fake_registry import build_service_fake
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetRegistryError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.registry.version import DatasetVersion
@@ -74,3 +74,25 @@ def test_download_rejects_corrupt_owned_payloads_before_committing_the_child(tmp
     with pytest.raises(TimeFFormatError, match="checksum mismatch"):
         LocalRegistry(source).download_version(child.metadata.dataset_id, "1.0.0", target)
     assert not (target / "manifest.json").exists()
+
+
+def test_publish_requires_hosted_owners_or_an_explicit_standalone_copy(tmp_path):
+    parent = make_dataset()
+    path = parent.write(path=tmp_path / "source")
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "timenet/published"}))
+    service = tmp_path / "service"
+    service.mkdir()
+    transport, requests = build_service_fake(service)
+    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        imported = child.copy_from(reader, namespace="base", include_tasks=True)
+        with pytest.raises(TimeNetRegistryError, match="absent from the destination"):
+            remote.store(child)
+        assert all(request.method != "POST" for request in requests)
+        remote.store(child, payload_policy="copy")
+    shutil.rmtree(tmp_path / "source")
+    with TimeFReader(remote.open_version(child.metadata.dataset_id, "1.0.0")) as reader:
+        reader.verify()
+        actual = next(reader.iter_records([imported.records["record-0"].id])).signals[0].values.read()
+    assert actual.equals(parent.records[0].signals[0].values.read())
+    assert remote.get_manifest(child.metadata.dataset_id, "1.0.0").payload_sources == ()

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 import shutil
+from typing import Literal
 
 from timenet.config import settings
 from timenet.connectors import BaseConnector
@@ -77,7 +78,13 @@ def run_pipeline(  # noqa: PLR0913
         dataset.derive_schema()
         if committed:  # force rebuild: drop the old committed version so the writer can republish it
             shutil.rmtree(version_dir)
-        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+        store_dataset(
+            dataset,
+            root,
+            values_backend=resolved_backend,
+            payload_policy=connector.payload_policy,
+            progress_cb=progress_cb,
+        )
         # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
         # delete it.
         if not keep_cache and cache_dir is None and cache.is_dir():
@@ -130,7 +137,13 @@ def publish_pipeline(  # noqa: PLR0913
         dataset = connector.convert(connector.download(cache), context=context)
         _validate_output(connector, dataset)
         dataset.derive_schema()
-        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+        registry.store(
+            dataset,
+            force=force,
+            values_backend=resolved_backend,
+            payload_policy=connector.payload_policy,
+            progress_cb=progress_cb,
+        )
         if not keep_cache and cache_dir is None and cache.is_dir():
             shutil.rmtree(cache)
     return version
@@ -169,6 +182,7 @@ def store_dataset(
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     values_backend: str = "parquet",
+    payload_policy: Literal["reuse", "copy"] = "reuse",
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
@@ -188,6 +202,8 @@ def store_dataset(
     """
     if dataset.schema is None:
         dataset.derive_schema()
-    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend) as writer:
+    with TimeFWriter(
+        root, dataset, progress_cb=progress_cb, values_backend=values_backend, payload_policy=payload_policy
+    ) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)

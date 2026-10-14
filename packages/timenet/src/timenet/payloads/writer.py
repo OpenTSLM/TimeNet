@@ -1,5 +1,6 @@
 """Pack owned bulk content into bounded Parquet row groups."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from weakref import WeakKeyDictionary
@@ -19,15 +20,38 @@ _ARRAY_CHUNK_VALUES = 32_768
 class PayloadStore:
     """Own the payload artifacts generated alongside one control database."""
 
-    def __init__(self, root: Path, *, inline_bytes: int = 4096) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        inline_bytes: int = 4096,
+        reference_transform: Callable[[Payload[Any]], PayloadReference] | None = None,
+    ) -> None:
         self.root = root
+        self._reference_transform = reference_transform
         self.inline_bytes = inline_bytes
-        self._text_refs: WeakKeyDictionary[Payload[Any], PayloadReference] = WeakKeyDictionary()
+        self._text_refs: dict[str, WeakKeyDictionary[Payload[Any], PayloadReference]] = {
+            "auto": WeakKeyDictionary(),
+            "external": WeakKeyDictionary(),
+        }
         self.files: list[str] = []
         self._writers: dict[str, pq.ParquetWriter] = {}
         self._buffers: dict[str, list[pa.Array]] = {}
         self._bytes: dict[str, int] = {}
         self._groups: dict[str, int] = {}
+
+    def reference(self, payload: Payload[Any]) -> PayloadReference:
+        """Reuse a pinned locator or apply the output's copy policy.
+
+        Returns:
+            The output locator.
+
+        Raises:
+            TimeFValidationError: If the payload has no pinned physical owner.
+        """
+        if payload.reference is None or payload.reference.source is None:
+            raise TimeFValidationError("reused payload references must name a pinned owner")
+        return payload.reference if self._reference_transform is None else self._reference_transform(payload)
 
     def text(self, payload: Payload[Any]) -> tuple[Any, PayloadReference | None]:
         """Keep small content inline and pack larger text into shared artifacts.
@@ -39,11 +63,10 @@ class PayloadStore:
             TimeFValidationError: If a producer disagrees with its descriptor.
         """
         if payload.reference is not None:
-            if payload.reference.source is None:
-                raise TimeFValidationError("reused payload references must name a pinned owner")
-            return None, payload.reference
-        if payload in self._text_refs:
-            return None, self._text_refs[payload]
+            return None, self.reference(payload)
+        references = self._text_refs[payload.storage]
+        if payload in references:
+            return None, references[payload]
         value = payload.read()
         actual = Payload.from_value(value).descriptor
         declared = payload.descriptor
@@ -59,7 +82,7 @@ class PayloadStore:
         kind = pa.string() if actual.kind == "str" else pa.list_(pa.string())
         chunk = self._cell(actual.kind, pa.array([value], type=kind), 1)
         reference = PayloadReference(codec="text", chunks=(chunk,))
-        self._text_refs[payload] = reference
+        references[payload] = reference
         return None, reference
 
     def _cell(self, name: str, value: pa.Array, n_values: int) -> PayloadChunk:
