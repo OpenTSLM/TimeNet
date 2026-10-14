@@ -203,3 +203,13 @@ without losing the TimeNet-specific error type.
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
 See the [API reference for `timenet.types`](api/types.md) for all symbols.
+
+## Explicit content reads
+
+Since data can come from a parent, actual data values are held by immutable `Payload` handles.
+That is, innstead of `annotation.value`, the user must invoke `annotation.value.read()` to actually
+load those values, since `annotation.value` is a lazy handle on the underlying data.
+This does not affect construction, since constructors create and use these values in the background, invisible to users.
+
+`Annotation.read_value()` returns the native value or `None` for a marker. Task methods
+`read_prompt()`, `read_rationale()`, and `read_targets()` provide equivalent explicit conveniences.

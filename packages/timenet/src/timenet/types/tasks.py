@@ -2,17 +2,19 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from enum import StrEnum, unique
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, TypeGuard, cast
 
 import pint
+from typing_extensions import TypedDict, Unpack
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import new_id
 from timenet.types.modalities import InputModality
+from timenet.types.payloads import Payload
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
 from timenet.types.units import normalize_unit
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
     from timenet.dataset.record import Record
     from timenet.dataset.time_series import Signal
 
-    TargetItem: TypeAlias = str | int | float | bool | Record | Signal | Span
+    TargetItem: TypeAlias = str | Payload[str] | int | float | bool | Record | Signal | Span
 else:
     TargetItem = object
 
@@ -46,7 +48,7 @@ def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
     task_id: str,
-    prompt: str | None,
+    prompt: str | Payload[str] | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
     """Normalize and validate the input kinds declared by a task.
@@ -71,7 +73,8 @@ def validate_input_modalities(
         raise TimeFValidationError(f"invalid input_modalities for task {task_id!r}") from exc
     if not declared:
         raise TimeFValidationError(f"task {task_id!r} must declare an input modality")
-    if prompt and InputModality.TEXT not in declared:
+    has_prompt = prompt is not None and (prompt.descriptor.length != 0 if isinstance(prompt, Payload) else bool(prompt))
+    if has_prompt and InputModality.TEXT not in declared:
         raise TimeFValidationError(f"task {task_id!r} has a prompt but does not declare text input")
     if InputModality.NO_INPUT in declared:
         if has_record_inputs or declared - {InputModality.NO_INPUT, InputModality.TEXT}:
@@ -89,7 +92,25 @@ class LocalizationMode(StrEnum):
     EXHAUSTIVE = "exhaustive"
 
 
-@dataclass(kw_only=True)
+class TaskArguments(TypedDict, total=False):
+    """Native constructor arguments shared by all task types."""
+
+    id: str
+    inputs: Iterable["Record"]
+    targets: Iterable[TargetItem] | None
+    prompt: str | Payload[str] | None
+    rationale: str | Payload[str] | None
+    split: Split | str | None
+    input_modalities: Iterable[InputModality] | None
+    scope: Span | None
+    input_annotations: Iterable[Annotation]
+    target_annotations: Iterable[Annotation]
+    from_tasks: Iterable["Task"]
+    annotations: Iterable[Annotation]
+    metadata: JsonMapping
+
+
+@dataclass(kw_only=True, init=False)
 class Task(SupportsAnnotate, ABC):
     """One modelling problem with ordered inputs and ordered output items.
 
@@ -110,7 +131,7 @@ class Task(SupportsAnnotate, ABC):
     """Records supplied to the model, in semantic order."""
     targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
     """Ordered native values and stored objects that form the expected output."""
-    prompt: str | None = None
+    prompt: Payload[str] | None = None
     """What the model is asked, or None for an unprompted task."""
     split: Split | None = None
     """The partition the task belongs to: train, validation, or test. None when the dataset does not
@@ -123,7 +144,7 @@ class Task(SupportsAnnotate, ABC):
     """Existing annotation occurrences supplied to the model as context."""
     target_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
     """Existing annotation occurrences that form the expected output."""
-    rationale: str | None = None
+    rationale: Payload[str] | None = None
     """Optional explanation associated with the answer."""
     from_tasks: tuple["Task", ...] = field(default=(), compare=False)
     """Tasks from which this task was derived."""
@@ -132,6 +153,31 @@ class Task(SupportsAnnotate, ABC):
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
 
+    def __init__(self, **kwargs: Unpack[TaskArguments]) -> None:
+        self._initialize({**kwargs})
+
+    def _initialize(self, values: dict[str, Any]) -> None:
+        known = {item.name for item in fields(self)}
+        unknown = values.keys() - known
+        if unknown:
+            raise TimeFValidationError(f"unknown task arguments: {sorted(unknown)}")
+        for item in fields(self):
+            if item.name in values:
+                value = values[item.name]
+            elif item.default_factory is not MISSING:
+                value = item.default_factory()
+            else:
+                value = item.default
+            setattr(self, item.name, value)
+        self.__post_init__()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in {"prompt", "rationale"} and value is not None and not isinstance(value, Payload):
+            value = Payload.from_value(value)
+        elif name == "targets" and value is not None:
+            value = tuple(Payload.from_value(item) if isinstance(item, str) else item for item in value)
+        super().__setattr__(name, value)
+
     def __post_init__(self) -> None:
         """Normalize caller-provided sequences and validate target item types and the split.
 
@@ -139,7 +185,15 @@ class Task(SupportsAnnotate, ABC):
             TimeFValidationError: If one target item has an unsupported type, or the split is unknown.
         """
         self.inputs = tuple(self.inputs)
-        self.targets = None if self.targets is None else tuple(self.targets)
+        self.targets = (
+            None
+            if self.targets is None
+            else tuple(Payload.from_value(target) if isinstance(target, str) else target for target in self.targets)
+        )
+        if self.prompt is not None and not isinstance(self.prompt, Payload):
+            self.prompt = Payload.from_value(self.prompt)
+        if self.rationale is not None and not isinstance(self.rationale, Payload):
+            self.rationale = Payload.from_value(self.rationale)
         self.input_annotations = tuple(self.input_annotations)
         self.target_annotations = tuple(self.target_annotations)
         self.from_tasks = tuple(self.from_tasks)
@@ -184,7 +238,7 @@ class Task(SupportsAnnotate, ABC):
             for signal_id, signal in signals.items()
             if signal_ids is None or signal_id in signal_ids
         }
-        if self.prompt or any(
+        if (self.prompt is not None and self.prompt.descriptor.length != 0) or any(
             value_type_of(annotation.value) in {"str", "list"} for annotation in self.input_annotations
         ):
             kinds.add(InputModality.TEXT)
@@ -202,6 +256,34 @@ class Task(SupportsAnnotate, ABC):
         self.annotations = (*self.annotations, attached)
         return attached
 
+    def read_prompt(self) -> str | None:
+        """Resolve the prompt explicitly.
+
+        Returns:
+            Prompt text, or None when absent.
+        """
+        return None if self.prompt is None else self.prompt.read()
+
+    def read_rationale(self) -> str | None:
+        """Resolve the rationale explicitly.
+
+        Returns:
+            Rationale text, or None when absent.
+        """
+        return None if self.rationale is None else self.rationale.read()
+
+    def read_targets(self) -> tuple[TargetItem, ...] | None:
+        """Resolve literal text targets and retain object and span references.
+
+        Returns:
+            Ordered native targets, or None for annotation-backed targets.
+        """
+        if self.targets is None:
+            return None
+        return cast(
+            "tuple[TargetItem, ...]", tuple(item.read() if isinstance(item, Payload) else item for item in self.targets)
+        )
+
     def spans(self) -> tuple[Span, ...]:
         """Return the task scope followed by every span-valued target."""
         spans = [] if self.scope is None else [self.scope]
@@ -212,7 +294,7 @@ class Task(SupportsAnnotate, ABC):
         """Validate configuration that depends on the finalized scope."""
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class ClassificationTask(Task):
     """Classify the inputs, optionally using a named label vocabulary."""
 
@@ -220,15 +302,18 @@ class ClassificationTask(Task):
     target_schema: str | None = None
     """Optional name of the label vocabulary."""
 
+    def __init__(self, *, target_schema: str | None = None, **kwargs: Unpack[TaskArguments]) -> None:
+        self._initialize({**kwargs, "target_schema": target_schema})
 
-@dataclass(kw_only=True)
+
+@dataclass(kw_only=True, init=False)
 class AnswerTask(Task):
     """Answer a question or caption the inputs."""
 
     task_type: ClassVar[TaskType] = TaskType.ANSWER
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class ScalarPredictionTask(Task):
     """Predict one or more quantities described by the task configuration."""
 
@@ -238,19 +323,27 @@ class ScalarPredictionTask(Task):
     target_name: str | None = None
     """Optional name of the predicted quantity."""
 
+    def __init__(
+        self, *, unit: str | pint.Unit | None = None, target_name: str | None = None, **kwargs: Unpack[TaskArguments]
+    ) -> None:
+        self._initialize({**kwargs, "unit": unit, "target_name": target_name})
+
     def __post_init__(self) -> None:
         """Normalize the common fields and physical unit."""
         super().__post_init__()
         self.unit = normalize_unit(self.unit)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class TemporalLocalizationTask(Task):
     """Locate events or regions in the inputs."""
 
     task_type: ClassVar[TaskType] = TaskType.TEMPORAL_LOCALIZATION
     mode: LocalizationMode = LocalizationMode.SPARSE
     """Whether the localization is sparse or exhaustive."""
+
+    def __init__(self, *, mode: LocalizationMode = LocalizationMode.SPARSE, **kwargs: Unpack[TaskArguments]) -> None:
+        self._initialize({**kwargs, "mode": mode})
 
     def __post_init__(self) -> None:
         """Normalize common fields and the localization mode.
@@ -267,34 +360,37 @@ class TemporalLocalizationTask(Task):
             ) from exc
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class ForecastingTask(Task):
     """Predict future values from the supplied inputs."""
 
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class TSEditingTask(Task):
     """Transform the input recording into the output described by targets."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_EDITING
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class TSGenerationTask(Task):
     """Generate output described by the prompt, optionally without record inputs."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_GENERATION
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class TSCorrespondenceTask(Task):
     """Relate input recordings to an optional candidate pool."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
     candidate_records: tuple["Record", ...] = field(default=(), compare=False)
     """Optional candidate pool. An empty tuple means the dataset-wide pool."""
+
+    def __init__(self, *, candidate_records: tuple["Record", ...] = (), **kwargs: Unpack[TaskArguments]) -> None:
+        self._initialize({**kwargs, "candidate_records": candidate_records})
 
     def __post_init__(self) -> None:
         """Normalize common fields and validate Record targets against the candidate pool.
@@ -324,7 +420,7 @@ def _is_target_item(value: object) -> bool:
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    return isinstance(value, (str, int, float, bool, Record, Signal, Span))
+    return isinstance(value, (str, int, float, bool, Record, Signal, Span, Payload))
 
 
 def _concrete_task_classes() -> list[type[Task]]:
