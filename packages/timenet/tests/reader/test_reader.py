@@ -64,7 +64,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
         (selected,) = reader.iter_records((record.id,))
 
     for back in (restored.records[0], selected):
-        values = [annotation.value for annotation in back.annotations if annotation.key == "subject_ids"]
+        values = [annotation.value() for annotation in back.annotations if annotation.key == "subject_ids"]
         assert values == ([list(subjects)] if subjects else [])
     with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
         matches = connection.execute(
@@ -153,8 +153,8 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
     task = next(task for task in restored.tasks if task.id == "qa-3")
-    assert task.prompt == "Question 3?"
-    assert task.rationale == "reason 3"
+    assert task.prompt() == "Question 3?"
+    assert task.rationale() == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
 
