@@ -41,6 +41,7 @@ from timenet.types import (
 )
 from timenet.types.payload_references import PayloadReference
 from timenet.types.payloads import Payload, PayloadDescriptor
+from timenet.types.references import TaskRef, validate_task_graph
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
@@ -1601,6 +1602,7 @@ class _TaskHydration:
 
         Raises:
             TimeFValidationError: If one of ``records`` is not stored in the control database.
+            TimeFFormatError: If the dependency graph is corrupt.
         """
         self.reader = reader
         self.required_modalities = required_modalities
@@ -1613,11 +1615,24 @@ class _TaskHydration:
         self.signals_by_id: dict[str, Signal] = {}
         self._records_without_signal_index: list[Record] = []
         self.annotations_by_id: dict[str, Annotation] = {}
-        self.retained: dict[int, Task] = {}
-        self._hydrating: set[int] = set()
         self._dataset_annotations_indexed = False
         facts = reader.task_facts()
-        self.parent_keys = facts.parent_task_keys
+        self.parents: dict[int, list[TaskRef]] = defaultdict(list)
+        graph: dict[str, set[str]] = {}
+        for key, child, parent in self.connection.execute(
+            "SELECT d.task_key, child.task_id, parent.task_id FROM task_dependencies d "
+            "LEFT JOIN tasks child ON child.task_key=d.task_key "
+            "LEFT JOIN tasks parent ON parent.task_key=d.parent_task_key ORDER BY d.task_key, d.position"
+        ).fetchall():
+            if child is None or parent is None:
+                raise TimeFFormatError("task dependency refers to a missing task")
+            graph.setdefault(child, set()).add(parent)
+            graph.setdefault(parent, set())
+            self.parents[key].append(TaskRef(id=parent))
+        try:
+            validate_task_graph(graph)
+        except TimeFValidationError as exc:
+            raise TimeFFormatError(str(exc)) from exc
         self.tasks_annotated = facts.tasks_annotated
         unknown = [record_id for record_id in self.records_by_id if record_id not in reader._record_keys]
         if unknown:
@@ -1664,62 +1679,10 @@ class _TaskHydration:
         return list(self.iter_tasks())
 
     def _hydrate(self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
-        """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.
-
-        Rows from the selection cursor avoid a second task-table scan.
-
-        Returns:
-            The tasks in the order of ``task_keys``, or in task ID order for the whole table.
-
-        Raises:
-            TimeFFormatError: If the stored derivations contain a cycle.
-        """
-        pending = None if task_keys is None else [key for key in task_keys if key not in self.retained]
-        if task_rows is not None:
-            task_rows = [row for row in task_rows if row.task_key not in self.retained]
-        dependencies = self.reader._task_dependencies(pending) if self.parent_keys else {}
-        in_batch = None if pending is None else set(pending)
-        missing_parents = (
-            []
-            if in_batch is None
-            else sorted(
-                {
-                    parent_key
-                    for parent_keys in dependencies.values()
-                    for parent_key in parent_keys
-                    if parent_key not in self.retained and parent_key not in in_batch
-                }
-            )
-        )
-        if missing_parents:
-            cyclic = self._hydrating.intersection(missing_parents)
-            if cyclic:
-                raise TimeFFormatError(f"task dependencies contain a cycle through task keys {sorted(cyclic)}")
-            self._hydrating.update(pending or ())
-            try:
-                self._hydrate(missing_parents)
-            finally:
-                self._hydrating.difference_update(pending or ())
-        built = self._build(pending, task_rows=task_rows)
-        for task_key, parent_keys in dependencies.items():
-            built[task_key].from_tasks = tuple(self._task(parent_key, built) for parent_key in parent_keys)
-        if task_keys is None:
-            return list(built.values())
-        for task_key, task in built.items():
-            if task_key in self.parent_keys:
-                self.retained[task_key] = task
-        return [self._task(task_key, built) for task_key in task_keys]
-
-    def _task(self, task_key: int, built: dict[int, Task]) -> Task:
-        """Return a task from this batch or the retained parents.
-
-        Raises:
-            TimeFFormatError: If the key was never hydrated.
-        """
-        task = built.get(task_key) or self.retained.get(task_key)
-        if task is None:
-            raise TimeFFormatError(f"task dependency refers to missing task key {task_key!r}")
-        return task
+        built = self._build(task_keys, task_rows=task_rows)
+        for key, task in built.items():
+            task.from_tasks = tuple(self.parents.get(key, ()))
+        return list(built.values()) if task_keys is None else [built[key] for key in task_keys]
 
     def _build(  # noqa: PLR0914 - one batch joins several tables
         self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None

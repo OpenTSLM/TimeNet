@@ -133,7 +133,7 @@ def _convert(
 
 def _streamed(dataset: TimeFDataset) -> list:
     # _task_stream is Callable | None, so narrow the type before you call it.
-    source = dataset._task_stream
+    source = dataset._task_sources[0]
     assert source is not None
     return list(source())
 
@@ -313,7 +313,7 @@ def test_the_tasks_stream_and_are_not_materialized(release, monkeypatch):
     # A streamed task never reaches Record.task_ids. This difference separates a streamed task
     # from a materialized one.
     assert all(not record.task_ids for record in dataset.records)
-    assert dataset._task_stream is not None
+    assert dataset.has_task_stream
 
 
 def test_the_source_gives_a_fresh_iterator_each_call(release, monkeypatch):
