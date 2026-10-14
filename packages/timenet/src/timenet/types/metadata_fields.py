@@ -7,7 +7,33 @@ from pydantic import BeforeValidator, Field, PlainSerializer, StrictStr, TypeAda
 from timenet.types.version import Version
 
 
-_SEMANTIC_VERSION_PATTERN = r"^\d+\.\d+\.\d+$"
+_DATASET_COMPONENT = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"
+_DATASET_ID = rf"{_DATASET_COMPONENT}/{_DATASET_COMPONENT}"
+_SEMANTIC_VERSION = r"\d+\.\d+\.\d+"
+
+DATASET_ID_PATTERN = rf"^{_DATASET_ID}$"
+"""Match a case-sensitive ``org/name`` identifier.
+
+Both components start with a letter, digit, underscore, or hyphen. Remaining
+characters may also include dots. ``/`` separates the components. ``^`` and ``$``
+anchor the identifier at the start and end of the string.
+"""
+
+SEMANTIC_VERSION_PATTERN = rf"^{_SEMANTIC_VERSION}$"
+r"""Match a ``major.minor.patch`` version with three numeric components.
+
+Each ``\d+`` accepts one or more digits, and ``\.`` matches a literal dot.
+The anchors exclude surrounding text. Version ranges and labels such as
+``latest`` do not match.
+"""
+
+DATASET_REF_PATTERN = rf"^{_DATASET_ID}@{_SEMANTIC_VERSION}$"
+"""Match an exact ``org/name@major.minor.patch`` release reference.
+
+Reuse the identifier and version fragments above, with ``@`` between them.
+Anchor the complete reference once so the same rules apply to standalone
+metadata fields and release references.
+"""
 
 
 def _parse_version(value: Any) -> Any:
@@ -23,7 +49,7 @@ def _parse_version(value: Any) -> Any:
 
 DatasetId = Annotated[
     StrictStr,
-    Field(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$"),
+    Field(pattern=DATASET_ID_PATTERN),
 ]
 """A safe, case-sensitive ``org/name`` dataset identifier."""
 
@@ -46,7 +72,7 @@ SemanticVersion = Annotated[
     Version,
     BeforeValidator(_parse_version),
     PlainSerializer(str, return_type=str),
-    WithJsonSchema({"type": "string", "pattern": _SEMANTIC_VERSION_PATTERN}),
+    WithJsonSchema({"type": "string", "pattern": SEMANTIC_VERSION_PATTERN}),
 ]
 """A :class:`Version` encoded as a semantic-version string on the wire."""
 
