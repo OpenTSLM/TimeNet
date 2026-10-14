@@ -90,7 +90,7 @@ _CHUNK_COVERAGE = """
         FROM signal_chunks GROUP BY signal_key
     ) chunks USING (signal_key)
     LEFT JOIN payloads p ON p.object_type='Signal' AND p.object_id=signals.signal_id AND p.field='values' AND p.position=0
-    WHERE CASE WHEN json_extract_string(p.reference, '$.source.dataset') IS NOT NULL
+    WHERE CASE WHEN json_extract_string(p.reference, '$.source.dataset') IS NOT NULL OR coalesce(json_extract_string(p.reference, '$.prefix'), '') <> ''
         THEN CAST(json_extract_string(p.descriptor, '$.length') AS BIGINT) <> signals.n_values
         ELSE coalesce(stored_values, 0) <> signals.n_values END
     LIMIT 1
