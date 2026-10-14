@@ -1,15 +1,19 @@
 """The build pipeline that turns a connector into a stored dataset."""
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
 from timenet.config import settings
 from timenet.connectors import BaseConnector
+from timenet.connectors.context import build_scope
 from timenet.dataset import TimeFDataset
+from timenet.engine.inputs import open_inputs
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.registry.writable import WritableRegistry
+from timenet.types import DatasetRef
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -58,22 +62,26 @@ def run_pipeline(  # noqa: PLR0913
     if committed and not force:
         return version_dir
 
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
-    cache.mkdir(parents=True, exist_ok=True)
+    reference = DatasetRef(dataset_id=metadata.dataset_id, version=metadata.dataset_version)
+    with build_scope(reference), ExitStack() as stack:
+        context = open_inputs(metadata, root, stack)
+        cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
+        cache.mkdir(parents=True, exist_ok=True)
 
-    raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
-    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset. This call is not redundant with that guard.
-    dataset.derive_schema()
-    if committed:  # force rebuild: drop the old committed version so the writer can republish it
-        shutil.rmtree(version_dir)
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
-    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
-    # delete it.
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
+        raw_refs = connector.download(cache)
+        dataset = connector.convert(raw_refs, context=context)
+        _validate_output(connector, dataset)
+        # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
+        # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
+        # directly with an underived dataset. This call is not redundant with that guard.
+        dataset.derive_schema()
+        if committed:  # force rebuild: drop the old committed version so the writer can republish it
+            shutil.rmtree(version_dir)
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+        # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
+        # delete it.
+        if not keep_cache and cache_dir is None and cache.is_dir():
+            shutil.rmtree(cache)
     return version_dir
 
 
@@ -113,15 +121,29 @@ def publish_pipeline(  # noqa: PLR0913
     if not force and registry.exists(dataset_id, version):
         return version
 
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
-    cache.mkdir(parents=True, exist_ok=True)
+    reference = DatasetRef(dataset_id=metadata.dataset_id, version=metadata.dataset_version)
+    with build_scope(reference), ExitStack() as stack:
+        context = open_inputs(metadata, settings().storage_dir, stack)
+        cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
+        cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
+        dataset = connector.convert(connector.download(cache), context=context)
+        _validate_output(connector, dataset)
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+        if not keep_cache and cache_dir is None and cache.is_dir():
+            shutil.rmtree(cache)
     return version
+
+
+def _validate_output(connector: BaseConnector, dataset: TimeFDataset) -> None:
+    expected, actual = connector.metadata(), dataset.metadata
+    if (actual.dataset_id, actual.dataset_version, actual.inputs) != (
+        expected.dataset_id,
+        expected.dataset_version,
+        expected.inputs,
+    ):
+        raise TimeFValidationError("converted dataset identity and pinned inputs must match its connector card")
 
 
 def _resolve_values_backend(connector: BaseConnector, override: str | None) -> str:
