@@ -23,6 +23,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
 from timenet.types.payloads import Payload
+from timenet.types.references import ObjectRef
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -71,6 +72,8 @@ class Annotation:
     annotations that share a key."""
     id: str = field(default_factory=new_id)
     """Reusable content identifier, a UUIDv7 string by default."""
+    content_origin: ObjectRef | None = field(default=None, compare=False)
+    occurrence_origin: ObjectRef | None = field(default=None, compare=False)
     occurrence_id: str | None = field(default=None, compare=False)
     """Identity of one attachment. It is assigned by ``annotate()``."""
     metadata: JsonMapping = field(default_factory=dict)
@@ -91,6 +94,8 @@ class Annotation:
         source: str | None = None,
         id: str | None = None,
         occurrence_id: str | None = None,
+        content_origin: ObjectRef | None = None,
+        occurrence_origin: ObjectRef | None = None,
         metadata: JsonMapping | None = None,
         confidence: float | None = None,
         occurrence_metadata: JsonMapping | None = None,
@@ -104,6 +109,8 @@ class Annotation:
             "source": source,
             "id": id or new_id(),
             "occurrence_id": occurrence_id,
+            "content_origin": content_origin,
+            "occurrence_origin": occurrence_origin,
             "metadata": {} if metadata is None else metadata,
             "confidence": confidence,
             "occurrence_metadata": {} if occurrence_metadata is None else occurrence_metadata,
