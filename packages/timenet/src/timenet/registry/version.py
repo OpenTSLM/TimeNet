@@ -1,86 +1,220 @@
-"""The :class:`DatasetVersion` handle: a random-access, picklable view of one committed version.
+"""Prepare complete local releases, then read through simple, picklable version handles."""
 
-The registry hands one of these back from :meth:`~timenet.registry.BaseRegistry.open_version`, and the
-reader (with the values backends) reads straight through it. It bundles the already-parsed manifest with
-a pyarrow filesystem and the version's root prefix on that filesystem. A read never re-opens the registry
-or re-parses ``manifest.json``. The filesystem is config-only (a
-:class:`pyarrow.fs.LocalFileSystem` today, a :class:`pyarrow.fs.S3FileSystem` later), so the whole handle
-pickles and a torch ``DataLoader`` can ship it to a worker.
-"""
-
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow.fs as pafs
 
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE, check_relative_path
 from timenet.manifest import Manifest
+from timenet.registry.shared import complete_copy, dependency_references
+from timenet.types.references import DatasetRef
+
+
+if TYPE_CHECKING:
+    from timenet.registry.base import BaseRegistry
 
 
 @dataclass(frozen=True)
 class DatasetVersion:
-    """An opened dataset version: its manifest plus a filesystem-rooted handle to its files."""
+    """A prepared release: its manifest, filesystem, and already-opened payload sources."""
 
     manifest: Manifest
-    """The version's parsed manifest. The reader trusts it rather than re-reading ``manifest.json``."""
     filesystem: pafs.FileSystem
-    """The filesystem the version's files live on (``LocalFileSystem`` now, ``S3FileSystem`` later). It
-    MUST serve range reads. The reader pulls Parquet footers and value slices out of order through
-    ``open_input_file``, so a forward-only download stream does not qualify."""
     root: str
-    """The version's root prefix on :attr:`filesystem`. An example is ``/abs/ds/1.0.0``."""
+    payload_sources: dict[str, "DatasetVersion"] = field(default_factory=dict, compare=False, repr=False)
 
-    def path(self, relpath: str) -> str:
-        """Return the filesystem path of a version-relative file.
+    def resolve_payload_source(self, key: str | None) -> "DatasetVersion":
+        """Return the prepared version that stores a chunk's bytes.
 
         Args:
-            relpath: A path relative to the version root.
+            key: The chunk's ``owner_key``, naming an entry in ``manifest.payload_sources``.
+                ``None`` means the bytes belong to this version.
 
         Returns:
-            The path to hand a pyarrow reader alongside :attr:`filesystem`.
+            This version or an already-prepared payload source. No files are opened here.
+
+        Raises:
+            TimeFFormatError: If the catalog refers to an unknown payload source.
         """
-        check_relative_path("relpath", relpath)
-        return f"{self.root}/{relpath}"
+        if key is None:
+            return self
+        try:
+            return self.payload_sources[key]
+        except KeyError as error:
+            raise TimeFFormatError(f"unknown payload source {key!r} in {self.manifest.dataset_id}") from error
+
+    def resolve_file_path(self, relative_path: str) -> str:
+        """Return a file's filesystem path without checking or downloading the file.
+
+        Args:
+            relative_path: A path within this version, such as ``time_series/part-000.parquet``.
+                Absolute paths and paths that escape the version directory are rejected.
+
+        Returns:
+            The path to use with :attr:`filesystem`.
+        """
+        check_relative_path("relative_path", relative_path)
+        return f"{self.root}/{relative_path}"
 
     def store_uri(self, relpath: str) -> str:
-        """Return a version-relative file as a store location for a store-oriented backend.
-
-        The Parquet backend reads through ``(filesystem, path)``. The Zarr backend opens a *store*
-        instead, which is what this method hands it. For a local version, the store is the plain
-        filesystem path, which Zarr opens as a ``LocalStore``. An object-store version needs a
-        scheme-qualified URI, such as ``s3://…``, because Zarr uses only this value and ignores
-        :attr:`filesystem`. The S3 backend will supply that scheme once it exists. The two accessors
-        stay distinct even though they return the same value for a local version.
+        """Return a location for a store-oriented backend such as Zarr.
 
         Args:
             relpath: A path relative to the version root.
 
         Returns:
-            The store location for ``relpath``.
+            The local path, or a scheme-qualified URI for an S3 filesystem.
         """
-        return self.path(relpath)
+        path = self.resolve_file_path(relpath)
+        return f"s3://{path}" if isinstance(self.filesystem, pafs.S3FileSystem) else path
 
     @classmethod
     def open_local(cls, root: str | Path) -> "DatasetVersion":
-        """Open a committed version directory on the local filesystem.
-
-        Reads the version's ``manifest.json`` and pairs it with a :class:`pyarrow.fs.LocalFileSystem`.
-        A caller builds this handle when it already holds a version directory on disk, such as
-        build's copy-on-write edit or a downloaded copy. It does not go through a registry's
-        ``open_version``.
+        """Prepare a local version and all its dependencies before reading.
 
         Args:
-            root: The version directory (``<...>/<dataset_id>/<version>``).
+            root: The version directory (``<registry>/<org>/<name>/<version>``).
 
         Returns:
-            A handle rooted at ``root``.
+            A handle with all payload sources resolved. Preparation never opens DuckDB catalogs.
 
         Raises:
-            FileNotFoundError: If ``root`` has no ``manifest.json``.
+            FileNotFoundError: If ``root`` has no manifest.
         """
-        root_path = Path(root)
-        manifest_path = root_path / MANIFEST_FILE
-        if not manifest_path.exists():
+        root = Path(root)
+        manifest_path = root / MANIFEST_FILE
+        if not manifest_path.is_file():
             raise FileNotFoundError(f"no manifest at {manifest_path}")
         manifest = Manifest.model_validate_json(manifest_path.read_text())
-        return cls(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root_path))
+        reference = DatasetRef.parse(f"{root.parent.parent.name}/{root.parent.name}@{root.name}")
+        return prepare_dependency_graph(root.parents[2], reference, manifest=manifest)
+
+
+def prepare_dependency_graph(  # noqa: PLR0913
+    root: str | Path,
+    reference: DatasetRef,
+    *,
+    fetch_from: "BaseRegistry | None" = None,
+    build: Callable[[DatasetRef], None] | None = None,
+    manifest: Manifest | None = None,
+    force: bool = False,
+    progress_cb: Callable[[int], None] | None = None,
+) -> DatasetVersion:
+    """Ensure the requested dataset and all its dependencies have complete local releases.
+
+    Args:
+        root: The local registry or cache directory.
+        reference: The exact dataset ID and version to prepare.
+        fetch_from: Fetch missing releases from this registry. ``None`` disables fetching.
+        build: Build a missing release when fetching cannot find it. ``None`` disables building.
+        manifest: An already-loaded manifest for the requested release.
+        force: Fetch the requested release again, even if it is cached.
+        progress_cb: Report downloaded bytes.
+
+    Returns:
+        The requested version with its physical sources already resolved.
+
+    Raises:
+        TimeFFormatError: If references form a cycle or a manifest identifies the wrong release.
+    """  # noqa: DOC502 - preparation helpers raise the documented errors
+    root = Path(root)
+    prepared: dict[str, DatasetVersion] = {}
+    visiting: set[str] = set()
+
+    def prepare_dataset(ref: DatasetRef) -> DatasetVersion:
+        key = str(ref)
+        if key in visiting:
+            raise TimeFFormatError(f"dataset dependency cycle through {ref}")
+        if key in prepared:
+            return prepared[key]
+        visiting.add(key)
+        directory = root / ref.dataset_id / str(ref.version)
+        release = _ensure_dataset_version_available_locally(
+            directory,
+            ref,
+            fetch_from=fetch_from,
+            build=build,
+            manifest=manifest if ref == reference else None,
+            force=force and ref == reference,
+            progress_cb=progress_cb,
+        )
+        for parent in dependency_references(release):
+            prepare_dataset(parent)
+        sources = {key: prepare_dataset(source) for key, source in release.payload_sources.items()}
+        version = DatasetVersion(release, pafs.LocalFileSystem(), str(directory), sources)
+        prepared[str(ref)] = version
+        visiting.remove(str(ref))
+        return version
+
+    return prepare_dataset(reference)
+
+
+def _ensure_dataset_version_available_locally(  # noqa: PLR0913
+    directory: Path,
+    reference: DatasetRef,
+    *,
+    fetch_from: "BaseRegistry | None",
+    build: Callable[[DatasetRef], None] | None,
+    manifest: Manifest | None,
+    force: bool,
+    progress_cb: Callable[[int], None] | None,
+) -> Manifest:
+    """Reuse, fetch, or build one complete release.
+
+    Returns:
+        The release manifest. File hashes are checked during transfer, not on every read.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If a complete release is unavailable.
+        TimeFFormatError: If a manifest identifies a different release.
+    """  # noqa: DOC502 - _validate_manifest_reference raises TimeFFormatError
+    manifest_path = directory / MANIFEST_FILE
+    if manifest is None and not force and manifest_path.is_file():
+        manifest = Manifest.model_validate_json(manifest_path.read_text())
+    if manifest is not None:
+        _validate_manifest_reference(manifest, reference)
+    if not force and manifest_path.is_file() and manifest is not None and complete_copy(directory, manifest):
+        return manifest
+    if fetch_from is not None:
+        try:
+            if manifest is None:
+                manifest = fetch_from.get_manifest(reference.dataset_id, str(reference.version))
+            _validate_manifest_reference(manifest, reference)
+            fetch_from._download_release(
+                reference.dataset_id,
+                str(reference.version),
+                directory,
+                force=True,
+                manifest=manifest,
+                progress_cb=progress_cb,
+            )
+        except TimeNetDatasetNotFoundError:
+            if build is None:
+                raise
+        else:
+            return manifest
+    if build is not None:
+        build(reference)
+        if manifest_path.is_file():
+            manifest = Manifest.model_validate_json(manifest_path.read_text())
+            _validate_manifest_reference(manifest, reference)
+            if complete_copy(directory, manifest):
+                return manifest
+    raise TimeNetDatasetNotFoundError(
+        f"complete release {reference} is missing at {directory}; "
+        "fetch it first or enable --fetch-parents or --build-parents"
+    )
+
+
+def _validate_manifest_reference(manifest: Manifest, reference: DatasetRef) -> None:
+    """Reject a manifest stored under the wrong release.
+
+    Raises:
+        TimeFFormatError: If the manifest's ID or version differs from the reference.
+    """
+    if manifest.dataset_id != reference.dataset_id or manifest.metadata.dataset_version != reference.version:
+        raise TimeFFormatError(f"manifest for {reference} declares a different dataset ID or version")

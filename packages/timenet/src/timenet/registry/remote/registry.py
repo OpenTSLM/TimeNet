@@ -16,7 +16,6 @@ import httpx
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
-from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
@@ -26,9 +25,11 @@ from timenet.registry.remote.models import (
     PublishResponseModel,
     UploadGrantModel,
 )
-from timenet.registry.version import DatasetVersion
+from timenet.registry.shared import validate_dependencies
+from timenet.registry.version import DatasetVersion, prepare_dependency_graph
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -55,6 +56,11 @@ class RemoteRegistry(WritableRegistry):
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
         self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
+
+    @property
+    def local_root(self) -> Path:
+        """The directory that holds complete local releases."""
+        return self._cache_dir
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
@@ -110,27 +116,27 @@ class RemoteRegistry(WritableRegistry):
         return buffer
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed version as a local handle, materializing it on first use.
-
-        A remote version is downloaded in full and then read from local disk, like the local and S3
-        backends. On-demand range reads are a separate follow-up.
+        """Fetch missing complete releases, then return a prepared local handle.
 
         Args:
-            dataset_id: The ``org/name`` id.
-            version: The version string, or ``None`` for the latest.
+            dataset_id: The dataset ID.
+            version: The release version, or ``None`` for the latest.
 
         Returns:
-            A handle to the committed version's manifest and files.
+            A local handle whose dependencies are ready before any reading starts.
         """
-        manifest = self.get_manifest(dataset_id, version)
-        resolved = str(manifest.metadata.dataset_version)
-        dest = self._cache_dir / dataset_id / resolved
-        if not (dest / MANIFEST_FILE).exists():
-            # download_version owns the one materialize path, so TimeNet.download() and open share it.
-            self.download_version(dataset_id, resolved, dest, manifest=manifest)
-        return DatasetVersion.open_local(dest)
+        manifest = None
+        if version in {None, "", "latest"}:
+            manifest = self.get_manifest(dataset_id, version)
+            version = str(manifest.metadata.dataset_version)
+        return prepare_dependency_graph(
+            self._cache_dir,
+            DatasetRef.parse(f"{dataset_id}@{version}"),
+            fetch_from=self,
+            manifest=manifest,
+        )
 
-    def download_version(  # noqa: PLR0913
+    def _download_release(  # noqa: PLR0913
         self,
         dataset_id: str,
         version: str,
@@ -194,7 +200,9 @@ class RemoteRegistry(WritableRegistry):
                 writer.write()
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
-            declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
+            manifest = Manifest.model_validate_json(manifest_bytes.decode())
+            validate_dependencies(self, manifest)
+            declared = {part.path for part in manifest.files.all_files()}
             publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
             publish = PublishResponseModel.model_validate_json(
                 self._http.post(publish_endpoint, content=manifest_bytes).content

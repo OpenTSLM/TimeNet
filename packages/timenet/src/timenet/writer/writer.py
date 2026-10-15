@@ -29,12 +29,15 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
+from timenet.format.storage import StorageSources
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
+    ChunkDataIndex,
     ChunkPlacement,
     ParquetValuesConfig,
     ZarrValuesConfig,
@@ -122,6 +125,9 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
+        self._storage_sources = StorageSources(
+            DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version)
+        )
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -294,6 +300,9 @@ class TimeFWriter:
 
         Returns:
             A mapping from ``(time_series_id, chunk_idx)`` to its on-disk placement.
+
+        Raises:
+            TimeFValidationError: If a shared signal no longer matches its physical values.
         """
         if self._values_backend_name == ValuesBackend.PARQUET:
             parquet_kwargs: dict[str, Any] = {
@@ -320,16 +329,37 @@ class TimeFWriter:
             if self._compression_level is not None:
                 zarr_kwargs["compression_level"] = self._compression_level
             config = ZarrValuesConfig(**zarr_kwargs)
+        from timenet.reader.reader import _SignalLoader  # noqa: PLC0415 - reader/writer cycle
+
+        shared: dict[tuple[str, int], ChunkPlacement] = {}
+        owned: list[Signal] = []
+        for signal in unique_series:
+            if not isinstance(signal.loader, _SignalLoader):
+                owned.append(signal)
+                continue
+            version, rows = signal.loader.stored_chunks()
+            if signal.spec != signal.loader.spec or signal.n_values != sum(row["n_values"] for row in rows):
+                raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
+            owner = self._storage_sources.add(version, {row["chunk_file"] for row in rows})
+            for row in rows:
+                shared[signal.id, row["chunk_idx"]] = ChunkPlacement(
+                    row["chunk_file"],
+                    ChunkDataIndex(row["chunk_major_idx"], row["chunk_minor_idx"]),
+                    signal.spec.spec_type,
+                    signal.name,
+                    row["n_values"],
+                    owner,
+                )
         values_backend = make_values_backend(config)
         result = values_backend.write_series(
-            unique_series,
+            owned,
             read_and_validate=self._read_and_validate,
             on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
         self._value_files = result.files
         self._value_encoding = cast("dict[str, ManifestValueEncoding]", dict(result.value_encoding))
-        return result.placements
+        return {**result.placements, **shared}
 
     def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
         """Read a series' values and enforce the per-series array contract.
@@ -399,6 +429,8 @@ class TimeFWriter:
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
+            payload_sources=self._storage_sources.sources,
+            input_locks=getattr(self._dataset, "input_locks", {}),
             build_env=build_env(),
             timef_format_version=1,
         )

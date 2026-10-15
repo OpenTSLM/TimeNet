@@ -166,7 +166,7 @@ def test_open_version_resolves_latest_to_a_concrete_directory(registry_root):
 
 def test_open_version_filesystem_reads_a_file(registry_root):
     version = LocalRegistry(registry_root).open_version("demo/ecg")
-    with version.filesystem.open_input_file(version.path("manifest.json")) as handle:
+    with version.filesystem.open_input_file(version.resolve_file_path("manifest.json")) as handle:
         assert b"demo/ecg" in handle.read()
 
 

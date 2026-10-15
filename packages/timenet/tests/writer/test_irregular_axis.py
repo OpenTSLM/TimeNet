@@ -301,9 +301,10 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
+    version = DatasetVersion.open_local(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axes SET last_us = last_us + 1000 WHERE axis_type = 'irregular'")
-    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).signals[0]
+    back = next(iter(TimeFReader(version).iter_records())).signals[0]
     with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
         back.time_offsets_us()
 
@@ -326,11 +327,12 @@ def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
+    version = DatasetVersion.open_local(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE signals SET n_values = 4 WHERE name = 'humidity'")
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(version) as reader,
         pytest.raises(TimeFFormatError, match="shared by Signals with different lengths"),
     ):
         next(reader.iter_records())
@@ -342,9 +344,10 @@ def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
+    version = DatasetVersion.open_local(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axis_offsets SET offset_us = -1 WHERE position = 1")
-    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).signals[0]
+    back = next(iter(TimeFReader(version).iter_records())).signals[0]
     with pytest.raises(TimeFFormatError, match="decreasing offsets"):
         back.time_offsets_us()
 
