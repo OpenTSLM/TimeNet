@@ -116,6 +116,32 @@
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
           "type": "string"
         },
+        "inputs": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DatasetRef"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
         "name": {
           "minLength": 1,
           "title": "Name",
@@ -213,6 +239,27 @@
         "license"
       ],
       "title": "DatasetMetadata",
+      "type": "object"
+    },
+    "DatasetRef": {
+      "additionalProperties": false,
+      "description": "An exact release, independent of its registry location.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version"
+      ],
+      "title": "DatasetRef",
       "type": "object"
     },
     "DatasetSchema": {
@@ -313,6 +360,26 @@
         "size"
       ],
       "title": "FilePart",
+      "type": "object"
+    },
+    "InputLock": {
+      "additionalProperties": false,
+      "description": "A build input pinned to its canonical manifest digest.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "manifest_checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Checksum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "manifest_checksum"
+      ],
+      "title": "InputLock",
       "type": "object"
     },
     "InputModality": {
@@ -440,6 +507,38 @@
         "control"
       ],
       "title": "ManifestFiles",
+      "type": "object"
+    },
+    "PayloadSource": {
+      "additionalProperties": false,
+      "description": "One immutable physical owner and the files needed from that release.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "manifest_checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Checksum",
+          "type": "string"
+        },
+        "files": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "values_backend": {
+          "$ref": "#/$defs/ValuesBackend",
+          "default": "parquet"
+        }
+      },
+      "required": [
+        "source",
+        "manifest_checksum"
+      ],
+      "title": "PayloadSource",
       "type": "object"
     },
     "TimeSeriesSpec": {
@@ -574,6 +673,20 @@
         "type": "string"
       },
       "title": "Value Encoding",
+      "type": "object"
+    },
+    "input_locks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InputLock"
+      },
+      "title": "Input Locks",
+      "type": "object"
+    },
+    "payload_sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PayloadSource"
+      },
+      "title": "Payload Sources",
       "type": "object"
     },
     "build_env": {
