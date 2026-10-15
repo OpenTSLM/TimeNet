@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 from urllib.parse import urlparse
 import uuid
 
@@ -109,7 +109,7 @@ class S3Registry(WritableRegistry):
             raise TimeNetDatasetNotFoundError(
                 f"no manifest for {dataset_id!r} version {resolved!r} under {self._display_root()}"
             )
-        return Manifest.model_validate_json(body.decode())
+        return Manifest.from_artifact(body.decode())
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -153,7 +153,12 @@ class S3Registry(WritableRegistry):
         if (cached / MANIFEST_FILE).exists():
             return DatasetVersion.open_local(cached)
         root = self._key(dataset_id, resolved)
-        return DatasetVersion(manifest=manifest, filesystem=self._s3_filesystem(), root=f"{self._bucket}/{root}")
+        return DatasetVersion(
+            manifest=manifest,
+            filesystem=self._s3_filesystem(),
+            root=f"{self._bucket}/{root}",
+            payload_root=f"{self._bucket}/{self._key(_DATASETS_PREFIX)}",
+        )
 
     def store(
         self,
@@ -161,6 +166,7 @@ class S3Registry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
@@ -190,8 +196,11 @@ class S3Registry(WritableRegistry):
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
-            with TimeFWriter(staging, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging, dataset, values_backend=values_backend, payload_policy=payload_policy, progress_cb=progress_cb
+            ) as writer:
                 writer.write()
+                self.validate_payload_sources(writer.payload_sources)
             version_dir = staging / dataset_id / version
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
             files = sorted(path for path in version_dir.rglob("*") if path.is_file())

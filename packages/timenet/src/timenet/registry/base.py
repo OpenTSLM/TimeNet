@@ -13,8 +13,10 @@ import shutil
 from typing import BinaryIO, TypeVar
 import uuid
 
+from timenet.errors import TimeFFormatError
 from timenet.manifest import Manifest
 from timenet.registry._paths import safe_version_path
+from timenet.registry.integrity import check_manifest, verify_owned
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
 
@@ -114,12 +116,64 @@ class BaseRegistry(ABC):
             force: Re-download even if a copy already exists.
             manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
             progress_cb: Called with each staged file's byte count, for a progress display.
+
+        Raises:
+            TimeFFormatError: If a release identity, owner pin, or artifact is invalid.
         """
+        if manifest is None:
+            manifest = self.get_manifest(dataset_id, version)
+        if manifest.dataset_id != dataset_id or str(manifest.metadata.dataset_version) != version:
+            raise TimeFFormatError(f"registry returned the wrong release for {dataset_id}@{version}")
+        self._download_payload_sources(manifest, Path(dest_dir), force=force, progress_cb=progress_cb)
+        self._download_owned(
+            dataset_id, version, Path(dest_dir), force=force, manifest=manifest, progress_cb=progress_cb
+        )
+
+    def _download_payload_sources(
+        self, manifest: Manifest, target: Path, *, force: bool, progress_cb: ProgressCallback | None
+    ) -> None:
+        if not manifest.payload_sources:
+            return
+        suffix = Path(manifest.dataset_id) / str(manifest.metadata.dataset_version)
+        if tuple(target.parts[-len(suffix.parts) :]) != suffix.parts:
+            raise TimeFFormatError("a release with payload sources must download under <root>/<org>/<name>/<version>")
+        root = target.parents[len(suffix.parts) - 1]
+        for source in manifest.payload_sources:
+            identity = source.dataset
+            owner_manifest = self.get_manifest(identity.dataset_id, str(identity.version))
+            if (
+                owner_manifest.dataset_id != identity.dataset_id
+                or owner_manifest.metadata.dataset_version != identity.version
+            ):
+                raise TimeFFormatError(f"registry returned the wrong physical owner for {identity}")
+            self._download_owned(
+                identity.dataset_id,
+                str(identity.version),
+                root / identity.dataset_id / str(identity.version),
+                force=force,
+                manifest=owner_manifest,
+                progress_cb=progress_cb,
+                expected_manifest_checksum=source.manifest_checksum,
+            )
+
+    def _download_owned(  # noqa: PLR0913 - one immutable download and its verification policy
+        self,
+        dataset_id: str,
+        version: str,
+        dest_dir: Path,
+        *,
+        force: bool = False,
+        manifest: Manifest,
+        progress_cb: ProgressCallback | None = None,
+        expected_manifest_checksum: str | None = None,
+    ) -> None:
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(dest_dir)
         if (target / "manifest.json").exists() and not force:
-            return  # already downloaded and current
+            check_manifest((target / "manifest.json").read_bytes(), manifest, expected_manifest_checksum)
+            verify_owned(target, manifest)
+            return
         parent = target.parent
         parent.mkdir(parents=True, exist_ok=True)
         # Each download stages into a unique dir and removes it in the finally below. A hard kill
@@ -132,6 +186,8 @@ class BaseRegistry(ABC):
                 self._stage_file(dataset_id, version, relpath, staging)
                 if progress_cb is not None and relpath != "manifest.json":
                     progress_cb((staging / relpath).stat().st_size)
+            check_manifest((staging / "manifest.json").read_bytes(), manifest, expected_manifest_checksum)
+            verify_owned(staging, manifest)
             if target.exists():
                 shutil.rmtree(target)
             staging.replace(target)

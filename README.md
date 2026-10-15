@@ -71,3 +71,5 @@ TimeNet uses the [MIT License](https://github.com/OpenTSLM/TimeNet/blob/main/LIC
 This license covers the TimeNet code, not the datasets that connectors fetch. Each dataset keeps
 its upstream license and access terms. Read the
 [dataset licensing guide](https://docs.timenet.ai/catalog/licensing.html) before redistribution.
+
+See [Dataset composition](docs/composition.md) for editable child catalogs, shared payloads, and format 2 migration.
