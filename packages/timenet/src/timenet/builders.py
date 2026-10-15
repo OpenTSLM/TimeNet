@@ -46,7 +46,7 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
+    def build(self, dataset_id: str, root: Path, *, force: bool = False, build_parents: bool = False) -> Path:
         """Build the dataset into a registry directory.
 
         Args:

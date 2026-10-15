@@ -10,10 +10,14 @@ from abc import ABC, abstractmethod
 import asyncio
 import inspect
 from pathlib import Path
-from typing import ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
+
+
+if TYPE_CHECKING:
+    from timenet.connectors.context import BuildContext
 
 
 TRaw = TypeVar("TRaw")
@@ -101,6 +105,11 @@ class BaseConnector(ABC, Generic[TRaw]):
         raise NotImplementedError(
             "a connector must implement download() (synchronous) or download_async() (asynchronous)"
         )
+
+    def compose(self, raw_refs: list[TRaw], context: "BuildContext") -> TimeFDataset:
+        """Return converted data, optionally overriding this hook to use opened parent inputs."""
+        _ = context
+        return self.convert(raw_refs)
 
     @abstractmethod
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:

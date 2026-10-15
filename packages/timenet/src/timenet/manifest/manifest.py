@@ -42,6 +42,8 @@ class Manifest(TimeFModel):
     """``spec_type`` to the values-column encoding used by its shards."""
     input_locks: dict[StrictStr, InputLock] = Field(default_factory=dict)
     """Build provenance; readers do not traverse these inputs."""
+    lineage: tuple[InputLock, ...] = ()
+    """Flattened provenance snapshots; never traversed to read data."""
     payload_sources: dict[StrictStr, PayloadSource] = Field(default_factory=dict)
     """Physical owners of referenced payload files, flattened by the writer."""
     build_env: BuildEnvironment = Field(default_factory=dict)
