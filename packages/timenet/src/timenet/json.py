@@ -65,4 +65,6 @@ def validate_json_mapping(value: object) -> JsonMapping:
     Returns:
         A detached JSON-native dictionary.
     """
+    if type(value) is dict and not value:
+        return {}
     return cast("JsonMapping", _MAPPING_ADAPTER.validate_python(value))
