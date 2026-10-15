@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import DatasetVersion, open_local_version
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.writer import TimeFWriter
@@ -76,7 +76,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
         handle.close()
     assert widest_group > 1, "the fixture needs one row group to hold several chunks"
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         for record in reader.iter_records(with_annotations=False):
             for series in record.signals:
                 values = series.to_arrow()
@@ -87,7 +87,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch):
     # Time offsets belong to the shared control-plane axis, so every values read projects only values.
     version_dir = _write(tmp_path)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.signals[0]
         control = reader._control_reader()
@@ -101,7 +101,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     monkeypatch.setattr(
         values_reader, "_shard", lambda version, rel_path: _ProjectionSpy(opener(version, rel_path), projections)
     )
-    values_reader.load(DatasetVersion.open_local(version_dir), rows, series.spec)
+    values_reader.load(open_local_version(version_dir), rows, series.spec)
     values_reader.close()
 
     assert projections == [["values"]]
