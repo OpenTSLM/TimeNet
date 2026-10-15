@@ -17,6 +17,7 @@ from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.external import ExternalReader
+from timenet.reader.handles import DatasetHandle, materialize
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
@@ -99,6 +100,7 @@ class TimeFReader:
         self._owner_readers.clear()
         self._records = None
         self._tasks = None
+        self._external_reader.cache.clear()
         self._chunk_rows_cache.clear()
         self._axis_offsets_cache.clear()
         self._axis_offsets_cache_bytes = 0
@@ -265,7 +267,15 @@ class TimeFReader:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
+    def get_handle(self) -> DatasetHandle:
+        """Return a lazy dataset handle without reading the catalog or payloads."""
+        return DatasetHandle(self)
+
     def read(self) -> TimeFDataset:
+        """Return a dataset with every value materialized in memory."""
+        return materialize(self._read_catalog())
+
+    def _read_catalog(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
 
         Returns:
