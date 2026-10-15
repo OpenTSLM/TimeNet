@@ -79,8 +79,8 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 
 ## Load or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
-loader.
+`load()` returns a `TimeFDataset` with all signal values, timestamps, and external text in memory.
+`get_handle()` defers catalog and payload reads until you request an object or field.
 
 ```python
 dataset = client.load("timenet/hello-world")
@@ -101,11 +101,17 @@ dataset = TimeNet(".timenet-registry").load(
 Set `auto_build=False` to report a missing local version without starting a build. Remote registries
 never run connector code.
 
-For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
-load reuses that committed copy. An S3 registry reads in place unless the storage directory already
-contains a complete copy.
+For an HTTP registry, each requested file enters the local cache after checksum validation.
+A child reads its own catalog and the referenced physical payloads. It does not open parent catalogs.
+An S3 registry reads in place unless local storage contains the version.
 
-`download()` always copies the complete version into local storage:
+```python
+with client.get_handle("physionet/ecg-qa-cot@1.0.0") as dataset:
+    signal = dataset.get_handle("Signal", "ecg-1-I", namespace="ptbxl")
+    window = signal.read_steps(0, 100)
+```
+
+`download()` copies the child files and all referenced payload files for offline use:
 
 ```python
 path = client.download("chengsenwang/tsqa@1.0.0")
