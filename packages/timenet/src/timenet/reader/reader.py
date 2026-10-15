@@ -16,7 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.format.external import ExternalReader
+from timenet.format.external import ExternalReader, materialize_table
 from timenet.reader.handles import DatasetHandle, materialize
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
@@ -169,8 +169,10 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
+            return materialize(
+                self._control_reader().read_tasks(
+                    records, cached_records=self._all_records() if records is None else ()
+                )
             )
 
     def iter_tasks(
@@ -222,12 +224,14 @@ class TimeFReader:
             :meth:`target_table`.
         """
         with self._as_format_error():
-            return self._control_reader().task_table(
+            table = self._control_reader().task_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
             )
+
+            return materialize_table(table, self._control_reader().external, "Task")
 
     def target_table(
         self,
@@ -247,12 +251,14 @@ class TimeFReader:
             Targets in task ID and position order.
         """
         with self._as_format_error():
-            return self._control_reader().target_table(
+            table = self._control_reader().target_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
             )
+
+            return materialize_table(table, self._control_reader().external, "Task")
 
     def annotation_table(self, object_type: str | None = None) -> pa.Table:
         """Return every annotation occurrence with its content as an Arrow table.
@@ -264,7 +270,9 @@ class TimeFReader:
             One row per occurrence.
         """
         with self._as_format_error():
-            return self._control_reader().annotation_table(object_type)
+            table = self._control_reader().annotation_table(object_type)
+
+            return materialize_table(table, self._control_reader().external, "Annotation")
 
     @property
     def values_backend(self) -> str:

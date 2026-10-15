@@ -17,7 +17,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.external import ValueHandle
+from timenet.format.external import OffsetHandle, ValueHandle
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -512,7 +512,9 @@ class DuckDBControlReader:
                     else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
                 )
             if (stored_offsets := self.external.get(("Axis", axis.axis_id, "offsets", 0))) is not None:
-                offsets_loader = stored_offsets
+                if not isinstance(axis, IrregularAxis) or stored_offsets.length != signal_row.n_values:
+                    raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
+                offsets_loader = OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
@@ -721,6 +723,39 @@ class DuckDBControlReader:
             }
             for row in rows
         ]
+
+    def read_task(self, identity: str) -> Task:
+        """Hydrate one task and its dependencies without constructing unrelated records.
+
+        Returns:
+            The requested task.
+
+        Raises:
+            TimeFValidationError: If the requested task is absent.
+        """
+        row = self.connection.execute("SELECT task_key FROM tasks WHERE task_id = ?", [identity]).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"no Task {identity!r}")
+        return _TaskHydration(self, None)._hydrate([row[0]])[0]
+
+    def read_annotation(self, identity: str) -> Annotation:
+        """Hydrate one annotation occurrence without constructing its owning object.
+
+        Returns:
+            The requested annotation.
+
+        Raises:
+            TimeFValidationError: If the requested occurrence is absent.
+        """
+        row = self.connection.execute(
+            "SELECT occurrence_key, object_key, object_type FROM annotation_occurrences WHERE occurrence_id = ?",
+            [identity],
+        ).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"no Annotation {identity!r}")
+        occurrences: dict[int, Annotation] = {}
+        self._read_annotations([row[1]], object_type=row[2], annotations_by_occurrence=occurrences)
+        return occurrences[row[0]]
 
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
