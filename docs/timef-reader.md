@@ -10,7 +10,7 @@ tags:
 
 `TimeFReader` opens a committed TimeF version and reconstructs a
 [`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
-handle contains the parsed manifest and access to the version files. The reader never imports or
+handle contains the parsed manifest and prepared local files for the version and its dependencies. The reader never imports or
 runs connector code.
 
 ```python
@@ -35,20 +35,29 @@ chunk caches.
 
 ## What loads when
 
+Preparation finishes before the reader receives its version handle.
 Creating the reader does not open the control database. The first request for records, tasks, or
 annotations opens `control.duckdb` in read-only mode.
 
-Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
-`to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
+`read()` materializes the complete dataset, including external text and signal values.
+The returned dataset remains usable after the reader closes.
 
-Large text fields and annotation string lists return `ValueHandle` objects. Call `read()` on a
-handle to obtain the native value. Small fields remain ordinary Python values. The Arrow
-`task_table()`, `target_table()`, and `annotation_table()` APIs resolve external text automatically.
-Irregular timestamp loaders read and validate their packed arrays on first access. The reader
-caches up to eight payload files.
+`get_handle()` returns a lazy handle. Entity handles support `read()` and field handles through
+`get_handle(field)`. A Signal handle also supports `to_arrow()`, `to_numpy()`, and `read_steps()`.
+A namespace lookup resolves the original parent ID through the child's local catalog.
 
-`iter_records(record_ids=...)` yields records one at a time. It does not create a complete
-`TimeFDataset`.
+```python
+with TimeFReader(version) as reader:
+    dataset = reader.get_handle()
+    task = dataset.get_handle("Task", "question-1")
+    prompt = task.get_handle("prompt").read()
+```
+
+`iter_records(record_ids=...)` yields records one at a time. Its Signal values remain lazy.
+It does not create a complete `TimeFDataset`.
+
+The Arrow table APIs resolve external text automatically. The reader caches up to eight packed
+payload files. Timestamp payload reads validate their length, endpoints, ordering, and nulls.
 
 Tasks have three useful read paths:
 
@@ -59,8 +68,8 @@ Tasks have three useful read paths:
 - `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
   Python task objects.
 
-Objects keep their identity within one reader. For example, a task input is the same `Record`
-instance that `iter_records()` returned.
+Tasks reuse the Record objects supplied to `read_tasks(records)` or `iter_tasks(records)`.
+Separate entity-handle reads can construct separate Python objects.
 
 ## Type reconstruction
 
@@ -86,7 +95,8 @@ and decoded Zarr chunks until it closes.
 
 | Member | Description |
 | --- | --- |
-| `read()` | Create the complete `TimeFDataset`. |
+| `read()` | Materialize the complete `TimeFDataset`. |
+| `get_handle()` | Defer entity and field reads. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `task_table()` | Return the task table with public IDs. |
@@ -117,3 +127,15 @@ also restores task relationships and Signal values with their original dtype and
 are the durable references. Python object identity from the writer process is not preserved.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
+
+## Inherited storage
+
+Each child owns a complete catalog. Its chunk and external-value locators name the ultimate physical
+owner directly. Reads never attach parent databases or traverse inheritance chains.
+
+The writer computes record scan order from physical chunk locations. This keeps full scans close to
+storage order, even when namespace IDs differ from parent IDs. Requested Record IDs retain the
+caller's order. `verify()` checks both child files and referenced payload files.
+
+Eager full reads use a stored list of required Parquet groups. Four workers decode a bounded window
+in parallel. This list is computed during the write. Lazy handles and range reads do not prefetch.
