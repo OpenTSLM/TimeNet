@@ -35,6 +35,7 @@ from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.reader.handles import MemoryArray
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -126,7 +127,9 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
-        self._storage_sources = StorageSources()
+        self._storage_sources = StorageSources(
+            DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version)
+        )
         self._external = ExternalWriter(self._staging_dir, self._storage_sources)
 
     # ---- context manager -----------------------------------------------------------------------
