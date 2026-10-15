@@ -20,6 +20,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.reader.handles import DatasetHandle
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
@@ -177,6 +178,10 @@ class TimeNet:
         return target
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
+        """Return the dataset with all values materialized in memory."""
+        return self.get_handle(dataset_id, version, auto_build=auto_build).read()
+
+    def get_handle(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
         """Read the dataset into memory through the registry's storage handle.
 
         Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
@@ -221,7 +226,7 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        return TimeFReader(handle).get_handle()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
@@ -262,4 +267,4 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
+        return TimeFTorchDataset.from_reader(self.get_handle(dataset_id, version).reader)
