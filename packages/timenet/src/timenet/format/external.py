@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from timenet.errors import TimeFFormatError
@@ -55,6 +56,32 @@ class ValueHandle:
     def physical_version(self) -> "DatasetVersion":
         """Return the direct physical owner without reading payload data."""
         return self.store.version.owner(self.owner)
+
+
+@dataclass(frozen=True)
+class OffsetHandle(ValueHandle):
+    """An external timestamp locator with verified axis endpoints."""
+
+    first: int
+    last: int
+
+    def read(self) -> pa.Array:
+        """Return timestamps after checking length, endpoints, and ordering.
+
+        Returns:
+            Validated integer timestamps.
+
+        Raises:
+            TimeFFormatError: If timestamps disagree with the axis.
+        """
+        offsets = super().read()
+        if len(offsets) != self.length or offsets.null_count:
+            raise TimeFFormatError(f"invalid offset count or null offsets at {self.path}:{self.row}")
+        if not len(offsets) or (offsets[0].as_py(), offsets[-1].as_py()) != (self.first, self.last):
+            raise TimeFFormatError("stored offsets disagreeing with its axis endpoints")
+        if len(offsets) > 1 and pc.any(pc.less(offsets.slice(1), offsets.slice(0, len(offsets) - 1))).as_py():  # ty: ignore[unresolved-attribute]
+            raise TimeFFormatError("stored axis has decreasing offsets")
+        return offsets
 
 
 class ExternalReader:
@@ -107,6 +134,47 @@ class ExternalReader:
                 "SELECT * FROM external_values"
             ).fetchall()
         }
+
+
+def materialize_table(table: pa.Table, handles: dict[tuple[str, str, str, int], ValueHandle], kind: str) -> pa.Table:
+    """Resolve external text fields while retaining the public Arrow table schema.
+
+    Returns:
+        The original table when it has no external values, otherwise a table with native values.
+    """
+    if not handles or not len(table):
+        return table
+    if kind == "Annotation":
+        identity_column = "content_id"
+        fields = {"value": ("text_value", "text_list_value")}
+    elif "position" in table.column_names:
+        identity_column = "task_id"
+        fields = {"targets": ("text_value",)}
+    else:
+        identity_column = "task_id"
+        fields = {"prompt": ("prompt",), "rationale": ("rationale",)}
+    identities = table[identity_column].to_pylist()
+    positions = table["position"].to_pylist() if "position" in table.column_names else [0] * len(table)
+    changed: dict[str, list] = {}
+    resolved: dict[tuple[str, str, str, int], Any] = {}
+    for index, (identity, position) in enumerate(zip(identities, positions, strict=True)):
+        for field, columns in fields.items():
+            key = (kind, identity, field, position)
+            handle = handles.get(key)
+            if handle is None:
+                continue
+            column = columns[-1] if handle.kind == "texts" else columns[0]
+            if column not in changed:
+                changed[column] = table[column].to_pylist()
+            if key not in resolved:
+                resolved[key] = handle.read()
+            changed[column][index] = resolved[key]
+    for column, values in changed.items():
+        index = table.schema.get_field_index(column)
+        table = table.set_column(
+            index, table.schema.field(index), pa.array(values, type=table.schema.field(index).type)
+        )
+    return table
 
 
 class ExternalWriter:

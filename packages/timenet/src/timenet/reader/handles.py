@@ -41,18 +41,19 @@ def materialize(value: Any, seen: set[int] | None = None) -> Any:  # noqa: PLR09
     """
     if isinstance(value, ValueHandle):
         return value.read()
-    if isinstance(value, tuple):
-        return tuple(materialize(item, seen) for item in value)
     if seen is None:
         seen = set()
+    if isinstance(value, tuple):
+        return tuple(materialize(item, seen) for item in value)
     if id(value) in seen:
         return value
     seen.add(id(value))
     if isinstance(value, Annotation):
         _set_field(value, "value", materialize(value.value, seen))
     elif isinstance(value, Signal):
-        _set_field(value, "loader", MemoryArray(value.to_arrow(), value.loader))
-        if value.time_offsets_loader is not None:
+        if not isinstance(value.loader, MemoryArray):
+            _set_field(value, "loader", MemoryArray(value.to_arrow(), value.loader))
+        if value.time_offsets_loader is not None and not isinstance(value.time_offsets_loader, MemoryArray):
             _set_field(
                 value, "time_offsets_loader", MemoryArray(value.time_offsets_loader(), value.time_offsets_loader)
             )
@@ -135,30 +136,33 @@ class EntityHandle:
             if row is None:
                 raise TimeFValidationError(f"no {self.kind} {identity!r} in namespace {self.namespace!r}")
             identity = row[0]
-        catalog = reader._read_catalog()
-        if self.kind == "Record":
-            objects = catalog.records
-        elif self.kind == "Source":
-            objects = (source for record in catalog.records for source in record.walk_sources())
-        elif self.kind == "Signal":
-            objects = (signal for record in catalog.records for signal in record.signals)
-        elif self.kind == "Task":
-            objects = catalog.tasks
-        elif self.kind == "Annotation":
-            objects = (
-                *catalog.annotations,
-                *(ann for record in catalog.records for ann in record.walk_annotations()),
-                *(ann for task in catalog.tasks for ann in task.annotations),
-            )
+        if self.kind == "Task":
+            return control.read_task(identity)
+        if self.kind in {"Record", "Source", "Signal"}:
+            if self.kind == "Record":
+                record_id = identity
+            else:
+                query = (
+                    "SELECT record_id FROM records JOIN sources USING (record_key) WHERE source_id = ?"
+                    if self.kind == "Source"
+                    else "SELECT record_id FROM records JOIN sources USING (record_key) "
+                    "JOIN signals USING (source_key) WHERE signal_id = ?"
+                )
+                row = control.connection.execute(query, [identity]).fetchone()
+                if row is None:
+                    return self._missing(identity)
+                record_id = row[0]
+            record = control.read_records([record_id])[0]
+            if self.kind == "Record":
+                return record
+            objects = record.walk_sources() if self.kind == "Source" else record.signals
             for obj in objects:
-                if obj.occurrence_id == identity:
+                if obj.id == identity:
                     return obj
-            return self._missing(identity)
+        elif self.kind == "Annotation":
+            return control.read_annotation(identity)
         else:
             raise TimeFValidationError(f"unknown object kind {self.kind!r}")
-        for obj in objects:
-            if obj.id == identity:
-                return obj
         return self._missing(identity)
 
     def _missing(self, identity: str) -> Any:
