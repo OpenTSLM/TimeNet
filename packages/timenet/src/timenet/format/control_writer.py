@@ -855,6 +855,10 @@ class DuckDBControlWriter:
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
             loader = signal.time_offsets_loader
+            from timenet.reader.handles import MemoryArray  # noqa: PLC0415 - reader imports control writer
+
+            while isinstance(loader, MemoryArray):
+                loader = loader.source
             if self.external is not None and isinstance(loader, ValueHandle):
                 self._pack("Axis", axis.axis_id, "offsets", loader)
                 return _OffsetSignature(loader.length, loader.digest)
