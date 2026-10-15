@@ -17,6 +17,7 @@ from timenet.format.control_schema import TABLES
 
 
 if TYPE_CHECKING:
+    from timenet.format.storage import StorageSources
     from timenet.registry.version import DatasetVersion
 
 
@@ -49,6 +50,7 @@ class ValueHandle:
     """A locator for one external value; constructing it performs no payload I/O."""
 
     store: "ExternalReader"
+    owner: str | None
     path: str
     row: int
     kind: str
@@ -69,6 +71,10 @@ class ValueHandle:
 
     def __deepcopy__(self, memo: dict) -> "ValueHandle":
         return self
+
+    def physical_version(self) -> "DatasetVersion":
+        """Return the direct physical source without reading payload data."""
+        return self.store.version.resolve_payload_source(self.owner)
 
 
 @dataclass(frozen=True)
@@ -116,12 +122,12 @@ class ExternalReader:
         Raises:
             TimeFFormatError: If the locator or stored value is invalid.
         """
-        version = self.version
+        version = handle.physical_version()
         key = PayloadFileKey(version_root=version.root, relative_path=handle.path)
         table = self.cache.get(key)
         if table is None:
             try:
-                with version.filesystem.open_input_file(version.path(handle.path)) as source:
+                with version.filesystem.open_input_file(version.resolve_file_path(handle.path)) as source:
                     table = pq.ParquetFile(source).read(use_threads=False)
             except (OSError, pa.ArrowException) as exc:
                 raise TimeFFormatError(f"cannot read external value {key}: {exc}") from exc
@@ -144,9 +150,9 @@ class ExternalReader:
         """
         return {
             ExternalObjectFieldKey(object_kind=kind, object_id=identity, field=field, position=position): ValueHandle(
-                self, path, row, value_kind, length, digest
+                self, owner, path, row, value_kind, length, digest
             )
-            for kind, identity, field, position, path, row, value_kind, length, digest in connection.execute(
+            for kind, identity, field, position, owner, path, row, value_kind, length, digest in connection.execute(
                 "SELECT * FROM external_values"
             ).fetchall()
         }
@@ -194,10 +200,11 @@ def materialize_table(table: pa.Table, handles: dict[ExternalObjectFieldKey, Val
 
 
 class ExternalWriter:
-    """Pack large local values into Parquet files and record their catalog locations."""
+    """Pack new values and preserve direct physical locations for inherited values."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, sources: "StorageSources") -> None:
         self.root = root
+        self.sources = sources
         self.files: list[str] = []
         self.rows: list[dict] = []
         self.locators: list[dict] = []
@@ -212,27 +219,33 @@ class ExternalWriter:
             The value to store in the catalog's native column.
         """
         if isinstance(value, ValueHandle):
-            value = value.read()
-        value_kind = "text" if isinstance(value, str) else "texts" if isinstance(value, list) else "offsets"
-        if value_kind == "offsets" and not isinstance(value, pa.Array):
-            return value
-        encoded = (
-            value.to_numpy().tobytes() if value_kind == "offsets" else json.dumps(value, ensure_ascii=False).encode()
-        )
-        if value_kind != "offsets" and len(encoded) <= INLINE_LIMIT:
-            return value
-        path = f"payloads/part-{len(self.files):08d}.parquet"
-        row = len(self.rows)
-        length = len(value)
-        digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
-        self.rows.append({value_kind: value.to_pylist() if value_kind == "offsets" else value})
-        self.bytes += len(encoded)
+            owner = self.sources.add(value.physical_version(), {value.path})
+            path, row, value_kind, length, digest = value.path, value.row, value.kind, value.length, value.digest
+        else:
+            value_kind = "text" if isinstance(value, str) else "texts" if isinstance(value, list) else "offsets"
+            if value_kind == "offsets" and not isinstance(value, pa.Array):
+                return value
+            encoded = (
+                value.to_numpy().tobytes()
+                if value_kind == "offsets"
+                else json.dumps(value, ensure_ascii=False).encode()
+            )
+            if value_kind != "offsets" and len(encoded) <= INLINE_LIMIT:
+                return value
+            path = f"payloads/part-{len(self.files):08d}.parquet"
+            row = len(self.rows)
+            owner = None
+            length = len(value)
+            digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+            self.rows.append({value_kind: value.to_pylist() if value_kind == "offsets" else value})
+            self.bytes += len(encoded)
         self.locators.append(
             {
                 "object_kind": kind,
                 "object_id": identity,
                 "field": field,
                 "position": position,
+                "owner_key": owner,
                 "value_path": path,
                 "row_index": row,
                 "value_kind": value_kind,
