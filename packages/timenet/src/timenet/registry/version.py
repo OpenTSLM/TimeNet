@@ -30,6 +30,9 @@ class DatasetVersion:
     root: str
     """The version's root prefix on :attr:`filesystem`. An example is ``/abs/ds/1.0.0``."""
 
+    payload_root: str | None = None
+    """Filesystem root containing releases addressed by org/name/version."""
+
     def path(self, relpath: str) -> str:
         """Return the filesystem path of a version-relative file.
 
@@ -78,9 +81,11 @@ class DatasetVersion:
         Raises:
             FileNotFoundError: If ``root`` has no ``manifest.json``.
         """
-        root_path = Path(root)
+        root_path = Path(root).resolve()
         manifest_path = root_path / MANIFEST_FILE
         if not manifest_path.exists():
             raise FileNotFoundError(f"no manifest at {manifest_path}")
-        manifest = Manifest.model_validate_json(manifest_path.read_text())
-        return cls(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root_path))
+        manifest = Manifest.from_artifact(manifest_path.read_bytes())
+        suffix = f"/{manifest.dataset_id}/{manifest.metadata.dataset_version}"
+        base = str(root_path)[: -len(suffix)] if str(root_path).endswith(suffix) else None
+        return cls(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root_path), payload_root=base)

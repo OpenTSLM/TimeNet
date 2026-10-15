@@ -7,13 +7,15 @@ from fractions import Fraction
 from functools import partial
 import json
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar, cast
+from typing import Any, Literal, NamedTuple, TypeVar, cast
 
 import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset.origins import origin_slots
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
@@ -24,9 +26,11 @@ from timenet.format.task_codec import (
     decode_target,
     decode_task_payload,
 )
+from timenet.payloads.offsets import validate_offsets
 from timenet.types import (
     TASKS,
     Annotation,
+    ArrayPayload,
     InputModality,
     Task,
     TaskType,
@@ -36,6 +40,9 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.types.payload_references import PayloadReference
+from timenet.types.payloads import Payload, PayloadDescriptor
+from timenet.types.references import ObjectRef, TaskRef, validate_task_graph
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
@@ -43,6 +50,22 @@ from timenet.types.wire import ValueDtype
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
 OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
+
+
+def _read_local_offsets(root: Path, descriptor: PayloadDescriptor, reference: PayloadReference) -> pa.Array:
+    if reference.source is not None:
+        raise TimeFFormatError("foreign timestamps require an attached payload resolver")
+    groups: dict[tuple[str, int], pa.Array] = {}
+    parts = []
+    for chunk in reference.chunks:
+        key = (chunk.path, chunk.major)
+        if key not in groups:
+            with pq.ParquetFile(root / reference.prefix / chunk.path) as file:
+                groups[key] = file.read_row_group(chunk.major, columns=["values"]).column(0).combine_chunks()
+        parts.append(groups[key][chunk.minor].values)
+    offsets = pa.concat_arrays(parts)
+    validate_offsets(offsets, descriptor)
+    return offsets
 
 
 class _LoadedAxis(NamedTuple):
@@ -174,6 +197,7 @@ class _TargetRow(NamedTuple):
     """One ``task_targets`` row, without its position, which the query orders by."""
 
     task_key: int
+    position: int
     target_kind: str
     text_value: str | None
     integer_value: int | None
@@ -383,6 +407,7 @@ class DuckDBControlReader:
         *,
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
+        payload_loader: Callable[[PayloadDescriptor, PayloadReference], Payload] | None = None,
         offsets_loader: OffsetsLoader | None = None,
     ) -> None:
         """Open and validate an immutable control database.
@@ -391,7 +416,8 @@ class DuckDBControlReader:
             path: Local path to ``control.duckdb``.
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
-            offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            payload_loader: Callable[[PayloadDescriptor, PayloadReference], Payload] | None = None,
+        offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -402,6 +428,7 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self._payload_loader = payload_loader
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
@@ -425,6 +452,69 @@ class DuckDBControlReader:
     def __exit__(self, *_: object) -> None:
         """Close the connection when leaving a context manager."""
         self.close()
+
+    def payloads(
+        self, kind: str, identities: list[str], field: str
+    ) -> dict[str, tuple[PayloadDescriptor, PayloadReference]]:
+        """Read physical descriptors for a bounded set of objects.
+
+        Returns:
+            Descriptors and locators keyed by local object ID.
+        """
+        result = {}
+        for identity, descriptor, reference in self.connection.execute(
+            "SELECT object_id, descriptor, reference FROM payloads WHERE object_type=? AND field=? "
+            "AND object_id IN (SELECT unnest(?)) AND position=0",
+            [kind, field, identities],
+        ).fetchall():
+            fields = _decode_json(descriptor)
+            for name in ("shape", "categories", "dimension_names"):
+                if name in fields:
+                    fields[name] = tuple(fields[name])
+            result[identity] = (PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference))
+        return result
+
+    def payload_handles(self, kind: str, identities: list[str]) -> dict[tuple[str, str, int], Payload[Any]]:
+        """Hydrate content handles in one bounded metadata query.
+
+        Returns:
+            Handles keyed by object ID, field, and position.
+
+        Raises:
+            TimeFFormatError: If no physical resolver is attached.
+        """
+        rows = self.connection.execute(
+            "SELECT object_id, field, position, descriptor, reference FROM payloads "
+            "WHERE object_type=? AND object_id IN (SELECT unnest(?))",
+            [kind, identities],
+        ).fetchall()
+        if rows and self._payload_loader is None:
+            raise TimeFFormatError("external text requires a payload resolver")
+        result = {}
+        for identity, field, position, descriptor, reference in rows:
+            fields = _decode_json(descriptor)
+            for name in ("shape", "categories", "dimension_names"):
+                fields[name] = tuple(fields[name])
+            if self._payload_loader is None:
+                raise TimeFFormatError("external text requires a payload resolver")
+            result[identity, field, position] = self._payload_loader(
+                PayloadDescriptor(**fields), PayloadReference.model_validate_json(reference)
+            )
+        return result
+
+    def _hydrate_origins(self, slots: Iterable[tuple[str, str, Any, str]]) -> None:
+        slots = list(slots)
+        origins = {
+            (kind, identity): ObjectRef.model_validate_json(reference)
+            for kind, identity, reference in self.connection.execute(
+                "SELECT object_type, object_id, reference FROM origins WHERE object_id IN (SELECT unnest(?))",
+                [[identity for _, identity, _, _ in slots]],
+            ).fetchall()
+        }
+        set_field = object.__setattr__
+        for kind, identity, obj, field in slots:
+            if (kind, identity) in origins:
+                set_field(obj, field, origins[kind, identity])
 
     def record_ids(self) -> tuple[str, ...]:
         """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
@@ -486,6 +576,17 @@ class DuckDBControlReader:
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
         axes = self._read_axes({row.axis_key for row in signal_rows})
 
+        stored_payloads = self.payloads("Signal", [row.signal_id for row in signal_rows], "values")
+        stored_offsets = self.payloads("Axis", [loaded.axis.axis_id for loaded in axes.values()], "offsets")
+        offset_handles: dict[str, Payload] = {}
+        for identity, (descriptor, reference) in stored_offsets.items():
+            if self._payload_loader is not None:
+                offset_handles[identity] = self._payload_loader(descriptor, reference)
+            else:
+                offset_handles[identity] = ArrayPayload.from_loader(
+                    partial(_read_local_offsets, self.path.parent, descriptor, reference),
+                    descriptor=descriptor,
+                )
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for signal_row in signal_rows:
@@ -503,11 +604,17 @@ class DuckDBControlReader:
             if isinstance(axis, IrregularAxis):
                 if loaded_axis.n_values is None:
                     raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
-                offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
-                    if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
-                )
+                offsets_loader = offset_handles.get(axis.axis_id)
+                if offsets_loader is None:
+                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no timestamp payload")
+                descriptor = offsets_loader.descriptor
+                if descriptor.length != loaded_axis.n_values or (descriptor.first_us, descriptor.last_us) != (
+                    axis.first_us,
+                    axis.last_us,
+                ):
+                    raise TimeFFormatError(
+                        f"axis {axis.axis_id!r} has offsets disagreeing with its axis endpoints or length"
+                    )
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
@@ -516,7 +623,9 @@ class DuckDBControlReader:
                     time_axis=axis,
                     n_values=signal_row.n_values,
                     loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
+                        self._payload_loader(*stored_payloads[signal_row.signal_id])
+                        if self._payload_loader is not None and signal_row.signal_id in stored_payloads
+                        else self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
                         if self._value_loader_factory is not None
                         else partial(self._value_loader, signal_row.signal_id, spec)
                     ),
@@ -582,6 +691,7 @@ class DuckDBControlReader:
             raise TimeFFormatError(
                 f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
             )
+        self._hydrate_origins(origin_slots(records))
         return tuple(records)
 
     def _read_rows(
@@ -791,10 +901,46 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(frozenset(parent_keys), annotated > 0)
         return self._task_facts
 
+    def _export_payloads(
+        self,
+        table: pa.Table,
+        kind: str,
+        id_column: str,
+        fields: dict[str, str],
+        mode: Literal["references", "materialize"],
+    ) -> pa.Table:
+        if mode not in {"references", "materialize"}:
+            raise TimeFValidationError(f"unknown payload export mode {mode!r}")
+        identities = table.column(id_column).to_pylist()
+        handles = self.payload_handles(kind, identities)
+        positions = table.column("position").to_pylist() if "position" in table.column_names else [0] * len(table)
+        for field, column in fields.items():
+            selected = [
+                handles.get((identity, field, position))
+                for identity, position in zip(identities, positions, strict=True)
+            ]
+            references = [
+                None if handle is None or handle.reference is None else handle.reference.model_dump_json()
+                for handle in selected
+            ]
+            descriptors = [None if handle is None else json.dumps(handle.descriptor.__dict__) for handle in selected]
+            table = table.append_column(f"{column}_reference", pa.array(references, type=pa.string()))
+            table = table.append_column(f"{column}_descriptor", pa.array(descriptors, type=pa.string()))
+            if mode == "materialize":
+                values = table.column(column).to_pylist()
+                for index, handle in enumerate(selected):
+                    if handle is not None:
+                        values[index] = handle.read()
+                table = table.set_column(
+                    table.schema.get_field_index(column), column, pa.array(values, type=table.schema.field(column).type)
+                )
+        return table
+
     def task_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -813,7 +959,7 @@ class DuckDBControlReader:
             The tasks in task ID order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH {_signal_ids_cte("scope_ids", "tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")},
                 inputs AS (
                     SELECT task_key, list(record_id ORDER BY position) AS input_record_ids
@@ -841,11 +987,13 @@ class DuckDBControlReader:
                 ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
             parameters,
         ).to_arrow_table()
+        return self._export_payloads(table, "Task", "task_id", {"prompt": "prompt", "rationale": "rationale"}, payloads)
 
     def target_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
+        payloads: Literal["references", "materialize"] = "references",
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -860,7 +1008,7 @@ class DuckDBControlReader:
             Targets in task ID and position order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH {_signal_ids_cte("span_ids", "task_targets", "signal_keys", ("task_key", "position"), "span_signal_ids")}
                 SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
                        x.boolean_value, records.record_id, signals.signal_id,
@@ -874,8 +1022,11 @@ class DuckDBControlReader:
                 ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
             parameters,
         ).to_arrow_table()
+        return self._export_payloads(table, "Task", "task_id", {"target": "text_value"}, payloads)
 
-    def annotation_table(self, object_type: str | None = None) -> pa.Table:
+    def annotation_table(
+        self, object_type: str | None = None, *, payloads: Literal["references", "materialize"] = "references"
+    ) -> pa.Table:
         """Return every annotation occurrence joined with its content as Arrow.
 
         Args:
@@ -887,12 +1038,13 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If ``object_type`` is not an annotated object type.
+            TimeFValidationError: If the payload export mode is unknown.
         """
         if object_type is not None and object_type not in _OBJECT_ID_SELECTS:
             raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
         object_ids = " UNION ALL ".join(_OBJECT_ID_SELECTS.values())
         where = "" if object_type is None else "WHERE o.object_type = ?"
-        return self.connection.execute(
+        table = self.connection.execute(
             f"""WITH object_ids AS ({object_ids})
                 SELECT o.occurrence_id, o.object_type, objects.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
@@ -906,6 +1058,26 @@ class DuckDBControlReader:
                 ORDER BY o.object_type, objects.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
             [] if object_type is None else [object_type],
         ).to_arrow_table()
+        handles = self.payload_handles("AnnotationContent", table.column("content_id").to_pylist())
+        for field in ("text_value", "text_list_value"):
+            selected_kind = "str" if field == "text_value" else "list"
+            filtered = {key: value for key, value in handles.items() if value.descriptor.kind == selected_kind}
+            values = table.column(field).to_pylist()
+            if payloads == "materialize":
+                for index, identity in enumerate(table.column("content_id").to_pylist()):
+                    if (identity, "value", 0) in filtered:
+                        values[index] = filtered[identity, "value", 0].read()
+                table = table.set_column(
+                    table.schema.get_field_index(field), field, pa.array(values, type=table.schema.field(field).type)
+                )
+        table = self._export_payloads(table, "AnnotationContent", "content_id", {"value": "text_value"}, "references")
+        names = [
+            name.replace("text_value_reference", "value_reference").replace("text_value_descriptor", "value_descriptor")
+            for name in table.column_names
+        ]
+        if payloads not in {"references", "materialize"}:
+            raise TimeFValidationError(f"unknown payload export mode {payloads!r}")
+        return table.rename_columns(names)
 
     @staticmethod
     def _record_filter(record_ids: Iterable[str] | None) -> tuple[str, list[object]]:
@@ -1274,7 +1446,12 @@ class DuckDBControlReader:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
 
-    def load_axis_offsets_by_key(self, axis_key: int, axis: IrregularAxis, n_values: int) -> pa.Array:
+    def load_axis_offsets_by_key(
+        self,
+        axis_key: int,  # noqa: ARG002 - retained low-level key API
+        axis: IrregularAxis,
+        n_values: int,
+    ) -> pa.Array:
         """Load one shared irregular axis through its internal integer key.
 
         Returns:
@@ -1283,17 +1460,15 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the offsets disagree with the axis or its Signals.
         """
-        column = (
-            self.connection.execute(
-                """SELECT offsets.offset_us
-               FROM axis_offsets offsets
-               WHERE axis_key = ? ORDER BY offsets.position""",
-                [axis_key],
-            )
-            .to_arrow_table()
-            .column(0)
+        stored = self.payloads("Axis", [axis.axis_id], "offsets").get(axis.axis_id)
+        if stored is None:
+            raise TimeFFormatError(f"axis {axis.axis_id!r} has no timestamp payload")
+        descriptor, reference = stored
+        offsets = (
+            self._payload_loader(descriptor, reference).read()
+            if self._payload_loader is not None
+            else _read_local_offsets(self.path.parent, descriptor, reference)
         )
-        offsets = column.chunk(0) if column.num_chunks == 1 else column.combine_chunks()
         if len(offsets) != n_values:
             raise TimeFFormatError(
                 f"axis {axis.axis_id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
@@ -1384,6 +1559,9 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing {row.object_type} key"
                 )
+        handles = self.payload_handles(
+            "AnnotationContent", [row.content_id for row in rows if row.content_id is not None]
+        )
         for row in rows:
             span = _occurrence_span(row)
             # The first pass over ``rows`` already rejected NULL content and object columns.
@@ -1394,7 +1572,9 @@ class DuckDBControlReader:
                 occurrence_id=row.occurrence_id,
                 id=content_id,
                 key=name,
-                value=decode_annotation_value(
+                value=handles[content_id, "value", 0]
+                if (content_id, "value", 0) in handles
+                else decode_annotation_value(
                     row.value_kind,
                     row.text_value,
                     row.integer_value,
@@ -1413,6 +1593,9 @@ class DuckDBControlReader:
             grouped[row.object_type, object_id].append(annotation)
             if annotations_by_occurrence is not None:
                 annotations_by_occurrence[row.occurrence_key] = annotation
+        self._hydrate_origins(
+            origin_slots(annotations=(annotation for values in grouped.values() for annotation in values))
+        )
         return {key: tuple(value) for key, value in grouped.items()}
 
 
@@ -1420,8 +1603,8 @@ class _TaskHydration:
     """State for one :meth:`DuckDBControlReader.iter_tasks` call.
 
     It holds the caller's Records and the lookups built from them, loads Records and Signals a
-    task refers to outside that set on demand, and keeps every task that another task derives
-    from until its dependants are built.
+    task refers to outside that set on demand, and keeps derivation identities without retaining
+    parent task bodies.
     """
 
     def __init__(  # noqa: PLR0913 - one argument per task selection axis
@@ -1438,6 +1621,7 @@ class _TaskHydration:
 
         Raises:
             TimeFValidationError: If one of ``records`` is not stored in the control database.
+            TimeFFormatError: If the dependency graph is corrupt.
         """
         self.reader = reader
         self.required_modalities = required_modalities
@@ -1450,11 +1634,24 @@ class _TaskHydration:
         self.signals_by_id: dict[str, Signal] = {}
         self._records_without_signal_index: list[Record] = []
         self.annotations_by_id: dict[str, Annotation] = {}
-        self.retained: dict[int, Task] = {}
-        self._hydrating: set[int] = set()
         self._dataset_annotations_indexed = False
         facts = reader.task_facts()
-        self.parent_keys = facts.parent_task_keys
+        self.parents: dict[int, list[TaskRef]] = defaultdict(list)
+        graph: dict[str, set[str]] = {}
+        for key, child, parent in self.connection.execute(
+            "SELECT d.task_key, child.task_id, parent.task_id FROM task_dependencies d "
+            "LEFT JOIN tasks child ON child.task_key=d.task_key "
+            "LEFT JOIN tasks parent ON parent.task_key=d.parent_task_key ORDER BY d.task_key, d.position"
+        ).fetchall():
+            if child is None or parent is None:
+                raise TimeFFormatError("task dependency refers to a missing task")
+            graph.setdefault(child, set()).add(parent)
+            graph.setdefault(parent, set())
+            self.parents[key].append(TaskRef(id=parent))
+        try:
+            validate_task_graph(graph)
+        except TimeFValidationError as exc:
+            raise TimeFFormatError(str(exc)) from exc
         self.tasks_annotated = facts.tasks_annotated
         unknown = [record_id for record_id in self.records_by_id if record_id not in reader._record_keys]
         if unknown:
@@ -1501,62 +1698,10 @@ class _TaskHydration:
         return list(self.iter_tasks())
 
     def _hydrate(self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
-        """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.
-
-        Rows from the selection cursor avoid a second task-table scan.
-
-        Returns:
-            The tasks in the order of ``task_keys``, or in task ID order for the whole table.
-
-        Raises:
-            TimeFFormatError: If the stored derivations contain a cycle.
-        """
-        pending = None if task_keys is None else [key for key in task_keys if key not in self.retained]
-        if task_rows is not None:
-            task_rows = [row for row in task_rows if row.task_key not in self.retained]
-        dependencies = self.reader._task_dependencies(pending) if self.parent_keys else {}
-        in_batch = None if pending is None else set(pending)
-        missing_parents = (
-            []
-            if in_batch is None
-            else sorted(
-                {
-                    parent_key
-                    for parent_keys in dependencies.values()
-                    for parent_key in parent_keys
-                    if parent_key not in self.retained and parent_key not in in_batch
-                }
-            )
-        )
-        if missing_parents:
-            cyclic = self._hydrating.intersection(missing_parents)
-            if cyclic:
-                raise TimeFFormatError(f"task dependencies contain a cycle through task keys {sorted(cyclic)}")
-            self._hydrating.update(pending or ())
-            try:
-                self._hydrate(missing_parents)
-            finally:
-                self._hydrating.difference_update(pending or ())
-        built = self._build(pending, task_rows=task_rows)
-        for task_key, parent_keys in dependencies.items():
-            built[task_key].from_tasks = tuple(self._task(parent_key, built) for parent_key in parent_keys)
-        if task_keys is None:
-            return list(built.values())
-        for task_key, task in built.items():
-            if task_key in self.parent_keys:
-                self.retained[task_key] = task
-        return [self._task(task_key, built) for task_key in task_keys]
-
-    def _task(self, task_key: int, built: dict[int, Task]) -> Task:
-        """Return a task from this batch or the retained parents.
-
-        Raises:
-            TimeFFormatError: If the key was never hydrated.
-        """
-        task = built.get(task_key) or self.retained.get(task_key)
-        if task is None:
-            raise TimeFFormatError(f"task dependency refers to missing task key {task_key!r}")
-        return task
+        built = self._build(task_keys, task_rows=task_rows)
+        for key, task in built.items():
+            task.from_tasks = tuple(self.parents.get(key, ()))
+        return list(built.values()) if task_keys is None else [built[key] for key in task_keys]
 
     def _build(  # noqa: PLR0914 - one batch joins several tables
         self, task_keys: list[int] | None, *, task_rows: list[_TaskRow] | None = None
@@ -1592,6 +1737,8 @@ class _TaskHydration:
             {key for refs in annotation_refs.values() for keys in refs.values() for key in keys}
         )
 
+        handles = reader.payload_handles("Task", [row.task_id for row in task_rows])
+        task_ids = {row.task_key: row.task_id for row in task_rows}
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         for target in target_rows:
             span_signal_ids = (
@@ -1613,7 +1760,9 @@ class _TaskHydration:
                 "span_signal_ids": span_signal_ids,
             }
             targets_by_task[target.task_key].append(
-                decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
+                handles[task_ids[target.task_key], "target", target.position]
+                if (task_ids[target.task_key], "target", target.position) in handles
+                else decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
         tasks: dict[int, Task] = {}
@@ -1628,7 +1777,7 @@ class _TaskHydration:
                 "id": row.task_id,
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
-                "prompt": row.prompt,
+                "prompt": handles.get((row.task_id, "prompt", 0), row.prompt),
                 "input_modalities": decode_input_modalities(row.input_modalities),
                 "split": decode_split(row.split),
                 "scope": decode_span(
@@ -1637,7 +1786,7 @@ class _TaskHydration:
                     row.scope_end,
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
-                "rationale": row.rationale,
+                "rationale": handles.get((row.task_id, "rationale", 0), row.rationale),
                 "annotations": task_annotations.get(("Task", row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
@@ -1667,6 +1816,7 @@ class _TaskHydration:
             except TimeFValidationError as exc:
                 raise TimeFFormatError(f"stored task {task.id!r} has an invalid Record scope: {exc}") from exc
             tasks[row.task_key] = task
+        reader._hydrate_origins(origin_slots(tasks=tasks.values()))
         return tasks
 
     def _index_record(self, record_key: int, record: Record) -> None:

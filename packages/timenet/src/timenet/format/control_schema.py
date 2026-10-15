@@ -3,9 +3,9 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
-stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
-be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
+Version 2 of the control schema. Object tables carry ``BIGINT`` keys drawn from sequences and
+store public IDs once, on their owning rows. Fixed-shape fields are typed columns so they can
+be filtered in SQL; metadata, payload descriptors, and typed references use JSON. The database carries no
 persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
 while streaming and what :func:`timenet.format.control_audit.audit_control_database` re-checks.
 """
@@ -196,12 +196,6 @@ AXES = Table(
     key_sequence=AXIS_KEYS,
 )
 
-AXIS_OFFSETS = Table(
-    "axis_offsets",
-    (_key("axis_key"), _key("position"), _key("offset_us")),
-    unique=(("axis_key", "position"),),
-    foreign_keys=(ForeignKey("axis_key", "axes", "axis_key"),),
-)
 
 SIGNALS = Table(
     "signals",
@@ -299,7 +293,7 @@ TASKS = Table(
         Column("scope_end", ColumnType.BIGINT),
         Column("scope_signal_keys", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
-        Column("target_schema", ColumnType.VARCHAR),
+        Column("target_schema", ColumnType.JSON),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),
         Column("mode", ColumnType.VARCHAR),
@@ -364,14 +358,36 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+PAYLOADS = Table(
+    "payloads",
+    (
+        _required("object_type"),
+        _required("object_id"),
+        _required("field"),
+        _key("position"),
+        _required("descriptor", ColumnType.JSON),
+        _required("reference", ColumnType.JSON),
+    ),
+    unique=(("object_type", "object_id", "field", "position"),),
+)
+"""Physical references for stored object content, without payload bodies."""
+
+ORIGINS = Table(
+    "origins",
+    (_required("object_type"), _required("object_id"), _required("reference", ColumnType.JSON)),
+    unique=(("object_type", "object_id"),),
+)
+"""Source provenance for independently editable catalog objects."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
+    ORIGINS,
     CONTROL_METADATA,
+    PAYLOADS,
     DATASETS,
     RECORDS,
     CLOCKS,
     SOURCES,
     AXES,
-    AXIS_OFFSETS,
     SIGNALS,
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,

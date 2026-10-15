@@ -7,11 +7,17 @@ local directory, an S3 prefix, or a remote service. So ``store`` is the one abst
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from hashlib import sha256
+from typing import Literal
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.format.checksums import CHECKSUM_PREFIX
+from timenet.format.constants import MANIFEST_FILE
+from timenet.manifest import Manifest
 from timenet.registry.base import BaseRegistry
+from timenet.types.payload_references import PayloadSource
 from timenet.writer import WriteProgressEvent
 
 
@@ -25,6 +31,7 @@ class WritableRegistry(BaseRegistry, ABC):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and publish it to this registry.
@@ -41,6 +48,30 @@ class WritableRegistry(BaseRegistry, ABC):
         Returns:
             The stored version string.
         """
+
+    def validate_payload_sources(self, sources: Iterable[PayloadSource]) -> None:
+        """Require exact physical owners before publishing a referenced release.
+
+        Raises:
+            TimeNetRegistryError: If an owner is missing or its manifest pin differs.
+        """
+        for source in sources:
+            identity = source.dataset
+            try:
+                with self.open_file(identity.dataset_id, str(identity.version), MANIFEST_FILE) as handle:
+                    content = handle.read()
+            except (TimeNetDatasetNotFoundError, FileNotFoundError) as exc:
+                raise TimeNetRegistryError(
+                    f"physical owner {identity} is absent from the destination registry; publish that owner first or use payload_policy='copy'"
+                ) from exc
+            manifest = Manifest.from_artifact(content)
+            if (manifest.dataset_id, manifest.metadata.dataset_version) != (
+                identity.dataset_id,
+                identity.version,
+            ) or CHECKSUM_PREFIX + sha256(content).hexdigest() != source.manifest_checksum:
+                raise TimeNetRegistryError(
+                    f"physical owner {identity} has a different manifest pin in the destination registry"
+                )
 
     def exists(self, dataset_id: str, version: str) -> bool:
         """Return whether a committed version already exists in this registry.

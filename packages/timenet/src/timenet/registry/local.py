@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 import shutil
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 import pyarrow.fs as pafs
 
@@ -94,7 +94,7 @@ class LocalRegistry(WritableRegistry):
         cached = self._manifest_cache.get((dataset_id, resolved))
         if cached is not None and cached[0] == mtime:
             return cached[1]
-        manifest = Manifest.model_validate_json(path.read_text())
+        manifest = Manifest.from_artifact(path.read_text())
         if manifest.metadata.dataset_id != dataset_id:
             raise TimeFFormatError(
                 f"manifest under {dataset_id!r}/{resolved} declares dataset id "
@@ -133,6 +133,7 @@ class LocalRegistry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset and write it into this registry's directory tree.
@@ -161,8 +162,11 @@ class LocalRegistry(WritableRegistry):
             return version
         if force and final_dir.exists():
             shutil.rmtree(final_dir)
-        with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+        with TimeFWriter(
+            self._root, dataset, values_backend=values_backend, payload_policy=payload_policy, progress_cb=progress_cb
+        ) as writer:
             writer.write()
+            self.validate_payload_sources(writer.payload_sources)
         return version
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
@@ -182,7 +186,9 @@ class LocalRegistry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         root = self._dataset_dir(dataset_id) / resolved
-        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
+        return DatasetVersion(
+            manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root), payload_root=str(self._root)
+        )
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.
