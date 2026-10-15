@@ -24,6 +24,7 @@ from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
 from timenet.registry.base import ProgressCallback
 from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
+from timenet.registry.shared import complete_copy
 
 
 _CHUNK_BYTES = 1 << 20
@@ -56,7 +57,7 @@ def download_version_files(  # noqa: PLR0913
         ``dest_dir``.
     """
     dest_dir = Path(dest_dir)
-    if (dest_dir / "manifest.json").exists() and not force:
+    if complete_copy(dest_dir, manifest) and not force:
         return dest_dir
     files = list(manifest.files.all_files())
     parent = dest_dir.parent
@@ -107,6 +108,8 @@ async def _download_all(  # noqa: PLR0913, PLR0917
                 dest = safe_version_path(staging, part.path)
                 url = await _resolve(client, headers, dataset_id, version, part.path)
                 await _stream_one(client, url, dest, expected_checksum=part.checksum, progress_cb=progress_cb)
+                if dest.stat().st_size != part.size:
+                    raise TimeFFormatError(f"size mismatch for {part.path!r} in {dataset_id}@{version}")
 
         await asyncio.gather(*(one(part) for part in files))
 

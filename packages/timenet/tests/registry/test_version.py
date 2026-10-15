@@ -1,11 +1,16 @@
+import json
 from pathlib import Path
 import pickle
+import shutil
 
 import pyarrow.fs as pafs
 import pytest
 
-from timenet.errors import TimeFValidationError
-from timenet.registry import DatasetVersion
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.registry import DatasetVersion, LocalRegistry
+from timenet.registry.version import prepare_dependency_graph
+from timenet.testing import make_dataset
+from timenet.types.references import DatasetRef
 
 
 def _version_dir(registry_root: Path) -> Path:
@@ -24,14 +29,14 @@ def test_open_local_without_manifest_raises(tmp_path):
         DatasetVersion.open_local(tmp_path)
 
 
-def test_path_joins_root_and_relpath(registry_root):
+def test_resolve_file_path_joins_root_and_relative_path(registry_root):
     version = DatasetVersion.open_local(_version_dir(registry_root))
-    assert version.path("time_series/part-000.parquet") == f"{version.root}/time_series/part-000.parquet"
+    assert version.resolve_file_path("time_series/part-000.parquet") == f"{version.root}/time_series/part-000.parquet"
 
 
 def test_store_uri_matches_path_for_local(registry_root):
     version = DatasetVersion.open_local(_version_dir(registry_root))
-    assert version.store_uri("values.zarr") == version.path("values.zarr")
+    assert version.store_uri("values.zarr") == version.resolve_file_path("values.zarr")
 
 
 @pytest.mark.parametrize(
@@ -42,10 +47,10 @@ def test_store_uri_matches_path_for_local(registry_root):
         "time_series/../../etc/passwd",  # traversal mid-path
     ],
 )
-def test_path_rejects_a_relpath_that_escapes_the_root(registry_root, relpath):
+def test_resolve_file_path_rejects_a_path_that_escapes_the_root(registry_root, relpath):
     version = DatasetVersion.open_local(_version_dir(registry_root))
     with pytest.raises(TimeFValidationError, match="dataset root"):
-        version.path(relpath)
+        version.resolve_file_path(relpath)
 
 
 def test_store_uri_rejects_a_relpath_that_escapes_the_root(registry_root):
@@ -60,5 +65,100 @@ def test_handle_is_picklable(registry_root):
     restored = pickle.loads(pickle.dumps(version))
     assert restored.root == version.root
     assert restored.manifest.metadata.dataset_id == "demo/ecg"
-    with restored.filesystem.open_input_file(restored.path("manifest.json")) as handle:
+    with restored.filesystem.open_input_file(restored.resolve_file_path("manifest.json")) as handle:
         assert b"demo/ecg" in handle.read()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_local_payload_source_rejects_missing_or_misplaced_manifest(registry_root, missing):
+    child = DatasetVersion.open_local(_version_dir(registry_root))
+    parent = DatasetVersion.open_local(registry_root / "timenet/hello-world/1.0.0")
+    reference = DatasetRef.parse("timenet/hello-world@1.0.0")
+    child.manifest.payload_sources["parent"] = reference
+    (Path(child.root) / "manifest.json").write_text(child.manifest.to_json())
+    manifest_path = Path(parent.root) / "manifest.json"
+    manifest = parent.manifest.to_dict()
+    if missing:
+        manifest_path.unlink()
+    else:
+        manifest["dataset_id"] = "wrong/dataset"
+        manifest["metadata"]["dataset_id"] = "wrong/dataset"
+        manifest_path.write_text(json.dumps(manifest))
+    expected_error = TimeNetDatasetNotFoundError if missing else TimeFFormatError
+    with pytest.raises(expected_error, match=r"complete release|different dataset ID"):
+        DatasetVersion.open_local(child.root)
+
+
+@pytest.mark.parametrize("corruption", [None, "truncated", "checksum"])
+def test_preparation_caches_only_verified_complete_releases(registry_root, tmp_path, corruption):
+    source_version = DatasetVersion.open_local(_version_dir(registry_root))
+    part = source_version.manifest.files.time_series[0]
+    source_file = Path(source_version.root) / part.path
+    expected = source_file.read_bytes()
+    reference = DatasetRef.parse("demo/ecg@2.0.0")
+    cache = tmp_path / "cache"
+    registry = LocalRegistry(registry_root)
+    directory = cache / reference.dataset_id / str(reference.version)
+    destination = directory / part.path
+
+    if corruption is not None:
+        damaged = expected[:-1] if corruption == "truncated" else bytes([expected[0] ^ 1]) + expected[1:]
+        source_file.write_bytes(damaged)
+        with pytest.raises(TimeFFormatError, match="checksum or size mismatch"):
+            prepare_dependency_graph(cache, reference, fetch_from=registry)
+        assert not destination.exists()
+        assert not (directory / "manifest.json").exists()
+        assert not list(directory.parent.glob("2.0.0.tmp-*"))
+        source_file.write_bytes(expected)
+
+    cached = prepare_dependency_graph(cache, reference, fetch_from=registry)
+    assert cached.resolve_file_path(part.path) == str(destination)
+    assert destination.read_bytes() == expected
+
+    # A cached file must remain readable without contacting the registry again.
+    source_file.unlink()
+    cached = prepare_dependency_graph(cache, reference, fetch_from=registry)
+    assert cached.resolve_file_path(part.path) == str(destination)
+    assert destination.read_bytes() == expected
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_preparation_fetches_before_building_a_missing_release(registry_root, tmp_path, available):
+    cache = tmp_path / "prepared"
+    reference = DatasetRef.parse("timenet/hello-world@1.0.0")
+    registry = LocalRegistry(registry_root if available else tmp_path / "empty-registry")
+    builds = []
+
+    def build(ref):
+        builds.append(ref)
+        LocalRegistry(cache).store(make_dataset())
+
+    with pytest.raises(TimeNetDatasetNotFoundError, match="complete release"):
+        prepare_dependency_graph(cache, reference)
+    version = prepare_dependency_graph(cache, reference, fetch_from=registry, build=build)
+    assert builds == ([] if available else [reference])
+    assert all(Path(version.resolve_file_path(part.path)).is_file() for part in version.manifest.files.all_files())
+
+
+def test_preparation_requires_complete_ancestors_and_detects_cycles(registry_root, tmp_path):
+    child_dir = _version_dir(registry_root)
+    child_manifest_path = child_dir / "manifest.json"
+    child = json.loads(child_manifest_path.read_text())
+    child["input_locks"] = {"parent": {"source": {"dataset_id": "timenet/hello-world", "version": "1.0.0"}}}
+    child_manifest_path.write_text(json.dumps(child))
+    cache = tmp_path / "prepared"
+    cached_child = cache / "demo/ecg/2.0.0"
+    shutil.copytree(child_dir, cached_child)
+    reference = DatasetRef.parse("demo/ecg@2.0.0")
+    with pytest.raises(TimeNetDatasetNotFoundError, match="timenet/hello-world"):
+        prepare_dependency_graph(cache, reference)
+
+    prepare_dependency_graph(cache, reference, fetch_from=LocalRegistry(registry_root))
+    cached_parent = cache / "timenet/hello-world/1.0.0"
+    assert (cached_parent / "control.duckdb").is_file()
+    parent_manifest_path = cached_parent / "manifest.json"
+    parent = json.loads(parent_manifest_path.read_text())
+    parent["payload_sources"] = {"cycle": {"dataset_id": "demo/ecg", "version": "2.0.0"}}
+    parent_manifest_path.write_text(json.dumps(parent))
+    with pytest.raises(TimeFFormatError, match="cycle"):
+        prepare_dependency_graph(cache, reference)
