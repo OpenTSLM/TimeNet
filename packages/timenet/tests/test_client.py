@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 from pydantic import ValidationError
 import pytest
@@ -9,10 +10,30 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
-from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
+from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
 from timenet.writer import TimeFWriter
+
+
+def test_local_child_fetches_complete_parents_before_returning_a_handle(tmp_path):
+    parent = make_dataset()
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.store(parent)
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+    with TimeNet(origin).get_handle(parent.metadata.dataset_id) as handle:
+        child.import_from(handle, records=[parent.records[0].id])
+    origin.store(child)
+    cache = tmp_path / "cache"
+    shutil.copytree(origin.root / "test/child/1.0.0", cache / "test/child/1.0.0")
+    client = TimeNet(cache)
+    with pytest.raises(TimeNetDatasetNotFoundError, match=parent.metadata.dataset_id):
+        client.get_handle("test/child", auto_build=False)
+    with client.get_handle("test/child", fetch_parents=str(origin.root)) as handle:
+        assert (cache / parent.metadata.dataset_id / "1.0.0/control.duckdb").is_file()
+        shutil.rmtree(origin.root)
+        assert handle.read().records[0].signals[0].to_arrow().equals(parent.records[0].signals[0].to_arrow())
+    assert client.load("test/child").records
 
 
 @pytest.fixture(autouse=True)
@@ -204,7 +225,7 @@ def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_ro
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
@@ -228,7 +249,7 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             dataset = make_dataset()
             dataset.derive_schema()
             with TimeFWriter(Path(root), dataset) as writer:
@@ -255,7 +276,7 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
