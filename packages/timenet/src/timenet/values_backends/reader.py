@@ -11,7 +11,7 @@ Concrete readers live in their own modules: :mod:`timenet.values_backends.parque
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
@@ -21,14 +21,42 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
-    from timenet.types import TimeSeriesSpec
+
+
+class ArrayEncoding(Protocol):
+    """The physical decoding contract, independent of logical signal metadata."""
+
+    @property
+    def dtype(self) -> str:
+        """The scalar dtype."""
+        ...
+
+    @property
+    def value_shape(self) -> tuple[int, ...]:
+        """The per-step shape."""
+        ...
+
+    @property
+    def dimension_names(self) -> tuple[str, ...]:
+        """The named tensor dimensions."""
+        ...
+
+    @property
+    def nullable(self) -> bool:
+        """Whether values can contain nulls."""
+        ...
+
+    @property
+    def categories(self) -> tuple[str, ...]:
+        """The enum decoding codebook."""
+        ...
 
 
 class BaseValuesReader(ABC):
     """Reads a series' values from a storage handle given its index rows."""
 
     @abstractmethod
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: list[dict], spec: ArrayEncoding) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
         Args:
@@ -43,7 +71,7 @@ class BaseValuesReader(ABC):
 
     @abstractmethod
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: ArrayEncoding
     ) -> pa.Array:
         """Read only the steps of one series in the half-open step range ``[start, stop)``.
 

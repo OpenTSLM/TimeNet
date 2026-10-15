@@ -92,7 +92,9 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "contains a cycle",
         ),
         (
-            "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
+            'INSERT INTO payload_descriptors VALUES (-1, \'{"kind":"array","dtype":"int64","length":2}\'); '
+            "INSERT INTO payload_stores VALUES (-1, NULL, NULL, 'parquet', ''); "
+            "INSERT INTO payloads SELECT -1, 'Axis', axis_id, 'offsets', 0, -1, -1 FROM axes",
             "axis length that does not match",
         ),
     ],
