@@ -57,12 +57,12 @@ def test_every_task_type_accepts_ordered_mixed_targets(task_type):
 
     task = task_type(targets=["answer", record, 0.98, point])
 
-    assert task.targets == ("answer", record, 0.98, point)
+    assert task.targets() == ("answer", record, 0.98, point)
 
 
 def test_none_and_an_explicit_empty_target_remain_distinct():
-    assert AnswerTask().targets is None
-    assert AnswerTask(targets=cast("Any", [])).targets == ()
+    assert AnswerTask().targets_handle() is None
+    assert AnswerTask(targets=cast("Any", [])).targets() == ()
 
 
 def test_task_rejects_an_unsupported_target_item():

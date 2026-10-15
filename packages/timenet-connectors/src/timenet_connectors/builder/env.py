@@ -22,6 +22,7 @@ from urllib.request import url2pathname
 
 from uv import find_uv_bin
 
+from timenet.connectors.context import active_build_path
 from timenet.errors import TimeNetBuildError
 from timenet_connectors.discovery import requirements_for
 
@@ -142,7 +143,11 @@ def run_isolated(  # noqa: PLR0913
         argv += ["--values-backend", values_backend]
     command = uv_command(env_spec(dataset_id, values_backend=values_backend), argv)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
-    child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
+    child_env = {
+        **os.environ,
+        "TIMENET_ISOLATION": "off",
+        "TIMENET_BUILD_PATH": json.dumps([str(reference) for reference in active_build_path()]),
+    }
     stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()

@@ -109,3 +109,18 @@ live in separate structures.
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+
+## Release identity and build inputs
+
+`dataset_version` identifies an immutable TimeNet release. `source_revision` records the upstream
+tag or revision independently. A card can declare exact input releases under local aliases:
+
+```yaml
+dataset_version: 1.0.0
+source_revision: upstream-v7
+inputs:
+  ecg: physionet/ptb-xl@1.2.3
+```
+
+Input declarations describe construction and provenance. They do not require the consumer to load
+those datasets. Storage references determine which external artifacts a consumer needs.

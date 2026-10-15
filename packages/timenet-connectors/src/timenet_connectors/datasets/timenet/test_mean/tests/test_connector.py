@@ -15,9 +15,9 @@ def _convert() -> TimeFDataset:
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[str, str | None]:
     return {
-        record.id: cast(str, task.targets[0])
+        record.id: cast(str, targets[0])
         for task in dataset.tasks
-        if isinstance(task, ClassificationTask) and task.targets is not None
+        if isinstance(task, ClassificationTask) and (targets := task.targets()) is not None
         for record in task.inputs
     }
 

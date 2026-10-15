@@ -2,9 +2,10 @@
 
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from itertools import chain
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -21,6 +22,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    Payload,
     StepSpan,
     SupportsAnnotate,
     Task,
@@ -30,6 +32,11 @@ from timenet.types import (
 )
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.dataset.composition import ImportedDataset
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -79,9 +86,30 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._annotations: list[Annotation] = []
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
-        self._task_stream: Callable[[], Iterator[Task]] | None = None
+        self._task_sources: list[Callable[[], Iterator[Task]]] = []
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        self._import_namespaces: set[str] = set()
+
+    def copy_from(
+        self,
+        parent: "TimeFDataset | TimeFReader",
+        *,
+        namespace: str | None = None,
+        record_ids: Iterable[str] | None = None,
+        include_tasks: bool = False,
+    ) -> "ImportedDataset":
+        """Copy editable metadata while sharing immutable parent payloads.
+
+        IDs stay unchanged unless ``namespace`` requests deterministic remapping.
+        Imports with colliding IDs fail before any objects are added.
+
+        Returns:
+            Imported objects indexed by their parent identities.
+        """
+        from timenet.dataset.composition import copy_from  # noqa: PLC0415
+
+        return copy_from(self, parent, namespace=namespace, record_ids=record_ids, include_tasks=include_tasks)
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -157,6 +185,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         *,
         path: str | Path,
         values_backend: ValuesBackend = ValuesBackend.PARQUET,
+        payload_policy: Literal["reuse", "copy"] = "reuse",
     ) -> Path:
         """Write this dataset as one immutable TimeF version.
 
@@ -172,7 +201,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         root = Path(path)
         if self.schema is None:
             self.derive_schema()
-        with TimeFWriter(root, self, values_backend=values_backend) as writer:
+        with TimeFWriter(root, self, values_backend=values_backend, payload_policy=payload_policy) as writer:
             writer.write()
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
@@ -248,31 +277,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
-        """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
+        """Append a replayable task source. Prefer :meth:`add_task_stream` for new code."""
+        self.add_task_stream(task_types, source)
 
-        For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records, then
-        hands the tasks over through ``source``; the writer streams them to disk without a list. Streamed
-        tasks do not populate ``Record.task_ids``.
-
-        Args:
-            task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
-                Every yielded task must be one of these types.
-            source: A callable returning a fresh iterator over the tasks each time it is called. The
-                writer calls it more than once (a peek for id storage, then the write), so it must
-                re-read its source rather than exhaust a one-shot generator.
-
-        Raises:
-            TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
-                streams its tasks or materializes them, never both, or the writer would drop one set.
-        """
-        if self._tasks:
-            raise TimeFValidationError(
-                "set_task_stream cannot follow add_task/add_tasks: a dataset either streams its tasks or "
-                "materializes them, not both"
-            )
-        self._streamed_task_types = tuple(task_types)
-        self._task_stream = source
+    def add_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
+        """Append a replayable task source alongside local tasks and other sources."""
+        self._streamed_task_types = tuple(self._ordered_unique((*self._streamed_task_types, *task_types)))
+        self._task_sources.append(source)
+        self._schema = None
 
     def iter_tasks(
         self,
@@ -296,7 +308,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
         wanted = None if split is None else parse_splits(split)
-        source = self._task_stream() if self._task_stream is not None else self._tasks
+        source = chain(self._tasks, chain.from_iterable(source() for source in self._task_sources))
         for task in source:
             if wanted is not None and task.split not in wanted:
                 continue
@@ -325,7 +337,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a streamed task fails one of the per-task checks.
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
-        declared = set(self._streamed_task_types)
+        declared = {*self._streamed_task_types, *(type(task) for task in self._tasks)}
         for task in self.iter_tasks():
             self._validate_streamed_task(task, index, declared)
             yield task
@@ -383,11 +395,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
-        """
-        if self._task_stream is not None:
-            raise TimeFValidationError(
-                "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
-            )
+        """  # noqa: DOC502 - raised by batch validation
         self._validate_task_batch(batch)
         # Extend each record's task_ids once per batch rather than once per task, so a record with
         # thousands of tasks does not copy its tuple thousands of times.
@@ -432,7 +440,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 parent_id = parent.id
                 if parent_id == task.id:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
-                if parent_id not in known_task_ids:
+                if parent_id not in known_task_ids and not self.has_task_stream:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {task.id!r} derives from task {parent_id!r}, which is not "
                         f"registered in this dataset or part of the batch"
@@ -548,7 +556,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             AnnotationDescriptor(
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
-                value_type=value_type_of(annotation.value),
+                value_type=value_type_of(annotation.handle()),
                 # The __post_init__ method normalizes unit to a plain string or None, so this
                 # value is always str | None.
                 unit=cast("str | None", annotation.unit),
@@ -568,7 +576,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         # A streamed dataset declares its task types up front, so the schema records them without
         # draining the stream just to collect them.
         streamed = self._ordered_unique(self._streamed_task_types)
-        tasks = streamed if self._task_stream is not None else self._ordered_unique(type(task) for task in self._tasks)
+        tasks = self._ordered_unique((*streamed, *(type(task) for task in self._tasks)))
         self._schema = DatasetSchema(
             time_series_specs=tuple(specs),
             annotations=tuple(annotations),
@@ -621,11 +629,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 neither representation is present.
         """
         name = type(task).__name__
-        if task.targets is not None and task.target_annotations:
+        if task.targets_handle() is not None and task.target_annotations:
             raise TimeFValidationError(
                 f"{name} sets inline targets and target_annotations; use one answer representation"
             )
-        if task.targets is None and not task.target_annotations:
+        if task.targets_handle() is None and not task.target_annotations:
             raise TimeFValidationError(f"{name} needs an answer: set targets= or target_annotations=")
 
     @staticmethod
@@ -695,7 +703,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def _task_records(task: Task) -> tuple[Record, ...]:
         """Return all Records referenced by a task, without duplicate objects."""
         candidates = cast("tuple[Record, ...]", getattr(task, "candidate_records", ()))
-        target_records = tuple(target for target in task.targets or () if isinstance(target, Record))
+        target_records = tuple(target for target in task.targets_handle() or () if isinstance(target, Record))
         found: list[Record] = []
         seen: set[int] = set()
         for record in (*task.inputs, *candidates, *target_records):
@@ -708,7 +716,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     @staticmethod
     def _task_signals(task: Task) -> tuple[Signal, ...]:
         """Return all Signals referenced directly as target items."""
-        return tuple(target for target in task.targets or () if isinstance(target, Signal))
+        return tuple(target for target in task.targets_handle() or () if isinstance(target, Signal))
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
@@ -738,7 +746,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     @property
     def has_task_stream(self) -> bool:
         """Whether tasks stream from a source (see :meth:`set_task_stream`) rather than the ``_tasks`` list."""
-        return self._task_stream is not None
+        return bool(self._task_sources)
 
     @property
     def schema(self) -> DatasetSchema | None:
@@ -1000,7 +1008,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
-            inline = matched[0].targets
+            inline = matched[0].targets()
             if inline is None or len(inline) != 1 or not isinstance(inline[0], (str, int, float, bool)):
                 raise TimeFValidationError(
                     f"{resolved.__name__} {matched[0].id!r} needs exactly one scalar target to use as y"
@@ -1029,9 +1037,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         kinds = {
             type(task)
             for task in self._tasks
-            if task.targets is not None
-            and len(task.targets) == 1
-            and isinstance(task.targets[0], (str, int, float, bool))
+            if (targets := task.targets_handle()) is not None
+            and len(targets) == 1
+            and (
+                isinstance(target := targets[0], (str, int, float, bool))
+                or (isinstance(target, Payload) and target.descriptor.kind == "str")
+            )
         }
         if len(kinds) == 1:
             return kinds.pop()
