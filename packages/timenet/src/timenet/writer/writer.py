@@ -436,7 +436,8 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
-            input_locks=getattr(self._dataset, "input_locks", {}),
+            input_locks=self._dataset.input_locks,
+            lineage=tuple(self._dataset.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )

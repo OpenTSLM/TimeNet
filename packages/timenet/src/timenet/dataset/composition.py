@@ -321,5 +321,8 @@ def import_from(  # noqa: PLR0913
             operation.select(kind, identity)
     result = operation.apply()
     child._imports[namespace] = result
-    child.input_locks[namespace] = InputLock(source=ref, manifest_checksum=digest)
+    lock = InputLock(source=ref, manifest_checksum=digest, metadata=parent.metadata.model_dump(mode="json"))
+    child.input_locks[namespace] = lock
+    for ancestor in (*parent.reader._version.manifest.lineage, lock):
+        child.lineage[str(ancestor.source)] = ancestor
     return result
