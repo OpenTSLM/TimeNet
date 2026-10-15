@@ -237,6 +237,7 @@ SIGNAL_CHUNKS = Table(
         _key("signal_key"),
         _key("chunk_index"),
         _required("value_path"),
+        Column("owner_key", ColumnType.VARCHAR),
         _key("chunk_major_index"),
         Column("chunk_minor_index", ColumnType.BIGINT),
         _key("n_values"),
@@ -380,9 +381,24 @@ EXTERNAL_VALUES = Table(
     unique=(("object_kind", "object_id", "field", "position"),),
 )
 
+NAMESPACES = Table(
+    "namespaces",
+    (_key("namespace_key"), _required("namespace"), _required("alias")),
+    unique=(("namespace_key",), ("namespace",), ("alias",)),
+)
+
+IMPORTED_OBJECTS = Table(
+    "imported_objects",
+    (_key("namespace_key"), _required("object_kind"), _required("source_id"), _required("object_id")),
+    unique=(("namespace_key", "object_kind", "source_id"),),
+    foreign_keys=(ForeignKey("namespace_key", "namespaces", "namespace_key"),),
+)
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
+    NAMESPACES,
     EXTERNAL_VALUES,
+    IMPORTED_OBJECTS,
     DATASETS,
     RECORDS,
     CLOCKS,

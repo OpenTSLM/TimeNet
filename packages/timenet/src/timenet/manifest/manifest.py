@@ -10,6 +10,7 @@ from timenet.manifest.files import ManifestFiles
 from timenet.types import DatasetMetadata, DatasetSchema
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
+from timenet.types.references import DatasetRef, InputLock
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
@@ -38,6 +39,12 @@ class Manifest(TimeFModel):
     """Storage backend for the time-series values plane."""
     value_encoding: dict[StrictStr, ValueEncoding] = Field(default_factory=dict)
     """``spec_type`` to the values-column encoding used by its shards."""
+    input_locks: dict[StrictStr, InputLock] = Field(default_factory=dict)
+    """Exact build inputs, prepared before reading or writing."""
+    lineage: tuple[InputLock, ...] = ()
+    """Flattened provenance snapshots; never traversed to read data."""
+    payload_sources: dict[StrictStr, DatasetRef] = Field(default_factory=dict)
+    """Physical owners of referenced payload files, flattened by the writer."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
     timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
