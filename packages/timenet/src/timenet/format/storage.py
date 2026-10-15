@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 class StorageSources:
     """Collect only the physical files referenced by a new catalog."""
 
-    def __init__(self) -> None:
+    def __init__(self, target: DatasetRef | None = None) -> None:
+        self.target = target
         self.sources: dict[str, PayloadSource] = {}
 
     def add(self, version: "DatasetVersion", paths: set[str]) -> str:
@@ -29,6 +30,10 @@ class StorageSources:
         """
         manifest = version.manifest
         ref = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
+        if ref == self.target:
+            raise TimeFValidationError(
+                f"shared payload owner {ref} is also the output release; use a different dataset ID or version"
+            )
         key = hashlib.sha256(str(ref).encode()).hexdigest()[:24]
         files = {
             part.path: part
