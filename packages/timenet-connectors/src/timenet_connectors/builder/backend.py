@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from timenet.config import settings
+from timenet.connectors.context import active_build_path
 from timenet.engine import run_pipeline
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import connector_dir, has_connector, resolve
@@ -63,7 +64,7 @@ class ConnectorBuilder:
         Returns:
             The committed version directory.
         """
-        if settings().isolation == "off":
+        if settings().isolation == "off" and not active_build_path():
             connector = resolve(dataset_id)()
             resolved_backend = connector.values_backend if values_backend is None else values_backend
             return run_pipeline(connector, root, force=force, values_backend=resolved_backend)

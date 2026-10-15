@@ -129,7 +129,7 @@ def test_target_annotation_refs_are_required():
     dataset = make_dataset()
     localize = next(t for t in dataset.tasks if t.id == "task-localize-0")
     localize.inputs = (dataset.records[0], dataset.records[2])
-    localize.targets = None
+    localize.set_targets(None)
     localize.target_annotations = tuple(
         annotation for annotation in dataset.records[0].annotations if annotation.id in {"stim-0", "art-0"}
     )

@@ -7,14 +7,16 @@ import numpy as np
 import pytest
 import wfdb
 
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
-from timenet.engine import store_dataset
+from timenet.engine import run_pipeline, store_dataset
+from timenet.errors import TimeFValidationError
+from timenet.payloads.reader import StoredPayloadLoader
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
-from timenet.types import AnswerTask
-from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet.types import AnswerTask, DatasetRef
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
+from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
 _CSV_COLUMNS = ["ecg_id", "question", "answer", "rationale", "template_id", "question_type", "clinical_context"]
@@ -120,19 +122,43 @@ def _source(tmp_path: Path, records_dir: Path, split: str = "train") -> EcgQaCot
         for row in _rows():
             writer.writerow({column: row.get(column, "") for column in _CSV_COLUMNS})
     return EcgQaCotSource(
-        records_root=records_root,
         answers_path=_write_answers(tmp_path),
         cot_csvs=((split, csv_path),),
     )
 
 
-def _convert(tmp_path: Path, records_dir: Path) -> TimeFDataset:
-    return EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
+def _parent(tmp_path: Path, registry_root: Path) -> Path:
+    rows = [
+        {
+            "ecg_id": ecg_id,
+            "filename_hr": f"records500/00000/{ecg_id:05d}_hr",
+            "scp_codes": "{'NORM': 100.0}",
+            "strat_fold": 9 if ecg_id == 1 else 10,
+            "report": "Synthetic parent clinical report.",
+        }
+        for ecg_id in (1, 2)
+    ]
+    database = tmp_path / "ptbxl_database.csv"
+    with database.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    parent = PtbXlConnector().convert([PtbXlSource(root=tmp_path, database_csv=database)])
+    return store_dataset(parent, registry_root)
 
 
-def test_is_a_connector():
-    assert isinstance(EcgQaCotConnector(), BaseConnector)
-    assert isinstance(EcgQaCotConnector(), BasePhysioNetConnector)
+def _convert(tmp_path: Path, records_dir: Path, *, registry_root: Path | None = None) -> TimeFDataset:
+    source = _source(tmp_path, records_dir)
+    parent_path = _parent(tmp_path, registry_root or tmp_path / "registry")
+    with TimeFReader(DatasetVersion.open_local(parent_path)) as parent:
+        return EcgQaCotConnector().convert([source], context=BuildContext({"ptbxl": parent}))
+
+
+def test_is_a_connector_and_requires_its_pinned_input(tmp_path, records_dir):
+    connector = EcgQaCotConnector()
+    assert isinstance(connector, BaseConnector)
+    with pytest.raises(TimeFValidationError, match="requires the opened 'ptbxl' input"):
+        connector.convert([_source(tmp_path, records_dir)])
 
 
 def test_metadata():
@@ -157,16 +183,16 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     tasks = list(dataset.iter_tasks())
     assert len(tasks) == len(rows)
     assert all(isinstance(task, AnswerTask) for task in tasks)
-    assert {task.targets[0] for task in tasks if task.targets is not None} == {row["answer"] for row in rows}
-    assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
+    assert {targets[0] for task in tasks if (targets := task.targets()) is not None} == {row["answer"] for row in rows}
+    assert {task.rationale() for task in tasks} == {row["rationale"] for row in rows}
     assert {task.inputs[0].id for task in tasks} == {"ptbxl-1", "ptbxl-2"}
     # The answer is the short label, not the chain of thought.
-    assert all(task.targets != (task.rationale,) for task in tasks)
+    assert all(task.targets() != (task.rationale(),) for task in tasks)
 
 
 def test_recording_carries_its_split(tmp_path, records_dir):
     for record in _convert(tmp_path, records_dir).records:
-        assert [ann.value for ann in record.annotations if ann.key == "split"] == ["train"]
+        assert [ann.value() for ann in record.annotations if ann.key == "split"] == ["train"]
 
 
 def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir):
@@ -174,7 +200,7 @@ def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir)
     keys = {ann.key for ann in dataset.annotations}
     assert {"question_type", "template_id", "answer_options", "clinical_context"} <= keys
     # template 0 appears in two rows but is attached once
-    template_values = sorted(ann.value for ann in dataset.annotations if ann.key == "template_id")
+    template_values = sorted(ann.value() for ann in dataset.annotations if ann.key == "template_id")
     assert template_values == [0, 1]
 
 
@@ -187,7 +213,7 @@ def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
 
 def test_answer_options_come_from_template(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    options = {ann.id: ann.value for ann in dataset.annotations if ann.key == "answer_options"}
+    options = {ann.id: ann.value() for ann in dataset.annotations if ann.key == "answer_options"}
     assert options["ecgqa-options-0"] == ["yes", "no", "not sure"]  # template 0 in the fixture answers CSV
 
 
@@ -200,17 +226,45 @@ def test_series_values_match_fixture_record(tmp_path, records_dir):
     assert float(got[0]) == pytest.approx(float(signal[0, 0]), rel=1e-5)
 
 
-def test_convert_needs_no_wfdb_for_format16(tmp_path, records_dir, monkeypatch):
-    # Format-16 records are read straight from the .hea/.dat, so convert and lead loading work with no
-    # wfdb installed. wfdb is only a fallback for other signal formats.
-    monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
-    dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
-    assert dataset.records
-    assert len(dataset.records[0].signals[0].to_numpy())  # runs the direct loader, no wfdb
+def test_child_needs_no_wfdb_or_parent_payload_reads(tmp_path, records_dir, monkeypatch):
+    source = _source(tmp_path, records_dir)
+    root = tmp_path / "registry"
+    parent_path = _parent(tmp_path, root)
+
+    def forbidden(*args):
+        pytest.fail("the child read an inherited payload while building")
+
+    with TimeFReader(DatasetVersion.open_local(parent_path)) as parent:
+        with monkeypatch.context() as guard:
+            guard.setitem(sys.modules, "wfdb", None)
+            guard.setattr(StoredPayloadLoader, "__call__", forbidden)
+            connector = EcgQaCotConnector()
+            # Isolate the network download. The engine opens the real pinned parent.
+            guard.setattr(connector, "download", lambda _cache: [source])
+            child_path = run_pipeline(connector, root, cache_dir=tmp_path / "questions-cache")
+        assert {ann.key for ann in next(parent.iter_records()).annotations} == {
+            "report",
+            "scp_codes",
+            "strat_fold",
+            "split",
+        }
+    manifest = DatasetVersion.open_local(child_path).manifest
+    assert manifest.files.time_series == ()
+    assert [owner.dataset for owner in manifest.payload_sources] == [
+        DatasetRef.model_validate("physionet/ptb-xl@1.0.0")
+    ]
+    with TimeFReader(DatasetVersion.open_local(child_path)) as reader:
+        record = next(reader.iter_records())
+        assert {ann.key: ann.value() for ann in record.annotations} == {"split": "train"}
+        expected, _ = wfdb.rdsamp(str(records_dir / "00001_hr"))
+        for signal in record.signals:
+            np.testing.assert_allclose(
+                signal.to_numpy(), expected[:, _LEADS.index(signal.name)].astype("float32"), rtol=1e-5
+            )
 
 
 def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
-    dataset = _convert(tmp_path / "src", records_dir)
+    dataset = _convert(tmp_path / "src", records_dir, registry_root=tmp_path / "out")
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -223,26 +277,3 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
         "answer_options",
         "clinical_context",
     }
-
-
-def test_read_header_uses_the_direct_path_for_plain_single_dat_16(tmp_path):
-    (tmp_path / "plain.hea").write_text(
-        "plain 2 500 100\nplain.dat 16 1000(0)/mV 16 0 0 0 0 I\nplain.dat 16 1000(0)/mV 16 0 0 0 0 II\n"
-    )
-    assert BasePhysioNetConnector._read_header(tmp_path / "plain").direct_read is True
-
-
-def test_read_header_falls_back_when_the_record_is_not_plain_16(tmp_path):
-    # 16x2 (two WFDB samples per frame) breaks the (-1, n_sig) reshape, so the record must route to wfdb; a
-    # multi-word signal description is kept whole rather than truncated to its last token.
-    (tmp_path / "framed.hea").write_text("framed 1 500 100\nframed.dat 16x2 1000(0)/mV 16 0 0 0 0 my lead II\n")
-    header = BasePhysioNetConnector._read_header(tmp_path / "framed")
-    assert header.direct_read is False
-    assert header.sig_name == ["my lead II"]
-
-
-def test_read_header_falls_back_when_signals_span_multiple_dat_files(tmp_path):
-    (tmp_path / "multi.hea").write_text(
-        "multi 2 500 100\na.dat 16 1000(0)/mV 16 0 0 0 0 I\nb.dat 16 1000(0)/mV 16 0 0 0 0 II\n"
-    )
-    assert BasePhysioNetConnector._read_header(tmp_path / "multi").direct_read is False

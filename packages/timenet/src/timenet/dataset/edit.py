@@ -210,7 +210,7 @@ def _task_invalidated(
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    targets = task.targets or ()
+    targets = task.targets_handle() or ()
     target_record_ids = {target.id for target in targets if isinstance(target, Record)}
     target_signal_ids = {target.id for target in targets if isinstance(target, Signal)}
     candidate_record_ids = {record.id for record in getattr(task, "candidate_records", ())}
@@ -255,9 +255,9 @@ def _rebuild_tasks(
             "inputs": inputs,
             "targets": tuple(
                 records_by_id.get(target.id, target) if isinstance(target, Record) else target
-                for target in task.targets or ()
+                for target in task.targets_handle() or ()
             )
-            if task.targets is not None
+            if task.targets_handle() is not None
             else None,
             "input_annotations": input_annotations,
             "from_tasks": (),
@@ -272,7 +272,7 @@ def _rebuild_tasks(
     for task in dataset.tasks:
         if task.id in rebuilt:
             rebuilt[task.id].from_tasks = tuple(
-                rebuilt[parent.id] for parent in task.from_tasks if parent.id in rebuilt
+                rebuilt[parent.id].ref for parent in task.from_tasks if parent.id in rebuilt
             )
     return list(rebuilt.values())
 
@@ -309,7 +309,8 @@ def edit_version(
     # values. If the reader's `with` block exits first, the write happens through a closed
     # reader. That only worked because close() silently reopened the shards and leaked the
     # handles.
-    with TimeFReader(DatasetVersion.open_local(base_dir)) as reader:
+    version = DatasetVersion.open_local(base_dir)
+    with TimeFReader(version) as reader:
         base_version = str(reader.metadata.dataset_version)
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
@@ -325,6 +326,8 @@ def edit_version(
             annotations=edited.annotations,
         )
         edited.derive_schema()
+
+        writer_kwargs.setdefault("payload_policy", "copy")
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()
