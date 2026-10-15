@@ -17,6 +17,7 @@ from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.external import ExternalReader, materialize_table
 from timenet.format.signal_loader import StoredSignalLoader
+from timenet.reader.handles import DatasetHandle, materialize
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
@@ -38,8 +39,8 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Configure a lazy reader for an opened dataset version.
 
-        Opening a reader does not download or query ``control.duckdb``. The first structural read
-        materializes the control database locally, verifies it, and opens it read-only.
+        The version is already prepared, including its dependencies. Opening a reader does not
+        query ``control.duckdb``. The first structural read opens the local catalog read-only.
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
@@ -164,8 +165,10 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
+            return materialize(
+                self._control_reader().read_tasks(
+                    records, cached_records=self._all_records() if records is None else ()
+                )
             )
 
     def iter_tasks(
@@ -272,7 +275,15 @@ class TimeFReader:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
+    def get_handle(self) -> DatasetHandle:
+        """Return a lazy dataset handle without reading the catalog or payloads."""
+        return DatasetHandle(self)
+
     def read(self) -> TimeFDataset:
+        """Return a dataset with every value materialized in memory."""
+        return materialize(self._read_catalog())
+
+    def _read_catalog(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
 
         Returns:

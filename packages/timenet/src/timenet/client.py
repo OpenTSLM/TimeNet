@@ -20,6 +20,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.reader.handles import DatasetHandle
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
@@ -177,11 +178,14 @@ class TimeNet:
         return target
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
-        """Read the dataset into memory through the registry's storage handle.
+        """Return the dataset with all values materialized in memory."""
+        with self.get_handle(dataset_id, version, auto_build=auto_build) as handle:
+            return handle.read()
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+    def get_handle(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
+        """Return a lazy dataset handle without opening its catalog or payload files.
+
+        An HTTP registry fetches and caches each file when it is first accessed.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -193,7 +197,7 @@ class TimeNet:
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
 
         Returns:
-            The dataset with lazy, per-series loaders that use the registry handle.
+            A handle for explicit dataset, entity, and field reads.
 
         Raises:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
@@ -221,7 +225,7 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        return TimeFReader(handle).get_handle()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
@@ -262,4 +266,4 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
+        return TimeFTorchDataset.from_reader(self.get_handle(dataset_id, version).reader)

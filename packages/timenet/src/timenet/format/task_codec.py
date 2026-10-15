@@ -6,6 +6,7 @@ public IDs here; the writer and reader swap them for internal keys at the table 
 """
 
 from collections.abc import Iterable
+from functools import lru_cache
 from typing import Any, cast
 
 from timenet.dataset.record import Record
@@ -53,6 +54,19 @@ def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality
 
     Raises:
         TimeFFormatError: If a stored input kind is unknown or repeated.
+    """  # noqa: DOC502 - raised by cached validation
+    return _decode_input_modalities(tuple(values or ()))
+
+
+@lru_cache(maxsize=256)
+def _decode_input_modalities(values: tuple[str, ...]) -> frozenset[InputModality]:
+    """Decode and validate one immutable modality declaration.
+
+    Returns:
+        The validated input kinds.
+
+    Raises:
+        TimeFFormatError: If the declaration is empty, repeated, or unknown.
     """
     if not values:
         raise TimeFFormatError("task has no stored input modalities")
