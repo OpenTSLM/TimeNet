@@ -41,6 +41,8 @@ class InputLock(TimeFModel):
 
     source: DatasetRef
     manifest_checksum: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Source license, citation, access, and descriptive provenance."""
 
 
 def manifest_digest(value: dict[str, Any]) -> str:

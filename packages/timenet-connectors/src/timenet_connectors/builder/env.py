@@ -105,6 +105,7 @@ def run_isolated(  # noqa: PLR0913
     keep_cache: bool = False,
     values_backend: str | None = None,
     quiet: bool = False,
+    build_parents: bool = False,
 ) -> str:
     """Build a dataset in its own environment and return what the child printed on stdout.
 
@@ -134,6 +135,8 @@ def run_isolated(  # noqa: PLR0913
     """  # noqa: DOC502 (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
     argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
+    if build_parents:
+        argv.append("--build-parents")
     if force:
         argv.append("--force")
     if keep_cache:

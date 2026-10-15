@@ -32,7 +32,10 @@ def test_external_values_and_offsets_round_trip_without_decoding_on_copy(tmp_pat
     value = restored.records[0].annotations[0].value
     assert isinstance(value, ValueHandle)
     assert value.read() == long_text
+    assert isinstance(restored.tasks[0].prompt, ValueHandle)
     assert restored.tasks[0].prompt.read() == long_text
+    assert restored.tasks[0].targets is not None
+    assert isinstance(restored.tasks[0].targets[0], ValueHandle)
     assert restored.tasks[0].targets[0].read() == long_text
     assert restored.records[0].signals[0].time_offsets_us().tolist() == [0, 7, 19]
     with connect_control(root / "control.duckdb", read_only=True) as connection:
