@@ -15,6 +15,7 @@ import uuid
 
 from timenet.manifest import Manifest
 from timenet.registry._paths import safe_version_path
+from timenet.registry.shared import complete_copy, download_owners
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
 
@@ -118,7 +119,8 @@ class BaseRegistry(ABC):
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(dest_dir)
-        if (target / "manifest.json").exists() and not force:
+        download_owners(self, manifest, target.parents[2], progress_cb=progress_cb)
+        if complete_copy(target, manifest) and not force:
             return  # already downloaded and current
         parent = target.parent
         parent.mkdir(parents=True, exist_ok=True)
