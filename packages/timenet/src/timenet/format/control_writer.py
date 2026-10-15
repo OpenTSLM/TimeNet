@@ -18,6 +18,7 @@ from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
+from timenet.format.control_cache import materialize_control
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.external import ExternalWriter, ValueHandle
@@ -339,6 +340,24 @@ class DuckDBControlWriter:
     @staticmethod
     def _write_namespaces(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
         """Store import lookup information outside the ordinary read path."""
+        if dataset._namespace_source is not None:
+            with connect_control(materialize_control(dataset._namespace_source), read_only=True) as stored:
+                for name in ("namespaces", "imported_objects"):
+                    rows = stored.execute(f"SELECT * FROM {name}").to_arrow_table().to_pylist()  # noqa: S608
+                    _insert_rows(connection, TABLES[name], rows)
+            for kind, table, column in (
+                ("Record", "records", "record_id"),
+                ("Source", "sources", "source_id"),
+                ("Signal", "signals", "signal_id"),
+                ("Task", "tasks", "task_id"),
+                ("Annotation", "annotation_occurrences", "occurrence_id"),
+            ):
+                connection.execute(
+                    f"DELETE FROM imported_objects WHERE object_kind = ? AND object_id NOT IN (SELECT {column} FROM {table})",  # noqa: S608
+                    [kind],
+                )
+        aliases = dict(connection.execute("SELECT alias, namespace_key FROM namespaces").fetchall())
+        first_key = max(aliases.values(), default=0) + 1
         present = (
             {
                 kind: {row[0] for row in connection.execute(query).fetchall()}
@@ -353,12 +372,14 @@ class DuckDBControlWriter:
             if dataset._imports
             else {}
         )
-        for key, (alias, imported) in enumerate(dataset._imports.items(), 1):
-            _insert_rows(
-                connection,
-                TABLES["namespaces"],
-                [{"namespace_key": key, "namespace": str(imported.source), "alias": alias}],
-            )
+        for candidate, (alias, imported) in enumerate(dataset._imports.items(), first_key):
+            key = aliases.get(alias, candidate)
+            if alias not in aliases:
+                _insert_rows(
+                    connection,
+                    TABLES["namespaces"],
+                    [{"namespace_key": key, "namespace": str(imported.source), "alias": alias}],
+                )
             _insert_rows(
                 connection,
                 TABLES["imported_objects"],

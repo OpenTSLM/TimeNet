@@ -1,7 +1,9 @@
 from timenet.dataset import TimeFDataset
+from timenet.dataset.edit import edit_version
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
+from timenet.types import Version
 from timenet.writer import TimeFWriter
 
 
@@ -82,3 +84,17 @@ def test_diamond_keeps_parent_namespaces_distinct_and_shares_ultimate_storage(tm
     with TimeFReader(version) as reader:
         for record in reader.read().records:
             assert record.signals[0].to_arrow().equals(original.records[0].signals[0].to_arrow())
+
+
+def test_edit_preserves_namespace_lookup_and_input_provenance(tmp_path):
+    parent = make_dataset()
+    path = store(tmp_path, parent)
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        child.import_from(reader.get_handle(), namespace="base", records=[record.id for record in parent.records])
+        child_path = store(tmp_path, child)
+    edited_path = edit_version(child_path, tmp_path, dataset_version=Version(1, 0, 1))
+    with TimeFReader(DatasetVersion.open_local(edited_path)) as reader:
+        restored = reader.get_handle().get_handle("Record", parent.records[0].id, namespace="base").read()
+        assert restored.signals[0].to_arrow().equals(parent.records[0].signals[0].to_arrow())
+        assert reader._manifest.input_locks == DatasetVersion.open_local(child_path).manifest.input_locks
