@@ -24,6 +24,7 @@ from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
 from timenet.registry.base import ProgressCallback
 from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
+from timenet.registry.shared import complete_copy
 
 
 _CHUNK_BYTES = 1 << 20
@@ -56,7 +57,7 @@ def download_version_files(  # noqa: PLR0913
         ``dest_dir``.
     """
     dest_dir = Path(dest_dir)
-    if (dest_dir / "manifest.json").exists() and not force:
+    if complete_copy(dest_dir, manifest) and not force:
         return dest_dir
     files = list(manifest.files.all_files())
     parent = dest_dir.parent
