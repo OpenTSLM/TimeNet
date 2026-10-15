@@ -109,3 +109,12 @@ live in separate structures.
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+
+## Input and storage pins
+
+`metadata.inputs` names exact parent releases by alias. `input_locks` records their manifest checksums
+and metadata. `lineage` records transitive provenance without requiring ancestor catalogs during reads.
+
+`payload_sources` maps compact owner keys to exact releases, manifest checksums, backend names, and
+referenced file descriptors. These sources are physical owners, which can differ from immediate
+parents. `files.payloads` lists the packed text and timestamp files owned by this release.
