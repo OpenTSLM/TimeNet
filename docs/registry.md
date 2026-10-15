@@ -67,10 +67,20 @@ uv add 'timenet[s3]'
 
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
-(`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
-a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
-`download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
+(`manifest.json` last), so a failed publish never leaves a partial version.
+Before reading, `load` prepares complete local copies of the release and its dependencies.
+Existing complete copies are reused. The backend has no catalog, so `list` and `search` are unsupported: publish and
 fetch by an explicit `org/name@version`.
+
+## Prepare releases before reading
+
+`open_version()` returns a prepared local handle. HTTP and S3 registries fetch missing complete
+releases during preparation. A local registry requires the releases to exist already.
+Preparation resolves all payload sources once. Reading then uses those handles without registry calls.
+
+`download_version()` prepares a complete release and its dependencies in the requested local registry.
+Downloads verify file sizes and checksums before publishing each release. Cached releases need no
+manifest fingerprint comparison or full checksum scan.
 
 ## `BaseRegistry`
 
@@ -80,7 +90,8 @@ Every backend implements this contract: four data-access methods and one shared 
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
-| `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
+| `open_file(dataset_id, version, relpath)` | A binary stream for downloading one file of a release. |
+| `local_root` | The local registry or cache directory for complete releases. |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 
