@@ -51,6 +51,7 @@ class TimeFReader:
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
+        self._owner_readers: dict[str, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_key: dict[int, int] = {}
         self._chunk_rows_cache: dict[int, list[dict]] = {}
@@ -64,6 +65,7 @@ class TimeFReader:
         state["_control"] = None
         state["_records"] = None
         state["_values"] = None
+        state["_owner_readers"] = {}
         state["_chunk_rows_cache"] = {}
         state["_axis_offsets_cache"] = OrderedDict()
         state["_axis_offsets_cache_bytes"] = 0
@@ -90,6 +92,9 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for backend in self._owner_readers.values():
+            backend.close()
+        self._owner_readers.clear()
         self._records = None
         self._tasks = None
         self._chunk_rows_cache.clear()
@@ -334,7 +339,8 @@ class TimeFReader:
             The complete canonical Arrow array.
         """
         rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load(self._version, rows, spec)
+        version, backend = self._storage_reader(rows)
+        return backend.load(version, rows, spec)
 
     def _load_signal_range(
         self,
@@ -350,7 +356,27 @@ class TimeFReader:
             The requested canonical Arrow values.
         """
         rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load_range(self._version, rows, start, stop, spec)
+        version, backend = self._storage_reader(rows)
+        return backend.load_range(version, rows, start, stop, spec)
+
+    def _storage_reader(self, rows: list[dict]) -> tuple[DatasetVersion, BaseValuesReader]:
+        """Select one direct physical owner and its cached backend.
+
+        Returns:
+            The version handle and its backend.
+
+        Raises:
+            TimeFFormatError: If a signal mixes physical owners.
+        """
+        key = rows[0].get("owner_key")
+        if any(row.get("owner_key") != key for row in rows):
+            raise TimeFFormatError("a signal has chunks from multiple physical owners")
+        if key is None:
+            return self._version, self._values_reader()
+        version = self._version.owner(key)
+        if key not in self._owner_readers:
+            self._owner_readers[key] = make_values_reader(version.manifest.values_backend)
+        return version, self._owner_readers[key]
 
     def _chunk_rows(self, signal_key: int, signal_id: str) -> list[dict]:
         """Return cached chunk locators after loading the Signal's bounded batch.
@@ -438,6 +464,15 @@ class _SignalLoader:
     signal_key: int
     signal_id: str
     spec: TimeSeriesSpec
+
+    def stored_chunks(self) -> tuple[DatasetVersion, list[dict]]:
+        """Return direct physical locators without reading any waveform bytes."""
+        rows = self.reader._chunk_rows(self.signal_key, self.signal_id)
+        version = self.reader._version.owner(rows[0].get("owner_key"))
+        return version, rows
+
+    def __deepcopy__(self, memo: dict) -> _SignalLoader:
+        return self
 
     def __call__(self) -> pa.Array:
         """Load all Signal values.
