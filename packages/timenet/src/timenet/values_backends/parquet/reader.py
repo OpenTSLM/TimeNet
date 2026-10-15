@@ -170,7 +170,7 @@ class ParquetValuesReader(BaseValuesReader):
         return group
 
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
-        path = version.path(rel_path)
+        path = version.resolve_file_path(rel_path)
         if path not in self._shard_cache:
             # pre_buffer coalesces a row group's column chunks into one read, which is one request
             # instead of one per column on a remote filesystem.

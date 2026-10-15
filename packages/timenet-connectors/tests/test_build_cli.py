@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet_connectors.builder import cli as cli_module
 from timenet_connectors.builder.cli import app
 
@@ -228,7 +228,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backe
         backend or "parquet"
     )
     if backend != "zarr" or find_spec("zarr") is not None:
-        with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        with TimeFReader(open_local_version(version_dir)) as reader:
             dataset = reader.read()
             assert len(dataset.records[0].signals[0].to_numpy()) == 16
 

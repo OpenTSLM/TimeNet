@@ -1,10 +1,10 @@
-import shutil
+import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.format.duckdb import connect_control
 from timenet.format.external import ValueHandle
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import Annotation, AnswerTask
 from timenet.writer import TimeFWriter
@@ -37,7 +37,7 @@ def _write(root, dataset):
 def test_external_values_and_offsets_round_trip(tmp_path):
     dataset, long_text, labels = _dataset()
     root = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(root)) as reader:
+    with TimeFReader(open_local_version(root)) as reader:
         restored = reader.read()
         annotations = {annotation.key: annotation.value for annotation in restored.records[0].annotations}
         assert isinstance(annotations["report"], ValueHandle)
@@ -64,19 +64,26 @@ def test_external_values_and_offsets_round_trip(tmp_path):
     assert not reader._external_reader.cache
 
 
-def test_rewriting_external_values_creates_an_independent_release(tmp_path):
+def test_inherited_external_values_are_reused_without_decoding(tmp_path, monkeypatch):
     dataset, long_text, labels = _dataset()
     original = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(original)) as reader:
+    with TimeFReader(open_local_version(original)) as reader:
         restored = reader.read()
-        copied = TimeFDataset(metadata=restored.metadata.model_copy(update={"dataset_id": "test/rewritten"}))
+        child = TimeFDataset(metadata=restored.metadata.model_copy(update={"dataset_id": "test/child"}))
         for record in restored.records:
-            copied.add_record(record=record)
-        copied.add_tasks(tasks=restored.tasks)
-        rewritten = _write(tmp_path, copied)
-    shutil.rmtree(original)
+            child.add_record(record=record)
+        child.add_tasks(tasks=restored.tasks)
 
-    with TimeFReader(DatasetVersion.open_local(rewritten)) as reader:
+        def unexpected_read(*args):
+            pytest.fail("copying stored payloads must not decode them")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(ValueHandle, "read", unexpected_read)
+            rewritten = _write(tmp_path, child)
+        assert not (rewritten / "payloads").exists()
+        assert not (rewritten / "time_series").exists()
+
+    with TimeFReader(open_local_version(rewritten)) as reader:
         restored = reader.read()
         annotations = {annotation.key: annotation.value for annotation in restored.records[0].annotations}
         assert annotations["report"].read() == long_text
