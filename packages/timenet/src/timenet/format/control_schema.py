@@ -365,6 +365,23 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+EXTERNAL_VALUES = Table(
+    "external_values",
+    (
+        _required("object_kind"),
+        _required("object_id"),
+        _required("field"),
+        _key("position"),
+        Column("owner_key", ColumnType.VARCHAR),
+        _required("value_path"),
+        _key("row_index"),
+        _required("value_kind"),
+        _key("n_values"),
+        _required("value_digest"),
+    ),
+    unique=(("object_kind", "object_id", "field", "position"),),
+)
+
 NAMESPACES = Table(
     "namespaces",
     (_key("namespace_key"), _required("namespace"), _required("alias")),
@@ -381,6 +398,7 @@ IMPORTED_OBJECTS = Table(
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     NAMESPACES,
+    EXTERNAL_VALUES,
     IMPORTED_OBJECTS,
     DATASETS,
     RECORDS,
