@@ -25,3 +25,5 @@ tags:
   - cot
   - physionet
 source_url: https://physionet.org/content/ptb-xl/
+inputs:
+  ptbxl: physionet/ptb-xl@1.0.0
