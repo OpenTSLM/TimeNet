@@ -38,7 +38,7 @@ def test_external_values_and_offsets_round_trip(tmp_path):
     dataset, long_text, labels = _dataset()
     root = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(root)) as reader:
-        restored = reader.read()
+        restored = reader.get_handle().reader._read_catalog()
         annotations = {annotation.key: annotation.value for annotation in restored.records[0].annotations}
         assert isinstance(annotations["report"], ValueHandle)
         assert annotations["report"].read() == long_text
@@ -68,7 +68,7 @@ def test_inherited_external_values_are_reused_without_decoding(tmp_path, monkeyp
     dataset, long_text, labels = _dataset()
     original = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(original)) as reader:
-        restored = reader.read()
+        restored = reader.get_handle().reader._read_catalog()
         child = TimeFDataset(metadata=restored.metadata.model_copy(update={"dataset_id": "test/child"}))
         for record in restored.records:
             child.add_record(record=record)
@@ -84,7 +84,7 @@ def test_inherited_external_values_are_reused_without_decoding(tmp_path, monkeyp
         assert not (rewritten / "time_series").exists()
 
     with TimeFReader(open_local_version(rewritten)) as reader:
-        restored = reader.read()
+        restored = reader.get_handle().reader._read_catalog()
         annotations = {annotation.key: annotation.value for annotation in restored.records[0].annotations}
         assert annotations["report"].read() == long_text
         assert annotations["labels"].read() == labels
@@ -93,3 +93,18 @@ def test_inherited_external_values_are_reused_without_decoding(tmp_path, monkeyp
         signal = restored.records[0].signals[0]
         assert signal.time_offsets_us().tolist() == [0, 7, 19]
         assert signal.to_numpy().tolist() == [1.0, 2.0, 3.0]
+
+
+def test_eager_read_retains_values_after_storage_is_unavailable(tmp_path):
+    dataset = make_dataset()
+    long_text = "stored clinical context " * 300
+    dataset.records[0].annotate(Annotation(key="report", value=long_text))
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    root = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    with TimeFReader(open_local_version(root)) as reader:
+        restored = reader.read()
+    (root / "time_series").rename(root / "unavailable-values")
+    (root / "payloads").rename(root / "unavailable-text")
+    assert next(ann.value for ann in restored.records[0].annotations if ann.key == "report") == long_text
+    assert restored.records[0].signals[0].to_arrow().equals(dataset.records[0].signals[0].to_arrow())
